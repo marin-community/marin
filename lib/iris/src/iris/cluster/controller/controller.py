@@ -341,7 +341,7 @@ class Controller:
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server is not None and self._server.started,
-            timeout=5.0,
+            timeout=Duration.from_seconds(5.0),
         )
 
     def stop(self) -> None:

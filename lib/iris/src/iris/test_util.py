@@ -17,6 +17,8 @@
 import os
 import time
 
+from iris.time_utils import Deadline, Duration
+
 
 class SentinelFile:
     """File-based signal for cross-thread/cross-process coordination in tests.
@@ -48,10 +50,10 @@ class SentinelFile:
     def is_set(self) -> bool:
         return os.path.exists(self._path)
 
-    def wait(self, poll_interval: float = 0.1, timeout: float | None = None) -> None:
+    def wait(self, poll_interval: float = 0.1, timeout: Duration | None = None) -> None:
         """Block until the sentinel file exists."""
-        deadline = time.monotonic() + timeout if timeout is not None else None
+        deadline = Deadline.from_now(timeout) if timeout is not None else None
         while not os.path.exists(self._path):
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError(f"SentinelFile {self._path} not signalled within {timeout}s")
+            if deadline is not None and deadline.expired():
+                raise TimeoutError(f"SentinelFile {self._path} not signalled within {timeout}")
             time.sleep(poll_interval)

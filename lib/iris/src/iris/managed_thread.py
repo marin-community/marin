@@ -56,11 +56,12 @@ NEVER write loops that ignore stop_event:
 import contextlib
 import logging
 import threading
-import time
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from typing import Any
+
+from iris.time_utils import Deadline, Duration
 
 logger = logging.getLogger(__name__)
 
@@ -147,8 +148,8 @@ class ManagedThread:
         self._stop_event.set()
         logger.debug("Signaled thread %s to stop", self._thread.name)
 
-    def join(self, timeout: float | None = None) -> None:
-        self._thread.join(timeout=timeout)
+    def join(self, timeout: Duration | None = None) -> None:
+        self._thread.join(timeout=timeout.to_seconds() if timeout is not None else None)
 
     @property
     def stop_event(self) -> threading.Event:
@@ -270,7 +271,7 @@ class ThreadContainer:
         for thread in threads:
             thread.join()
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: Duration = Duration.from_seconds(5.0)) -> None:
         """Stop children first, then own threads, then executors.
 
         Threads are stopped before executors because threads may submit work
@@ -292,15 +293,15 @@ class ThreadContainer:
             thread.stop()
 
         # Wait for threads to exit with shared deadline
-        deadline = time.monotonic() + timeout
+        deadline = Deadline.from_now(timeout)
         for thread in threads:
-            remaining = max(0, deadline - time.monotonic())
-            thread.join(timeout=remaining)
+            remaining = deadline.remaining_seconds()
+            thread.join(timeout=Duration.from_seconds(remaining))
 
         # Warn about threads that didn't exit
         for thread in threads:
             if thread.is_alive:
-                logger.warning("Thread %s did not exit within %s seconds", thread.name, timeout)
+                logger.warning("Thread %s did not exit within %s", thread.name, timeout)
 
         # Shutdown executors last
         for executor in executors:

@@ -28,6 +28,7 @@ from contextlib import contextmanager
 import pytest
 from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
+from iris.time_utils import Deadline, Duration
 
 # httpx logs every HTTP request at INFO level, which floods test output
 # during polling loops (status checks, log fetching).
@@ -178,8 +179,8 @@ def _thread_cleanup():
     before = {t.ident for t in threading.enumerate()}
     yield
 
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
+    deadline = Deadline.from_now(Duration.from_seconds(5.0))
+    while not deadline.expired():
         leaked = [
             t
             for t in threading.enumerate()

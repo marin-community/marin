@@ -59,7 +59,7 @@ from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -486,13 +486,13 @@ class WorkerPool:
     def wait_for_workers(
         self,
         min_workers: int | None = None,
-        timeout: float = 600.0,
+        timeout: Duration = Duration.from_seconds(600.0),
     ) -> None:
         """Wait for workers to become available.
 
         Args:
             min_workers: Minimum workers required (default: all workers)
-            timeout: Maximum time to wait in seconds
+            timeout: Maximum duration to wait
 
         Raises:
             TimeoutError: If min_workers not available within timeout

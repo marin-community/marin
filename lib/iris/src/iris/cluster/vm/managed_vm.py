@@ -350,7 +350,7 @@ class ManagedVm:
     def _stop(self) -> threading.Event:
         return self._managed_thread.stop_event
 
-    def stop(self, timeout: float = 10.0) -> None:
+    def stop(self, timeout: Duration = Duration.from_seconds(10.0)) -> None:
         """Signal VM thread to stop and wait for it to exit."""
         self._threads.stop(timeout=timeout)
 

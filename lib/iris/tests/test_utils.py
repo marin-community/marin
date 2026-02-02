@@ -27,7 +27,7 @@ PREFER SentinelFile and wait_for_condition over time.sleep:
     GOOD - reliable and fast:
         sentinel = SentinelFile(str(tmp_path / "ready"))
         worker.start(ready_sentinel=sentinel)
-        sentinel.wait(timeout=5.0)
+        sentinel.wait(timeout=Duration.from_seconds(5.0))
         assert worker.is_ready()
 
     ALSO GOOD - for condition-based waiting:
@@ -55,9 +55,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from iris.test_util import SentinelFile
+from iris.time_utils import Deadline, Duration
 
 
-def wait_for_condition(condition: Callable[[], bool], timeout: float = 10.0, poll_interval: float = 0.01) -> None:
+def wait_for_condition(
+    condition: Callable[[], bool], timeout: Duration = Duration.from_seconds(10.0), poll_interval: float = 0.01
+) -> None:
     """Wait for a condition to become true.
 
     Polls the condition callable at regular intervals until it returns True
@@ -65,7 +68,7 @@ def wait_for_condition(condition: Callable[[], bool], timeout: float = 10.0, pol
 
     Args:
         condition: Callable that returns True when the condition is satisfied
-        timeout: Maximum time to wait in seconds (default: 10.0)
+        timeout: Maximum duration to wait (default: 10 seconds)
         poll_interval: Time between condition checks in seconds (default: 0.01)
 
     Raises:
@@ -74,14 +77,14 @@ def wait_for_condition(condition: Callable[[], bool], timeout: float = 10.0, pol
     Example:
         >>> controller.start()
         >>> # Wait for controller to be ready
-        >>> wait_for_condition(lambda: controller.is_ready(), timeout=5.0)
+        >>> wait_for_condition(lambda: controller.is_ready(), timeout=Duration.from_seconds(5.0))
     """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    deadline = Deadline.from_now(timeout)
+    while not deadline.expired():
         if condition():
             return
         time.sleep(poll_interval)
-    raise TimeoutError(f"Condition did not become true within {timeout}s")
+    raise TimeoutError(f"Condition did not become true within {timeout}")
 
 
 # Tests for sentinel utilities
@@ -97,7 +100,7 @@ def test_sentinel_file_signal_and_wait(tmp_path: Path) -> None:
 
     # Wait returns immediately when file exists
     start = time.monotonic()
-    sentinel.wait(timeout=1.0)
+    sentinel.wait(timeout=Duration.from_seconds(1.0))
     elapsed = time.monotonic() - start
 
     # Should return almost immediately (< 100ms)
@@ -112,7 +115,7 @@ def test_sentinel_file_timeout(tmp_path: Path) -> None:
 
     start = time.monotonic()
     with pytest.raises(TimeoutError, match="not signalled within"):
-        sentinel.wait(timeout=0.1)
+        sentinel.wait(timeout=Duration.from_seconds(0.1))
     elapsed = time.monotonic() - start
 
     # Should wait approximately the timeout duration
@@ -134,7 +137,7 @@ def test_sentinel_file_concurrent_creation(tmp_path: Path) -> None:
 
     # Wait should succeed once thread creates the file
     start = time.monotonic()
-    sentinel.wait(timeout=1.0)
+    sentinel.wait(timeout=Duration.from_seconds(1.0))
     elapsed = time.monotonic() - start
 
     # Should return shortly after file creation (~50-100ms)
@@ -163,7 +166,7 @@ def test_sentinel_file_reset(tmp_path: Path) -> None:
 def test_wait_for_condition_immediate() -> None:
     """Test wait_for_condition returns immediately when condition is already true."""
     start = time.monotonic()
-    wait_for_condition(lambda: True, timeout=1.0)
+    wait_for_condition(lambda: True, timeout=Duration.from_seconds(1.0))
     elapsed = time.monotonic() - start
 
     # Should return almost immediately
@@ -176,7 +179,7 @@ def test_wait_for_condition_timeout() -> None:
 
     start = time.monotonic()
     with pytest.raises(TimeoutError, match="did not become true within"):
-        wait_for_condition(lambda: False, timeout=0.1)
+        wait_for_condition(lambda: False, timeout=Duration.from_seconds(0.1))
     elapsed = time.monotonic() - start
 
     # Should wait approximately the timeout duration
@@ -197,7 +200,7 @@ def test_wait_for_condition_becomes_true() -> None:
     thread.start()
 
     start = time.monotonic()
-    wait_for_condition(lambda: flag.is_set(), timeout=1.0)
+    wait_for_condition(lambda: flag.is_set(), timeout=Duration.from_seconds(1.0))
     elapsed = time.monotonic() - start
 
     # Should return shortly after flag is set (~50-100ms)

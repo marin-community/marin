@@ -432,7 +432,7 @@ class _StubManagedVm(ManagedVm):
     def start(self) -> None:
         pass
 
-    def stop(self, timeout: float = 10.0) -> None:
+    def stop(self, timeout: Duration = Duration.from_seconds(10.0)) -> None:
         pass
 
     def init_log(self, tail: int | None = None) -> str:
@@ -673,7 +673,7 @@ class LocalVmManager:
 
     def stop(self) -> None:
         """Stop all container threads managed by this VM manager."""
-        self._threads.stop(timeout=5.0)
+        self._threads.stop(timeout=Duration.from_seconds(5.0))
 
 
 def _create_local_autoscaler(

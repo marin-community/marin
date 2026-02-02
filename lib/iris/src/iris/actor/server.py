@@ -36,7 +36,7 @@ from connectrpc.request import RequestContext
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
-from iris.time_utils import ExponentialBackoff, Timestamp
+from iris.time_utils import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +241,7 @@ class ActorServer:
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server.started,
-            timeout=5.0,
+            timeout=Duration.from_seconds(5.0),
         )
 
         return self._actual_port

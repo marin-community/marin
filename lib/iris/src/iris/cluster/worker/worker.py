@@ -139,7 +139,7 @@ class Worker:
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server.started,
-            timeout=5.0,
+            timeout=Duration.from_seconds(5.0),
         )
 
         # Create controller client if controller configured
@@ -566,7 +566,7 @@ class Worker:
                 running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
                 stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
                     lambda: task.status not in running_states,
-                    timeout=term_timeout_ms / 1000,
+                    timeout=Duration.from_ms(term_timeout_ms),
                 )
 
                 # Force kill if graceful shutdown timed out
