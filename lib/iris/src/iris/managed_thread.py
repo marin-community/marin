@@ -74,6 +74,9 @@ class ManagedThread:
     Optionally, an on_stop callback can be provided to perform cleanup actions
     when stop() is called. This is useful for blocking operations that need
     active intervention to exit (e.g., killing containers, setting server flags).
+
+    Threads automatically remove themselves from their owning container on
+    completion to prevent accumulation of completed threads.
     """
 
     def __init__(
@@ -83,9 +86,11 @@ class ManagedThread:
         name: str | None = None,
         args: tuple = (),
         on_stop: Callable[[], None] | None = None,
+        _container: "ThreadContainer | None" = None,
     ):
         self._stop_event = threading.Event()
         self._on_stop = on_stop
+        self._container = _container
 
         def _safe_target(*a: Any) -> None:
             # Create watcher thread if on_stop callback is provided
@@ -118,6 +123,15 @@ class ManagedThread:
                     watcher.join(timeout=1.0)
                     if watcher.is_alive():
                         logger.warning("on_stop callback for %s did not complete", name)
+
+                # Remove self from container when thread completes
+                if self._container is not None:
+                    with self._container._lock:
+                        try:
+                            self._container._threads.remove(self)
+                        except ValueError:
+                            # Already removed, that's fine
+                            pass
 
         self._thread = threading.Thread(
             target=_safe_target,
@@ -177,7 +191,7 @@ class ThreadContainer:
         args: tuple = (),
         on_stop: Callable[[], None] | None = None,
     ) -> ManagedThread:
-        thread = ManagedThread(target=target, name=name, args=args, on_stop=on_stop)
+        thread = ManagedThread(target=target, name=name, args=args, on_stop=on_stop, _container=self)
         self._threads.append(thread)
         thread.start()
         return thread
