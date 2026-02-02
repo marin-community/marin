@@ -635,6 +635,7 @@ class LocalVmManager:
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),
             )
+            worker_threads = self._threads.create_child(f"worker-{worker_id}")
             worker = Worker(
                 worker_config,
                 cache_dir=self._cache_path,
@@ -643,6 +644,7 @@ class LocalVmManager:
                 container_runtime=container_runtime,
                 environment_provider=environment_provider,
                 port_allocator=self._port_allocator,
+                threads=worker_threads,
             )
             worker.start()
             workers.append(worker)
@@ -679,6 +681,7 @@ def _create_local_autoscaler(
     controller_address: str,
     cache_path: Path,
     fake_bundle: Path,
+    threads: ThreadContainer | None = None,
 ) -> Autoscaler:
     """Create Autoscaler with LocalVmManagers for all scale groups.
 
@@ -710,4 +713,5 @@ def _create_local_autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
         config=config.autoscaler,
+        threads=threads,
     )

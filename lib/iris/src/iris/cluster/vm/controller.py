@@ -993,13 +993,16 @@ class LocalController:
         port = self._config.controller_vm.local.port or find_free_port()
         address = f"http://127.0.0.1:{port}"
 
+        controller_threads = self._threads.create_child("controller") if self._threads else None
+        autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
+
         autoscaler = _create_local_autoscaler(
             self._config,
             address,
             cache_path,
             fake_bundle,
+            threads=autoscaler_threads,
         )
-        controller_threads = self._threads.create_child("controller") if self._threads else None
         self._controller = _InnerController(
             config=_InnerControllerConfig(
                 host="127.0.0.1",
