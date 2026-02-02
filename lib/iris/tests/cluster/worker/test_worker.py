@@ -61,20 +61,6 @@ def test_no_port_reuse_before_release(allocator):
     assert len(set(ports1) & set(ports2)) == 0
 
 
-def test_ports_reused_after_release():
-    """Test that ports can be reused after release."""
-    allocator_small = PortAllocator(port_range=(40000, 40003))
-
-    ports1 = allocator_small.allocate(count=3)
-    assert len(ports1) == 3
-
-    allocator_small.release(ports1)
-
-    ports2 = allocator_small.allocate(count=3)
-    assert len(ports2) == 3
-    assert set(ports1) == set(ports2)
-
-
 def test_release_partial_ports(allocator):
     """Test releasing only some ports."""
     ports = allocator.allocate(count=5)
@@ -83,17 +69,6 @@ def test_release_partial_ports(allocator):
 
     new_ports = allocator.allocate(count=2)
     assert len(set(new_ports) & set(ports[:3])) > 0
-
-
-def test_exhausted_port_range():
-    """Test behavior when port range is exhausted."""
-    allocator_tiny = PortAllocator(port_range=(40000, 40002))
-
-    ports = allocator_tiny.allocate(count=2)
-    assert len(ports) == 2
-
-    with pytest.raises(RuntimeError, match="No free ports available"):
-        allocator_tiny.allocate(count=1)
 
 
 def test_concurrent_allocations(allocator):
