@@ -34,6 +34,20 @@ from iris.test_util import SentinelFile
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+@pytest.fixture(autouse=True)
+def _reset_logging():
+    """Reset logging between tests to prevent closed stream errors.
+
+    Ensures all log handlers properly flush before test teardown, preventing
+    race conditions where background threads try to log to closed streams.
+    """
+    yield
+    # Flush all handlers to ensure buffered messages are written
+    logging.shutdown()
+    # Reinitialize logging for the next test
+    # Note: pytest will reconfigure logging for the next test automatically
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--use-docker",
@@ -115,13 +129,25 @@ def sentinel(tmp_path) -> SentinelFile:
     return SentinelFile(str(tmp_path / "sentinel"))
 
 
+@pytest.fixture(autouse=True)
+def _auto_thread_registry():
+    """Automatically provide an isolated thread registry for every test.
+
+    This ensures all tests run with a fresh ThreadRegistry that is properly
+    cleaned up, preventing thread leaks and test isolation issues. Tests can
+    use get_thread_registry() to access the current registry implicitly.
+    """
+    with thread_registry_scope("test"):
+        yield
+
+
 @pytest.fixture
 def registry():
-    """Provides an isolated thread registry for the test.
+    """Provides explicit access to the current thread registry.
 
-    Automatically cleans up all threads spawned within the registry when
-    the test completes. This is the recommended way to use ThreadContainer
-    in tests that need explicit thread management.
+    Since _auto_thread_registry already sets up a thread_registry_scope,
+    this fixture just returns the current registry for tests that need
+    explicit access.
 
     Example:
         def test_with_threads(registry):
@@ -129,8 +155,9 @@ def registry():
             # Test code...
             # Cleanup happens automatically
     """
-    with thread_registry_scope("test") as reg:
-        yield reg
+    from iris.managed_thread import get_thread_registry
+
+    return get_thread_registry()
 
 
 @pytest.fixture(autouse=True)
