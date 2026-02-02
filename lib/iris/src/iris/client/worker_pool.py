@@ -58,7 +58,7 @@ from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
-from iris.managed_thread import ThreadContainer
+from iris.managed_thread import ThreadContainer, get_thread_registry
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -389,6 +389,7 @@ class WorkerPool:
         config: WorkerPoolConfig,
         timeout: float = 30.0,
         resolver: Resolver | None = None,
+        threads: ThreadContainer | None = None,
     ):
         """Create a worker pool.
 
@@ -397,6 +398,7 @@ class WorkerPool:
             config: Pool configuration (workers, resources, etc.)
             timeout: RPC timeout in seconds for worker calls
             resolver: Optional resolver override (for testing)
+            threads: ThreadContainer for managing pool threads. If None, uses the default registry.
         """
         self._client = client
         self._config = config
@@ -409,7 +411,7 @@ class WorkerPool:
 
         # Task queue and dispatch
         self._task_queue: Queue[PendingTask] = Queue()
-        self._threads = ThreadContainer()
+        self._threads = threads if threads is not None else get_thread_registry().container
         self._shutdown = False
 
         # Resolver for endpoint discovery (injectable for testing)

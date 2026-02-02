@@ -22,19 +22,17 @@ Also provides the local provider implementations used by workers:
 - LocalEnvironmentProvider: probes local system resources
 - _LocalBundleProvider: serves pre-built bundles from local filesystem
 - _LocalImageProvider: no-op image provider (uses local:latest)
-- _LocalContainerRuntime: executes containers as threads with output capture
+- _LocalContainerRuntime: executes containers as threads
 - _LocalContainer: thread-based container execution model
-- _StreamingCapture: captures stdout/stderr to LogLine stream
 """
 
 from __future__ import annotations
 
-import io
 import logging
 import socket
+import subprocess
 import threading
 import uuid
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,7 +47,7 @@ from iris.cluster.worker.worker_types import TaskLogs
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, ThreadContainer
+from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_registry
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -59,42 +57,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Local Providers (in-process implementations for testing)
 # =============================================================================
-
-
-class _StreamingCapture(io.StringIO):
-    """StringIO subclass that immediately writes lines to container logs."""
-
-    def __init__(self, container: _LocalContainer, source: str):
-        super().__init__()
-        self._container = container
-        self._source = source
-        self._buffer = ""
-
-    def write(self, s: str) -> int:
-        result = super().write(s)
-        self._buffer += s
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-            self._container._logs.append(
-                LogLine(
-                    timestamp=datetime.now(timezone.utc),
-                    source=self._source,
-                    data=line,
-                )
-            )
-        return result
-
-    def flush_remaining(self):
-        """Flush any remaining buffered content as a final log line."""
-        if self._buffer:
-            self._container._logs.append(
-                LogLine(
-                    timestamp=datetime.now(timezone.utc),
-                    source=self._source,
-                    data=self._buffer,
-                )
-            )
-            self._buffer = ""
 
 
 @dataclass
@@ -127,11 +89,10 @@ class _LocalContainer:
     def _execute(self):
         from iris.cluster.client.job_info import JobInfo, _parse_ports_from_env, set_job_info
 
-        stdout_capture = _StreamingCapture(self, "stdout")
-        stderr_capture = _StreamingCapture(self, "stderr")
+        container_name = self.config.task_id or self.config.job_id or "unnamed"
+        container_logger = logging.getLogger(f"iris.container.{container_name}")
 
         try:
-            # Build JobInfo from container config env vars
             env = self.config.env
             job_info = JobInfo(
                 job_id=env.get("IRIS_JOB_ID", ""),
@@ -147,42 +108,50 @@ class _LocalContainer:
 
             entrypoint = self.config.entrypoint
 
-            # Check if killed before executing
             if self._killed.is_set():
                 self._exit_code = 137
                 return
 
-            # Execute based on entrypoint type
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                if entrypoint.is_callable:
-                    fn, args, kwargs = entrypoint.resolve()
-                    fn(*args, **kwargs)
-                else:
-                    # Command entrypoint: run subprocess with output capture
-                    assert entrypoint.command is not None
-                    import subprocess
+            if entrypoint.is_callable:
+                # Run callable directly in-thread; output goes to parent process.
+                # Use a named logger so output can be attributed to this container.
+                container_logger.info("Starting callable entrypoint")
+                fn, args, kwargs = entrypoint.resolve()
+                fn(*args, **kwargs)
+            else:
+                # Command entrypoint: run as subprocess, capture and log output.
+                assert entrypoint.command is not None
+                container_logger.info("Starting command: %s", entrypoint.command)
+                result = subprocess.run(
+                    entrypoint.command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=self.config.env,
+                )
+                self._append_subprocess_logs(result.stdout, "stdout")
+                self._append_subprocess_logs(result.stderr, "stderr")
+                if result.returncode != 0:
+                    raise RuntimeError(f"Command failed with exit code {result.returncode}")
 
-                    result = subprocess.run(
-                        entrypoint.command,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                        env=self.config.env,
-                    )
-                    stdout_capture.write(result.stdout)
-                    stderr_capture.write(result.stderr)
-                    if result.returncode != 0:
-                        raise RuntimeError(f"Command failed with exit code {result.returncode}")
             self._exit_code = 0
 
         except Exception as e:
             self._error = str(e)
             self._exit_code = 1
         finally:
-            # Flush any remaining buffered output
-            stdout_capture.flush_remaining()
-            stderr_capture.flush_remaining()
             self._running = False
+
+    def _append_subprocess_logs(self, output: str, source: str) -> None:
+        """Append subprocess output lines to the container log."""
+        for line in output.splitlines():
+            self._logs.append(
+                LogLine(
+                    timestamp=datetime.now(timezone.utc),
+                    source=source,
+                    data=line,
+                )
+            )
 
     def kill(self):
         self._killed.set()
@@ -482,6 +451,7 @@ class LocalVmManager:
         fake_bundle: Path,
         vm_registry: VmRegistry,
         port_allocator: PortAllocator,
+        threads: ThreadContainer | None = None,
     ):
         self._config = scale_group_config
         self._controller_address = controller_address
@@ -490,7 +460,7 @@ class LocalVmManager:
         self._vm_registry = vm_registry
         self._port_allocator = port_allocator
         self._slice_counter = 0
-        self._threads = ThreadContainer(name=f"local-vm-manager-{scale_group_config.name}")
+        self._threads = threads if threads is not None else get_thread_registry().container
 
     def create_vm_group(self, tags: dict[str, str] | None = None) -> VmGroupProtocol:
         """Create a new VM group with workers."""

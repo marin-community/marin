@@ -26,6 +26,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
+from iris.managed_thread import thread_registry_scope
 from iris.test_util import SentinelFile
 
 # httpx logs every HTTP request at INFO level, which floods test output
@@ -114,6 +115,24 @@ def sentinel(tmp_path) -> SentinelFile:
     return SentinelFile(str(tmp_path / "sentinel"))
 
 
+@pytest.fixture
+def registry():
+    """Provides an isolated thread registry for the test.
+
+    Automatically cleans up all threads spawned within the registry when
+    the test completes. This is the recommended way to use ThreadContainer
+    in tests that need explicit thread management.
+
+    Example:
+        def test_with_threads(registry):
+            registry.spawn(my_thread_fn, name="test-thread")
+            # Test code...
+            # Cleanup happens automatically
+    """
+    with thread_registry_scope("test") as reg:
+        yield reg
+
+
 @pytest.fixture(autouse=True)
 def _thread_cleanup():
     """Ensure no new non-daemon threads leak from each test.
@@ -121,6 +140,9 @@ def _thread_cleanup():
     Takes a snapshot of threads before the test and checks that no new
     non-daemon threads remain after teardown. Waits briefly for threads
     that are in the process of shutting down.
+
+    This fixture helps catch tests that don't properly clean up their threads,
+    which can cause tests to hang or interfere with each other.
     """
     before = {t.ident for t in threading.enumerate()}
     yield
@@ -136,8 +158,17 @@ def _thread_cleanup():
             return
         time.sleep(0.1)
 
-    thread_names = [t.name for t in leaked]
-    warnings.warn(f"Threads leaked from test: {thread_names}", stacklevel=1)
+    # Generate detailed warning about leaked threads
+    thread_info = []
+    for t in leaked:
+        thread_info.append(f"{t.name} (daemon={t.daemon}, ident={t.ident})")
+
+    warnings.warn(
+        f"Threads leaked from test: {thread_info}\n"
+        "All threads should be stopped via ThreadContainer.stop() or similar cleanup.\n"
+        "See lib/iris/tests/test_utils.py for best practices.",
+        stacklevel=1,
+    )
 
 
 def pytest_sessionfinish(session, exitstatus):

@@ -27,7 +27,7 @@ from contextlib import contextmanager
 
 from iris.cluster.vm.controller import ControllerProtocol, create_controller
 from iris.cluster.vm.debug import controller_tunnel
-from iris.managed_thread import ThreadContainer
+from iris.managed_thread import ThreadContainer, get_thread_registry
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
@@ -76,9 +76,13 @@ class ClusterManager:
         manager.stop()
     """
 
-    def __init__(self, config: config_pb2.IrisClusterConfig):
+    def __init__(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        threads: ThreadContainer | None = None,
+    ):
         self._config = config
-        self._threads = ThreadContainer("cluster")
+        self._threads = threads if threads is not None else get_thread_registry().container
         self._controller: ControllerProtocol | None = None
 
     @property

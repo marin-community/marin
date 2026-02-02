@@ -33,7 +33,7 @@ import cloudpickle
 import uvicorn
 from connectrpc.request import RequestContext
 
-from iris.managed_thread import ThreadContainer
+from iris.managed_thread import ThreadContainer, get_thread_registry
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
 from iris.time_utils import ExponentialBackoff, Timestamp
@@ -56,19 +56,25 @@ class RegisteredActor:
 class ActorServer:
     """Server for hosting actor instances and handling RPC calls."""
 
-    def __init__(self, host: str = "0.0.0.0", port: int | None = None):
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int | None = None,
+        threads: ThreadContainer | None = None,
+    ):
         """Initialize the actor server.
 
         Args:
             host: Host address to bind to
             port: Port to bind to. If None or 0, auto-assigns a free port.
+            threads: ThreadContainer for managing server threads. If None, uses the default registry.
         """
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
         self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
-        self._threads = ThreadContainer("actor-server")
+        self._threads = threads if threads is not None else get_thread_registry().container
         self._server: uvicorn.Server | None = None
 
     @property

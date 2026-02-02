@@ -12,18 +12,54 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ManagedThread and ThreadContainer for structured thread lifecycle management.
+"""ManagedThread, ThreadContainer, and ThreadRegistry for structured thread lifecycle management.
 
 ManagedThread wraps threading.Thread with an integrated stop event, ensuring
 threads are non-daemon and can be cleanly shut down. ThreadContainer provides
 component-scoped thread groups with hierarchical composition.
+
+ThreadRegistry layers a contextvar on top of ThreadContainer so that code can
+implicitly find the "current" registry without threading it through every call
+site. Use thread_registry_scope() in tests for isolation.
+
+Thread Safety Best Practices
+=============================
+
+All managed threads MUST:
+1. Accept threading.Event as first parameter (the stop_event)
+2. Check stop_event regularly in loops (recommended: every 0.1-1 second)
+3. Exit promptly when stop_event is set (within ~1 second)
+4. Use stop_event.wait(timeout) instead of time.sleep() for delays
+
+Example thread pattern:
+    def worker_loop(stop_event: threading.Event, config: Config) -> None:
+        '''Worker that processes items until stopped.'''
+        while not stop_event.is_set():
+            item = queue.get(timeout=1.0)
+            if item:
+                process(item)
+            # Check stop event after each item, or use wait for delays:
+            # stop_event.wait(timeout=1.0)  # Sleep but check stop_event
+
+NEVER write loops that ignore stop_event:
+    BAD:
+        def worker(stop_event: threading.Event):
+            while True:  # Never checks stop_event!
+                time.sleep(10)
+
+    GOOD:
+        def worker(stop_event: threading.Event):
+            while not stop_event.is_set():
+                stop_event.wait(timeout=10)  # Checks stop_event every 10s
 """
 
+import contextlib
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -57,10 +93,13 @@ class ManagedThread:
         self._thread.start()
 
     def stop(self) -> None:
+        """Signal the thread to stop (but don't wait for it to exit).
+
+        To wait for the thread to exit, call join() separately. This allows
+        ThreadContainer to manage multiple thread timeouts globally.
+        """
         self._stop_event.set()
-        print("STOPPED THREAD", self._thread.name)
-        self._thread.join()
-        print("JOINED THREAD", self._thread.name)
+        logger.debug("Signaled thread %s to stop", self._thread.name)
 
     def join(self, timeout: float | None = None) -> None:
         self._thread.join(timeout=timeout)
@@ -100,25 +139,36 @@ class ThreadContainer:
         return thread
 
     def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
-        def _run(stop_event: threading.Event) -> None:
-            import sys
+        """Spawn a server (like uvicorn.Server) with automatic stop_event bridging.
 
-            print("RUNNING SERVER", server, name, file=sys.stderr)
+        The stop_event is monitored in a watcher thread, which sets server.should_exit
+        when the stop_event is triggered. The watcher thread is daemon=True so it
+        won't block process exit if something goes wrong.
+
+        Args:
+            server: Server instance with should_exit attribute and run() method
+            name: Name for the managed thread
+        """
+
+        def _run(stop_event: threading.Event) -> None:
+            logger.debug("Running server %s (%s)", name, server)
 
             def _watch_stop() -> None:
-                while not stop_event.is_set():
-                    time.sleep(0.25)
-
-                print("STOPPING SERVER", server, name, file=sys.stderr)
+                # Use wait() with timeout to ensure responsive checking.
+                # This watcher is daemon=True so it won't block shutdown.
+                stop_event.wait()
+                logger.debug("Signaling server %s to exit", name)
                 server.should_exit = True
-                print("STOPPED SERVER", server, name, file=sys.stderr)
 
-            watcher = threading.Thread(target=_watch_stop, name=f"{name}-stop-watcher")
+            watcher = threading.Thread(target=_watch_stop, name=f"{name}-stop-watcher", daemon=True)
             watcher.start()
             server.run()
-            print("SERVER DONE", server, name, file=sys.stderr)
+            logger.debug("Server %s exited", name)
             assert server.should_exit
-            watcher.join()
+            # Join with timeout to prevent hanging forever if watcher is stuck
+            watcher.join(timeout=1.0)
+            if watcher.is_alive():
+                logger.warning("Stop watcher for %s did not exit cleanly", name)
 
         return self.spawn(target=_run, name=name)
 
@@ -178,3 +228,92 @@ class ThreadContainer:
 
         for executor in self._executors:
             executor.shutdown(wait=True)
+
+
+# ---------------------------------------------------------------------------
+# ThreadRegistry: contextvar-based access to the current ThreadContainer
+# ---------------------------------------------------------------------------
+
+_current_registry: ContextVar["ThreadRegistry | None"] = ContextVar("_current_registry", default=None)
+
+
+class ThreadRegistry:
+    """Contextvar-aware wrapper around a ThreadContainer.
+
+    Provides the same spawn/stop API as ThreadContainer, but is discoverable
+    via get_thread_registry() without being passed explicitly. This lets
+    components create managed threads without requiring every call site to
+    accept a ThreadContainer parameter.
+
+    For advanced or hierarchical use, callers can still create and pass
+    ThreadContainer instances directly.
+    """
+
+    def __init__(self, name: str = "registry") -> None:
+        self._container = ThreadContainer(name=name)
+
+    @property
+    def container(self) -> ThreadContainer:
+        """The underlying ThreadContainer, exposed for interop with code
+        that accepts ThreadContainer directly."""
+        return self._container
+
+    def spawn(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()) -> ManagedThread:
+        return self._container.spawn(target=target, name=name, args=args)
+
+    def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
+        return self._container.spawn_server(server=server, name=name)
+
+    def spawn_executor(self, max_workers: int, prefix: str) -> ThreadPoolExecutor:
+        return self._container.spawn_executor(max_workers=max_workers, prefix=prefix)
+
+    def create_child(self, name: str) -> ThreadContainer:
+        return self._container.create_child(name=name)
+
+    @property
+    def is_alive(self) -> bool:
+        return self._container.is_alive
+
+    def alive_threads(self) -> list[ManagedThread]:
+        return self._container.alive_threads()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._container.stop(timeout=timeout)
+
+    def wait(self) -> None:
+        self._container.wait()
+
+
+def get_thread_registry() -> ThreadRegistry:
+    """Return the current thread registry, creating a default if none is set.
+
+    In production code this returns a process-wide default registry.
+    In tests, use thread_registry_scope() to get an isolated registry
+    that is automatically cleaned up.
+    """
+    registry = _current_registry.get()
+    if registry is not None:
+        return registry
+
+    registry = ThreadRegistry(name="default")
+    _current_registry.set(registry)
+    return registry
+
+
+@contextlib.contextmanager
+def thread_registry_scope(name: str = "test") -> Generator[ThreadRegistry, None, None]:
+    """Context manager that installs a fresh ThreadRegistry for the duration of the block.
+
+    On exit, all threads in the registry are stopped and the previous
+    registry (if any) is restored. This is the primary mechanism for
+    test isolation: each test gets its own registry and does not leak
+    threads into the next test.
+    """
+    previous = _current_registry.get()
+    registry = ThreadRegistry(name=name)
+    _current_registry.set(registry)
+    try:
+        yield registry
+    finally:
+        registry.stop()
+        _current_registry.set(previous)
