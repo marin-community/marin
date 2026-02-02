@@ -646,6 +646,7 @@ class ControllerServiceImpl:
         log_filter = cluster_pb2.Worker.FetchLogsFilter(
             start_ms=request.start_ms,
             max_lines=request.limit,
+            tail=request.limit if request.tail else 0,
         )
         worker_client = WorkerServiceClientSync(f"http://{worker.address}")
         worker_resp = worker_client.fetch_task_logs(

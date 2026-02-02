@@ -588,8 +588,14 @@ class Worker:
 
         return True
 
-    def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
-        """Get logs for a task."""
+    def get_logs(self, task_id: str, start_line: int = 0, tail: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
+        """Get logs for a task.
+
+        Args:
+            task_id: The task ID to fetch logs for
+            start_line: Starting line number (0-indexed) when fetching from beginning
+            tail: If > 0, return the last N lines instead of starting from start_line
+        """
         task = self._tasks.get(task_id)
         if not task:
             return []
@@ -609,6 +615,9 @@ class Worker:
         # Sort by timestamp
         logs.sort(key=lambda x: x.timestamp.epoch_ms)
 
+        # Return last N lines if tail is specified, otherwise return from start_line
+        if tail > 0:
+            return logs[-tail:]
         return logs[start_line:]
 
     @property

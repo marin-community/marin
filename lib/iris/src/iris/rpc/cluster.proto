@@ -567,6 +567,8 @@ message Controller {
     int32 task_index = 2;
     int64 start_ms = 3;
     int64 limit = 4;
+    // If true, return the last `limit` lines instead of the first `limit` lines
+    bool tail = 5;
   }
 
   message GetTaskLogsResponse {
@@ -628,6 +630,8 @@ message Worker {
     int64 start_ms = 3;
     int64 end_ms = 4;
     int64 max_lines = 5;
+    // If set, return the last N lines instead of starting from start_line
+    int64 tail = 6;
   }
 
   message FetchTaskLogsRequest {

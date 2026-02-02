@@ -90,7 +90,8 @@ class WorkerServiceImpl:
     ) -> cluster_pb2.Worker.FetchTaskLogsResponse:
         """Fetch logs for a task."""
         start_line = request.filter.start_line if request.filter.start_line else 0
-        logs = self._provider.get_logs(request.task_id, start_line=start_line)
+        tail = request.filter.tail if request.filter.tail else 0
+        logs = self._provider.get_logs(request.task_id, start_line=start_line, tail=tail)
 
         # Apply additional filters
         result = []
