@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from typing import Literal
+
+BwdStrategy = Literal["combined", "split"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +19,7 @@ class BlockSizes:
     b_block_size: int = 1024
     h_block_size: int = 256
     v_block_size: int = 2048
+    bwd_strategy: BwdStrategy = "combined"
 
     @classmethod
     def get_default(cls) -> "BlockSizes":

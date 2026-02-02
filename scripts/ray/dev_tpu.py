@@ -20,7 +20,7 @@ This script allocates a TPU using a Ray job and then "holds it" as long as the s
 remains running. It will automatically set up a reasonable home directory and SSH
 configuration for the target TPU.
 
-You can connect to the TPU directly using `ssh dev-tpu-<tpu-name>`, or via the `connect`
+You can connect to the TPU directly using `ssh dev-tpu-<cluster-tag>-<tpu-name>`, or via the `connect`
 command.
 
 The `watch` command lets you watch for local file changes and automatically sync
@@ -300,8 +300,32 @@ class TPUAllocationActor:
         _hacky_remove_tpu_lockfile()
 
 
+def _validate_cluster_tag(cluster_tag: str) -> None:
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", cluster_tag):
+        raise click.ClickException(
+            "Invalid cluster tag. Use only letters, numbers, '.', '_' or '-' and start with an alphanumeric."
+        )
+
+
+def _marker_token(cluster_tag: str, tpu_name: str) -> str:
+    token = f"{cluster_tag}_{tpu_name}"
+    return re.sub(r"[^A-Za-z0-9]", "_", token).upper()
+
+
+def _host_alias(cluster_tag: str, tpu_name: str) -> str:
+    _validate_cluster_tag(cluster_tag)
+    return f"dev-tpu-{cluster_tag}-{tpu_name}"
+
+
 def add_ssh_host_config(
-    hostname: str, ip_address: str, username: str, tpu_name: str, gcloud_tpu_name: str, gcloud_zone: str
+    hostname: str,
+    ip_address: str,
+    username: str,
+    tpu_name: str,
+    gcloud_tpu_name: str,
+    gcloud_zone: str,
+    *,
+    cluster_tag: str,
 ) -> None:
     """Add SSH host configuration."""
     config_path = Path.home() / ".ssh" / "config"
@@ -329,17 +353,18 @@ def add_ssh_host_config(
         logger.warning("SSH may fail if your key isn't available on the VM.")
         logger.warning("You can add it at https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys")
 
-    host_alias = f"dev-tpu-{tpu_name}"
+    host_alias = _host_alias(cluster_tag, tpu_name)
+    marker_token = _marker_token(cluster_tag, tpu_name)
 
     ssh_config_entry = f"""
-# BEGIN_DEV_TPU_{tpu_name.upper()}
+# BEGIN_DEV_TPU_{marker_token}
 Host {host_alias}
     HostName {ip_address}
     HostKeyAlias compute.{hostname}
     StrictHostKeyChecking no
     CheckHostIP no
     User {username}
-# END_DEV_TPU_{tpu_name.upper()}
+# END_DEV_TPU_{marker_token}
 """
 
     existing_config = ""
@@ -351,9 +376,9 @@ Host {host_alias}
         f.write(existing_config)
 
     # Check if this specific TPU config already exists and remove it
-    tpu_marker = f"BEGIN_DEV_TPU_{tpu_name.upper()}"
+    tpu_marker = f"BEGIN_DEV_TPU_{marker_token}"
     if tpu_marker in existing_config:
-        pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?\n)*?# END_DEV_TPU_{tpu_name.upper()}\n"
+        pattern = f"# BEGIN_DEV_TPU_{marker_token}\n(.*?\n)*?# END_DEV_TPU_{marker_token}\n"
         existing_config = re.sub(pattern, "", existing_config, flags=re.DOTALL)
 
     with open(config_path, "w") as f:
@@ -362,7 +387,7 @@ Host {host_alias}
     logger.info(f"Added SSH configuration for {host_alias}")
 
 
-def remove_ssh_host_config(tpu_name: str) -> None:
+def remove_ssh_host_config(tpu_name: str, *, cluster_tag: str) -> None:
     """Remove SSH host configuration for specific TPU."""
     config_path = Path.home() / ".ssh" / "config"
     if not config_path.exists():
@@ -370,13 +395,14 @@ def remove_ssh_host_config(tpu_name: str) -> None:
 
     existing_config = config_path.read_text()
 
-    tpu_marker = f"BEGIN_DEV_TPU_{tpu_name.upper()}"
+    marker_token = _marker_token(cluster_tag, tpu_name)
+    tpu_marker = f"BEGIN_DEV_TPU_{marker_token}"
     if tpu_marker in existing_config:
-        pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?\n)*?# END_DEV_TPU_{tpu_name.upper()}\n"
+        pattern = f"# BEGIN_DEV_TPU_{marker_token}\n(.*?\n)*?# END_DEV_TPU_{marker_token}\n"
         updated_config = re.sub(pattern, "", existing_config, flags=re.DOTALL)
         updated_config = updated_config.strip() + "\n"
         config_path.write_text(updated_config)
-        logger.info(f"Removed SSH configuration for dev-tpu-{tpu_name}")
+        logger.info(f"Removed SSH configuration for dev-tpu-{cluster_tag}-{tpu_name}")
 
 
 def list_tracked_files(local_path: Path) -> list[str]:
@@ -454,6 +480,8 @@ def hold_tpu_allocation(
     config_file: str,
     sync_path: str = ".",
     tpu_type: str = "v4-8",
+    *,
+    cluster_tag: str,
 ) -> Generator[dict[str, str], None, None]:
     """Context manager that holds a TPU allocation until the context exits.
 
@@ -488,22 +516,24 @@ def hold_tpu_allocation(
                 tpu_name,
                 host_info["gcloud_tpu_name"],
                 host_info["gcloud_zone"],
+                cluster_tag=cluster_tag,
             )
 
             logger.info("Syncing environment")
             try:
-                sync_to_remote(f"dev-tpu-{tpu_name}", sync_path)
-                setup_remote_environment(f"dev-tpu-{tpu_name}")
+                host_alias = _host_alias(cluster_tag, tpu_name)
+                sync_to_remote(host_alias, sync_path)
+                setup_remote_environment(host_alias)
             except Exception as e:
                 logger.warning(f"Environment setup failed, keeping TPU allocation alive. {e}")
 
-            print(f"SSH alias: dev-tpu-{tpu_name}")
+            print(f"SSH alias: {_host_alias(cluster_tag, tpu_name)}")
             yield host_info
         except Exception as e:
             logger.error(f"Error during TPU allocation or setup: {e}", exc_info=True)
             raise
         finally:
-            remove_ssh_host_config(tpu_name)
+            remove_ssh_host_config(tpu_name, cluster_tag=cluster_tag)
 
 
 class Context:
@@ -513,25 +543,42 @@ class Context:
         self.config_obj: RayClusterConfig | None = None
         self.tpu_name: str | None = None
         self.config_data: dict | None = None
+        self.cluster_tag: str | None = None
 
 
 def _infer_tpu_type_from_config(config_data: dict | None) -> str | None:
     if not config_data:
         return None
-
     try:
         return config_data["available_node_types"]["tpu_worker"]["node_config"]["acceleratorType"]
     except KeyError:
         return None
 
 
+def _cluster_tag_from_config(config_data: dict | None) -> str | None:
+    if not config_data:
+        return None
+    return config_data.get("cluster_name")
+
+
+def _require_cluster_tag(ctx: click.Context) -> str:
+    cluster_tag = ctx.obj.cluster_tag
+    if not cluster_tag:
+        raise click.ClickException(
+            "Cluster tag is required. Pass --config (with cluster_name) or --cluster-tag to disambiguate."
+        )
+    _validate_cluster_tag(cluster_tag)
+    return cluster_tag
+
+
 @click.group()
 @click.option("--config", help="Path to cluster config file")
 @click.option("--cluster", help="Cluster name to connect to")
+@click.option("--cluster-tag", help="Cluster tag for SSH aliasing (defaults to cluster_name from config)")
 @click.option("--tpu-name", help="TPU name identifier")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 @click.pass_context
-def cli(ctx, config, cluster, tpu_name, verbose):
+def cli(ctx, config, cluster, cluster_tag, tpu_name, verbose):
     """Development TPU management for Ray clusters."""
     ctx.ensure_object(Context)
     if cluster:
@@ -553,6 +600,10 @@ def cli(ctx, config, cluster, tpu_name, verbose):
         token_path = maybe_fetch_local_ray_token(gcp_project=gcp_project)
         os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
         os.environ["RAY_AUTH_MODE"] = "token"
+        if cluster_tag is None:
+            cluster_tag = _cluster_tag_from_config(ctx.obj.config_data)
+
+    ctx.obj.cluster_tag = cluster_tag
 
 
 @cli.command("allocate")
@@ -570,6 +621,7 @@ def allocate(ctx, tpu_type, sync_path, username):
         username = getpass.getuser()
 
     tpu_name = ctx.obj.tpu_name
+    cluster_tag = _require_cluster_tag(ctx)
 
     if not tpu_type:
         inferred_tpu_type = _infer_tpu_type_from_config(ctx.obj.config_data)
@@ -584,7 +636,14 @@ def allocate(ctx, tpu_type, sync_path, username):
     print(f"Allocating development TPU '{tpu_name}' for {username}...")
     print(f"TPU type: {tpu_type}")
 
-    with hold_tpu_allocation(username, tpu_name, ctx.obj.config_file, sync_path, tpu_type):
+    with hold_tpu_allocation(
+        username,
+        tpu_name,
+        ctx.obj.config_file,
+        sync_path,
+        tpu_type,
+        cluster_tag=cluster_tag,
+    ):
         print("\nTPU allocation is active. Press Ctrl-C to release...")
         try:
             while True:
@@ -604,14 +663,18 @@ def connect(ctx, username):
         username = getpass.getuser()
 
     tpu_name = ctx.obj.tpu_name
-    host_alias = f"dev-tpu-{tpu_name}"
+    cluster_tag = _require_cluster_tag(ctx)
+    host_alias = _host_alias(cluster_tag, tpu_name)
     env = build_env_dict()
     env_string = build_env_string(env)
 
     config_path = Path.home() / ".ssh" / "config"
     if not config_path.exists() or f"Host {host_alias}" not in config_path.read_text():
         print(f"Error: SSH configuration for {host_alias} not found", file=sys.stderr)
-        print(f"You need to run 'allocate --tpu-name {tpu_name}' first to set up the TPU", file=sys.stderr)
+        print(
+            f"You need to run 'allocate --tpu-name {tpu_name} --cluster-tag {cluster_tag}' first to set up the TPU",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print(f"Connecting to {host_alias}...")
@@ -624,7 +687,8 @@ def connect(ctx, username):
 def setup_env(ctx):
     """Set up the remote environment on the development TPU."""
     tpu_name = ctx.obj.tpu_name
-    host_alias = f"dev-tpu-{tpu_name}"
+    cluster_tag = _require_cluster_tag(ctx)
+    host_alias = _host_alias(cluster_tag, tpu_name)
     setup_remote_environment(host_alias)
 
 
@@ -651,12 +715,16 @@ def execute(ctx, command, username, sync_path, env, forward_all_env):
         username = getpass.getuser()
 
     tpu_name = ctx.obj.tpu_name
-    host_alias = f"dev-tpu-{tpu_name}"
+    cluster_tag = _require_cluster_tag(ctx)
+    host_alias = _host_alias(cluster_tag, tpu_name)
 
     config_path = Path.home() / ".ssh" / "config"
     if not config_path.exists() or f"Host {host_alias}" not in config_path.read_text():
         print(f"Error: SSH configuration for {host_alias} not found", file=sys.stderr)
-        print(f"You need to run 'allocate --tpu-name {tpu_name}' first to set up the TPU", file=sys.stderr)
+        print(
+            f"You need to run 'allocate --tpu-name {tpu_name} --cluster-tag {cluster_tag}' first to set up the TPU",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Sync files
@@ -804,13 +872,17 @@ def watch(ctx, command, username, sync_path, debounce, env, forward_all_env):
         uv run scripts/ray/dev_tpu.py watch --watch-path src --watch-path tests -- uv run pytest
     """
     tpu_name = ctx.obj.tpu_name
-    host_alias = f"dev-tpu-{tpu_name}"
+    cluster_tag = _require_cluster_tag(ctx)
+    host_alias = _host_alias(cluster_tag, tpu_name)
 
     # Check if SSH config exists
     config_path = Path.home() / ".ssh" / "config"
     if not config_path.exists() or f"Host {host_alias}" not in config_path.read_text():
         print(f"Error: SSH configuration for {host_alias} not found", file=sys.stderr)
-        print(f"You need to run 'allocate --tpu-name {tpu_name}' first to set up the TPU", file=sys.stderr)
+        print(
+            f"You need to run 'allocate --tpu-name {tpu_name} --cluster-tag {cluster_tag}' first to set up the TPU",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Build environment variables

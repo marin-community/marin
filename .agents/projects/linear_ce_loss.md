@@ -2,14 +2,12 @@
 
 ## Snapshot
 We now have a **new Pallas TPU backward kernel** for `fused_cross_entropy_loss_and_logsumexp_penalty` that uses a **parallel core grid axis** (no `core_map`) with per-core `w_grad` partials. This targets v5p megacore and uses **per-core batch splitting** plus explicit HBM↔VMEM staging.
-
-Forward already uses megacore via `dimension_semantics`. Backward now uses a leading grid axis of size `num_cores`, accumulates `w_grad_partial[core]`, then reduces across cores.
+**New:** a **split backward strategy** is implemented: separate Pallas calls compute `x_grad` and `w_grad` (each remats logits). This is exposed via `BlockSizes(bwd_strategy="split")` for profiling/experiments.
 
 ## Where it lives
 - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
-  - `linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel`
-  - `linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu` (single backward path now)
-  - `_make_custom_vjp` always uses the same backward implementation (split path removed)
+  - `linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu` (HBM-ref, scratch-first `dw`, core-parallel when available)
+  - `_make_custom_vjp` always uses this single backward implementation (split path removed)
 
 ## Current shape/alignment constraints
 The parallel combined kernel enforces:
@@ -21,17 +19,15 @@ The parallel combined kernel enforces:
 We are using `pl.multiple_of` on b/h/v start indices to satisfy tiling constraints.
 
 ## Kernel structure (bwd combined, core-parallel)
-Per-core kernel (via a leading grid axis) currently does:
-1. For each `(b_block, v_block)` tile:
-   - Loads `x` and `w` tiles into VMEM.
-   - Recomputes logits for that tile (remat).
-   - Computes softmax delta for labels and LSE, produces `delta`.
-2. Accumulates:
-   - `dx` into HBM (`x_grad_hbm_ref`) using `pltpu.sync_copy` read/modify/write.
-   - `dw` into per-core HBM buffer `w_grad_partial_ref[core_idx]`.
-3. Host-side: `w_grad = sum(w_grad_partial_ref, axis=0)`
-
-This means **dw is computed per-core** to avoid cross-core atomics, and reduced afterward.
+Per-core kernel (leading grid axis) now:
+1. For each `v_block` and `h_block`: zero `dw_accum` in VMEM.
+2. Loop over all `b_block`s for that core:
+   - Build logits over **all h_blocks** (remat) for the current `b_block, v_block`.
+   - Compute `delta` (softmax + labels + lse + soft-cap).
+   - Update `x_grad` in HBM (RMW) for this `b_block, h_block`.
+   - Accumulate `dw_accum += x_tile^T @ delta` (scratch-first).
+3. After the `b_block` loop: write `dw_accum` **once** to `w_grad_partial[core, h_slice, v_slice]`.
+4. Host-side: `w_grad = sum(w_grad_partial, axis=0)`.
 
 ### Parallel combined pseudocode (current implementation)
 ```text
@@ -108,6 +104,45 @@ cooperative megacore:
 ## Open TODOs
 - If needed, squeeze incremental wins via block-size retuning and pipeline scheduling.
 - If we need another large step, it probably requires algorithm/storage changes rather than micro-tuning.
+
+## V4 Work (separate thread / subagent candidate)
+### Goal
+We need a **minimal Pallas kernel** that reliably reproduces the **TPU v4 sublane crash**
+triggered by `jax.nn.one_hot` / dynamic gather lowering inside a Pallas kernel, and then
+we need a **v4-safe one-hot emulation** to avoid that path.
+
+### Why
+On v4, `jax.nn.one_hot(labels, ...)` inside a Pallas kernel lowers to
+`tpu.dynamic_gather` on the **sublane** path, which is unsupported and crashes the
+kernel. This blocks the fused CE Pallas path on v4 entirely.
+
+### What we want
+1. **Repro kernel**: a tiny Pallas kernel that calls `jax.nn.one_hot` (or the specific
+   gather primitive) and triggers the v4 sublane error. This gives us a stable minimal
+   repro for upstream or future debugging.
+2. **Workaround kernel**: emulate one-hot **without** `dynamic_gather` on v4, e.g.:
+   - Compute a block-local index vector `idx = arange(v_block)` in SMEM/VMEM
+   - For each label in the `b_block`, compute `eq = (idx == label_offset)` using
+     broadcast compare, yielding a one-hot row
+   - Use that boolean mask (cast to dtype) to implement the same label subtraction
+     in the softmax delta path
+
+The workaround should be isolated to v4 (or a backend capability check) so v5+ can
+keep using the faster native lowering.
+
+### Files already created
+- `lib/levanter/scripts/debug/fused_ce_v4_probe.py`
+  - Tries the Pallas path on v4 and prints the failure.
+- `lib/levanter/scripts/debug/fused_ce_v4_workaround.py`
+  - Forces XLA path; useful for baseline comparisons.
+
+### Next steps
+- Add a tiny standalone kernel that **only** does one-hot to isolate the crash
+  (even smaller than the fused CE kernel), then verify it fails on v4.
+- Implement a v4-safe one-hot emulation in the Pallas CE kernel, guarded by
+  device kind (or a new config flag).
+- If a clean emulation is found, re-enable v4 support and add a regression test
+  that exercises the emulated one-hot on v4.
 
 ## How to run TPU tests
 ```bash
