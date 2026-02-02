@@ -83,6 +83,11 @@ USER ${RUNNER_USER}
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/home/${RUNNER_USER}/.uv/bin:/home/${RUNNER_USER}/.local/bin:${PATH}"
 
+# Cache is mounted from host at /opt/uv-cache. Use copy mode since the mount
+# is a different filesystem and hardlinks won't work.
+ENV UV_CACHE_DIR=/opt/uv-cache
+ENV UV_LINK_MODE=copy
+
 WORKDIR /home/${RUNNER_USER}/actions-runner
 
 # Entrypoint script: registers, runs one job, then exits.

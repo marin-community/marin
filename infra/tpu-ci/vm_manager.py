@@ -308,6 +308,34 @@ echo "=== Setting up CPU CI runners ==="
 echo "Pulling CPU CI Docker image..."
 docker pull {config.CPU_CI_IMAGE} || true
 
+# Pre-populate the shared UV cache so the first CI job doesn't start cold.
+# Clones the repo and runs uv sync for each subpackage that CPU tests use.
+echo "Pre-populating UV cache for CPU CI..."
+CPU_TEMP=$(mktemp -d)
+git clone --depth 1 https://github.com/{config.GITHUB_REPOSITORY}.git "$CPU_TEMP" || true
+if [ -d "$CPU_TEMP/.git" ]; then
+    chown -R 1000:1000 "$CPU_TEMP"
+    for sync_cmd in \
+        "uv sync --package marin --extra cpu --group test --frozen" \
+        "uv sync --package levanter --dev --frozen" \
+        "uv sync --package haliax --dev" \
+        "uv sync --package zephyr --group test --frozen" \
+        "cd lib/iris && uv sync --group dev" \
+        "cd lib/fray && uv sync --group fray-test" \
+        "cd lib/dupekit && uv sync --frozen --group test"; do
+        echo "  Running: $sync_cmd"
+        docker run --rm \
+            -v /var/cache/uv:/opt/uv-cache:rw \
+            -v "$CPU_TEMP":/workspace:rw \
+            -w /workspace \
+            {config.CPU_CI_IMAGE} bash -c "$sync_cmd" || true
+    done
+    rm -rf "$CPU_TEMP"
+    echo "UV cache pre-populated for CPU CI"
+else
+    echo "Failed to clone repo, skipping CPU CI cache pre-population"
+fi
+
 # Create systemd services for each CPU runner container.
 # Each container runs an ephemeral GitHub Actions runner with resource limits.
 for i in $(seq 0 {config.CPU_RUNNERS_PER_VM - 1}); do
@@ -333,6 +361,7 @@ ExecStart=/usr/bin/docker run --rm \\
   -e RUNNER_LABELS={",".join(config.CPU_RUNNER_LABELS)} \\
   -v /var/cache/uv:/opt/uv-cache:rw \\
   -e UV_CACHE_DIR=/opt/uv-cache \\
+  -e UV_LINK_MODE=copy \\
   {config.CPU_CI_IMAGE}
 ExecStop=/usr/bin/docker stop $SERVICE_NAME
 
