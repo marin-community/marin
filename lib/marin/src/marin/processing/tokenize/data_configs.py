@@ -27,8 +27,8 @@ from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.utils import load_tokenizer_with_backoff
 
-PermutationType = Literal["linear", "feistel"]
-"""Permutation type for shuffle. feistel is much better but we historically used linear."""
+PermutationType = Literal["feistel"]
+"""Permutation type for shuffle. Only `feistel` is supported."""
 
 TokenizerStep = ExecutorStep[TokenizeConfig]
 
@@ -69,10 +69,6 @@ def lm_data_config(
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
 
     Notes:
-
-        If you are seeing this invoked with `permutation_type="linear"`, that means the experiment was
-        run with the old, deprecated shuffle type. The newer shuffle "feistel" is default and you should
-        prefer it for future experiments,
 
     Args:
         training_set: The training set to use
@@ -138,6 +134,9 @@ def lm_mixture_data_config(
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
         for name, step in components.items()
     }
+
+    if permutation_type != "feistel":
+        raise ValueError(f"Unsupported permutation_type {permutation_type!r}; only 'feistel' is supported.")
 
     if missing_weights_are_validation:
         missing_keys = {k: 0.0 for k in components if k not in weights}
@@ -237,6 +236,9 @@ def lm_varying_mixture_data_config(
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
         for name, step in components.items()
     }
+
+    if permutation_type != "feistel":
+        raise ValueError(f"Unsupported permutation_type {permutation_type!r}; only 'feistel' is supported.")
 
     # Validate and normalize weights
     if not weights_list:

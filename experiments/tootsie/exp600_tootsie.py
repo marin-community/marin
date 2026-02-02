@@ -258,7 +258,7 @@ phase_3_data_mixture = lm_varying_mixture_data_config(
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v1),
     ],
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 llama_8b_tootsie_phase3 = dataclasses.replace(
@@ -342,7 +342,7 @@ bad_dessert_data_mixture_v1 = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, bad_dessert_weights_v1),
     ],
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 # we're aiming to do 1 pass through the new mixes, which is another ~212e9 tokens
@@ -415,7 +415,7 @@ dessert_data_mixture_v3 = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, dessert_weights_v2),
     ],
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 llama_8b_tootsie_dessert_v3 = dataclasses.replace(
@@ -477,7 +477,7 @@ cooldown_config_v2 = lm_varying_mixture_data_config(
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v2),
     ],
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 # deliberately using same number of steps as the previous run
@@ -552,7 +552,7 @@ phase_4_data_mixture = lm_varying_mixture_data_config(
         (PHASE_4_START, phase_4_warmup_weights),
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
     ],
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 llama_8b_tootsie_adept_phoenix = dataclasses.replace(
@@ -661,7 +661,7 @@ starling_cooldown_mixture = lm_varying_mixture_data_config(
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
         (PHASE_4_END, starling_cooldown_weights),
     ],
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 tootsie_8b_sensible_starling = default_train(

@@ -157,7 +157,7 @@ llama_22b_train_config_ema = SimpleTrainConfig(
 dclm_mixture_config_llama3_zoned = lm_mixture_data_config(
     components=dclm_components_zoned,
     weights=DCLM_MIXTURE_WEIGHTS,
-    permutation_type="linear",
+    permutation_type="feistel",
     include_raw_paths=False,
 )
 llama_13b_tootsie_ema_warmstart = dataclasses.replace(
