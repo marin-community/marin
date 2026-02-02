@@ -219,6 +219,7 @@ def create_run_task_request(
     task_index: int = 0,
     num_tasks: int = 1,
     ports: list[str] | None = None,
+    attempt_id: int = 0,
 ):
     """Create a RunTaskRequest for testing."""
 
@@ -242,6 +243,7 @@ def create_run_task_request(
         job_id=job_id or task_id,
         task_index=task_index,
         num_tasks=num_tasks,
+        attempt_id=attempt_id,
         entrypoint=entrypoint_proto,
         environment=env_config,
         bundle_gcs_path="gs://bucket/bundle.zip",
@@ -365,6 +367,62 @@ def test_kill_running_task(worker, mock_runtime):
 
     assert task.status == cluster_pb2.TASK_STATE_KILLED
     mock_runtime.kill.assert_any_call("container123", force=False)
+
+
+def test_new_attempt_supersedes_old(worker, mock_runtime):
+    """New attempt for same task_id kills the old attempt and starts a new one."""
+    mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
+
+    request_0 = create_run_task_request(task_id="retry-task", attempt_id=0)
+    worker.submit_task(request_0)
+
+    # Wait for attempt 0 to be running
+    old_task = worker.get_task("retry-task")
+    for _ in range(20):
+        if old_task.status == cluster_pb2.TASK_STATE_RUNNING and old_task.container_id:
+            break
+        time.sleep(0.1)
+    assert old_task.status == cluster_pb2.TASK_STATE_RUNNING
+    assert old_task.attempt_id == 0
+
+    # Submit attempt 1 for the same task_id — should kill attempt 0
+    request_1 = create_run_task_request(task_id="retry-task", attempt_id=1)
+    worker.submit_task(request_1)
+
+    # Old attempt should have been killed
+    assert old_task.should_stop is True
+
+    # The new attempt should now be tracked with the new attempt_id
+    new_task = worker.get_task("retry-task")
+    assert new_task.attempt_id == 1
+    assert new_task is not old_task
+
+    # Clean up
+    worker.kill_task("retry-task")
+    new_task.thread.join(timeout=15.0)
+
+
+def test_duplicate_attempt_rejected(worker, mock_runtime):
+    """Same attempt_id for an existing non-terminal task is rejected."""
+    mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
+
+    request = create_run_task_request(task_id="dup-task", attempt_id=0)
+    worker.submit_task(request)
+
+    # Wait for it to be running
+    task = worker.get_task("dup-task")
+    for _ in range(20):
+        if task.status == cluster_pb2.TASK_STATE_RUNNING:
+            break
+        time.sleep(0.1)
+
+    # Submit same attempt_id again — should be rejected (task unchanged)
+    worker.submit_task(create_run_task_request(task_id="dup-task", attempt_id=0))
+    assert worker.get_task("dup-task") is task  # Same object, not replaced
+
+    # Clean up
+    worker.kill_task("dup-task")
+    task.thread.join(timeout=15.0)
 
 
 def test_kill_nonexistent_task(worker):

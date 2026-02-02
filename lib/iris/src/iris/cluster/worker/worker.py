@@ -349,21 +349,37 @@ class Worker:
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
         """Submit a new task for execution.
 
-        Rejects duplicates: if a task with the same task_id is already running
-        (non-terminal), the submission is skipped. This guards against the controller
-        re-dispatching a task after a heartbeat timeout while the original is still
-        in-flight.
+        If a non-terminal task with the same task_id already exists:
+        - Same or older attempt_id: rejected as duplicate
+        - Newer attempt_id: old attempt is killed and new one starts
         """
         if rule := chaos("worker.submit_task"):
             time.sleep(rule.delay_seconds)
             raise RuntimeError("chaos: worker rejecting task")
         task_id = request.task_id
 
+        should_kill_existing = False
         with self._lock:
             existing = self._tasks.get(task_id)
             if existing is not None and existing.status not in self._TERMINAL_STATES:
-                logger.info("Rejecting duplicate task %s (status=%s)", task_id, existing.status)
-                return task_id
+                if request.attempt_id <= existing.attempt_id:
+                    logger.info(
+                        "Rejecting duplicate task %s (attempt %d, status=%s)",
+                        task_id,
+                        request.attempt_id,
+                        existing.status,
+                    )
+                    return task_id
+                logger.info(
+                    "Superseding task %s: attempt %d -> %d, killing old attempt",
+                    task_id,
+                    existing.attempt_id,
+                    request.attempt_id,
+                )
+                should_kill_existing = True
+
+        if should_kill_existing:
+            self.kill_task(task_id)
 
         job_id = request.job_id
         task_index = request.task_index
