@@ -9,12 +9,15 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
+    # workspaces
     "iris",
     "fray",
     "haliax",
     "levanter",
     "marin",
     "zephyr",
+    # top level deps. try to keep these small.
+    "watchdog",
 ]
 
 [tool.uv]
