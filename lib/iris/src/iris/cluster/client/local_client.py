@@ -59,10 +59,10 @@ def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig
 
 
 class LocalClusterClient:
-    """Local cluster client using real Controller/Worker with in-process execution.
+    """Local cluster client using real Controller/Worker with subprocess-based task execution.
 
-    Provides the same execution path as production clusters while running
-    entirely in-process without Docker or network dependencies.
+    Provides the same execution path as production clusters. Workers run in-process,
+    but tasks execute in subprocesses (not Docker containers) for isolation.
 
     Use the create() classmethod to instantiate:
         client = LocalClusterClient.create()
