@@ -644,6 +644,7 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"Worker {task.worker_id} not found")
 
         log_filter = cluster_pb2.Worker.FetchLogsFilter(
+            start_line=request.start_line,
             start_ms=request.start_ms,
             max_lines=request.limit,
         )
