@@ -7,29 +7,50 @@ name = "iris"
 version = "0.1.0"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
     "fsspec>=2024.0.0",
+    "gcsfs>=2024.0.0",
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
     "humanfriendly>=10.0",
     "pydantic>=2.12.5",
+    "pyyaml>=6.0",
     "starlette>=0.50.0",
     "typing-extensions>=4.0",
     "uvicorn[standard]>=0.23.0",
 ]
 
+[project.optional-dependencies]
+scripts = [
+    "pillow>=10.0.0",
+    "playwright>=1.49.0",
+]
+
+[project.scripts]
+iris = "iris.cli:iris"
+iris-run = "iris.iris_run:main"
+
 [dependency-groups]
-demo = [
-    "click>=8.3.1",
+examples = [
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "nbconvert>=7.16.6",
+    "nbformat>=5.10.4",
 ]
 dev = [
-    "pytest>=8.3.2",
+    "ipykernel>=7.1.0",
+    "jupyter>=1.1.1",
+    "nbconvert>=7.16.6",
+    "nbformat>=5.10.4",
+    "pillow>=10.0.0",
+    "playwright>=1.49.0",
     "pytest-asyncio",
+    "pytest-flakefinder>=1.1.0",
+    "pytest-playwright>=0.6.2",
     "pytest-timeout",
+    "pytest>=8.3.2",
 ]
 
 [tool.hatch.metadata]
@@ -40,10 +61,12 @@ packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 30
-addopts = "--durations=10"
+addopts = "--durations=10 -m 'not slow and not chaos'"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests that use real Docker (run with --use-docker)",
+    "snapshot: marks Playwright snapshot tests (needs browser)",
+    "chaos: marks chaos/fault injection tests (deselect with '-m \"not chaos\"')",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"

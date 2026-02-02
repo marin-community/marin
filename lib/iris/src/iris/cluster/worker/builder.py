@@ -46,8 +46,7 @@ class ImageProvider(Protocol):
     def build(
         self,
         bundle_path: Path,
-        base_image: str,
-        extras: list[str],
+        dockerfile: str,
         job_id: str,
         task_logs: TaskLogs | None = None,
     ) -> BuildResult: ...
@@ -59,37 +58,6 @@ class ImageProvider(Protocol):
     def unprotect(self, tag: str) -> None:
         """Remove protection from an image (job completed)."""
         ...
-
-
-DOCKERFILE_TEMPLATE = """FROM {base_image}
-
-# Install git (required for git-based dependencies) and UV
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
-# TODO -- install Cargo here.
-# How do we make Rust stuff build faster?
-# We could pre-build something similar or at least fetch Rust deps to cache?
-
-# Configure UV
-ENV UV_CACHE_DIR=/opt/uv-cache
-ENV UV_LINK_MODE=copy
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv
-WORKDIR /app
-
-RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
-    {pyproject_mounts} \\
-    uv sync {extras_flags}
-
-# Copy workspace contents
-COPY . .
-
-# Use the venv python
-ENV PATH="/app/.venv/bin:$PATH"
-
-# Always install cloudpickle - required by iris to unpickle job entrypoints
-RUN uv pip install cloudpickle
-"""
 
 
 class ImageCache:
@@ -137,8 +105,7 @@ class ImageCache:
     def build(
         self,
         bundle_path: Path,
-        base_image: str,
-        extras: list[str],
+        dockerfile: str,
         job_id: str,
         task_logs: TaskLogs | None = None,
     ) -> BuildResult:
@@ -150,6 +117,7 @@ class ImageCache:
             logger.warning(f"No pyproject.toml or uv.lock files found in the bundle path, using tag: {tag}")
         else:
             h = hashlib.sha256()
+            h.update(dockerfile.encode())
             for f in uv_locks_files:
                 with open(f, "rb") as fd:
                     h.update(fd.read())
@@ -170,19 +138,7 @@ class ImageCache:
                 from_cache=True,
             )
 
-        # Build image
         start = time.time()
-        extras_flags = " ".join(f"--extra {e}" for e in extras) if extras else ""
-
-        pyproject_mounts = " \\\n".join(
-            f"--mount=type=bind,source={f.relative_to(bundle_path)},target={f.relative_to(bundle_path)}"
-            for f in uv_locks_files
-        )
-
-        dockerfile = DOCKERFILE_TEMPLATE.format(
-            base_image=base_image, extras_flags=extras_flags, pyproject_mounts=pyproject_mounts
-        )
-        # TODO (rav): does there need to be a lock around docker build?
         self._docker.build(bundle_path, dockerfile, image_tag, task_logs)
         build_time_ms = int((time.time() - start) * 1000)
 

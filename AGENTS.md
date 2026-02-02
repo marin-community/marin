@@ -7,7 +7,7 @@
 - Consult the subproject manuals when working in submodule trees:
   * `lib/levanter/AGENTS.md` for Levanter-specific conventions.
   * `lib/marin/AGENTS.md` for Marin-specific conventions
-- When a recipe exists, follow it—the agent-friendly playbooks live in `docs/recipes/`. Some live in the individual `lib/*/docs` directories.
+  * `lib/iris/AGENTS.md` for Iris-specific conventions
 
 ## Shared Workflow Playbooks
 
@@ -41,8 +41,12 @@
 - Disprefer internal mutation of function arguments, especially config dataclasses; prefer returning a modified copy (e.g., via `dataclasses.replace`) so call sites remain predictable and side effects are explicit.
 - Use early returns (`if not x: return None`) when they reduce nesting.
 - Do not introduce ad-hoc compatibility hacks like `hasattr(m, "old_attr")`; update the code consistently instead.
-- Do not use `from future import ...` statements.
 - Document public APIs with concise Google-style docstrings.
+- Prefer small, concrete helpers over abstraction that adds indirection without reuse.
+- When defaults depend on environment/resource type, resolve them once and fail fast on unknown/ambiguous inputs rather than silently guessing.
+- Keep environment detection logic minimal and explicit; avoid multi-key heuristics unless they are clearly required.
+- Prefer single strong signals over sprawling defensive checks when detecting environment state (e.g., check the one variable that must be set rather than many optional ones).
+- In marin we generally prefer logging over `print` statements. `print` is fine for debugging and "scripts".
 
 ### Error Handling
 
@@ -57,7 +61,7 @@
 
 ### Deprecation
 
-- Unless specifically requested, do not introduce deprecation or fallback paths—update all call sites instead.
+**NO BACKWARD COMPATIBILITY**: Do NOT add deprecation warnings, fallback paths, or compatibility shims. Update all call sites instead. Only add backward compatibility if the user explicitly requests it.
 
 ## Comments
 
@@ -104,5 +108,3 @@ DO NOT:
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
-
-> This file will be expanded as agent workflows and best practices evolve.

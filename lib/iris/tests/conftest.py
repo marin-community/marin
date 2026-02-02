@@ -14,7 +14,22 @@
 
 # Test configuration for iris
 
+import logging
+import os
+import subprocess
+import sys
+import threading
+import traceback
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 import pytest
+from iris.managed_thread import ThreadRegistry, set_thread_registry
+from iris.test_util import SentinelFile
+
+# httpx logs every HTTP request at INFO level, which floods test output
+# during polling loops (status checks, log fetching).
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def pytest_addoption(parser):
@@ -24,8 +39,107 @@ def pytest_addoption(parser):
         default=False,
         help="Use real Docker containers instead of in-process mocks",
     )
+    parser.addoption(
+        "--update-snapshots",
+        action="store_true",
+        default=False,
+        help="Update golden snapshot files instead of comparing",
+    )
 
 
 @pytest.fixture(scope="session")
 def use_docker(request):
     return request.config.getoption("--use-docker")
+
+
+# =============================================================================
+# Docker Cleanup Utilities
+# =============================================================================
+# TODO: This before/after snapshot approach can accidentally delete containers
+# created by other processes during the test window. Fix by patching
+# DockerRuntime -> TrackingDockerRuntime at the module level so all Docker
+# operations are tracked explicitly. See review.md for details.
+
+
+def _get_container_ids() -> set[str]:
+    """Get all container IDs (running and stopped)."""
+    result = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True, check=False)
+    return set(result.stdout.strip().split()) if result.stdout.strip() else set()
+
+
+def _get_image_ids() -> set[str]:
+    """Get all image IDs."""
+    result = subprocess.run(["docker", "images", "-q"], capture_output=True, text=True, check=False)
+    return set(result.stdout.strip().split()) if result.stdout.strip() else set()
+
+
+@contextmanager
+def _docker_cleanup(*, cleanup_images: bool = True) -> Iterator[None]:
+    """Context manager that cleans up Docker artifacts created during its scope."""
+    containers_before = _get_container_ids()
+    images_before = _get_image_ids() if cleanup_images else set()
+
+    try:
+        yield
+    finally:
+        for cid in _get_container_ids() - containers_before:
+            subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
+        if cleanup_images:
+            for iid in _get_image_ids() - images_before:
+                subprocess.run(["docker", "rmi", "-f", iid], capture_output=True, check=False)
+
+
+@pytest.fixture
+def docker_cleanup_scope():
+    """Cleans up all Docker containers and images created during the test."""
+    with _docker_cleanup(cleanup_images=True):
+        yield
+
+
+@pytest.fixture(scope="session")
+def docker_cleanup_session(use_docker):
+    """Session-scoped cleanup for e2e tests that use real Docker."""
+    if use_docker:
+        with _docker_cleanup(cleanup_images=True):
+            yield
+    else:
+        # Skip Docker cleanup when not using Docker
+        yield
+
+
+@pytest.fixture
+def sentinel(tmp_path) -> SentinelFile:
+    """Per-test sentinel file for blocking/unblocking job threads."""
+    return SentinelFile(str(tmp_path / "sentinel"))
+
+
+@pytest.fixture(autouse=True)
+def _thread_registry():
+    """Per-test ThreadRegistry: every test gets a clean registry, all threads
+    are shut down (blocking) before the next test starts."""
+    registry = ThreadRegistry()
+    old = set_thread_registry(registry)
+    yield registry
+    registry.shutdown(timeout=5.0)
+    set_thread_registry(old)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Hook to debug pytest exit status - dump any non-daemon threads still alive."""
+    alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
+    if alive:
+        # Write directly to fd 2 (stderr) to bypass pytest's capture entirely.
+        tty = os.fdopen(os.dup(2), "w")
+        tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
+        frames = sys._current_frames()
+        for t in alive:
+            tty.write(f"\n  Thread: {t.name} (daemon={t.daemon}, ident={t.ident})\n")
+            frame = frames.get(t.ident)
+            if frame:
+                for line in traceback.format_stack(frame):
+                    tty.write(f"    {line.rstrip()}\n")
+        if exitstatus != 0:
+            tty.write(f"\nPytest exiting with status {exitstatus}\n")
+        tty.flush()
+        tty.close()
+        os._exit(1)
