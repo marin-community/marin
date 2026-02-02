@@ -628,7 +628,7 @@ class Controller:
 
         # Update task states from running tasks (e.g. ASSIGNED -> BUILDING -> RUNNING)
         for entry in response.running_tasks:
-            if entry.state and entry.state != cluster_pb2.TASK_STATE_UNSPECIFIED:
+            if entry.state != cluster_pb2.TASK_STATE_UNSPECIFIED:
                 task_id = TaskId(entry.task_id)
                 task = self._state.get_task(task_id)
                 if task and task.state != entry.state and not task.is_finished():

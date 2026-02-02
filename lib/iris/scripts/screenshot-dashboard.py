@@ -356,7 +356,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             page.wait_for_load_state("domcontentloaded")
             page.wait_for_function(
                 "() => document.getElementById('root').children.length > 0"
-                " && !document.getElementById('root').textContent.includes('Loading...')",
+                " && !document.body.textContent.includes('Loading')",
                 timeout=10000,
             )
 
@@ -375,7 +375,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             page.wait_for_load_state("domcontentloaded")
             page.wait_for_function(
                 "() => document.getElementById('root').children.length > 0"
-                " && !document.getElementById('root').textContent.includes('Loading...')",
+                " && !document.body.textContent.includes('Loading')",
                 timeout=10000,
             )
             path = output_dir / f"job-{label}.png"

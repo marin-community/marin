@@ -297,7 +297,6 @@ class TaskAttempt:
             self._download_bundle()
             self._build_image()
             container_id = self._start_container()
-            self._report_state()
             self._monitor(container_id)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
