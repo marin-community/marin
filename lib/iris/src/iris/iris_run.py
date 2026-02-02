@@ -134,7 +134,7 @@ def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
         "PYTHONPATH": ".",
         "PYTHONUNBUFFERED": "1",
         "HF_HOME": "~/.cache/huggingface",
-        "HF_HUB_ENABLE_HF_TRANSFER": "1",
+        "HF_HUB_ENABLE_HF_TRANSFER": "0",
     }
 
     # Add defaults without overriding user-provided values
@@ -463,6 +463,8 @@ def main(
 ):
     """Submit jobs to Iris clusters."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     command = list(cmd)
     if not command:

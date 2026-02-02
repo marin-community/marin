@@ -290,8 +290,8 @@ class Job:
                         if state.last_timestamp is None or entry.timestamp > state.last_timestamp:
                             state.last_timestamp = entry.timestamp
                         _print_log_entry(self._job_id, entry, task_index=state.task_index)
-                except ValueError:
-                    logger.debug("Task %d not yet scheduled for job %s", state.task_index, self._job_id)
+                except Exception as e:
+                    logger.debug("Task %d not yet scheduled for job %s: %s", state.task_index, self._job_id, e)
 
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
@@ -302,7 +302,7 @@ class Job:
                         for proto in entries:
                             entry = LogEntry.from_proto(proto)
                             _print_log_entry(self._job_id, entry, task_index=state.task_index)
-                    except ValueError:
+                    except Exception:
                         logger.debug(
                             "Task %d logs unavailable during final drain for job %s", state.task_index, self._job_id
                         )
@@ -444,28 +444,41 @@ _iris_context: ContextVar[IrisContext | None] = ContextVar(
 
 
 def iris_ctx() -> IrisContext:
-    """Get or create IrisContext from environment.
+    """Get the current IrisContext, raising if not in a job.
 
     Returns:
         Current IrisContext
+
+    Raises:
+        RuntimeError: If not running inside an Iris job
     """
-    ctx = _iris_context.get()
+    ctx = get_iris_ctx()
     if ctx is None:
-        ctx = create_context_from_env()
-        _iris_context.set(ctx)
+        raise RuntimeError("iris_ctx() called outside an Iris job (no job info available)")
     return ctx
 
 
 def get_iris_ctx() -> IrisContext | None:
     """Get the current IrisContext, or None if not in a job.
 
-    Unlike iris_ctx(), this function does not auto-create context
-    from environment if called outside a job context.
+    Checks the ContextVar first. If unset, checks whether we're inside an
+    Iris job (via get_job_info) and auto-creates the context if so.
 
     Returns:
         Current IrisContext or None
     """
-    return _iris_context.get()
+    ctx = _iris_context.get()
+    if ctx is not None:
+        return ctx
+
+    # If job_info is available (ContextVar or IRIS_JOB_ID env), we're in a job.
+    job_info = get_job_info()
+    if job_info is not None:
+        ctx = create_context_from_env()
+        _iris_context.set(ctx)
+        return ctx
+
+    return None
 
 
 @contextmanager
