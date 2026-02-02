@@ -367,3 +367,7 @@ echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"
         if "/" in resource_name:
             return resource_name.split("/")[-1]
         return resource_name
+
+    def stop(self) -> None:
+        """No-op: TpuVmManager has no background threads to stop."""
+        pass

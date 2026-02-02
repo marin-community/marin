@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.vm.config import config_to_dict
+from iris.managed_thread import ThreadContainer
 from iris.cluster.vm.gcp_tpu_platform import (
     controller_address_metadata_key,
     controller_metadata_key,
@@ -958,8 +959,13 @@ class LocalController:
     Workers are threads, not VMs. No Docker, no GCS, no SSH.
     """
 
-    def __init__(self, config: config_pb2.IrisClusterConfig):
+    def __init__(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        threads: ThreadContainer | None = None,
+    ):
         self._config = config
+        self._threads = threads
         self._controller: _InProcessController | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
 
@@ -987,11 +993,15 @@ class LocalController:
         port = self._config.controller_vm.local.port or find_free_port()
         address = f"http://127.0.0.1:{port}"
 
+        controller_threads = self._threads.create_child("controller") if self._threads else None
+        autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
+
         autoscaler = _create_local_autoscaler(
             self._config,
             address,
             cache_path,
             fake_bundle,
+            threads=autoscaler_threads,
         )
         self._controller = _InnerController(
             config=_InnerControllerConfig(
@@ -1001,6 +1011,7 @@ class LocalController:
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=autoscaler,
+            threads=controller_threads,
         )
         self._controller.start()
         return self._controller.url
@@ -1036,13 +1047,21 @@ class LocalController:
         return "(local controller — no startup logs)"
 
 
-def create_controller(config: config_pb2.IrisClusterConfig) -> ControllerProtocol:
+def create_controller(
+    config: config_pb2.IrisClusterConfig,
+    threads: ThreadContainer | None = None,
+) -> ControllerProtocol:
     """Factory function to create appropriate controller type.
 
     Dispatches based on the controller_vm.controller oneof field:
     - gcp: Creates GcpController for GCP-managed VMs
     - manual: Creates ManualController for SSH bootstrap to pre-existing hosts
     - local: Creates LocalController for in-process testing
+
+    Args:
+        config: Cluster configuration.
+        threads: Optional parent ThreadContainer. Only used by LocalController
+            to integrate in-process threads into the caller's hierarchy.
     """
     controller_vm = config.controller_vm
     which = controller_vm.WhichOneof("controller")
@@ -1051,5 +1070,5 @@ def create_controller(config: config_pb2.IrisClusterConfig) -> ControllerProtoco
     if which == "manual":
         return ManualController(config)
     if which == "local":
-        return LocalController(config)
+        return LocalController(config, threads=threads)
     raise ValueError("No controller config specified in controller_vm")

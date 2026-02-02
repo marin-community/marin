@@ -34,7 +34,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
-from iris.managed_thread import ThreadContainer
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
@@ -69,6 +69,7 @@ class Worker:
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
+        threads: ThreadContainer | None = None,
     ):
         self._config = config
 
@@ -111,7 +112,8 @@ class Worker:
         )
 
         self._server: uvicorn.Server | None = None
-        self._threads = ThreadContainer()
+        self._threads = threads if threads is not None else get_thread_container()
+        self._task_threads = self._threads.create_child("tasks")
 
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
@@ -137,7 +139,7 @@ class Worker:
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server.started,
-            timeout=5.0,
+            timeout=Duration.from_seconds(5.0),
         )
 
         # Create controller client if controller configured
@@ -163,19 +165,20 @@ class Worker:
         self._threads.wait()
 
     def stop(self) -> None:
+        # Stop task threads first so running tasks exit before infrastructure
+        # tears down. ThreadContainer.stop() signals each thread's stop_event,
+        # which the _run_task watcher bridges to attempt.should_stop + container kill.
+        self._task_threads.stop()
+
         if self._server:
             self._server.should_exit = True
         self._threads.stop()
 
-        # Kill and remove all containers
+        # Remove any remaining containers (tasks already killed above via stop_event)
         with self._lock:
             tasks = list(self._tasks.values())
         for task in tasks:
             if task.container_id:
-                try:
-                    self._runtime.kill(task.container_id, force=True)
-                except RuntimeError:
-                    pass
                 try:
                     self._runtime.remove(task.container_id)
                 except RuntimeError:
@@ -402,10 +405,21 @@ class Worker:
         with self._lock:
             self._tasks[task_id] = attempt
 
-        # Start execution in background
-        thread = threading.Thread(target=attempt.run, daemon=True)
-        attempt.thread = thread
-        thread.start()
+        # Start execution in a monitored non-daemon thread. When stop() is called,
+        # the on_stop callback kills the container so attempt.run() exits promptly.
+        def _run_task(stop_event: threading.Event) -> None:
+            attempt.run()
+
+        def _stop_task() -> None:
+            attempt.should_stop = True
+            if attempt.container_id:
+                try:
+                    self._runtime.kill(attempt.container_id, force=True)
+                except RuntimeError:
+                    pass
+
+        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id}", on_stop=_stop_task)
+        attempt.thread = mt._thread
 
         return task_id
 
@@ -552,7 +566,7 @@ class Worker:
                 running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
                 stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
                     lambda: task.status not in running_states,
-                    timeout=term_timeout_ms / 1000,
+                    timeout=Duration.from_ms(term_timeout_ms),
                 )
 
                 # Force kill if graceful shutdown timed out

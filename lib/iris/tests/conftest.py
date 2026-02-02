@@ -19,17 +19,51 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import traceback
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
-from iris.managed_thread import ThreadRegistry, set_thread_registry
+from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
+from iris.time_utils import Deadline, Duration
 
 # httpx logs every HTTP request at INFO level, which floods test output
 # during polling loops (status checks, log fetching).
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+@pytest.fixture(autouse=True, scope="function")
+def _ensure_logging_health():
+    """Ensure logging handlers are healthy before and after each test.
+
+    Removes any closed or invalid handlers before test setup to prevent
+    "I/O operation on closed file" errors. Flushes after test completion
+    to ensure buffered messages are written.
+    """
+    # Before test: remove any closed handlers from previous tests
+    for handler in logging.root.handlers[:]:
+        if hasattr(handler, "stream"):
+            try:
+                # Test if stream is writable
+                handler.stream.closed  # noqa: B018
+                if handler.stream.closed:
+                    logging.root.removeHandler(handler)
+            except (AttributeError, ValueError):
+                # Handler doesn't have a stream or stream is invalid
+                pass
+
+    yield
+
+    # After test: flush all handlers
+    for handler in logging.root.handlers[:]:
+        try:
+            handler.flush()
+        except (OSError, ValueError):
+            # Handler may be closed or invalid
+            pass
 
 
 def pytest_addoption(parser):
@@ -113,22 +147,70 @@ def sentinel(tmp_path) -> SentinelFile:
     return SentinelFile(str(tmp_path / "sentinel"))
 
 
+@pytest.fixture
+def container():
+    """Provides an isolated thread container for the test.
+
+    Automatically cleans up all threads spawned within the container when
+    the test completes. This is the recommended way to use ThreadContainer
+    in tests that need explicit thread management.
+
+    Example:
+        def test_with_threads(container):
+            container.spawn(my_thread_fn, name="test-thread")
+            # Test code...
+            # Cleanup happens automatically
+    """
+    with thread_container_scope("test") as cont:
+        yield cont
+
+
 @pytest.fixture(autouse=True)
-def _thread_registry():
-    """Per-test ThreadRegistry: every test gets a clean registry, all threads
-    are shut down (blocking) before the next test starts."""
-    registry = ThreadRegistry()
-    old = set_thread_registry(registry)
-    yield registry
-    registry.shutdown(timeout=5.0)
-    set_thread_registry(old)
+def _thread_cleanup():
+    """Ensure no new non-daemon threads leak from each test.
+
+    Takes a snapshot of threads before the test and checks that no new
+    non-daemon threads remain after teardown. Waits briefly for threads
+    that are in the process of shutting down.
+
+    This fixture helps catch tests that don't properly clean up their threads,
+    which can cause tests to hang or interfere with each other.
+    """
+    before = {t.ident for t in threading.enumerate()}
+    yield
+
+    deadline = Deadline.from_now(Duration.from_seconds(5.0))
+    while not deadline.expired():
+        leaked = [
+            t
+            for t in threading.enumerate()
+            if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
+        ]
+        if not leaked:
+            return
+        time.sleep(0.1)
+
+    # Generate detailed warning about leaked threads
+    thread_info = []
+    for t in leaked:
+        thread_info.append(f"{t.name} (daemon={t.daemon}, ident={t.ident})")
+
+    warnings.warn(
+        f"Threads leaked from test: {thread_info}\n"
+        "All threads should be stopped via ThreadContainer.stop() or similar cleanup.\n"
+        "See lib/iris/tests/test_utils.py for best practices.",
+        stacklevel=1,
+    )
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Hook to debug pytest exit status - dump any non-daemon threads still alive."""
+    """Hook to debug pytest exit status - dump any non-daemon threads still alive.
+
+    Uses os._exit() to force-terminate if orphaned non-daemon threads would
+    otherwise prevent process exit.
+    """
     alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
     if alive:
-        # Write directly to fd 2 (stderr) to bypass pytest's capture entirely.
         tty = os.fdopen(os.dup(2), "w")
         tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
         frames = sys._current_frames()
@@ -138,8 +220,9 @@ def pytest_sessionfinish(session, exitstatus):
             if frame:
                 for line in traceback.format_stack(frame):
                     tty.write(f"    {line.rstrip()}\n")
-        if exitstatus != 0:
-            tty.write(f"\nPytest exiting with status {exitstatus}\n")
         tty.flush()
         tty.close()
-        os._exit(1)
+        # Force exit to prevent orphaned non-daemon threads from blocking
+        # Only force-exit on failure to avoid skipping atexit handlers on clean runs
+        if exitstatus != 0:
+            os._exit(exitstatus)

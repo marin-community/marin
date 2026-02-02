@@ -36,6 +36,7 @@ from iris.cluster.vm.ssh import (
     run_streaming_with_retry,
     wait_for_connection,
 )
+from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2, vm_pb2
 from iris.rpc.proto_utils import vm_state_name
 from iris.time_utils import Duration, Timestamp
@@ -342,18 +343,18 @@ class ManagedVm:
         # Inlined bootstrap state
         self._log_lines: list[str] = []
         self._phase: str = ""
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"vm-{vm_id}")
-        self._stop = threading.Event()
+        self._threads = ThreadContainer(f"vm-{vm_id}")
+        self._managed_thread = self._threads.spawn(target=self._run, name=f"vm-{vm_id}")
 
-    def start(self) -> None:
-        """Start the lifecycle thread."""
-        self._thread.start()
+    @property
+    def _stop(self) -> threading.Event:
+        return self._managed_thread.stop_event
 
-    def stop(self) -> None:
-        """Signal thread to stop (best-effort)."""
-        self._stop.set()
+    def stop(self, timeout: Duration = Duration.from_seconds(10.0)) -> None:
+        """Signal VM thread to stop and wait for it to exit."""
+        self._threads.stop(timeout=timeout)
 
-    def _run(self) -> None:
+    def _run(self, stop_event: threading.Event) -> None:
         """Main lifecycle: BOOTING -> INITIALIZING -> READY.
 
         Inlines bootstrap logic directly - no nested state machine.
@@ -696,7 +697,6 @@ class TrackedVmFactory:
             discovery_preamble=discovery_preamble,
         )
         self._registry.register(vm)
-        vm.start()
         return vm
 
     @property
