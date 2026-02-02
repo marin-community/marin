@@ -97,13 +97,24 @@ class ThreadContainer:
             thread.join()
 
     def stop(self, timeout: float = 5.0) -> None:
-        """Signal all threads to stop, then join with a shared deadline."""
+        """Signal all threads to stop, then join with a shared deadline.
+
+        Raises RuntimeError if any threads are still alive after timeout.
+        """
         for thread in self._threads:
             thread.stop()
         deadline = time.monotonic() + timeout
         for thread in self._threads:
             remaining = max(0, deadline - time.monotonic())
             thread.join(timeout=remaining)
+
+        # Verify all threads have actually exited
+        alive = [t for t in self._threads if t.is_alive]
+        if alive:
+            names = [t.name for t in alive]
+            raise RuntimeError(
+                f"ThreadContainer.stop() timeout: {len(alive)} thread(s) still alive after {timeout}s: {names}"
+            )
 
 
 def _stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
