@@ -19,7 +19,6 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import logging
-import os
 import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -156,8 +155,6 @@ def wait_all(
 # ---------------------------------------------------------------------------
 # current_client / set_current_client
 # ---------------------------------------------------------------------------
-
-
 
 
 def current_client() -> Client:

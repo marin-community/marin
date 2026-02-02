@@ -20,7 +20,6 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 
 import pickle
 
-
 from fray.v2.iris_backend import (
     IrisActorHandle,
     convert_constraints,

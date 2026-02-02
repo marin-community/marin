@@ -27,7 +27,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from iris.cluster.types import Constraint, Entrypoint as IrisEntrypoint, EnvironmentSpec, ResourceSpec
@@ -464,7 +464,7 @@ class FrayIrisClient:
         This avoids creating a new connection when we already have an IrisClient
         from the context (e.g., when running inside an Iris task).
         """
-        instance = object.__new__(FrayIrisClient)
+        instance = cast(FrayIrisClient, object.__new__(FrayIrisClient))
         instance._iris = iris_client
         return instance
 
