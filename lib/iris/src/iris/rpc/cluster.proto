@@ -438,6 +438,7 @@ message Controller {
   message RunningTaskEntry {
     string task_id = 1;
     int32 attempt_id = 2;
+    TaskState state = 3;
   }
 
   // A task completion reported by the worker in its heartbeat response.

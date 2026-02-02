@@ -498,12 +498,14 @@ class Controller(_message.Message):
         registered_at: _time_pb2.Timestamp
         def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., registered_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
     class RunningTaskEntry(_message.Message):
-        __slots__ = ("task_id", "attempt_id")
+        __slots__ = ("task_id", "attempt_id", "state")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+        STATE_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         attempt_id: int
-        def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
+        state: TaskState
+        def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., state: _Optional[_Union[TaskState, str]] = ...) -> None: ...
     class CompletedTaskEntry(_message.Message):
         __slots__ = ("task_id", "job_id", "task_index", "state", "exit_code", "error", "finished_at", "attempt_id")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]

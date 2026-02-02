@@ -297,7 +297,6 @@ class TaskAttempt:
             self._download_bundle()
             self._build_image()
             container_id = self._start_container()
-            self._report_state()
             self._monitor(container_id)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
@@ -403,6 +402,7 @@ class TaskAttempt:
             RuntimeError: If container creation fails after retries
         """
         self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
+        self._report_state()
 
         # Build environment from user-provided vars + EnvironmentConfig
         env_config = self.request.environment

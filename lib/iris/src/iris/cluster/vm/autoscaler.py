@@ -152,7 +152,7 @@ def route_demand(
 
     routed_groups = [(name, count) for name, count in allocations.items() if count > 0]
     if routed_groups:
-        logger.info("Demand routed: %s", ", ".join(f"{name}={count}" for name, count in routed_groups))
+        logger.debug("Demand routed: %s", ", ".join(f"{name}={count}" for name, count in routed_groups))
 
     return RoutingResult(allocations=allocations, unmet_demand=total_unmet)
 

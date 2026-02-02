@@ -710,9 +710,11 @@ class ControllerJob:
         if counts[cluster_pb2.TASK_STATE_KILLED] > 0 and not self.is_finished():
             return cluster_pb2.JOB_STATE_KILLED
 
-        # Job is RUNNING if any task is running or building
+        # Job is RUNNING if any task is assigned, building, or running
         if (
-            counts[cluster_pb2.TASK_STATE_RUNNING] > 0 or counts[cluster_pb2.TASK_STATE_BUILDING] > 0
+            counts[cluster_pb2.TASK_STATE_RUNNING] > 0
+            or counts[cluster_pb2.TASK_STATE_BUILDING] > 0
+            or counts[cluster_pb2.TASK_STATE_ASSIGNED] > 0
         ) and self.state != cluster_pb2.JOB_STATE_RUNNING:
             if self.started_at is None:
                 self.started_at = Timestamp.now()
@@ -1038,11 +1040,12 @@ class ControllerState:
 
             self._transactions.append(txn)
 
-            # Log transaction for debugging
+            # Log transaction for debugging; demote all heartbeat events to DEBUG
             if txn.actions:
-                logger.info(f"Event {type(event).__name__}: {len(txn.actions)} actions")
+                log = logger.debug if isinstance(event, WorkerHeartbeatEvent) else logger.info
+                log(f"Event {type(event).__name__}: {len(txn.actions)} actions")
                 for action in txn.actions:
-                    logger.info(f"  - {action.action} {action.entity_id} {action.details}")
+                    log(f"  - {action.action} {action.entity_id} {action.details}")
 
             return txn
 

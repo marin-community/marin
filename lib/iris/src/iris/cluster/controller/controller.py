@@ -626,6 +626,20 @@ class Controller:
         """
         self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp=Timestamp.now()))
 
+        # Update task states from running tasks (e.g. ASSIGNED -> BUILDING -> RUNNING)
+        for entry in response.running_tasks:
+            if entry.state != cluster_pb2.TASK_STATE_UNSPECIFIED:
+                task_id = TaskId(entry.task_id)
+                task = self._state.get_task(task_id)
+                if task and task.state != entry.state and not task.is_finished():
+                    self._state.handle_event(
+                        TaskStateChangedEvent(
+                            task_id=task_id,
+                            new_state=entry.state,
+                            attempt_id=entry.attempt_id,
+                        )
+                    )
+
         for entry in response.completed_tasks:
             task_id = TaskId(entry.task_id)
             task = self._state.get_task(task_id)

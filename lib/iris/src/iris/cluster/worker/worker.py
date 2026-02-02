@@ -528,6 +528,7 @@ class Worker:
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
+                            state=task.status,
                         )
                     )
 
@@ -538,6 +539,7 @@ class Worker:
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
+                            state=task.status,
                         )
                     )
 
