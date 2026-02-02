@@ -94,8 +94,12 @@ class ClusterManager:
         logger.info("Controller started at %s (local=%s)", address, self.is_local)
         return address
 
-    def stop(self) -> None:
-        """Stop the controller and clean up resources."""
+    def stop(self, timeout: float = 60.0) -> None:
+        """Stop the controller and clean up resources.
+
+        Args:
+            timeout: Maximum time to wait for shutdown (default 60s).
+        """
         if self._controller:
             self._controller.stop()
             self._controller = None

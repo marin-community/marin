@@ -34,6 +34,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
+from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
@@ -109,12 +110,10 @@ class Worker:
             port=config.port,
         )
 
-        self._server_thread: threading.Thread | None = None
+        # Thread management
+        self._threads = ThreadContainer()
+        self._task_threads = ThreadContainer()
         self._server: uvicorn.Server | None = None
-
-        # Lifecycle thread for register + serve loop
-        self._lifecycle_thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
 
@@ -126,11 +125,10 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         # Start HTTP server
-        self._server_thread = threading.Thread(
+        self._threads.spawn(
             target=self._run_server,
-            daemon=True,
+            name="worker-server",
         )
-        self._server_thread.start()
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
@@ -146,11 +144,10 @@ class Worker:
             )
 
             # Start lifecycle thread: register + serve + reset loop
-            self._lifecycle_thread = threading.Thread(
+            self._threads.spawn(
                 target=self._run_lifecycle,
-                daemon=True,
+                name="worker-lifecycle",
             )
-            self._lifecycle_thread.start()
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -162,20 +159,20 @@ class Worker:
             logger.info("Startup cleanup: removed %d iris containers", removed)
 
     def wait(self) -> None:
-        """Block until the server thread exits."""
-        if self._server_thread:
-            self._server_thread.join()
+        """Block until all threads exit."""
+        self._threads.wait()
 
-    def stop(self) -> None:
-        self._stop_event.set()
-        if self._lifecycle_thread:
-            self._lifecycle_thread.join(timeout=5.0)
+    def stop(self, timeout: float = 30.0) -> None:
+        """Stop worker and all running tasks.
 
-        # Stop uvicorn server
-        if self._server:
-            self._server.should_exit = True
-        if self._server_thread:
-            self._server_thread.join(timeout=5.0)
+        Args:
+            timeout: Maximum time to wait for threads to exit (default 30s).
+        """
+        # Stop all lifecycle threads (server, lifecycle)
+        self._threads.stop(timeout=timeout / 2)
+
+        # Stop all task threads
+        self._task_threads.stop(timeout=timeout / 2)
 
         # Kill and remove all containers
         with self._lock:
@@ -198,7 +195,7 @@ class Worker:
             except OSError:
                 pass
 
-    def _run_server(self) -> None:
+    def _run_server(self, stop_event: threading.Event) -> None:
         try:
             config = uvicorn.Config(
                 self._dashboard._app,
@@ -207,11 +204,21 @@ class Worker:
                 log_level="error",
             )
             self._server = uvicorn.Server(config)
+
+            # Bridge stop_event to server shutdown
+            def _watch_stop() -> None:
+                stop_event.wait()
+                if self._server:
+                    self._server.should_exit = True
+
+            watch_thread = threading.Thread(target=_watch_stop, daemon=True, name="server-stop-bridge")
+            watch_thread.start()
+
             self._server.run()
         except Exception as e:
             print(f"Worker server error: {e}")
 
-    def _run_lifecycle(self) -> None:
+    def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
 
         This loop runs continuously until shutdown. On each iteration:
@@ -220,16 +227,16 @@ class Worker:
         3. Serve (wait for heartbeats from controller)
         4. If heartbeat timeout expires, return to step 1
         """
-        while not self._stop_event.is_set():
+        while not stop_event.is_set():
             self._reset_worker_state()
-            worker_id = self._register()
+            worker_id = self._register(stop_event)
             if worker_id is None:
                 # Shutdown requested during registration
                 break
             self._worker_id = worker_id
-            self._serve()
+            self._serve(stop_event)
 
-    def _register(self) -> str | None:
+    def _register(self, stop_event: threading.Event) -> str | None:
         """Register with controller. Retries until accepted or shutdown.
 
         Returns the assigned worker_id, or None if shutdown was requested.
@@ -242,7 +249,7 @@ class Worker:
 
         logger.info("Attempting to register with controller at %s", self._config.controller_address)
 
-        while not self._stop_event.is_set():
+        while not stop_event.is_set():
             try:
                 # Chaos injection for testing delayed registration
                 if rule := chaos("worker.register"):
@@ -263,7 +270,7 @@ class Worker:
                     logger.warning("Registration rejected by controller, retrying in 5s")
             except Exception as e:
                 logger.warning("Registration failed: %s, retrying in 5s", e)
-            self._stop_event.wait(5.0)
+            stop_event.wait(5.0)
 
         return None
 
@@ -287,7 +294,7 @@ class Worker:
 
         return f"{address_host}:{self._config.port}"
 
-    def _serve(self) -> None:
+    def _serve(self, stop_event: threading.Event) -> None:
         """Wait for heartbeats from controller. Returns when heartbeat timeout expires.
 
         This method blocks in a loop, checking the time since last heartbeat.
@@ -296,12 +303,12 @@ class Worker:
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
         logger.info("Serving (waiting for controller heartbeats)")
 
-        while not self._stop_event.is_set():
+        while not stop_event.is_set():
             if self._heartbeat_deadline.expired():
                 logger.warning("No heartbeat from controller, resetting")
                 return
             # Check every second
-            self._stop_event.wait(1.0)
+            stop_event.wait(1.0)
 
     def _reset_worker_state(self) -> None:
         """Reset worker state: wipe all containers and clear tracking."""
@@ -425,12 +432,33 @@ class Worker:
         with self._lock:
             self._tasks[task_id] = attempt
 
-        # Start execution in background
-        thread = threading.Thread(target=attempt.run, daemon=True)
+        # Start execution in background using managed thread
+        thread = self._task_threads.spawn(
+            target=self._run_task_attempt,
+            name=f"task-{task_id}",
+            args=(attempt,),
+        )
         attempt.thread = thread
-        thread.start()
 
         return task_id
+
+    def _run_task_attempt(self, stop_event: threading.Event, attempt: TaskAttempt) -> None:
+        """Run task attempt, bridging stop_event to attempt.should_stop.
+
+        Args:
+            stop_event: Event signaling the thread should stop (from ManagedThread)
+            attempt: TaskAttempt to execute
+        """
+        # Bridge stop_event to attempt.should_stop
+        def _watch_stop() -> None:
+            stop_event.wait()
+            attempt.should_stop = True
+
+        watch_thread = threading.Thread(target=_watch_stop, daemon=True, name=f"task-stop-bridge-{attempt.task_id}")
+        watch_thread.start()
+
+        # Run the task attempt
+        attempt.run()
 
     def get_task(self, task_id: str) -> TaskInfo | None:
         """Get a task by ID.

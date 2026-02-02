@@ -45,6 +45,7 @@ from iris.cluster.controller.state import (
 from iris.cluster.types import JobId, TaskId, WorkerId, VmWorkerStatus, VmWorkerStatusMap, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
+from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff, Timestamp
@@ -284,13 +285,11 @@ class Controller:
             port=config.port,
         )
 
-        # Background loop state
+        # Thread management
+        self._threads = ThreadContainer()
         self._stop = False
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
-        self._scheduling_loop_thread: threading.Thread | None = None
-        self._heartbeat_loop_thread: threading.Thread | None = None
-        self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
 
         # Per-worker dispatch state (outboxes). Protected by _dispatch_lock since
@@ -323,25 +322,22 @@ class Controller:
         self._stop = False
 
         # Start main controller loop
-        self._scheduling_loop_thread = threading.Thread(
+        self._threads.spawn(
             target=self._run_scheduling_loop,
-            daemon=True,
+            name="controller-scheduling",
         )
-        self._scheduling_loop_thread.start()
 
         # Start heartbeat loop (separate from scheduling so slow RPCs don't block scheduling)
-        self._heartbeat_loop_thread = threading.Thread(
+        self._threads.spawn(
             target=self._run_heartbeat_loop,
-            daemon=True,
+            name="controller-heartbeat",
         )
-        self._heartbeat_loop_thread.start()
 
         # Start dashboard server in background thread
-        self._server_thread = threading.Thread(
+        self._threads.spawn(
             target=self._run_server,
-            daemon=True,
+            name="controller-server",
         )
-        self._server_thread.start()
 
         # Log autoscaler configuration if provided (runs from scheduling loop, not separate thread)
         if self._autoscaler:
@@ -353,27 +349,19 @@ class Controller:
             timeout=5.0,
         )
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 30.0) -> None:
         """Stop all background components gracefully.
 
-        Waits for all threads to complete naturally. If shutdown hangs,
-        test framework timeout will kill the process.
+        Args:
+            timeout: Maximum time to wait for all threads to exit (default 30s).
+                    If threads don't exit within this time, they will be left running.
         """
         self._stop = True
         self._wake_event.set()
         self._heartbeat_event.set()
 
-        # Wait for threads to exit - no timeout, let pytest-timeout handle hangs
-        if self._scheduling_loop_thread:
-            self._scheduling_loop_thread.join()
-        if self._heartbeat_loop_thread:
-            self._heartbeat_loop_thread.join()
-
-        # Stop uvicorn server
-        if self._server:
-            self._server.should_exit = True
-        if self._server_thread:
-            self._server_thread.join()
+        # Stop all managed threads (scheduling, heartbeat, server)
+        self._threads.stop(timeout=timeout)
 
         # Shutdown dispatch executor - wait for in-flight requests to complete
         # Don't cancel futures to avoid httpx logging to closed stdout/stderr
@@ -383,13 +371,13 @@ class Controller:
         if self._autoscaler:
             self._autoscaler.shutdown()
 
-    def _run_scheduling_loop(self) -> None:
+    def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
-        while not self._stop:
+        while not stop_event.is_set():
             self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
             self._wake_event.clear()
 
-            if self._stop:
+            if stop_event.is_set():
                 break
 
             self._run_scheduling()
@@ -398,12 +386,12 @@ class Controller:
             if self._autoscaler:
                 self._run_autoscaler_once()
 
-    def _run_heartbeat_loop(self) -> None:
+    def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
-        while not self._stop:
+        while not stop_event.is_set():
             self._heartbeat_event.wait(timeout=self._config.scheduler_interval_seconds)
             self._heartbeat_event.clear()
-            if self._stop:
+            if stop_event.is_set():
                 break
             self._heartbeat_all_workers()
 
@@ -718,7 +706,7 @@ class Controller:
             )
         return result
 
-    def _run_server(self) -> None:
+    def _run_server(self, stop_event: threading.Event) -> None:
         try:
             config = uvicorn.Config(
                 self._dashboard._app,
@@ -727,6 +715,16 @@ class Controller:
                 log_level="error",
             )
             self._server = uvicorn.Server(config)
+
+            # Bridge stop_event to server shutdown
+            def _watch_stop() -> None:
+                stop_event.wait()
+                if self._server:
+                    self._server.should_exit = True
+
+            watch_thread = threading.Thread(target=_watch_stop, daemon=True, name="server-stop-bridge")
+            watch_thread.start()
+
             self._server.run()
         except Exception as e:
             logger.exception("Controller server error: %s", e)

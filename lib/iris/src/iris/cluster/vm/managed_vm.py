@@ -36,6 +36,7 @@ from iris.cluster.vm.ssh import (
     run_streaming_with_retry,
     wait_for_connection,
 )
+from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2, vm_pb2
 from iris.rpc.proto_utils import vm_state_name
 from iris.time_utils import Duration, Timestamp
@@ -342,18 +343,24 @@ class ManagedVm:
         # Inlined bootstrap state
         self._log_lines: list[str] = []
         self._phase: str = ""
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"vm-{vm_id}")
-        self._stop = threading.Event()
+        self._threads = ThreadContainer()
 
     def start(self) -> None:
         """Start the lifecycle thread."""
-        self._thread.start()
+        self._threads.spawn(
+            target=self._run,
+            name=f"vm-{self.info.vm_id}",
+        )
 
-    def stop(self) -> None:
-        """Signal thread to stop (best-effort)."""
-        self._stop.set()
+    def stop(self, timeout: float = 30.0) -> None:
+        """Stop the lifecycle thread.
 
-    def _run(self) -> None:
+        Args:
+            timeout: Maximum time to wait for thread to exit (default 30s).
+        """
+        self._threads.stop(timeout=timeout)
+
+    def _run(self, stop_event: threading.Event) -> None:
         """Main lifecycle: BOOTING -> INITIALIZING -> READY.
 
         Inlines bootstrap logic directly - no nested state machine.
@@ -372,7 +379,7 @@ class ManagedVm:
             # The controller re-bootstraps all VMs on startup to pull the latest worker image.
             # Wait for connection
             logger.info("VM %s: Waiting for connection (timeout=%.1fs)", vm_id, boot_timeout.to_seconds())
-            if not wait_for_connection(self._conn, boot_timeout, poll_interval, self._stop):
+            if not wait_for_connection(self._conn, boot_timeout, poll_interval, stop_event):
                 self.info.init_error = f"Boot timeout after {boot_timeout.to_seconds():.1f}s"
                 logger.error("VM %s: Boot timeout after %.1fs", vm_id, boot_timeout.to_seconds())
                 self._transition(vm_pb2.VM_STATE_FAILED)
