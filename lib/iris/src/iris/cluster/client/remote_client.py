@@ -264,6 +264,7 @@ class RemoteClusterClient:
             task_index=task_index,
             start_ms=start.epoch_ms() if start else 0,
             limit=max_lines,
+            start_line=0,
         )
         response = self._client.get_task_logs(request)
         return list(response.logs)
