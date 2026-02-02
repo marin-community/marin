@@ -187,7 +187,8 @@ class ThreadContainer:
         on_stop: Callable[[], None] | None = None,
     ) -> ManagedThread:
         thread = ManagedThread(target=target, name=name, args=args, on_stop=on_stop, _container=self)
-        self._threads.append(thread)
+        with self._lock:
+            self._threads.append(thread)
         thread.start()
         return thread
 
@@ -206,7 +207,6 @@ class ThreadContainer:
             logger.debug("Running server %s (%s)", name, server)
             server.run()
             logger.debug("Server %s exited", name)
-            assert server.should_exit
 
         def _stop_server() -> None:
             logger.debug("Signaling server %s to exit", name)

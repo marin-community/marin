@@ -51,7 +51,7 @@ Example thread pattern:
 """
 
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -128,7 +128,7 @@ def signal_sentinel(path: Path) -> None:
     path.touch()
 
 
-def wait_for_condition(condition: callable, timeout: float = 10.0, poll_interval: float = 0.01) -> None:
+def wait_for_condition(condition: Callable[[], bool], timeout: float = 10.0, poll_interval: float = 0.01) -> None:
     """Wait for a condition to become true.
 
     Polls the condition callable at regular intervals until it returns True

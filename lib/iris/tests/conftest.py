@@ -222,4 +222,6 @@ def pytest_sessionfinish(session, exitstatus):
         tty.flush()
         tty.close()
         # Force exit to prevent orphaned non-daemon threads from blocking
-        os._exit(exitstatus)
+        # Only force-exit on failure to avoid skipping atexit handlers on clean runs
+        if exitstatus != 0:
+            os._exit(exitstatus)
