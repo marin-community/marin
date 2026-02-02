@@ -281,3 +281,12 @@ class RemoteClusterClient:
         )
         response = self._client.get_task_logs(request)
         return list(response.logs)
+
+    def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
+        """Get autoscaler status including recent actions and group states.
+
+        Returns:
+            GetAutoscalerStatusResponse proto with autoscaler status and recent actions
+        """
+        request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
+        return self._client.get_autoscaler_status(request)

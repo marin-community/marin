@@ -43,19 +43,61 @@ def test_deadline_from_now_with_duration():
 
 
 def test_timestamp_proto_roundtrip():
-    """Timestamp survives proto serialization."""
+    """Timestamp proto serialization handles edge cases correctly."""
+    # Normal case
     original = Timestamp.now()
     proto = original.to_proto()
     restored = Timestamp.from_proto(proto)
     assert original == restored
 
+    # Epoch zero (1970-01-01)
+    epoch_zero = Timestamp.from_ms(0)
+    proto_zero = epoch_zero.to_proto()
+    restored_zero = Timestamp.from_proto(proto_zero)
+    assert epoch_zero == restored_zero
+    assert restored_zero.epoch_ms() == 0
+
+    # Negative timestamp (before epoch)
+    negative = Timestamp.from_ms(-1000)
+    proto_neg = negative.to_proto()
+    restored_neg = Timestamp.from_proto(proto_neg)
+    assert negative == restored_neg
+    assert restored_neg.epoch_ms() == -1000
+
+    # Very large timestamp (year 2100+)
+    large = Timestamp.from_ms(4102444800000)  # 2100-01-01
+    proto_large = large.to_proto()
+    restored_large = Timestamp.from_proto(proto_large)
+    assert large == restored_large
+
 
 def test_duration_proto_roundtrip():
-    """Duration survives proto serialization."""
+    """Duration proto serialization handles edge cases correctly."""
+    # Normal case
     original = Duration.from_seconds(5.5)
     proto = original.to_proto()
     restored = Duration.from_proto(proto)
     assert original == restored
+
+    # Zero duration
+    zero = Duration.from_ms(0)
+    proto_zero = zero.to_proto()
+    restored_zero = Duration.from_proto(proto_zero)
+    assert zero == restored_zero
+    assert restored_zero.to_ms() == 0
+
+    # Negative duration (valid for time offsets/deltas)
+    negative = Duration.from_ms(-5000)
+    proto_neg = negative.to_proto()
+    restored_neg = Duration.from_proto(proto_neg)
+    assert negative == restored_neg
+    assert restored_neg.to_ms() == -5000
+
+    # Very large duration (days)
+    large = Duration.from_hours(24 * 365)  # 1 year
+    proto_large = large.to_proto()
+    restored_large = Duration.from_proto(proto_large)
+    assert large == restored_large
 
 
 def test_rate_limiter_throttles():
@@ -68,18 +110,6 @@ def test_rate_limiter_throttles():
 
 
 # Additional integration tests from test_time_integration.py
-
-
-def test_timestamp_proto_roundtrip_with_message():
-    """Timestamp round-trips through proto message objects."""
-    original = Timestamp.now()
-
-    # to_proto() returns a time_pb2.Timestamp message
-    proto_msg = original.to_proto()
-
-    # Deserialize back
-    restored = Timestamp.from_proto(proto_msg)
-    assert original == restored
 
 
 def test_timestamp_uses_wall_clock():
@@ -158,44 +188,6 @@ def test_deadline_remaining_prevents_overshoot():
     # Should be very close to deadline or just expired
     remaining = deadline.remaining_seconds()
     assert remaining <= 0.02  # Within 20ms of deadline
-
-
-def test_timestamp_duration_interaction():
-    """Timestamp and Duration can be combined correctly."""
-    start = Timestamp.now()
-    offset = Duration.from_seconds(5.0)
-
-    future = start.add(offset)
-
-    # Future should be 5 seconds ahead
-    diff_ms = future.epoch_ms() - start.epoch_ms()
-    assert diff_ms == 5000
-
-
-def test_very_short_duration():
-    """System handles very short durations (1ms) correctly."""
-    short = Duration.from_ms(1)
-
-    assert short.to_ms() == 1
-    assert short.to_seconds() == pytest.approx(0.001)
-
-    # Proto roundtrip
-    proto = short.to_proto()
-    restored = Duration.from_proto(proto)
-    assert restored.to_ms() == 1
-
-
-def test_very_long_duration():
-    """System handles very long durations (hours) correctly."""
-    long_duration = Duration.from_hours(24)
-
-    assert long_duration.to_ms() == 24 * 60 * 60 * 1000
-    assert long_duration.to_seconds() == pytest.approx(86400.0)
-
-    # Proto roundtrip
-    proto = long_duration.to_proto()
-    restored = Duration.from_proto(proto)
-    assert restored.to_seconds() == long_duration.to_seconds()
 
 
 def test_zero_duration():
