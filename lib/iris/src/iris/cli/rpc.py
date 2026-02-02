@@ -87,13 +87,10 @@ def _discover_methods_from_client(client_class: type) -> dict[str, MethodInfo]:
         if not callable(method):
             continue
 
-        # Get type hints to find input/output types
         annotations = getattr(method, "__annotations__", {})
         if not annotations:
             continue
 
-        # The first positional parameter after 'self' is 'request'
-        # The return type is the output
         if "request" not in annotations:
             continue
         if "return" not in annotations:
@@ -102,13 +99,11 @@ def _discover_methods_from_client(client_class: type) -> dict[str, MethodInfo]:
         input_type = annotations["request"]
         output_type = annotations["return"]
 
-        # Skip if not protobuf message types
         if not (isinstance(input_type, type) and issubclass(input_type, Message)):
             continue
         if not (isinstance(output_type, type) and issubclass(output_type, Message)):
             continue
 
-        # Convert snake_case method name to PascalCase for display
         pascal_name = "".join(word.capitalize() for word in attr_name.split("_"))
 
         methods[pascal_name] = MethodInfo(
@@ -173,16 +168,7 @@ def list_services() -> list[ServiceInfo]:
 
 
 def build_request(method_info: MethodInfo, json_str: str | None, kwargs: dict[str, Any]) -> Message:
-    """Build a protobuf request message from JSON or keyword arguments.
-
-    Args:
-        method_info: The method information containing the input type.
-        json_str: Optional JSON string to parse. Takes precedence if provided.
-        kwargs: Key-value arguments to convert to the request message.
-
-    Returns:
-        A protobuf message instance of the method's input type.
-    """
+    """Build a protobuf request message from JSON or keyword arguments."""
     if json_str:
         data = json.loads(json_str)
     else:
@@ -192,20 +178,7 @@ def build_request(method_info: MethodInfo, json_str: str | None, kwargs: dict[st
 
 
 def call_rpc(service_name: str, method_name: str, url: str, request: Message) -> Message:
-    """Execute an RPC call and return the response.
-
-    Args:
-        service_name: The service name (e.g., "controller").
-        method_name: The method name in PascalCase (e.g., "ListJobs").
-        url: The service URL (e.g., "http://localhost:10000").
-        request: The protobuf request message.
-
-    Returns:
-        The protobuf response message.
-
-    Raises:
-        ValueError: If the service or method is not found.
-    """
+    """Execute an RPC call and return the response."""
     register_services()
 
     service = SERVICES.get(service_name)
@@ -224,14 +197,7 @@ def call_rpc(service_name: str, method_name: str, url: str, request: Message) ->
 
 
 def format_response(response: Message) -> str:
-    """Format a protobuf response message as JSON.
-
-    Args:
-        response: The protobuf message to format.
-
-    Returns:
-        A JSON string representation of the message.
-    """
+    """Format a protobuf response message as JSON."""
     return json_format.MessageToJson(
         response,
         preserving_proto_field_name=True,
@@ -240,10 +206,7 @@ def format_response(response: Message) -> str:
 
 
 def get_method_signature(method: MethodInfo) -> str:
-    """Get a human-readable signature for a method.
-
-    Returns a string like "GetJobStatusRequest -> GetJobStatusResponse".
-    """
+    """Get a human-readable signature for a method."""
     input_name = method.input_type.DESCRIPTOR.name
     output_name = method.output_type.DESCRIPTOR.name
     return f"{input_name} -> {output_name}"
@@ -255,18 +218,12 @@ def get_method_signature(method: MethodInfo) -> str:
 
 
 def to_kebab_case(name: str) -> str:
-    """Convert PascalCase to kebab-case.
-
-    Example: GetJobStatus -> get-job-status
-    """
+    """Convert PascalCase to kebab-case."""
     return re.sub(r"(?<!^)(?=[A-Z])", "-", name).lower()
 
 
 def kebab_to_pascal(name: str) -> str:
-    """Convert kebab-case to PascalCase.
-
-    Example: get-job-status -> GetJobStatus
-    """
+    """Convert kebab-case to PascalCase."""
     return "".join(word.capitalize() for word in name.split("-"))
 
 
@@ -290,7 +247,6 @@ def _build_options_from_proto(input_type: type[Message]) -> list[click.Option]:
         click_type = PROTO_TYPE_TO_CLICK[field.type]
         kebab_name = field.name.replace("_", "-")
 
-        # Use --flag/--no-flag pattern for booleans to allow explicit True/False
         if field.type == FieldDescriptor.TYPE_BOOL:
             options.append(
                 click.Option(
@@ -310,7 +266,6 @@ def build_command_from_method(service_name: str, method: MethodInfo) -> click.Co
         click.Option(["--json", "json_str"], default=None, help="Full JSON request body"),
     ]
 
-    # Add options for simple scalar fields
     options.extend(_build_options_from_proto(method.input_type))
 
     @click.pass_context
@@ -318,7 +273,6 @@ def build_command_from_method(service_name: str, method: MethodInfo) -> click.Co
         url = ctx.obj.get("url")
         config_file = ctx.obj.get("config_file")
 
-        # Validate that exactly one of --url or --config is provided
         if url and config_file:
             raise ValueError("--url and --config are mutually exclusive")
         if not url and not config_file:
@@ -327,16 +281,13 @@ def build_command_from_method(service_name: str, method: MethodInfo) -> click.Co
         field_values = {k: v for k, v in kwargs.items() if v is not None}
 
         def _execute_rpc(rpc_url: str):
-            """Execute the RPC with the given URL."""
             request = build_request(method, json_str, field_values)
             response = call_rpc(service_name, method.name, rpc_url, request)
             click.echo(format_response(response))
 
         if url:
-            # Direct URL access
             _execute_rpc(url)
         else:
-            # Config file - establish SSH tunnel
             config = load_config(Path(config_file))
             zone = config.zone
             project = config.project_id
@@ -360,13 +311,6 @@ class ServiceCommands(click.MultiCommand):
     """Dynamic Click group for RPC service methods.
 
     Lazily generates Click commands from protobuf service definitions.
-    Either --url or --config option is required on the group level.
-
-    Use --url for direct access to a running controller (e.g., local development).
-    Use --config for remote access via SSH tunnel (e.g., production clusters on GCP).
-
-    Example: iris controller-rpc --url http://localhost:10000 list-jobs
-    Example: iris controller-rpc --config examples/eu-west4.yaml list-jobs
     """
 
     def __init__(self, service_name: str, **attrs):
@@ -423,3 +367,12 @@ class ServiceCommands(click.MultiCommand):
         if not method:
             return None
         return build_command_from_method(self.service_name, method)
+
+
+def register_rpc_commands(iris_group: click.Group) -> None:
+    """Register RPC service commands on the top-level iris group."""
+    iris_group.add_command(
+        ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods (use --url or --config)")
+    )
+    iris_group.add_command(ServiceCommands("worker", name="worker-rpc", help="Worker service RPC methods"))
+    iris_group.add_command(ServiceCommands("actor", name="actor-rpc", help="Actor service RPC methods"))

@@ -14,7 +14,7 @@ uv run iris cluster --config=examples/eu-west4.yaml start
 uv run iris cluster --config=examples/eu-west4.yaml status
 
 # Validate cluster with test jobs (establishes SSH tunnel automatically)
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
+uv run iris cluster --config=examples/eu-west4.yaml debug validate
 
 # Stop cluster (controller + all worker slices)
 uv run iris cluster --config=examples/eu-west4.yaml stop
@@ -276,23 +276,37 @@ iris build worker-image -t iris-worker:v1 --push --region us-central1
 iris build controller-image -t iris-controller:v1 --push --region us-central1
 ```
 
-### Cluster Tools (Debugging & Validation)
-
-The `scripts/cluster-tools.py` script provides debugging and validation commands:
+### Dashboard & Debugging
 
 ```bash
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models --help
+# Open SSH tunnel to controller and print dashboard URL
+iris cluster --config=... dashboard
+iris cluster --config=... dashboard --port 8080
 
-# Discover and show controller VM status
-discover
-autoscaler-status
-list-workers
-# controller logs
-logs {--follow}
-bootstrap-logs
-validate
-# Cleanup all iris resources (dry-run by default)
-cleanup {--no-dry-run}
+# Debug commands (auto-establish SSH tunnel)
+iris cluster --config=... debug discover         # Find controller VM
+iris cluster --config=... debug health           # Health check
+iris cluster --config=... debug autoscaler-status
+iris cluster --config=... debug list-workers
+iris cluster --config=... debug list-jobs
+iris cluster --config=... debug logs --follow    # Controller docker logs
+iris cluster --config=... debug bootstrap-logs   # VM startup logs
+iris cluster --config=... debug show-task-logs JOB_ID
+iris cluster --config=... debug validate         # Run test TPU jobs
+iris cluster --config=... debug cleanup          # Dry-run by default
+iris cluster --config=... debug cleanup --no-dry-run
+```
+
+### Job Submission
+
+```bash
+# Submit a command to the cluster (replaces iris-run)
+iris run --config cluster.yaml -- python train.py
+iris run --config cluster.yaml --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+iris run --config cluster.yaml --no-wait -- python long_job.py
+
+# Submit a Python script with a main() function
+iris submit script.py --config cluster.yaml
 ```
 
 ## Smoke Test
@@ -407,7 +421,18 @@ src/iris/
 │   ├── worker/              # Worker service
 │   └── vm/                  # VM management + autoscaling
 ├── rpc/                      # Protocol definitions + generated code
-└── cli.py                    # Main CLI entry point
+└── cli/                      # CLI package
+    ├── main.py               # Top-level iris group
+    ├── cluster.py            # Cluster lifecycle + dashboard
+    ├── controller.py         # Controller VM management
+    ├── autoscaler.py         # Autoscaler status
+    ├── slice.py              # Slice CRUD
+    ├── vm.py                 # VM status/logs
+    ├── build.py              # Image build commands
+    ├── submit.py             # Python callable submission
+    ├── run.py                # Command passthrough submission
+    ├── rpc.py                # Dynamic RPC CLI
+    └── debug.py              # Debugging & validation
 ```
 
 ## References
