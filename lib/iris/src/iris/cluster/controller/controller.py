@@ -26,7 +26,7 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
-from iris.managed_thread import ThreadContainer, get_thread_registry
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     TaskAssignedEvent,
@@ -287,7 +287,7 @@ class Controller:
         )
 
         # Background loop state
-        self._threads = threads if threads is not None else get_thread_registry().container
+        self._threads = threads if threads is not None else get_thread_container()
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None

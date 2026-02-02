@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ManagedThread, ThreadContainer, and ThreadRegistry for structured thread lifecycle management.
+"""ManagedThread and ThreadContainer for structured thread lifecycle management.
 
 ManagedThread wraps threading.Thread with an integrated stop event, ensuring
 threads are non-daemon and can be cleanly shut down. ThreadContainer provides
 component-scoped thread groups with hierarchical composition.
 
-ThreadRegistry layers a contextvar on top of ThreadContainer so that code can
-implicitly find the "current" registry without threading it through every call
-site. Use thread_registry_scope() in tests for isolation.
+A contextvar-based default container is available via get_thread_container()
+for components that don't want to pass containers explicitly. Use
+thread_container_scope() in tests for isolation.
 
 Thread Safety Best Practices
 =============================
@@ -308,96 +308,42 @@ class ThreadContainer:
 
 
 # ---------------------------------------------------------------------------
-# ThreadRegistry: contextvar-based access to the current ThreadContainer
+# Contextvar-based default container
 # ---------------------------------------------------------------------------
 
-_current_registry: ContextVar["ThreadRegistry | None"] = ContextVar("_current_registry", default=None)
+_current_container: ContextVar[ThreadContainer | None] = ContextVar("_current_container", default=None)
 
 
-class ThreadRegistry:
-    """Contextvar-aware wrapper around a ThreadContainer.
+def get_thread_container() -> ThreadContainer:
+    """Return the current thread container, creating a default if none is set.
 
-    Provides the same spawn/stop API as ThreadContainer, but is discoverable
-    via get_thread_registry() without being passed explicitly. This lets
-    components create managed threads without requiring every call site to
-    accept a ThreadContainer parameter.
-
-    For advanced or hierarchical use, callers can still create and pass
-    ThreadContainer instances directly.
-    """
-
-    def __init__(self, name: str = "registry") -> None:
-        self._container = ThreadContainer(name=name)
-
-    @property
-    def container(self) -> ThreadContainer:
-        """The underlying ThreadContainer, exposed for interop with code
-        that accepts ThreadContainer directly."""
-        return self._container
-
-    def spawn(
-        self,
-        target: Callable[..., Any],
-        *,
-        name: str | None = None,
-        args: tuple = (),
-        on_stop: Callable[[], None] | None = None,
-    ) -> ManagedThread:
-        return self._container.spawn(target=target, name=name, args=args, on_stop=on_stop)
-
-    def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
-        return self._container.spawn_server(server=server, name=name)
-
-    def spawn_executor(self, max_workers: int, prefix: str) -> ThreadPoolExecutor:
-        return self._container.spawn_executor(max_workers=max_workers, prefix=prefix)
-
-    def create_child(self, name: str) -> ThreadContainer:
-        return self._container.create_child(name=name)
-
-    @property
-    def is_alive(self) -> bool:
-        return self._container.is_alive
-
-    def alive_threads(self) -> list[ManagedThread]:
-        return self._container.alive_threads()
-
-    def stop(self, timeout: float = 5.0) -> None:
-        self._container.stop(timeout=timeout)
-
-    def wait(self) -> None:
-        self._container.wait()
-
-
-def get_thread_registry() -> ThreadRegistry:
-    """Return the current thread registry, creating a default if none is set.
-
-    In production code this returns a process-wide default registry.
-    In tests, use thread_registry_scope() to get an isolated registry
+    In production code this returns a process-wide default container.
+    In tests, use thread_container_scope() to get an isolated container
     that is automatically cleaned up.
     """
-    registry = _current_registry.get()
-    if registry is not None:
-        return registry
+    container = _current_container.get()
+    if container is not None:
+        return container
 
-    registry = ThreadRegistry(name="default")
-    _current_registry.set(registry)
-    return registry
+    container = ThreadContainer(name="default")
+    _current_container.set(container)
+    return container
 
 
 @contextlib.contextmanager
-def thread_registry_scope(name: str = "test") -> Generator[ThreadRegistry, None, None]:
-    """Context manager that installs a fresh ThreadRegistry for the duration of the block.
+def thread_container_scope(name: str = "test") -> Generator[ThreadContainer, None, None]:
+    """Context manager that installs a fresh ThreadContainer for the duration of the block.
 
-    On exit, all threads in the registry are stopped and the previous
-    registry (if any) is restored. This is the primary mechanism for
-    test isolation: each test gets its own registry and does not leak
+    On exit, all threads in the container are stopped and the previous
+    container (if any) is restored. This is the primary mechanism for
+    test isolation: each test gets its own container and does not leak
     threads into the next test.
     """
-    previous = _current_registry.get()
-    registry = ThreadRegistry(name=name)
-    _current_registry.set(registry)
+    previous = _current_container.get()
+    container = ThreadContainer(name=name)
+    _current_container.set(container)
     try:
-        yield registry
+        yield container
     finally:
-        registry.stop()
-        _current_registry.set(previous)
+        container.stop()
+        _current_container.set(previous)

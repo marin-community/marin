@@ -26,7 +26,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
-from iris.managed_thread import thread_registry_scope
+from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
 
 # httpx logs every HTTP request at INFO level, which floods test output
@@ -147,21 +147,21 @@ def sentinel(tmp_path) -> SentinelFile:
 
 
 @pytest.fixture
-def registry():
-    """Provides an isolated thread registry for the test.
+def container():
+    """Provides an isolated thread container for the test.
 
-    Automatically cleans up all threads spawned within the registry when
+    Automatically cleans up all threads spawned within the container when
     the test completes. This is the recommended way to use ThreadContainer
     in tests that need explicit thread management.
 
     Example:
-        def test_with_threads(registry):
-            registry.spawn(my_thread_fn, name="test-thread")
+        def test_with_threads(container):
+            container.spawn(my_thread_fn, name="test-thread")
             # Test code...
             # Cleanup happens automatically
     """
-    with thread_registry_scope("test") as reg:
-        yield reg
+    with thread_container_scope("test") as cont:
+        yield cont
 
 
 @pytest.fixture(autouse=True)

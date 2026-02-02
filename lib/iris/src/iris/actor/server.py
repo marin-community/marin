@@ -33,7 +33,7 @@ import cloudpickle
 import uvicorn
 from connectrpc.request import RequestContext
 
-from iris.managed_thread import ThreadContainer, get_thread_registry
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
 from iris.time_utils import ExponentialBackoff, Timestamp
@@ -74,7 +74,7 @@ class ActorServer:
         self._actors: dict[str, RegisteredActor] = {}
         self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
-        self._threads = threads if threads is not None else get_thread_registry().container
+        self._threads = threads if threads is not None else get_thread_container()
         self._server: uvicorn.Server | None = None
         # Create dedicated executor for running actor methods
         # This avoids relying on asyncio's default executor which can be shut down prematurely

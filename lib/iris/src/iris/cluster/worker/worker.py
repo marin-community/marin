@@ -34,7 +34,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
-from iris.managed_thread import ThreadContainer, get_thread_registry
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
@@ -112,7 +112,7 @@ class Worker:
         )
 
         self._server: uvicorn.Server | None = None
-        self._threads = threads if threads is not None else get_thread_registry().container
+        self._threads = threads if threads is not None else get_thread_container()
         self._task_threads = self._threads.create_child("tasks")
 
         self._worker_id: str | None = config.worker_id

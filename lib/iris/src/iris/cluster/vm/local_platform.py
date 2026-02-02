@@ -55,7 +55,7 @@ from iris.cluster.worker.worker_types import TaskLogs
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_registry
+from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -133,7 +133,7 @@ class _LocalContainer:
 
             # Spawn thread to stream logs asynchronously
             name_suffix = self.config.task_id or self.config.job_id or "unnamed"
-            self._log_thread = get_thread_registry().spawn(
+            self._log_thread = get_thread_container().spawn(
                 target=self._stream_logs,
                 name=f"logs-{name_suffix}",
             )
@@ -577,7 +577,7 @@ class LocalVmManager:
         self._vm_registry = vm_registry
         self._port_allocator = port_allocator
         self._slice_counter = 0
-        self._threads = threads if threads is not None else get_thread_registry().container
+        self._threads = threads if threads is not None else get_thread_container()
 
     def create_vm_group(self, tags: dict[str, str] | None = None) -> VmGroupProtocol:
         """Create a new VM group with workers."""
