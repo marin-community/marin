@@ -529,6 +529,10 @@ class Controller:
         Uses a lock-copy-unlock-send-lock-apply pattern: snapshots dispatch outboxes
         under lock, sends RPCs without holding the lock, then re-locks to apply results.
         """
+        # Exit early if shutdown is in progress
+        if self._stop:
+            return
+
         # Phase 1: snapshot worker list (no lock), then drain outboxes (under lock)
         all_workers = self._state.get_available_workers()
         with self._dispatch_lock:
@@ -546,6 +550,9 @@ class Controller:
         # Phase 3: process results, requeue failures
         try:
             for future in as_completed(futures, timeout=10):
+                # Exit if shutdown started while waiting for futures
+                if self._stop:
+                    return
                 worker, tasks_to_run, tasks_to_kill = futures.pop(future)
                 self._handle_heartbeat_future(future, worker, tasks_to_run, tasks_to_kill)
         except TimeoutError:
