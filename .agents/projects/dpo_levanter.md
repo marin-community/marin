@@ -18,6 +18,44 @@ This document analyzes the changes made to Haliax and Levanter for DPO support, 
 
 ---
 
+## Update: Fixes Merged to Main
+
+The fixes described in this document have been implemented and merged to `main` via two PRs:
+
+### PR #2463: "fix potential sharding inside hax.vmap"
+
+This PR implemented fixes #1 and #2 from this analysis:
+
+| Fix | Implementation |
+|-----|----------------|
+| `nn/scan.py`: Add `auto_sharded` after vmap | Added `stacked = haliax.auto_sharded(stacked)` after vmap in `Stacked.init` |
+| `partitioning.py`: Skip sharding for batched tracers | Changed from `is_in_jit()` to `_is_jit_tracer(named.array)` for more precise tracer detection |
+
+The PR also added 86 lines of regression tests in `test_scan.py` to verify vmap + sharding interactions.
+
+### PR #2502: "fix getting pspec for None-backed named arrays"
+
+This PR implemented fixes #3 and #4, plus the simplified `trainer_state.py` changes:
+
+| Fix | Implementation |
+|-----|----------------|
+| `partitioning.py`: Handle `array=None` in `pspec_for` | Uses `node.axes` safely without accessing potentially-None array |
+| `trainer_state.py`: Simplified partition/combine | Added `is_leaf=lambda x: isinstance(x, hax.NamedArray)` to `eqx.partition`/`eqx.combine` calls |
+| `lora.py`: Consistent NamedArray handling | Switched to `haliax.tree_util.tree_map` |
+
+The PR also added a regression test `test_pspec_for_namedarray_with_missing_array` to verify the fix.
+
+### Why These Were Separate PRs
+
+The fixes were split to:
+1. Keep changes focused and reviewable
+2. Allow independent testing of vmap/sharding vs None-array handling
+3. Land in `main` without requiring the full DPO implementation
+
+With these PRs merged, the DPO branch (`dpo_claude_opus`) can focus purely on the DPO-specific logic (preference data, loss function, `DpoModel`, training script) without carrying Haliax patches.
+
+---
+
 ## Why DPO Surfaces These Issues (DPO vs LM Training)
 
 DPO (Direct Preference Optimization) training differs fundamentally from standard LM pretraining in ways that expose latent bugs in JAX/Equinox/Haliax interactions:
