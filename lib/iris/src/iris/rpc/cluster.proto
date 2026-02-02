@@ -567,6 +567,7 @@ message Controller {
     int32 task_index = 2;
     int64 start_ms = 3;
     int64 limit = 4;
+    int64 start_line = 5;  // Supports negative indexing: -1000 = last 1000 lines
   }
 
   message GetTaskLogsResponse {

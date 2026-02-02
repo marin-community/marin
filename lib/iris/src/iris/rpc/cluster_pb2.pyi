@@ -683,16 +683,18 @@ class Controller(_message.Message):
         actions: _containers.RepeatedCompositeFieldContainer[Controller.TransactionAction]
         def __init__(self, actions: _Optional[_Iterable[_Union[Controller.TransactionAction, _Mapping]]] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
-        __slots__ = ("job_id", "task_index", "start_ms", "limit")
+        __slots__ = ("job_id", "task_index", "start_ms", "limit", "start_line")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         TASK_INDEX_FIELD_NUMBER: _ClassVar[int]
         START_MS_FIELD_NUMBER: _ClassVar[int]
         LIMIT_FIELD_NUMBER: _ClassVar[int]
+        START_LINE_FIELD_NUMBER: _ClassVar[int]
         job_id: str
         task_index: int
         start_ms: int
         limit: int
-        def __init__(self, job_id: _Optional[str] = ..., task_index: _Optional[int] = ..., start_ms: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
+        start_line: int
+        def __init__(self, job_id: _Optional[str] = ..., task_index: _Optional[int] = ..., start_ms: _Optional[int] = ..., limit: _Optional[int] = ..., start_line: _Optional[int] = ...) -> None: ...
     class GetTaskLogsResponse(_message.Message):
         __slots__ = ("logs", "worker_address")
         LOGS_FIELD_NUMBER: _ClassVar[int]

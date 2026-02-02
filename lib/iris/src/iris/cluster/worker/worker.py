@@ -589,7 +589,12 @@ class Worker:
         return True
 
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
-        """Get logs for a task."""
+        """Get logs for a task.
+
+        Args:
+            task_id: ID of the task to get logs for
+            start_line: Line offset (supports negative indexing: -1000 = last 1000 lines)
+        """
         task = self._tasks.get(task_id)
         if not task:
             return []
@@ -609,6 +614,7 @@ class Worker:
         # Sort by timestamp
         logs.sort(key=lambda x: x.timestamp.epoch_ms)
 
+        # Python slicing naturally supports negative indexing
         return logs[start_line:]
 
     @property
