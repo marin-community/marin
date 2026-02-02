@@ -209,10 +209,9 @@ class ScalingGroup:
 
         timestamp = timestamp or Timestamp.now()
 
-        # Chaos injection for VM creation failures
-        chaos_raise("vm.create")
-
         try:
+            # Chaos injection for VM creation failures
+            chaos_raise("vm.create")
             vm_group = self._vm_manager.create_vm_group(tags)
             with self._vm_groups_lock:
                 self._vm_groups[vm_group.group_id] = vm_group
