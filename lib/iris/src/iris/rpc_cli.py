@@ -22,6 +22,7 @@ import json
 import re
 import traceback
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import click
@@ -29,6 +30,8 @@ from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
+from iris.cluster.vm.config import load_config
+from iris.cluster.vm.debug import controller_tunnel
 from iris.rpc import actor_connect, cluster_connect
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
@@ -318,54 +321,33 @@ def build_command_from_method(service_name: str, method: MethodInfo) -> click.Co
 
         # Validate that exactly one of --url or --config is provided
         if url and config_file:
-            click.echo("Error: --url and --config are mutually exclusive", err=True)
-            raise SystemExit(1)
+            raise ValueError("--url and --config are mutually exclusive")
         if not url and not config_file:
-            click.echo("Error: Either --url or --config is required", err=True)
-            raise SystemExit(1)
+            raise ValueError("Either --url or --config is required")
 
         field_values = {k: v for k, v in kwargs.items() if v is not None}
 
         def _execute_rpc(rpc_url: str):
             """Execute the RPC with the given URL."""
-            try:
-                request = build_request(method, json_str, field_values)
-                response = call_rpc(service_name, method.name, rpc_url, request)
-                click.echo(format_response(response))
-            except json.JSONDecodeError as e:
-                click.echo(f"Invalid JSON: {e}", err=True)
-                raise SystemExit(1) from None
-            except Exception as e:
-                click.echo(f"RPC error: {e}", err=True)
-                if ctx.obj and ctx.obj.get("traceback"):
-                    traceback.print_exc()
-                raise SystemExit(1) from None
+            request = build_request(method, json_str, field_values)
+            response = call_rpc(service_name, method.name, rpc_url, request)
+            click.echo(format_response(response))
 
         if url:
             # Direct URL access
             _execute_rpc(url)
         else:
             # Config file - establish SSH tunnel
-            from pathlib import Path
-
-            from iris.cluster.vm.config import load_config
-            from iris.cluster.vm.debug import controller_tunnel
-
             config = load_config(Path(config_file))
             zone = config.zone
             project = config.project_id
             label_prefix = config.label_prefix or "iris"
 
             if not zone or not project:
-                click.echo("Error: Config file must specify zone and project_id", err=True)
-                raise SystemExit(1)
+                raise ValueError("Config file must specify zone and project_id")
 
-            try:
-                with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
-                    _execute_rpc(tunnel_url)
-            except RuntimeError as e:
-                click.echo(f"Error establishing tunnel: {e}", err=True)
-                raise SystemExit(1) from None
+            with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
+                _execute_rpc(tunnel_url)
 
     return click.Command(
         name=to_kebab_case(method.name),
@@ -380,6 +362,9 @@ class ServiceCommands(click.MultiCommand):
 
     Lazily generates Click commands from protobuf service definitions.
     Either --url or --config option is required on the group level.
+
+    Use --url for direct access to a running controller (e.g., local development).
+    Use --config for remote access via SSH tunnel (e.g., production clusters on GCP).
 
     Example: iris controller-rpc --url http://localhost:10000 list-jobs
     Example: iris controller-rpc --config examples/eu-west4.yaml list-jobs
