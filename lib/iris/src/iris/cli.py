@@ -347,10 +347,13 @@ def iris(ctx, verbose: bool, show_traceback: bool):
 # =============================================================================
 
 # Add service commands as top-level groups for direct RPC access:
-#   iris controller-rpc list-jobs --url http://localhost:10000
-#   iris worker-rpc heartbeat --url http://localhost:10001
-#   iris actor-rpc invoke --url http://localhost:10002
-iris.add_command(ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods"))
+#   iris controller-rpc --url http://localhost:10000 list-jobs
+#   iris controller-rpc --config examples/eu-west4.yaml list-jobs
+#   iris worker-rpc --url http://localhost:10001 heartbeat
+#   iris actor-rpc --url http://localhost:10002 invoke
+iris.add_command(
+    ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods (use --url or --config)")
+)
 iris.add_command(ServiceCommands("worker", name="worker-rpc", help="Worker service RPC methods"))
 iris.add_command(ServiceCommands("actor", name="actor-rpc", help="Actor service RPC methods"))
 
