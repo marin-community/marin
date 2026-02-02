@@ -17,7 +17,7 @@ Demo VLM Training Experiment
 
 Train a Vision-Language Model (LLaVA-OneVision architecture):
 - Vision Encoder: SigLIP (384x384, patch14)
-- Language Model: Qwen3-1.7B
+- Language Model: Qwen3-4B
 - Projector: 2-layer MLP
 
 Data Format: LLaVA conversation format (messages + images)
@@ -69,7 +69,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -89,22 +89,25 @@ vision_config = SiglipVisionConfig(
     image_size=384,
     patch_size=16,  # Must match vision_checkpoint (siglip2-so400m-patch16-384)
     flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+    gradient_checkpointing=True,
 )
 
-# Language model: Qwen3-1.7B
+# Language model: Qwen3-4B
 text_config = Qwen3Config(
-    max_seq_len=4096,
-    hidden_dim=2048,
-    intermediate_dim=6144,
-    num_heads=16,
+    max_seq_len=2048,
+    hidden_dim=2560,
+    intermediate_dim=9728,
+    num_heads=32,
     num_kv_heads=8,
-    num_layers=28,
+    num_layers=36,
+    head_dim=128,  # Required for HuggingFace Qwen3-4B compatibility
     rope=Llama3RotaryEmbeddingsConfig(),
     tie_word_embeddings=True,
     flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+    gradient_checkpointing=True,
 )
 
-# Qwen3-1.7B <|image_pad|> token ID (hardcoded to avoid HF API call during import)
+# Qwen3-4B <|image_pad|> token ID (hardcoded to avoid HF API call during import)
 # This prevents 429 rate limit errors when 64 workers import this module simultaneously
 IMAGE_TOKEN_INDEX = 151655
 
@@ -120,6 +123,7 @@ vlm_config = LlavaOnevisionConfig(
     disable_anyres=True,
     # Use Qwen3's <|image_pad|> token ID (default 151646 is for Qwen2)
     image_token_index=IMAGE_TOKEN_INDEX,
+    gradient_checkpointing=True,
 )
 
 # ============================================================================
@@ -140,7 +144,7 @@ vlm_config = LlavaOnevisionConfig(
 
 data_source = ConversationDatasetSourceConfig(
     # >>> EDIT THIS PATH to point to your training data <<<
-    train_urls=["gs://marin-vlm/stage3_sharded_full/*.parquet"],
+    train_urls=["gs://marin-vlm/stage2_sharded/*.parquet"],
     messages_key="messages",
     images_key="images",
 )
@@ -153,26 +157,35 @@ VISION_FEATURE_HEIGHT = vision_config.image_size // vision_config.patch_size  # 
 
 data_config = ImageMixtureDatasetConfig(
     cache_dir="cache/vlm_demo",
-    # Processor for image preprocessing
+    # Processor for image preprocessing (loaded from GCS to avoid HuggingFace download race conditions)
     processor="gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf",
     # Custom tokenizer for text processing (uses CustomVLMProcessor internally)
-    tokenizer="Qwen/Qwen3-1.7B",
+    tokenizer="Qwen/Qwen3-4B",
     configs={"train": data_source},
     train_weights={"train": 1.0},
-    use_cache=False,  # Streaming mode (no disk caching)
-    max_length=4096,  # Match model's max_seq_len to avoid truncation issues
+    use_cache=False,  # Streaming mode with pre-computed pack assignments
+    max_length=2048,  # Match model's max_seq_len to avoid truncation issues
     vision_feature_height=VISION_FEATURE_HEIGHT,  # Override: use model's actual feature size
     # Disable anyres to match model config (disable_anyres=True sets vision_aspect_ratio="single")
     # Without this, the HF processor uses anyres_max_9 which calculates extra tokens for grid patches
     vision_aspect_ratio="single",
     image_grid_pinpoints=[[384, 384]],  # Single resolution only
+    # === Streaming Packing Configuration ===
+    # Enable sequence packing: multiple samples are combined into a single training example
+    # with attention masks preventing cross-sample attention. This improves GPU/TPU utilization.
+    # IMPORTANT: Packing requires disable_anyres=True (set above).
+    # For streaming mode, provide pack_assignments_path (pre-computed offline).
+    enable_packing=True,
+    max_segments_per_pack=4,  # Maximum samples per packed example
+    # Pre-computed pack assignments from: python scripts/compute_vlm_pack_assignments.py
+    pack_assignments_path="gs://marin-vlm/stage2_sharded/pack_assignments.json",
 )
 
 # ============================================================================
 # 4. TRAINING CONFIGURATION
 # ============================================================================
 # Dataset size: 558K samples
-DATASET_SIZE = 47141442
+DATASET_SIZE = 5125936
 NUM_EPOCHS = 1
 NUM_TRAIN_STEPS = (DATASET_SIZE // BATCH_SIZE) * NUM_EPOCHS
 
@@ -190,7 +203,7 @@ train_config = SimpleVlmTrainConfig(
     # Full bfloat16: params and compute both in bfloat16 (saves memory)
     mp="bfloat16",
 
-    # Streaming mode: double the default prefetch for better throughput
+    # Streaming mode prefetch settings
     streaming_max_buffered_batches=16,
     streaming_prefetch_size=8,
 
@@ -200,7 +213,7 @@ train_config = SimpleVlmTrainConfig(
 
     # Load complete VLM weights from GCS HF checkpoint (vision encoder + projector + LLM)
     # This checkpoint contains trained weights from stage 1
-    vlm_checkpoint="gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-round2-2-80caa3/hf/vlm-official-qwen3-1.7b-round2-2-80caa3/step-39061/step-39061",
+    vlm_checkpoint="gs://your-bucket/path/to/qwen3-4b-vlm-checkpoint",  # TODO: Update with actual 4B checkpoint
     # vision_checkpoint and llm_checkpoint not needed when using vlm_checkpoint
 
     # New training stage - data starts from beginning
@@ -238,7 +251,7 @@ train_config = SimpleVlmTrainConfig(
 # 5. EXPERIMENT NAME (via environment variable)
 # ============================================================================
 # Can be set via: -e EXP_NAME my-experiment-name
-EXP_NAME = os.environ.get("EXP_NAME", "vlm-demo21-qwen2-1.7b")
+EXP_NAME = os.environ.get("EXP_NAME", "vlm-round2-qwen3-4b")
 
 # ============================================================================
 # 6. CREATE TRAINING STEP
@@ -248,8 +261,8 @@ vlm_training = default_train_vlm(
     data_config=data_config,
     model_config=vlm_config,
     train_config=train_config,
-    tags=["vlm", "demo", "qwen3-1.7b", "siglip"],
-    allow_out_of_region=("data.pack_assignments_path",),
+    tags=["vlm", "round2", "qwen3-4b", "siglip"],
+    allow_out_of_region=("data.pack_assignments_path", "data.processor"),
 )
 
 # ============================================================================

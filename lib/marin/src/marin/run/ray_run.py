@@ -150,8 +150,8 @@ async def submit_and_track_job(
 
     # Uninstall non-headless opencv and reinstall headless version to avoid libGL.so.1 dependency
     # opencv-python-headless provides the same cv2 API without GUI/OpenGL requirements
-    # --force-reinstall is needed because uninstalling opencv-python removes the shared cv2 module
-    opencv_fix = "pip uninstall -y opencv-python 2>/dev/null || true && pip install --force-reinstall opencv-python-headless"
+    # Use --no-deps to avoid reinstalling numpy which can fail in Ray's virtualenv
+    opencv_fix = "pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless"
     entrypoint_with_opencv_fix = f"{opencv_fix} && {entrypoint}"
 
     logger.info(

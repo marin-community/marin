@@ -195,7 +195,7 @@ train_config = SimpleVlmTrainConfig(
     per_device_parallelism=PER_DEVICE_PARALLELISM,
     num_train_steps=NUM_TRAIN_STEPS,
     epoch=0,  # Disable epoch mode (use num_train_steps instead)
-    learning_rate=0.5e-4,
+    learning_rate=1e-4,
     warmup=0.002,  # 3% warmup
     weight_decay=0.0,
     min_lr_ratio=0.01,  # Final LR = 1% of peak LR
