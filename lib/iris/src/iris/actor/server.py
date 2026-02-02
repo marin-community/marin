@@ -243,7 +243,3 @@ class ActorServer:
     def stop(self) -> None:
         """Stop the actor server and wait for threads to exit."""
         self._threads.stop()
-
-    def shutdown(self) -> None:
-        """Deprecated: use stop() instead."""
-        self.stop()

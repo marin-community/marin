@@ -15,11 +15,11 @@
 """Tests for hierarchical ThreadContainer behavior."""
 
 import threading
-import time
 
 import pytest
 
 from iris.managed_thread import ThreadContainer
+from tests.test_utils import wait_for_condition
 
 
 def _busy_wait(stop_event: threading.Event) -> None:
@@ -41,9 +41,7 @@ def test_create_child_and_stop_propagates():
     parent.spawn(target=_counter, name="parent-thread", args=(parent_results,))
     child.spawn(target=_counter, name="child-thread", args=(child_results,))
 
-    time.sleep(0.1)
-    assert len(parent_results) == 1
-    assert len(child_results) == 1
+    wait_for_condition(lambda: len(parent_results) == 1 and len(child_results) == 1, timeout=1.0)
 
     parent.stop(timeout=2.0)
 
@@ -59,7 +57,7 @@ def test_alive_threads_includes_children():
     child.spawn(target=_busy_wait, name="c1")
     child.spawn(target=_busy_wait, name="c2")
 
-    time.sleep(0.05)
+    wait_for_condition(lambda: len(parent.alive_threads()) == 3, timeout=1.0)
     alive = parent.alive_threads()
     assert len(alive) == 3
 
@@ -87,8 +85,7 @@ def test_nested_children():
 
     leaf.spawn(target=_busy_wait, name="leaf-thread")
 
-    time.sleep(0.05)
-    assert len(root.alive_threads()) == 1
+    wait_for_condition(lambda: len(root.alive_threads()) == 1, timeout=1.0)
 
     root.stop(timeout=2.0)
     assert root.alive_threads() == []
@@ -111,7 +108,7 @@ def test_child_stop_before_parent_threads():
     child.spawn(target=child_thread, name="child-t")
     parent.spawn(target=parent_thread, name="parent-t")
 
-    time.sleep(0.05)
+    wait_for_condition(lambda: len(parent.alive_threads()) == 2, timeout=1.0)
     parent.stop(timeout=2.0)
 
     # Child threads should be stopped (and joined) before parent threads

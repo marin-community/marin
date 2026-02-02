@@ -15,27 +15,35 @@
 """Local platform: in-process VmManager for testing without GCP.
 
 Provides LocalVmManager (VmManagerProtocol) and LocalVmGroup (VmGroupProtocol)
-that create real Worker instances running in-process with thread-based execution
+that create real Worker instances running in-process with subprocess-based execution
 instead of Docker containers.
 
 Also provides the local provider implementations used by workers:
 - LocalEnvironmentProvider: probes local system resources
 - _LocalBundleProvider: serves pre-built bundles from local filesystem
 - _LocalImageProvider: no-op image provider (uses local:latest)
-- _LocalContainerRuntime: executes containers as threads
-- _LocalContainer: thread-based container execution model
+- _LocalContainerRuntime: executes containers as subprocesses
+- _LocalContainer: subprocess-based container execution (enables hard kill)
 """
 
 from __future__ import annotations
 
+import base64
+import ctypes
+import ctypes.util
 import logging
+import os
+import select
+import signal
 import socket
 import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from iris.cluster.types import get_tpu_topology, tpu_device
 from iris.cluster.vm.autoscaler import Autoscaler
@@ -55,125 +63,238 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Process management utilities
+# =============================================================================
+
+
+def _set_pdeathsig_preexec():
+    """Use prctl(PR_SET_PDEATHSIG, SIGKILL) to kill subprocess if parent dies.
+
+    This is a Linux-specific feature that ensures container processes are
+    automatically killed if the worker process dies unexpectedly. On other
+    platforms, this is a no-op.
+    """
+    if sys.platform == "linux":
+        PR_SET_PDEATHSIG = 1
+        try:
+            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+            if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
+                errno = ctypes.get_errno()
+                logger.warning(f"Failed to set parent death signal: errno {errno}")
+        except Exception as e:
+            logger.debug(f"Could not set parent death signal: {e}")
+
+
+# =============================================================================
 # Local Providers (in-process implementations for testing)
 # =============================================================================
 
 
 @dataclass
 class _LocalContainer:
+    """Container execution via subprocess (not thread).
+
+    Uses subprocess.Popen to run both callable and command entrypoints,
+    enabling hard termination and proper log capture. Mirrors the Docker
+    runtime's thunk pattern for callable entrypoints.
+    """
+
     config: ContainerConfig
-    _thread_container: ThreadContainer
-    _managed_thread: ManagedThread | None = field(default=None, repr=False)
+    _process: subprocess.Popen | None = field(default=None, repr=False)
+    _log_thread: ManagedThread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
     _logs: list[LogLine] = field(default_factory=list)
-    _killed: threading.Event = field(default_factory=threading.Event)
 
     def start(self):
+        """Start container as subprocess and begin streaming logs."""
         self._running = True
-        # Use task_id or job_id as name, or fall back to unnamed
-        name_suffix = self.config.task_id or self.config.job_id or "unnamed"
-        self._managed_thread = self._thread_container.spawn(
-            target=self._execute_managed,
-            name=f"container-{name_suffix}",
-        )
-
-    def _execute_managed(self, stop_event: threading.Event):
-        """Managed thread wrapper that can be stopped via stop_event."""
-        # Just run the container execution directly
-        # The stop_event allows ThreadContainer to signal us to stop,
-        # but we don't need to check it during normal execution
-        self._execute()
-
-    def _execute(self):
-        from iris.cluster.client.job_info import JobInfo, _parse_ports_from_env, set_job_info
-
-        container_name = self.config.task_id or self.config.job_id or "unnamed"
-        container_logger = logging.getLogger(f"iris.container.{container_name}")
+        cmd = self._build_command()
 
         try:
-            env = self.config.env
-            job_info = JobInfo(
-                job_id=env.get("IRIS_JOB_ID", ""),
-                task_id=env.get("IRIS_TASK_ID"),
-                task_index=int(env.get("IRIS_TASK_INDEX", "0")),
-                num_tasks=int(env.get("IRIS_NUM_TASKS", "1")),
-                attempt_id=int(env.get("IRIS_ATTEMPT_ID", "0")),
-                worker_id=env.get("IRIS_WORKER_ID"),
-                controller_address=env.get("IRIS_CONTROLLER_ADDRESS"),
-                ports=_parse_ports_from_env(env),
+            # Use process groups on Unix for clean termination
+            # Set PR_SET_PDEATHSIG on Linux for automatic cleanup if parent dies
+            popen_kwargs: dict[str, Any] = {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "text": True,
+                "env": self.config.env,
+                "bufsize": 1,  # Line buffered
+            }
+
+            if sys.platform != "win32":
+                # Create new process group for clean termination
+                popen_kwargs["start_new_session"] = True
+                # Set up automatic termination if parent dies (Linux only)
+                popen_kwargs["preexec_fn"] = _set_pdeathsig_preexec
+
+            self._process = subprocess.Popen(cmd, **popen_kwargs)
+
+            # Spawn thread to stream logs asynchronously
+            name_suffix = self.config.task_id or self.config.job_id or "unnamed"
+            self._log_thread = get_thread_registry().spawn(
+                target=self._stream_logs,
+                name=f"logs-{name_suffix}",
             )
-            set_job_info(job_info)
-
-            entrypoint = self.config.entrypoint
-
-            if self._killed.is_set():
-                self._exit_code = 137
-                return
-
-            if entrypoint.is_callable:
-                # Run callable directly in-thread; output goes to parent process.
-                # Use a named logger so output can be attributed to this container.
-                container_logger.info("Starting callable entrypoint")
-                fn, args, kwargs = entrypoint.resolve()
-                fn(*args, **kwargs)
-            else:
-                # Command entrypoint: run as subprocess, capture and log output.
-                assert entrypoint.command is not None
-                container_logger.info("Starting command: %s", entrypoint.command)
-                result = subprocess.run(
-                    entrypoint.command,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    env=self.config.env,
-                )
-                self._append_subprocess_logs(result.stdout, "stdout")
-                self._append_subprocess_logs(result.stderr, "stderr")
-                if result.returncode != 0:
-                    raise RuntimeError(f"Command failed with exit code {result.returncode}")
-
-            self._exit_code = 0
-
         except Exception as e:
             self._error = str(e)
             self._exit_code = 1
-        finally:
+            self._running = False
+            logger.exception("Failed to start container")
+
+    def _build_command(self) -> list[str]:
+        """Build command for both callable and command entrypoints.
+
+        Uses the same thunk pattern as DockerContainerRuntime to ensure
+        consistent behavior between local and Docker execution.
+        """
+        if self.config.entrypoint.is_command:
+            assert self.config.entrypoint.command is not None
+            return self.config.entrypoint.command
+
+        # Callable entrypoint: build Python thunk using cloudpickle bytes
+        # This mirrors DockerContainerRuntime._build_command()
+        assert self.config.entrypoint.callable_bytes is not None
+        encoded = base64.b64encode(self.config.entrypoint.callable_bytes).decode()
+
+        # Build job_info setup from environment variables
+        env = self.config.env
+        job_info_setup = f"""
+job_id='{env.get("IRIS_JOB_ID", "")}',
+task_id={env.get("IRIS_TASK_ID")!r},
+task_index={env.get("IRIS_TASK_INDEX", "0")},
+num_tasks={env.get("IRIS_NUM_TASKS", "1")},
+attempt_id={env.get("IRIS_ATTEMPT_ID", "0")},
+worker_id={env.get("IRIS_WORKER_ID")!r},
+controller_address={env.get("IRIS_CONTROLLER_ADDRESS")!r},
+"""
+
+        thunk = f"""
+import cloudpickle
+import base64
+import sys
+import traceback
+
+# Set up job_info context (same as in-thread execution)
+try:
+    from iris.cluster.client.job_info import JobInfo, set_job_info, _parse_ports_from_env
+    job_info = JobInfo(
+        {job_info_setup}
+        ports=_parse_ports_from_env({env!r}),
+    )
+    set_job_info(job_info)
+except ImportError:
+    pass  # job_info not available in subprocess
+
+# Execute cloudpickled function
+try:
+    fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}'))
+    fn(*args, **kwargs)
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
+"""
+        return [sys.executable, "-u", "-c", thunk]
+
+    def _stream_logs(self, stop_event: threading.Event):
+        """Stream stdout/stderr from subprocess to log buffer.
+
+        Runs in a separate thread to avoid blocking. Uses select() for
+        non-blocking reads with timeout to respect stop_event.
+        """
+        if not self._process:
+            return
+
+        try:
+            while self._process.poll() is None:
+                if stop_event.is_set():
+                    break
+
+                # Non-blocking read with timeout
+                ready, _, _ = select.select([self._process.stdout, self._process.stderr], [], [], 0.1)
+
+                for stream in ready:
+                    line = stream.readline()
+                    if line:
+                        source = "stdout" if stream == self._process.stdout else "stderr"
+                        self._logs.append(
+                            LogLine(
+                                timestamp=datetime.now(timezone.utc),
+                                source=source,
+                                data=line.rstrip(),
+                            )
+                        )
+
+            # Process exited - drain remaining output
+            if self._process.stdout:
+                for line in self._process.stdout:
+                    self._logs.append(
+                        LogLine(
+                            timestamp=datetime.now(timezone.utc),
+                            source="stdout",
+                            data=line.rstrip(),
+                        )
+                    )
+            if self._process.stderr:
+                for line in self._process.stderr:
+                    self._logs.append(
+                        LogLine(
+                            timestamp=datetime.now(timezone.utc),
+                            source="stderr",
+                            data=line.rstrip(),
+                        )
+                    )
+
+            self._exit_code = self._process.returncode
             self._running = False
 
-    def _append_subprocess_logs(self, output: str, source: str) -> None:
-        """Append subprocess output lines to the container log."""
-        for line in output.splitlines():
-            self._logs.append(
-                LogLine(
-                    timestamp=datetime.now(timezone.utc),
-                    source=source,
-                    data=line,
-                )
-            )
+        except Exception as e:
+            logger.exception("Error streaming logs from container")
+            self._error = str(e)
+            self._exit_code = 1
+            self._running = False
 
     def kill(self):
-        self._killed.set()
-        # Give thread a moment to notice
-        if self._managed_thread and self._managed_thread.is_alive:
-            self._managed_thread.stop()
-            self._managed_thread.join(timeout=0.5)
-        if self._running:
-            self._running = False
-            self._exit_code = 137
+        """Hard kill the subprocess immediately via SIGKILL.
+
+        On Unix: kills the entire process group to ensure all children are terminated.
+        On Windows: kills just the process.
+        """
+        if self._process and self._process.poll() is None:
+            logger.debug("Killing container process %s", self._process.pid)
+            try:
+                if sys.platform == "win32":
+                    self._process.kill()
+                else:
+                    # Kill entire process group
+                    os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                # Process already terminated
+                pass
+            except Exception as e:
+                logger.warning("Failed to kill process %s: %s", self._process.pid, e)
+                # Fall back to just killing the process itself
+                self._process.kill()
+
+            try:
+                self._process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                logger.warning("Process did not terminate after SIGKILL")
+
+        self._running = False
+        if self._exit_code is None:
+            self._exit_code = 137  # 128 + SIGKILL
 
 
 class _LocalContainerRuntime(ContainerRuntime):
-    def __init__(self, thread_container: ThreadContainer):
+    def __init__(self):
         self._containers: dict[str, _LocalContainer] = {}
-        self._thread_container = thread_container
 
     def create_container(self, config: ContainerConfig) -> str:
         container_id = f"local-{uuid.uuid4().hex[:8]}"
         self._containers[container_id] = _LocalContainer(
             config=config,
-            _thread_container=self._thread_container,
         )
         return container_id
 
@@ -336,7 +457,6 @@ class LocalVmGroup(VmGroupProtocol):
         worker_ids: list[str],
         worker_ports: list[int],
         vm_registry: VmRegistry,
-        thread_container: ThreadContainer,
     ):
         self._group_id = group_id
         self._scale_group = scale_group
@@ -345,7 +465,6 @@ class LocalVmGroup(VmGroupProtocol):
         self._created_at = Timestamp.now()
         self._vm_registry = vm_registry
         self._terminated = False
-        self._thread_container = thread_container
 
         # Create mock ManagedVm instances for each worker (for autoscaler compatibility)
         self._managed_vms: list[ManagedVm] = []
@@ -423,8 +542,6 @@ class LocalVmGroup(VmGroupProtocol):
             worker.stop()
         for vm in self._managed_vms:
             self._vm_registry.unregister(vm.info.vm_id)
-        # Stop all container threads
-        self._thread_container.stop(timeout=5.0)
 
     def to_proto(self) -> vm_pb2.SliceInfo:
         return vm_pb2.SliceInfo(
@@ -467,9 +584,6 @@ class LocalVmManager:
         slice_id = f"{self._config.name}-slice-{self._slice_counter}"
         self._slice_counter += 1
 
-        # Create a child container for this VM group's threads
-        group_threads = self._threads.create_child(f"group-{slice_id}")
-
         # Determine worker count based on accelerator type
         if self._config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
             try:
@@ -489,7 +603,7 @@ class LocalVmManager:
             # Each worker needs its own runtime to avoid container dict conflicts
             bundle_provider = _LocalBundleProvider(self._fake_bundle)
             image_provider = _LocalImageProvider()
-            container_runtime = _LocalContainerRuntime(thread_container=group_threads)
+            container_runtime = _LocalContainerRuntime()
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
             worker_port = find_free_port()
 
@@ -549,7 +663,6 @@ class LocalVmManager:
             worker_ids=worker_ids,
             worker_ports=worker_ports,
             vm_registry=self._vm_registry,
-            thread_container=group_threads,
         )
 
     def discover_vm_groups(self) -> list[VmGroupProtocol]:

@@ -300,3 +300,7 @@ class FakeVmManager:
         """List all VM groups."""
         with self._lock:
             return list(self._slices.values())
+
+    def stop(self) -> None:
+        """No-op: FakeVmManager has no background threads to stop."""
+        pass

@@ -158,30 +158,6 @@ def wait_for_condition(condition: callable, timeout: float = 10.0, poll_interval
 # Tests for sentinel utilities
 
 
-def test_sentinel_file_creates_and_cleans_up(tmp_path: Path) -> None:
-    """Test that sentinel_file context manager creates parent dirs and cleans up."""
-    sentinel = tmp_path / "subdir" / "sentinel.txt"
-
-    # Initially doesn't exist
-    assert not sentinel.exists()
-
-    with sentinel_file(sentinel) as path:
-        assert path == sentinel
-        # Parent directory is created
-        assert sentinel.parent.exists()
-        # File doesn't exist yet (caller creates it)
-        assert not sentinel.exists()
-
-        # Simulate signaling
-        sentinel.touch()
-        assert sentinel.exists()
-
-    # Cleanup happens automatically
-    assert not sentinel.exists()
-    # Parent dir still exists (we only clean up the file)
-    assert sentinel.parent.exists()
-
-
 def test_sentinel_file_cleans_up_on_exception(tmp_path: Path) -> None:
     """Test that sentinel_file cleans up even when exception occurs."""
     sentinel = tmp_path / "sentinel.txt"

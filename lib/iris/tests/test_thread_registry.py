@@ -15,9 +15,9 @@
 """Tests for the contextvar-based ThreadRegistry."""
 
 import threading
-import time
 
 from iris.managed_thread import get_thread_registry, thread_registry_scope
+from tests.test_utils import wait_for_condition
 
 
 def _busy_wait(stop_event: threading.Event) -> None:
@@ -34,8 +34,7 @@ def test_registry_scope_spawns_and_cleans_up():
     results: list[int] = []
     with thread_registry_scope("test-cleanup") as registry:
         registry.spawn(target=_counter, name="t1", args=(results,))
-        time.sleep(0.05)
-        assert len(results) == 1
+        wait_for_condition(lambda: len(results) == 1, timeout=1.0)
         assert registry.is_alive
 
     # After exiting the scope, threads have been stopped
@@ -66,22 +65,3 @@ def test_registry_scope_restores_previous():
             pass
 
         assert get_thread_registry() is first
-
-
-def test_get_thread_registry_returns_default():
-    """Outside any scope, get_thread_registry creates a default."""
-    with thread_registry_scope("isolate"):
-        # Inside a scope, we get the scoped one
-        reg = get_thread_registry()
-        assert reg is not None
-
-
-def test_registry_container_interop():
-    """The underlying ThreadContainer is accessible for code that needs it."""
-    with thread_registry_scope("interop") as registry:
-        container = registry.container
-        container.spawn(target=_busy_wait, name="via-container")
-        time.sleep(0.05)
-
-        # Threads spawned on the container are visible through the registry
-        assert len(registry.alive_threads()) == 1

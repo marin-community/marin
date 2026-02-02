@@ -350,9 +350,6 @@ class ManagedVm:
     def _stop(self) -> threading.Event:
         return self._managed_thread.stop_event
 
-    def start(self) -> None:
-        """No-op for backward compatibility; thread starts on construction."""
-
     def stop(self, timeout: float = 10.0) -> None:
         """Signal VM thread to stop and wait for it to exit."""
         self._threads.stop(timeout=timeout)
@@ -700,7 +697,6 @@ class TrackedVmFactory:
             discovery_preamble=discovery_preamble,
         )
         self._registry.register(vm)
-        vm.start()
         return vm
 
     @property

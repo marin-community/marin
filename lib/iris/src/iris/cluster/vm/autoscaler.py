@@ -237,8 +237,7 @@ class Autoscaler:
 
         # Step 4: Stop VM managers (cleanup local platform threads if present)
         for group in self._groups.values():
-            if hasattr(group._vm_manager, "stop"):
-                group._vm_manager.stop()
+            group._vm_manager.stop()
 
     def __enter__(self) -> Autoscaler:
         return self
