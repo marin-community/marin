@@ -777,6 +777,7 @@ class Executor:
 
         ready = [step for step, deps in remaining_deps.items() if not deps]
         running: dict[ExecutorStep, StepRunner | None] = {}
+        failed_steps: set[ExecutorStep] = set()
 
         while ready or running:
             # Launch ready steps, respecting max_concurrent limit if set
@@ -805,15 +806,27 @@ class Executor:
 
             for finished_step in finished_steps:
                 runner = running[finished_step]
+                step_failed = False
                 if runner is not None:
                     logger.info("Waiting for %s to finish for step %s", runner.job_id, finished_step.name)
-                    runner.wait()
+                    try:
+                        runner.wait()
+                    except Exception as e:
+                        logger.error("Step %s failed: %s", finished_step.name, e)
+                        failed_steps.add(finished_step)
+                        step_failed = True
 
                 running.pop(finished_step)
-                for child in dependents.get(finished_step, []):
-                    remaining_deps[child].remove(finished_step)
-                    if not remaining_deps[child]:
-                        ready.append(child)
+
+                if not step_failed:
+                    for child in dependents.get(finished_step, []):
+                        remaining_deps[child].remove(finished_step)
+                        if not remaining_deps[child]:
+                            ready.append(child)
+
+        if failed_steps:
+            failed_names = sorted(step.name for step in failed_steps)
+            raise RuntimeError(f"{len(failed_steps)} step(s) failed: {failed_names}")
 
     def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> StepRunner | None:
         config = self.configs[step]
