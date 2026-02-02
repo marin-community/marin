@@ -115,11 +115,15 @@ class _LocalContainer:
         try:
             # Use process groups on Unix for clean termination
             # Set PR_SET_PDEATHSIG on Linux for automatic cleanup if parent dies
+            # Inherit the current environment (PATH, VIRTUAL_ENV, etc.) and overlay
+            # with task-specific env vars. Without this, subprocesses lack PATH and
+            # can't find binaries (exit code 127) or Python packages.
+            merged_env = {**os.environ, **self.config.env}
             popen_kwargs: dict[str, Any] = {
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
                 "text": True,
-                "env": self.config.env,
+                "env": merged_env,
                 "bufsize": 1,  # Line buffered
             }
 

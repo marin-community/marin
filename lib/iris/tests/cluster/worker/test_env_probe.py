@@ -61,6 +61,7 @@ def test_environment_provider_basic_probe(monkeypatch):
     # CPU-only device should be set
     assert metadata.device.HasField("cpu")
 
-    # Preemptible attribute should be present and default to false on non-GCP
+    # Preemptible attribute should be present (value depends on environment:
+    # "false" on non-GCP, "true" on preemptible GCP VMs)
     assert "preemptible" in metadata.attributes
-    assert metadata.attributes["preemptible"].string_value == "false"
+    assert metadata.attributes["preemptible"].string_value in ("true", "false")
