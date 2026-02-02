@@ -287,6 +287,7 @@ def test_collect_workdir_size_mb_nonexistent_directory():
     assert size_mb == 0
 
 
+@pytest.mark.docker
 def test_get_stats_invalid_container(docker_runtime):
     """Test that get_stats returns available=False for invalid container ID."""
     invalid_container_id = "nonexistent_container_12345"

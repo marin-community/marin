@@ -95,14 +95,25 @@ def use_docker(request):
 # operations are tracked explicitly. See review.md for details.
 
 
+def _docker_available() -> bool:
+    """Check if docker CLI is available."""
+    import shutil
+
+    return shutil.which("docker") is not None
+
+
 def _get_container_ids() -> set[str]:
     """Get all container IDs (running and stopped)."""
+    if not _docker_available():
+        return set()
     result = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True, check=False)
     return set(result.stdout.strip().split()) if result.stdout.strip() else set()
 
 
 def _get_image_ids() -> set[str]:
     """Get all image IDs."""
+    if not _docker_available():
+        return set()
     result = subprocess.run(["docker", "images", "-q"], capture_output=True, text=True, check=False)
     return set(result.stdout.strip().split()) if result.stdout.strip() else set()
 
