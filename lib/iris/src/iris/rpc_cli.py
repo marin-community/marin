@@ -20,7 +20,6 @@ Connect RPC clients, allowing arbitrary RPC calls via CLI.
 
 import json
 import re
-import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
