@@ -118,7 +118,7 @@ def check_health(
     try:
         status_result = conn.run(
             f"sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'not_found'",
-            timeout=10,
+            timeout=Duration.from_seconds(10),
         )
         result.container_status = status_result.stdout.strip()
     except Exception as e:

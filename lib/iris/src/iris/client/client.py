@@ -444,15 +444,17 @@ _iris_context: ContextVar[IrisContext | None] = ContextVar(
 
 
 def iris_ctx() -> IrisContext:
-    """Get or create IrisContext from environment.
+    """Get the current IrisContext, raising if not in a job.
 
     Returns:
         Current IrisContext
+
+    Raises:
+        RuntimeError: If not running inside an Iris job
     """
-    ctx = _iris_context.get()
+    ctx = get_iris_ctx()
     if ctx is None:
-        ctx = create_context_from_env()
-        _iris_context.set(ctx)
+        raise RuntimeError("iris_ctx() called outside an Iris job (no job info available)")
     return ctx
 
 

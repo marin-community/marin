@@ -320,7 +320,17 @@ class Controller:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
         self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
         self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
-        self._threads.spawn(self._run_server, name="controller-server")
+
+        # Create and start uvicorn server via spawn_server, which bridges the
+        # ManagedThread stop_event to server.should_exit automatically.
+        server_config = uvicorn.Config(
+            self._dashboard._app,
+            host=self._config.host,
+            port=self._config.port,
+            log_level="error",
+        )
+        self._server = uvicorn.Server(server_config)
+        self._threads.spawn_server(self._server, name="controller-server")
 
         # Log autoscaler configuration if provided (runs from scheduling loop, not separate thread)
         if self._autoscaler:
@@ -342,11 +352,8 @@ class Controller:
         self._wake_event.set()
         self._heartbeat_event.set()
 
-        # Stop uvicorn server so the server thread can exit
-        if self._server:
-            self._server.should_exit = True
-
-        # Stop all managed threads (signals stop_event + joins)
+        # Stop all managed threads (signals stop_event + joins; server stop is
+        # handled by spawn_server's stop_event bridge)
         self._threads.stop()
 
         # Shutdown dispatch executor - wait for in-flight requests to complete
@@ -705,22 +712,6 @@ class Controller:
                 running_task_ids=frozenset(str(tid) for tid in worker.running_tasks),
             )
         return result
-
-    def _run_server(self, stop_event: threading.Event) -> None:
-        config = uvicorn.Config(
-            self._dashboard._app,
-            host=self._config.host,
-            port=self._config.port,
-            log_level="error",
-        )
-        self._server = uvicorn.Server(config)
-
-        def _watch_stop() -> None:
-            stop_event.wait()
-            self._server.should_exit = True
-
-        threading.Thread(target=_watch_stop, daemon=True, name="server-stop-bridge").start()
-        self._server.run()
 
     def launch_job(
         self,
