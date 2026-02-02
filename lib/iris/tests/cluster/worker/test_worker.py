@@ -234,6 +234,7 @@ def create_run_task_request(
             "TASK_VAR": "task_value",
         },
         extras=["dev"],
+        dockerfile="FROM python:3.11-slim\nRUN echo test",
     )
 
     resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)

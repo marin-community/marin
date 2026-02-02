@@ -45,6 +45,7 @@ from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.worker.builder import BuildResult
+from iris.cluster.worker.worker_types import TaskLogs
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
@@ -241,13 +242,11 @@ class _LocalImageProvider:
     def build(
         self,
         bundle_path: Path,
-        base_image: str,
-        extras: list[str],
+        dockerfile: str,
         job_id: str,
-        task_logs=None,
-        pip_packages: list[str] | None = None,
+        task_logs: TaskLogs | None = None,
     ) -> BuildResult:
-        del bundle_path, base_image, extras, job_id, task_logs, pip_packages
+        del bundle_path, dockerfile, job_id, task_logs
         return BuildResult(
             image_tag="local:latest",
             build_time_ms=0,

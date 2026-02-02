@@ -27,6 +27,7 @@ from iris.cluster.vm.controller import (
     GcpController,
     HealthCheckResult,
     ManualController,
+    check_health,
     create_controller,
 )
 from iris.cluster.vm.managed_vm import (
@@ -706,3 +707,18 @@ class TestBootstrapScript:
                     # No raw placeholders should remain
                     for placeholder in ["{cache_dir}", "{docker_image}", "{worker_port}", "{env_flags}"]:
                         assert placeholder not in script
+
+
+def test_check_health_passes_duration_to_conn_run():
+    """check_health passes Duration objects (not bare ints) to conn.run timeout."""
+    mock_conn = MagicMock()
+    mock_conn.run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="healthy", stderr="")
+
+    result = check_health(mock_conn, port=8080, container_name="test-container")
+
+    assert result.healthy
+    for call in mock_conn.run.call_args_list:
+        timeout_arg = call.kwargs.get("timeout")
+        assert isinstance(
+            timeout_arg, Duration
+        ), f"conn.run called with timeout={timeout_arg!r} (type {type(timeout_arg).__name__}), expected Duration"

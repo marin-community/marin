@@ -170,15 +170,14 @@ def current_client() -> Client:
     if client is not None:
         return client
 
-    # Auto-detect Iris environment
     try:
-        from iris.client import get_iris_ctx
+        from iris.client.client import get_iris_ctx
 
-        iris_ctx = get_iris_ctx()
-        if iris_ctx is not None:
+        ctx = get_iris_ctx()
+        if ctx is not None:
             from fray.v2.iris_backend import FrayIrisClient
 
-            return FrayIrisClient.from_iris_client(iris_ctx.client)
+            return FrayIrisClient.from_iris_client(ctx.client)
     except ImportError:
         pass  # Iris not installed
 

@@ -125,7 +125,6 @@ def build_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
-    no_cache: bool = False,
 ) -> None:
     """Build a Docker image for Iris (worker or controller).
 
@@ -138,7 +137,6 @@ def build_image(
         platform: Target platform (e.g., "linux/amd64")
         region: Tuple of GCP Artifact Registry regions to push to
         project: GCP project ID for registry
-        no_cache: If True, build without using cache
     """
     dockerfile_name = f"Dockerfile.{image_type}"
 
@@ -152,8 +150,6 @@ def build_image(
     click.echo(f"Using Dockerfile: {dockerfile_path}")
 
     cmd = ["docker", "buildx", "build", "--platform", platform]
-    if no_cache:
-        cmd.append("--no-cache")
     cmd.extend(["-t", tag])
     cmd.extend(["-f", str(dockerfile_path)])
     cmd.extend(["--load"])
