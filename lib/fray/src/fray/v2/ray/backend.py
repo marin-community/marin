@@ -165,7 +165,7 @@ def get_entrypoint_params(request: JobRequest) -> dict[str, Any]:
     return params
 
 
-def build_runtime_env(request: JobRequest, cluster_spec: str) -> dict:
+def build_runtime_env(request: JobRequest) -> dict:
     """Build Ray runtime environment for a job request."""
     environment = request.environment if request.environment else create_environment()
 
@@ -187,8 +187,6 @@ def build_runtime_env(request: JobRequest, cluster_spec: str) -> dict:
         if "gpu" not in extras:
             extras.append("gpu")
         env_vars["JAX_PLATFORMS"] = ""
-
-    env_vars["FRAY_CLIENT_SPEC"] = cluster_spec
 
     if os.environ.get("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in ("1", "true") or os.environ.get(
         "PYTEST_CURRENT_TEST"
@@ -255,12 +253,6 @@ class RayClient:
                 pass
         return self._address
 
-    def _get_client_spec(self) -> str:
-        base = "ray"
-        if self._namespace:
-            base += f"?namespace={self._namespace}"
-        return base
-
     def submit(self, request: JobRequest) -> RayJobHandle:
         """Submit a job, routing to TPU/binary/callable based on device type."""
         logger.info("Submitting job: %s", request.name)
@@ -275,7 +267,7 @@ class RayClient:
 
     def _launch_binary_job(self, request: JobRequest) -> RayJobHandle:
         entrypoint = request.entrypoint.binary_entrypoint
-        runtime_env = build_runtime_env(request, self._get_client_spec())
+        runtime_env = build_runtime_env(request)
         entrypoint_cmd = f"{entrypoint.command} {' '.join(entrypoint.args)}"
         entrypoint_params = get_entrypoint_params(request)
 
@@ -309,7 +301,7 @@ class RayClient:
 
     def _launch_callable_job(self, request: JobRequest) -> RayJobHandle:
         entrypoint = request.entrypoint.callable_entrypoint
-        runtime_env = build_runtime_env(request, self._get_client_spec())
+        runtime_env = build_runtime_env(request)
         # Strip keys that can only be set at the Job level
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
@@ -328,7 +320,7 @@ class RayClient:
         assert callable_ep is not None, "TPU jobs require callable entrypoint"
 
         device = request.resources.device
-        runtime_env = build_runtime_env(request, self._get_client_spec())
+        runtime_env = build_runtime_env(request)
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["excludes", "config", "working_dir"]}
 
         if callable_ep.args or callable_ep.kwargs:

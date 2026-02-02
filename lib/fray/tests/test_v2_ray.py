@@ -226,7 +226,7 @@ def test_build_runtime_env_cpu_sets_jax_platforms():
         entrypoint=Entrypoint.from_callable(lambda: None),
         resources=ResourceConfig(device=CpuConfig()),
     )
-    env = build_runtime_env(request, "ray")
+    env = build_runtime_env(request)
     assert env["env_vars"]["JAX_PLATFORMS"] == "cpu"
 
 
@@ -238,7 +238,7 @@ def test_build_runtime_env_tpu_clears_jax_platforms():
         entrypoint=Entrypoint.from_callable(lambda: None),
         resources=ResourceConfig(device=TpuConfig(variant="v4-8")),
     )
-    env = build_runtime_env(request, "ray")
+    env = build_runtime_env(request)
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
 
 
@@ -250,19 +250,8 @@ def test_build_runtime_env_gpu_clears_jax_platforms():
         entrypoint=Entrypoint.from_callable(lambda: None),
         resources=ResourceConfig(device=GpuConfig(variant="H100")),
     )
-    env = build_runtime_env(request, "ray")
+    env = build_runtime_env(request)
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
-
-
-def test_build_runtime_env_sets_fray_client_spec():
-    from fray.v2.ray.backend import build_runtime_env
-
-    request = JobRequest(
-        name="spec-test",
-        entrypoint=Entrypoint.from_callable(lambda: None),
-    )
-    env = build_runtime_env(request, "ray?namespace=test-ns")
-    assert env["env_vars"]["FRAY_CLIENT_SPEC"] == "ray?namespace=test-ns"
 
 
 # ---------------------------------------------------------------------------

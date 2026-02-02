@@ -87,7 +87,7 @@ def build_runtime_env(request: JobRequest, cluster_spec: str, *, local: bool = F
 
     # ... existing JAX_PLATFORMS logic ...
 
-    env_vars["FRAY_CLIENT_SPEC"] = cluster_spec
+    # Note: FRAY_CLIENT_SPEC removed - auto-detection via ray.is_initialized()
 
     if local:
         return {"env_vars": env_vars}
@@ -125,7 +125,7 @@ def build_runtime_env(request: JobRequest, cluster_spec: str) -> dict:
 
     # ... existing logic ...
 
-    env_vars["FRAY_CLIENT_SPEC"] = cluster_spec
+    # Note: FRAY_CLIENT_SPEC removed - auto-detection via ray.is_initialized()
 
     disable_runtime_envs = os.environ.get("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in ("1", "true")
     if disable_runtime_envs:
