@@ -35,8 +35,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --upgrade pip
           uv sync --package marin --extra cpu --group test --frozen
+          uv pip install --upgrade pip
 
       - name: Set up Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v3
