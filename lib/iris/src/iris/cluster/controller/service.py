@@ -643,7 +643,9 @@ class ControllerServiceImpl:
         if not worker:
             raise ConnectError(Code.NOT_FOUND, f"Worker {task.worker_id} not found")
 
+        # Use negative start_line to get last N lines (e.g., -1000 = last 1000 lines)
         log_filter = cluster_pb2.Worker.FetchLogsFilter(
+            start_line=-request.limit if request.limit > 0 else 0,
             start_ms=request.start_ms,
             max_lines=request.limit,
         )

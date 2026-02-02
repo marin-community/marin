@@ -624,7 +624,7 @@ message Worker {
 
   message FetchLogsFilter {
     string regex = 1;
-    int64 start_line = 2;
+    int64 start_line = 2;  // Supports negative indexing: -1000 = last 1000 lines
     int64 start_ms = 3;
     int64 end_ms = 4;
     int64 max_lines = 5;
