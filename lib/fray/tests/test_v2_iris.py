@@ -179,5 +179,3 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
-
-
