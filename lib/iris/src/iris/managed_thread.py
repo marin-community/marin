@@ -26,6 +26,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -124,50 +125,86 @@ class ThreadRegistry:
 class ThreadContainer:
     """Component-scoped thread group with bulk stop/join.
 
-    Threads are spawned into the global ThreadRegistry (for test cleanup)
-    and also tracked locally so the owning component can shut them all
-    down in one call.
+    Threads are created and tracked locally so the owning component can
+    shut them all down in one call. Supports hierarchical composition
+    via create_child().
     """
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "root") -> None:
+        self._name = name
         self._threads: list[ManagedThread] = []
+        self._children: list[ThreadContainer] = []
+        self._executors: list[ThreadPoolExecutor] = []
+        self._lock = threading.Lock()
 
     def spawn(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()) -> ManagedThread:
-        thread = get_thread_registry().spawn(target=target, name=name, args=args)
+        thread = ManagedThread(target=target, name=name, args=args)
         self._threads.append(thread)
+        thread.start()
         return thread
 
     def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
-        thread = spawn_server(server, name=name)
-        self._threads.append(thread)
-        return thread
+        def _run(stop_event: threading.Event) -> None:
+            server_done = threading.Event()
+
+            def _watch_stop() -> None:
+                while not server_done.is_set():
+                    if stop_event.wait(timeout=0.25):
+                        server.should_exit = True
+                        return
+
+            watcher = threading.Thread(target=_watch_stop, name=f"{name}-stop-watcher")
+            watcher.start()
+            try:
+                server.run()
+            finally:
+                server_done.set()
+                watcher.join()
+
+        return self.spawn(target=_run, name=name)
+
+    def spawn_executor(self, max_workers: int, prefix: str) -> ThreadPoolExecutor:
+        """Create a ThreadPoolExecutor that will be shut down when this container stops."""
+        executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix=prefix)
+        with self._lock:
+            self._executors.append(executor)
+        return executor
+
+    def create_child(self, name: str) -> "ThreadContainer":
+        """Create a child container whose lifecycle is bound to this parent."""
+        child = ThreadContainer(name=name)
+        with self._lock:
+            self._children.append(child)
+        return child
+
+    def alive_threads(self) -> list[ManagedThread]:
+        """Return threads that are still alive, including those in child containers."""
+        alive = [t for t in self._threads if t.is_alive]
+        for child in self._children:
+            alive.extend(child.alive_threads())
+        return alive
 
     def wait(self) -> None:
         """Block until all threads have exited."""
+        for child in self._children:
+            child.wait()
         for thread in self._threads:
             thread.join()
 
     def stop(self, timeout: float = 5.0) -> None:
-        """Signal all threads to stop, then join with a shared deadline."""
+        """Stop children first, then executors, then own threads."""
+        for child in self._children:
+            child.stop(timeout=timeout)
+
+        for executor in self._executors:
+            executor.shutdown(wait=True)
+
         for thread in self._threads:
             thread.stop()
         deadline = time.monotonic() + timeout
         for thread in self._threads:
             remaining = max(0, deadline - time.monotonic())
             thread.join(timeout=remaining)
-
-
-def _stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
-    """Bridge a stop_event to a uvicorn Server's should_exit flag.
-
-    Spawns a daemon thread that waits for stop_event and sets server.should_exit.
-    """
-
-    def _watch() -> None:
-        stop_event.wait()
-        server.should_exit = True
-
-    threading.Thread(target=_watch, daemon=True, name="stop-event-bridge").start()
 
 
 def spawn_server(server: Any, *, name: str) -> ManagedThread:
@@ -178,8 +215,24 @@ def spawn_server(server: Any, *, name: str) -> ManagedThread:
     """
 
     def _run(stop_event: threading.Event) -> None:
-        _stop_event_to_server(stop_event, server)
-        server.run()
+        # Poll stop_event in a local non-daemon thread that exits once
+        # either the stop_event fires or the server finishes on its own.
+        server_done = threading.Event()
+
+        def _watch_stop() -> None:
+            # Wait for whichever comes first: stop requested or server exited.
+            while not server_done.is_set():
+                if stop_event.wait(timeout=0.25):
+                    server.should_exit = True
+                    return
+
+        watcher = threading.Thread(target=_watch_stop, name=f"{name}-stop-watcher")
+        watcher.start()
+        try:
+            server.run()
+        finally:
+            server_done.set()
+            watcher.join()
 
     return get_thread_registry().spawn(target=_run, name=name)
 

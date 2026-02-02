@@ -261,6 +261,7 @@ class Controller:
         config: ControllerConfig,
         worker_stub_factory: WorkerStubFactory,
         autoscaler: "Autoscaler | None" = None,
+        threads: ThreadContainer | None = None,
     ):
         if not config.bundle_prefix:
             raise ValueError(
@@ -286,7 +287,7 @@ class Controller:
         )
 
         # Background loop state
-        self._threads = ThreadContainer()
+        self._threads = threads or ThreadContainer("controller")
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None

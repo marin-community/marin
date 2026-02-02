@@ -1900,3 +1900,42 @@ class TestAutoscalerAsyncScaleUp:
 
         # Scale-up should have completed
         assert len(create_completed) == 1
+
+    def test_autoscaler_shutdown_stops_vm_threads(self):
+        """shutdown() calls stop() on all VM threads before terminating."""
+
+        config = config_pb2.ScaleGroupConfig(
+            name="test-group",
+            min_slices=0,
+            max_slices=5,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        )
+
+        # Create mock VM groups with VMs that track stop() calls
+        discovered_slice = make_mock_slice("slice-001", all_ready=True)
+        manager = make_mock_vm_manager(slices_to_discover=[discovered_slice])
+
+        group = ScalingGroup(config, manager)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # Track stop() calls on VMs
+        stop_called = []
+        for vm_group in group.vm_groups():
+            for vm in vm_group.vms():
+                original_stop = vm.stop
+
+                def make_stop_wrapper(vm_id):
+                    def stop_wrapper():
+                        stop_called.append(vm_id)
+                        return original_stop()
+
+                    return stop_wrapper
+
+                vm.stop = make_stop_wrapper(vm.info.vm_id)
+
+        # Shutdown should call stop() on all VMs
+        autoscaler.shutdown()
+
+        # Verify stop() was called on the VM
+        assert len(stop_called) == 1

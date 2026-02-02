@@ -214,10 +214,31 @@ class Autoscaler:
         )
 
     def shutdown(self) -> None:
-        """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups."""
+        """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups.
+
+        Shutdown ordering:
+        1. Stop accepting new scale-up work (shutdown executor)
+        2. Stop all VM bootstrap threads (call vm.stop() on each VM)
+        3. Terminate VMs and cleanup (group.terminate_all())
+        4. Stop VM managers (cleanup local platform threads if present)
+        """
+        # Step 1: Stop accepting new scale-up work
         self._scale_up_executor.shutdown(wait=True)
+
+        # Step 2: Stop all VM bootstrap threads
+        for group in self._groups.values():
+            for vm_group in group.vm_groups():
+                for vm in vm_group.vms():
+                    vm.stop()
+
+        # Step 3: Terminate VMs and cleanup
         for group in self._groups.values():
             group.terminate_all()
+
+        # Step 4: Stop VM managers (cleanup local platform threads if present)
+        for group in self._groups.values():
+            if hasattr(group._vm_manager, "stop"):
+                group._vm_manager.stop()
 
     def __enter__(self) -> Autoscaler:
         return self

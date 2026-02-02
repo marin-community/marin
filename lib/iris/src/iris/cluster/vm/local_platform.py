@@ -49,6 +49,7 @@ from iris.cluster.worker.worker_types import TaskLogs
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
+from iris.managed_thread import ManagedThread, ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -99,7 +100,8 @@ class _StreamingCapture(io.StringIO):
 @dataclass
 class _LocalContainer:
     config: ContainerConfig
-    _thread: threading.Thread | None = field(default=None, repr=False)
+    _thread_container: ThreadContainer
+    _managed_thread: ManagedThread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
@@ -108,8 +110,19 @@ class _LocalContainer:
 
     def start(self):
         self._running = True
-        self._thread = threading.Thread(target=self._execute, daemon=True)
-        self._thread.start()
+        # Use task_id or job_id as name, or fall back to unnamed
+        name_suffix = self.config.task_id or self.config.job_id or "unnamed"
+        self._managed_thread = self._thread_container.spawn(
+            target=self._execute_managed,
+            name=f"container-{name_suffix}",
+        )
+
+    def _execute_managed(self, stop_event: threading.Event):
+        """Managed thread wrapper that can be stopped via stop_event."""
+        # Just run the container execution directly
+        # The stop_event allows ThreadContainer to signal us to stop,
+        # but we don't need to check it during normal execution
+        self._execute()
 
     def _execute(self):
         from iris.cluster.client.job_info import JobInfo, _parse_ports_from_env, set_job_info
@@ -174,20 +187,25 @@ class _LocalContainer:
     def kill(self):
         self._killed.set()
         # Give thread a moment to notice
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=0.5)
+        if self._managed_thread and self._managed_thread.is_alive:
+            self._managed_thread.stop()
+            self._managed_thread.join(timeout=0.5)
         if self._running:
             self._running = False
             self._exit_code = 137
 
 
 class _LocalContainerRuntime(ContainerRuntime):
-    def __init__(self):
+    def __init__(self, thread_container: ThreadContainer):
         self._containers: dict[str, _LocalContainer] = {}
+        self._thread_container = thread_container
 
     def create_container(self, config: ContainerConfig) -> str:
         container_id = f"local-{uuid.uuid4().hex[:8]}"
-        self._containers[container_id] = _LocalContainer(config=config)
+        self._containers[container_id] = _LocalContainer(
+            config=config,
+            _thread_container=self._thread_container,
+        )
         return container_id
 
     def start_container(self, container_id: str) -> None:
@@ -324,7 +342,7 @@ class _StubManagedVm(ManagedVm):
     def start(self) -> None:
         pass
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 10.0) -> None:
         pass
 
     def init_log(self, tail: int | None = None) -> str:
@@ -349,6 +367,7 @@ class LocalVmGroup(VmGroupProtocol):
         worker_ids: list[str],
         worker_ports: list[int],
         vm_registry: VmRegistry,
+        thread_container: ThreadContainer,
     ):
         self._group_id = group_id
         self._scale_group = scale_group
@@ -357,6 +376,7 @@ class LocalVmGroup(VmGroupProtocol):
         self._created_at = Timestamp.now()
         self._vm_registry = vm_registry
         self._terminated = False
+        self._thread_container = thread_container
 
         # Create mock ManagedVm instances for each worker (for autoscaler compatibility)
         self._managed_vms: list[ManagedVm] = []
@@ -434,6 +454,8 @@ class LocalVmGroup(VmGroupProtocol):
             worker.stop()
         for vm in self._managed_vms:
             self._vm_registry.unregister(vm.info.vm_id)
+        # Stop all container threads
+        self._thread_container.stop(timeout=5.0)
 
     def to_proto(self) -> vm_pb2.SliceInfo:
         return vm_pb2.SliceInfo(
@@ -468,11 +490,15 @@ class LocalVmManager:
         self._vm_registry = vm_registry
         self._port_allocator = port_allocator
         self._slice_counter = 0
+        self._threads = ThreadContainer(name=f"local-vm-manager-{scale_group_config.name}")
 
     def create_vm_group(self, tags: dict[str, str] | None = None) -> VmGroupProtocol:
         """Create a new VM group with workers."""
         slice_id = f"{self._config.name}-slice-{self._slice_counter}"
         self._slice_counter += 1
+
+        # Create a child container for this VM group's threads
+        group_threads = self._threads.create_child(f"group-{slice_id}")
 
         # Determine worker count based on accelerator type
         if self._config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
@@ -493,7 +519,7 @@ class LocalVmManager:
             # Each worker needs its own runtime to avoid container dict conflicts
             bundle_provider = _LocalBundleProvider(self._fake_bundle)
             image_provider = _LocalImageProvider()
-            container_runtime = _LocalContainerRuntime()
+            container_runtime = _LocalContainerRuntime(thread_container=group_threads)
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
             worker_port = find_free_port()
 
@@ -553,11 +579,16 @@ class LocalVmManager:
             worker_ids=worker_ids,
             worker_ports=worker_ports,
             vm_registry=self._vm_registry,
+            thread_container=group_threads,
         )
 
     def discover_vm_groups(self) -> list[VmGroupProtocol]:
         """Return empty list - no recovery for local demo."""
         return []
+
+    def stop(self) -> None:
+        """Stop all container threads managed by this VM manager."""
+        self._threads.stop(timeout=5.0)
 
 
 def _create_local_autoscaler(

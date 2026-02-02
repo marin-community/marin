@@ -69,6 +69,7 @@ class Worker:
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
+        threads: ThreadContainer | None = None,
     ):
         self._config = config
 
@@ -111,7 +112,8 @@ class Worker:
         )
 
         self._server: uvicorn.Server | None = None
-        self._threads = ThreadContainer()
+        self._threads = threads or ThreadContainer("worker")
+        self._task_threads = self._threads.create_child("tasks")
 
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
@@ -163,19 +165,20 @@ class Worker:
         self._threads.wait()
 
     def stop(self) -> None:
+        # Stop task threads first so running tasks exit before infrastructure
+        # tears down. ThreadContainer.stop() signals each thread's stop_event,
+        # which the _run_task watcher bridges to attempt.should_stop + container kill.
+        self._task_threads.stop()
+
         if self._server:
             self._server.should_exit = True
         self._threads.stop()
 
-        # Kill and remove all containers
+        # Remove any remaining containers (tasks already killed above via stop_event)
         with self._lock:
             tasks = list(self._tasks.values())
         for task in tasks:
             if task.container_id:
-                try:
-                    self._runtime.kill(task.container_id, force=True)
-                except RuntimeError:
-                    pass
                 try:
                     self._runtime.remove(task.container_id)
                 except RuntimeError:
@@ -402,10 +405,30 @@ class Worker:
         with self._lock:
             self._tasks[task_id] = attempt
 
-        # Start execution in background
-        thread = threading.Thread(target=attempt.run, daemon=True)
-        attempt.thread = thread
-        thread.start()
+        # Start execution in a monitored non-daemon thread. When the container's
+        # stop_event fires (e.g. during Worker.stop()), we bridge it to
+        # attempt.should_stop and forcefully kill the container so the blocking
+        # attempt.run() exits promptly.
+        def _run_task(stop_event: threading.Event) -> None:
+            def _watch_stop() -> None:
+                stop_event.wait()
+                attempt.should_stop = True
+                if attempt.container_id:
+                    try:
+                        self._runtime.kill(attempt.container_id, force=True)
+                    except RuntimeError:
+                        pass
+
+            watcher = threading.Thread(target=_watch_stop, name=f"task-{task_id}-stop-watcher")
+            watcher.start()
+            try:
+                attempt.run()
+            finally:
+                stop_event.set()
+                watcher.join()
+
+        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id}")
+        attempt.thread = mt._thread
 
         return task_id
 

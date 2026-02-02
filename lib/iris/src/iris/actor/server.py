@@ -24,7 +24,6 @@ import asyncio
 import inspect
 import logging
 import socket
-import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -35,6 +34,7 @@ import uvicorn
 
 from connectrpc.request import RequestContext
 
+from iris.managed_thread import ThreadContainer
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
 from iris.time_utils import ExponentialBackoff, Timestamp
@@ -69,6 +69,8 @@ class ActorServer:
         self._actors: dict[str, RegisteredActor] = {}
         self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
+        self._threads = ThreadContainer("actor-server")
+        self._server: uvicorn.Server | None = None
 
     @property
     def address(self) -> str:
@@ -222,17 +224,21 @@ class ActorServer:
             port=self._actual_port,
             log_level="error",
         )
-        server = uvicorn.Server(config)
+        self._server = uvicorn.Server(config)
 
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
+        self._threads.spawn_server(self._server, name=f"actor-server-{self._actual_port}")
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: server.started,
+            lambda: self._server.started,
             timeout=5.0,
         )
 
         return self._actual_port
 
+    def stop(self) -> None:
+        """Stop the actor server and wait for threads to exit."""
+        self._threads.stop(timeout=5.0)
+
     def shutdown(self) -> None:
-        pass
+        """Deprecated: use stop() instead."""
+        self.stop()
