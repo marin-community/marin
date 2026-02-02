@@ -183,7 +183,7 @@ generate_with_selection = ExecutorStep(
         max_doc_tokens=32768,
 
         # Ray Data
-        num_instances=(1, 32),
+        num_instances=(1, 256),
         batch_size=16,  # Smaller batch since generating 4 samples each
         tensor_parallel_size=1,
         preserve_order=False,
@@ -284,7 +284,7 @@ summarize_selected = ExecutorStep(
         max_doc_tokens=32768,
 
         # Ray Data
-        num_instances=(1, 32),
+        num_instances=(1, 256),
         batch_size=32,
         tensor_parallel_size=1,
         preserve_order=False,
@@ -404,7 +404,7 @@ cycle_gen_questions = ExecutorStep(
         max_doc_tokens=32768,
 
         # Ray Data
-        num_instances=(1, 32),
+        num_instances=(1, 256),
         batch_size=64,
         tensor_parallel_size=1,
         preserve_order=False,
@@ -534,7 +534,7 @@ cycle_compare = ExecutorStep(
         max_doc_tokens=32768,
 
         # Ray Data
-        num_instances=(1, 32),
+        num_instances=(1, 256),
         batch_size=128,
         tensor_parallel_size=1,
         preserve_order=False,
@@ -595,7 +595,7 @@ factual_check = ExecutorStep(
         max_doc_tokens=32768,
 
         # Ray Data
-        num_instances=(1, 32),
+        num_instances=(1, 256),
         batch_size=128,
         tensor_parallel_size=1,
         preserve_order=False,
@@ -656,7 +656,7 @@ correctness_check = ExecutorStep(
         max_doc_tokens=32768,
 
         # Ray Data
-        num_instances=(1, 32),
+        num_instances=(1, 256),
         batch_size=128,
         tensor_parallel_size=1,
         preserve_order=False,
