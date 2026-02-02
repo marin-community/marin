@@ -41,7 +41,7 @@ def ray_cluster():
 
 @pytest.fixture(scope="module")
 def local_cluster():
-    yield LocalCluster(LocalClusterConfig(use_isolated_env=True))
+    yield LocalCluster(LocalClusterConfig(use_isolated_env=False))
 
 
 @pytest.fixture(scope="module", params=["local", "ray"])

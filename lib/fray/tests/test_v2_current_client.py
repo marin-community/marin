@@ -24,7 +24,7 @@ from fray.v2.local import LocalClient
 
 def test_default_returns_local_client():
     """When no context is set, should return LocalClient."""
-    with patch("iris.client.get_iris_ctx", return_value=None):
+    with patch("iris.client.client.get_iris_ctx", return_value=None):
         with patch("ray.is_initialized", return_value=False):
             client = current_client()
             assert isinstance(client, LocalClient)
@@ -55,7 +55,7 @@ def test_iris_auto_detection_with_context():
     mock_iris_client_lib = MagicMock()
     mock_ctx.client = mock_iris_client_lib
 
-    with patch("iris.client.get_iris_ctx", return_value=mock_ctx):
+    with patch("iris.client.client.get_iris_ctx", return_value=mock_ctx):
         with patch("fray.v2.iris_backend.FrayIrisClient") as mock_client_cls:
             mock_fray_client = MagicMock()
             mock_client_cls.from_iris_client.return_value = mock_fray_client
@@ -71,7 +71,7 @@ def test_iris_auto_detection_reuses_client():
     mock_iris_client_lib = MagicMock()
     mock_ctx.client = mock_iris_client_lib
 
-    with patch("iris.client.get_iris_ctx", return_value=mock_ctx):
+    with patch("iris.client.client.get_iris_ctx", return_value=mock_ctx):
         with patch("fray.v2.iris_backend.FrayIrisClient") as mock_client_cls:
             mock_fray_client = MagicMock()
             mock_client_cls.from_iris_client.return_value = mock_fray_client
@@ -83,7 +83,7 @@ def test_iris_auto_detection_reuses_client():
 
 def test_iris_not_detected_when_no_context():
     """Should not detect Iris when get_iris_ctx() returns None."""
-    with patch("iris.client.get_iris_ctx", return_value=None):
+    with patch("iris.client.client.get_iris_ctx", return_value=None):
         with patch("ray.is_initialized", return_value=False):
             client = current_client()
             assert isinstance(client, LocalClient)
@@ -91,7 +91,7 @@ def test_iris_not_detected_when_no_context():
 
 def test_ray_auto_detection():
     """Should auto-detect Ray when ray.is_initialized() is True."""
-    with patch("iris.client.get_iris_ctx", return_value=None):
+    with patch("iris.client.client.get_iris_ctx", return_value=None):
         with patch("ray.is_initialized", return_value=True):
             with patch("fray.v2.ray.backend.RayClient") as mock_client_cls:
                 mock_ray_client = MagicMock()
@@ -104,7 +104,7 @@ def test_ray_auto_detection():
 
 def test_ray_not_detected_when_not_initialized():
     """Should not detect Ray when ray.is_initialized() is False."""
-    with patch("iris.client.get_iris_ctx", return_value=None):
+    with patch("iris.client.client.get_iris_ctx", return_value=None):
         with patch("ray.is_initialized", return_value=False):
             client = current_client()
             assert isinstance(client, LocalClient)
@@ -117,7 +117,7 @@ def test_explicit_client_overrides_auto_detection():
     mock_ctx.client = mock_iris_client_lib
 
     explicit = LocalClient(max_threads=1)
-    with patch("iris.client.get_iris_ctx", return_value=mock_ctx):
+    with patch("iris.client.client.get_iris_ctx", return_value=mock_ctx):
         with set_current_client(explicit):
             # Should return explicit client, not auto-detected Iris client
             assert current_client() is explicit
@@ -129,7 +129,7 @@ def test_iris_takes_priority_over_ray():
     mock_iris_client_lib = MagicMock()
     mock_ctx.client = mock_iris_client_lib
 
-    with patch("iris.client.get_iris_ctx", return_value=mock_ctx):
+    with patch("iris.client.client.get_iris_ctx", return_value=mock_ctx):
         with patch("ray.is_initialized", return_value=True):
             with patch("fray.v2.iris_backend.FrayIrisClient") as mock_iris_cls:
                 mock_fray_client = MagicMock()

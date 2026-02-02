@@ -165,3 +165,77 @@ def test_run_streaming_with_retry_calls_on_line_callback():
     lines_received: list[str] = []
     run_streaming_with_retry(conn, "bootstrap script", on_line=lines_received.append)
     assert lines_received == expected_lines
+
+
+# ============================================================================
+# Regression tests for Duration/float type safety
+# ============================================================================
+
+
+class FakeSshConnection:
+    """Minimal SshConnection implementation for testing timeout handling.
+
+    Records calls so tests can verify Duration values are properly converted
+    to float/int before reaching subprocess APIs.
+    """
+
+    def __init__(self, run_result: subprocess.CompletedProcess | None = None):
+        self._run_result = run_result or subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        self.last_timeout: Duration | None = None
+
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        self.last_timeout = timeout
+        return self._run_result
+
+    def run_streaming(self, command: str) -> MagicMock:
+        return make_fake_popen()
+
+    @property
+    def address(self) -> str:
+        return "fake-host"
+
+    @property
+    def zone(self) -> str:
+        return ""
+
+
+def test_connection_available_accepts_duration_timeout():
+    """connection_available works with Duration timeout (regression for TypeError)."""
+    conn = FakeSshConnection()
+    assert connection_available(conn, timeout=Duration.from_seconds(5)) is True
+    assert conn.last_timeout == Duration.from_seconds(5)
+
+
+def test_check_health_passes_duration_to_run():
+    """check_health passes Duration to conn.run without TypeError."""
+    conn = FakeSshConnection()
+    result = check_health(conn, port=10001)
+    assert result.healthy is True
+    assert conn.last_timeout == Duration.from_seconds(10)
+
+
+def test_direct_ssh_connection_accepts_duration_connect_timeout():
+    """DirectSshConnection accepts Duration for connect_timeout field."""
+    from iris.cluster.vm.ssh import DirectSshConnection
+
+    conn = DirectSshConnection(
+        host="10.0.0.1",
+        connect_timeout=Duration.from_seconds(45),
+    )
+    cmd = conn._build_cmd("echo hello")
+    # The SSH ConnectTimeout option should be the integer seconds value
+    assert "ConnectTimeout=45" in " ".join(cmd)
+
+
+def test_ssh_config_duration_flows_to_direct_ssh_connection():
+    """SshConfig.connect_timeout (Duration) flows correctly to DirectSshConnection."""
+    from iris.cluster.vm.managed_vm import SshConfig
+    from iris.cluster.vm.ssh import DirectSshConnection
+
+    ssh_config = SshConfig(connect_timeout=Duration.from_seconds(20))
+    conn = DirectSshConnection(
+        host="10.0.0.1",
+        connect_timeout=ssh_config.connect_timeout,
+    )
+    cmd = conn._build_cmd("echo hello")
+    assert "ConnectTimeout=20" in " ".join(cmd)

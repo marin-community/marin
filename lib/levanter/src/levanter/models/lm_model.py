@@ -138,13 +138,6 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
     def Embed(self) -> Axis:
         pass
 
-    cross_entropy_block_size: Optional[int] = None
-    """
-    The block size for computing cross-entropy loss. This is the number of tokens that are processed together
-    in a single block. This can be adjusted to fit within memory constraints. It's deliberately set to a large
-    value because it usually faster to compute the loss in larger blocks.
-    """
-
     def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
         return None
 
@@ -298,7 +291,6 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             reduction_axis=reduction_axis,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            block_size=self.config.cross_entropy_block_size,
             logit_soft_cap=logit_soft_cap,
         )
 
