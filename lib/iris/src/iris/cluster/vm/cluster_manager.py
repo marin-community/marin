@@ -103,7 +103,6 @@ class ClusterManager:
         if self._controller:
             self._controller.stop(timeout=timeout)
             self._controller = None
-            logger.info("Controller stopped")
 
     def reload(self) -> str:
         """Reload cluster by reloading the controller.
