@@ -360,12 +360,12 @@ class Controller:
         self._wake_event.set()
         self._heartbeat_event.set()
 
-        # Stop all managed threads (scheduling, heartbeat, server)
-        self._threads.stop(timeout=timeout)
-
-        # Shutdown dispatch executor - wait for in-flight requests to complete
+        # Shutdown dispatch executor first so heartbeat thread can exit as_completed()
         # Don't cancel futures to avoid httpx logging to closed stdout/stderr
         self._dispatch_executor.shutdown(wait=True, cancel_futures=False)
+
+        # Stop all managed threads (scheduling, heartbeat, server)
+        self._threads.stop(timeout=timeout)
 
         # Shutdown autoscaler
         if self._autoscaler:
