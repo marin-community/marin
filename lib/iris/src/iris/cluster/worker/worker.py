@@ -405,29 +405,20 @@ class Worker:
         with self._lock:
             self._tasks[task_id] = attempt
 
-        # Start execution in a monitored non-daemon thread. When the container's
-        # stop_event fires (e.g. during Worker.stop()), we bridge it to
-        # attempt.should_stop and forcefully kill the container so the blocking
-        # attempt.run() exits promptly.
+        # Start execution in a monitored non-daemon thread. When stop() is called,
+        # the on_stop callback kills the container so attempt.run() exits promptly.
         def _run_task(stop_event: threading.Event) -> None:
-            def _watch_stop() -> None:
-                stop_event.wait()
-                attempt.should_stop = True
-                if attempt.container_id:
-                    try:
-                        self._runtime.kill(attempt.container_id, force=True)
-                    except RuntimeError:
-                        pass
+            attempt.run()
 
-            watcher = threading.Thread(target=_watch_stop, name=f"task-{task_id}-stop-watcher")
-            watcher.start()
-            try:
-                attempt.run()
-            finally:
-                stop_event.set()
-                watcher.join()
+        def _stop_task() -> None:
+            attempt.should_stop = True
+            if attempt.container_id:
+                try:
+                    self._runtime.kill(attempt.container_id, force=True)
+                except RuntimeError:
+                    pass
 
-        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id}")
+        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id}", on_stop=_stop_task)
         attempt.thread = mt._thread
 
         return task_id

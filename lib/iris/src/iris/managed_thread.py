@@ -70,17 +70,54 @@ class ManagedThread:
 
     Target callable must accept threading.Event as its first argument.
     The event is set when stop() is called, signaling the thread to exit.
+
+    Optionally, an on_stop callback can be provided to perform cleanup actions
+    when stop() is called. This is useful for blocking operations that need
+    active intervention to exit (e.g., killing containers, setting server flags).
     """
 
-    def __init__(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()):
+    def __init__(
+        self,
+        target: Callable[..., Any],
+        *,
+        name: str | None = None,
+        args: tuple = (),
+        on_stop: Callable[[], None] | None = None,
+    ):
         self._stop_event = threading.Event()
+        self._on_stop = on_stop
 
         def _safe_target(*a: Any) -> None:
+            # Create watcher thread if on_stop callback is provided
+            watcher = None
+            on_stop = self._on_stop
+            if on_stop is not None:
+
+                def _watch_stop() -> None:
+                    self._stop_event.wait()
+                    assert on_stop is not None
+                    try:
+                        on_stop()
+                    except Exception:
+                        logger.exception("on_stop callback failed for %s", name or "<unnamed>")
+
+                watcher = threading.Thread(
+                    target=_watch_stop,
+                    name=f"{name}-on-stop" if name else "on-stop",
+                    daemon=True,
+                )
+                watcher.start()
+
             try:
                 target(*a)
             except Exception:
                 logger.exception("ManagedThread %s crashed", name or "<unnamed>")
                 raise
+            finally:
+                if watcher:
+                    watcher.join(timeout=1.0)
+                    if watcher.is_alive():
+                        logger.warning("on_stop callback for %s did not complete", name)
 
         self._thread = threading.Thread(
             target=_safe_target,
@@ -132,8 +169,15 @@ class ThreadContainer:
         self._executors: list[ThreadPoolExecutor] = []
         self._lock = threading.Lock()
 
-    def spawn(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()) -> ManagedThread:
-        thread = ManagedThread(target=target, name=name, args=args)
+    def spawn(
+        self,
+        target: Callable[..., Any],
+        *,
+        name: str | None = None,
+        args: tuple = (),
+        on_stop: Callable[[], None] | None = None,
+    ) -> ManagedThread:
+        thread = ManagedThread(target=target, name=name, args=args, on_stop=on_stop)
         self._threads.append(thread)
         thread.start()
         return thread
@@ -141,9 +185,8 @@ class ThreadContainer:
     def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
         """Spawn a server (like uvicorn.Server) with automatic stop_event bridging.
 
-        The stop_event is monitored in a watcher thread, which sets server.should_exit
-        when the stop_event is triggered. The watcher thread is daemon=True so it
-        won't block process exit if something goes wrong.
+        When stop() is called, server.should_exit is set to True, causing server.run()
+        to exit cleanly.
 
         Args:
             server: Server instance with should_exit attribute and run() method
@@ -152,25 +195,15 @@ class ThreadContainer:
 
         def _run(stop_event: threading.Event) -> None:
             logger.debug("Running server %s (%s)", name, server)
-
-            def _watch_stop() -> None:
-                # Use wait() with timeout to ensure responsive checking.
-                # This watcher is daemon=True so it won't block shutdown.
-                stop_event.wait()
-                logger.debug("Signaling server %s to exit", name)
-                server.should_exit = True
-
-            watcher = threading.Thread(target=_watch_stop, name=f"{name}-stop-watcher", daemon=True)
-            watcher.start()
             server.run()
             logger.debug("Server %s exited", name)
             assert server.should_exit
-            # Join with timeout to prevent hanging forever if watcher is stuck
-            watcher.join(timeout=1.0)
-            if watcher.is_alive():
-                logger.warning("Stop watcher for %s did not exit cleanly", name)
 
-        return self.spawn(target=_run, name=name)
+        def _stop_server() -> None:
+            logger.debug("Signaling server %s to exit", name)
+            server.should_exit = True
+
+        return self.spawn(target=_run, name=name, on_stop=_stop_server)
 
     def spawn_executor(self, max_workers: int, prefix: str) -> ThreadPoolExecutor:
         """Create a ThreadPoolExecutor that will be shut down when this container stops."""
@@ -258,8 +291,15 @@ class ThreadRegistry:
         that accepts ThreadContainer directly."""
         return self._container
 
-    def spawn(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()) -> ManagedThread:
-        return self._container.spawn(target=target, name=name, args=args)
+    def spawn(
+        self,
+        target: Callable[..., Any],
+        *,
+        name: str | None = None,
+        args: tuple = (),
+        on_stop: Callable[[], None] | None = None,
+    ) -> ManagedThread:
+        return self._container.spawn(target=target, name=name, args=args, on_stop=on_stop)
 
     def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
         return self._container.spawn_server(server=server, name=name)
