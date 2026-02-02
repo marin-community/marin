@@ -96,7 +96,6 @@ class ClusterManager:
 
     def stop(self) -> None:
         """Stop the controller and clean up resources."""
-        print("Shutting down amigo")
         if self._controller:
             self._controller.stop()
             self._controller = None
