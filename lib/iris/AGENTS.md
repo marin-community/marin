@@ -1,38 +1,52 @@
 # Agent Tips
 
 * Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate-protos.py to regenerate files after changing the `.proto` files.
-* Prefer shallow, functional interfaces which return control to the user, vs callbacks or inheritance.
+* Use scripts/generate_protos.py to regenerate files after changing the `.proto` files.
+* Prefer _shallow_, _functional_ code which returns control quickly to the user, vs callbacks or inheritance.
 
-e.g.
-
+```
 class Scheduler:
-  def add_job()
+  def add_job():
   def add_worker():
   def compute_schedule() -> ScheduledJobs:
 
+class Runner:
+  def run_jobs(ScheduledJobs)
+```
+
 is preferable to:
 
+```
 class Scheduler:
   def __init__(self, job_creator: JobCreator):
     self.job_creator = job_creator
   def run(self):
     ... self.job_creator.create_job()
+```
 
-It's acceptable to have a top-level class which implements the main loop of
-course, but prefer to keep other interfaces shallow and functional whenever
-possible.
+* Tests should test stable behavior, not implementation details.
 
-* Tests should evaluate _behavior_, not implementation. Don't test things that are trivially caught by the type checker. Explicitly that means:
+ABSOLUTELY DO NOT test things that are trivially caught by the type checker.
+Explicitly that means:
 
 - No tests for "constant = constant"
 - No tests for "method exists"
 - No tests for "create an object(x, y, z) and attributes are x, y, z"
 
-These tests have negative value - they make our code more brittle. Test
-_behavior_ instead. You can use mocks as needed to isolate environments (e.g.
-mock around a remote API). Prefer "fakes" -- e.g. create a real database but
-with fake data -- when reasonable.
+These tests have negative value - they make our code more brittle.
+
+Test _stable behavior_ instead. You can use mocks as needed to isolate
+environments (e.g.  mock around a remote API), but prefer "fakes" -- e.g. create
+a real database but with fake data -- when reasonable.
+
+## Documentation
+
+ALWAYS read the docs for the appropriate area.
+IF they disagree with the code, ALWAYS add a task to update them.
+
+Documentation should be kept up-to-date as code changes. When implementing new features or making significant changes, update the relevant documentation files:
+
+@README.md - Main overview, CLI reference, and quick start
 
 ## Protocols and Testing
 
@@ -63,22 +77,6 @@ the dashboard, rather than creating a scheduler and running it manually.
 
 ## Architecture Notes
 
-### Job vs Attempt
-
-- **Job**: A logical unit of work with a hierarchical `job_id` (e.g., "my-exp/worker-0/task-1")
-- **Attempt**: A single execution of a job, identified by `attempt_id` (0, 1, 2...)
-- Jobs may be retried on failure/preemption; each retry creates a new attempt
-- The controller tracks all attempts for history; workers execute individual attempts
-- `(job_id, attempt_id)` uniquely identifies an execution on the worker side
-
-### Key Environment Variables (injected into job containers)
-
-- `IRIS_JOB_ID` - Hierarchical job identifier
-- `IRIS_ATTEMPT_ID` - Current attempt number (0-indexed)
-- `IRIS_WORKER_ID` - Worker executing the job
-- `IRIS_CONTROLLER_ADDRESS` - Controller URL for sub-jobs/actors
-- `IRIS_PORT_<NAME>` - Allocated port numbers
-
 ## Planning
 
 Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
@@ -101,3 +99,40 @@ That is _each stage of the plan_ should be a independently testable,
 self-contained unit of work. THis is preferable to plans which attempt to make
 all of the changes for one area (e.g. all proto changes, then all server
 changes, etc.)
+
+When adding new modules or significant features:
+1. Update the README with a brief overview and usage examples
+2. Add detailed documentation to the appropriate docs/ file
+3. Reference the documentation from this AGENTS.md file
+
+**Key documentation areas:**
+
+| Area | File | Description |
+|------|------|-------------|
+| Architecture | README.md | High-level architecture, CLI reference, quick start |
+| Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
+| Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
+| Original Design | docs/fray-zero.md | Rationale and design decisions |
+
+## Key Modules
+
+### Autoscaler and VM Management
+
+The autoscaler runs inside the Controller process and manages cloud VMs based on pending task demand. Key files:
+
+```
+src/iris/
+├── cli.py                       # Main CLI (cluster start/stop/status, slice/vm commands)
+├── cluster/
+│   ├── controller/
+│   │   ├── controller.py        # Controller with integrated autoscaler
+│   │   └── main.py              # Controller daemon CLI (serve command)
+│   └── vm/
+│       ├── autoscaler.py        # Core scaling logic
+│       ├── scaling_group.py     # Per-group state tracking
+│       ├── gcp.py               # GCP TPU management
+│       ├── manual.py            # Pre-existing host management
+│       └── config.py            # Config loading + factory functions
+```
+
+See [README.md](README.md) for CLI usage and configuration examples.

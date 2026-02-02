@@ -107,6 +107,26 @@ def tpus_per_node(tpu_type: str) -> int:
     return chips
 
 
+def tpu_type_from_cluster_config(cluster_config: str) -> str:
+    """Infer the TPU accelerator type for a single TPU worker from the cluster config."""
+    with open(cluster_config, "r") as f:
+        data = yaml.safe_load(f) or {}
+
+    node_types = data.get("available_node_types", {})
+    tpu_worker = node_types.get("tpu_worker", {})
+    accelerator_type = tpu_worker.get("node_config", {}).get("acceleratorType")
+    if accelerator_type:
+        return accelerator_type
+
+    for node_type in node_types.values():
+        accelerator_type = node_type.get("node_config", {}).get("acceleratorType")
+        resources = node_type.get("resources", {})
+        if accelerator_type and "TPU" in resources:
+            return accelerator_type
+
+    raise ValueError("Unable to infer TPU worker type from cluster config.")
+
+
 def make_client() -> JobSubmissionClient:
     """Create a JobSubmissionClient based on environment variables."""
     address = os.environ.get("RAY_ADDRESS", REMOTE_DASHBOARD_URL)
@@ -146,7 +166,7 @@ async def submit_and_track_job(
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"],
+        "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"],
     }
 
     # add the TPU dependency for cluster jobs.
@@ -196,7 +216,7 @@ def main():
         nargs="+",
         metavar=("KEY", "VALUE"),
         help="Set environment variables for the job. If only a KEY is provided, "
-        "the VALUE will be set to an empty string.",
+        "the VALUE will be set to an empty string. Supports KEY=VALUE form.",
     )
     parser.add_argument(
         "--extra",
@@ -230,9 +250,11 @@ def main():
     )
     parser.add_argument(
         "--tpu",
-        type=str,
+        nargs="?",
+        const="auto",
         default=None,
-        help="TPU type to reserve for the entrypoint (e.g. v4-8)",
+        help="TPU type to reserve for the entrypoint (e.g. v4-8). If provided without a value, "
+        "use the TPU worker type from the cluster config.",
     )
     parser.add_argument(
         "--cluster",
@@ -275,6 +297,10 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to parse {marin_yaml}: {e}")
 
+    for key in ("HF_TOKEN", "WANDB_API_KEY"):
+        if key not in env_vars and os.environ.get(key) is not None:
+            env_vars[key] = os.environ[key]
+
     if args.env_vars:
         for item in args.env_vars:
             if len(item) > 2:
@@ -286,13 +312,16 @@ def main():
             elif len(item) == 1:
                 # If only the key is provided, set its value to an empty string
                 if "=" in item[0]:
-                    logger.error(
-                        f"Invalid key provided for environment variable: {' '.join(item)}. "
-                        f"Key should not contain '='.\n\n"
-                        f"You probably meant to do '-e {' '.join(item[0].split('='))}'."
-                    )
-                    exit(1)
-                env_vars[item[0]] = ""
+                    key, value = item[0].split("=", 1)
+                    if not key:
+                        logger.error(
+                            f"Invalid key provided for environment variable: {' '.join(item)}. "
+                            f"Key should not be empty."
+                        )
+                        exit(1)
+                    env_vars[key] = value
+                else:
+                    env_vars[item[0]] = ""
             elif len(item) == 2:
                 # If both key and value are provided, store them as a key-value pair
                 if "=" in item[0]:
@@ -304,16 +333,6 @@ def main():
                     exit(1)
                 env_vars[item[0]] = item[1]
 
-    entrypoint_resources = args.entrypoint_resources
-    if args.tpu:
-        try:
-            chips = tpus_per_node(args.tpu)
-        except ValueError as e:
-            logger.error(str(e))
-            exit(1)
-        tpu_res = {f"TPU-{args.tpu}-head": 1, "TPU": chips}
-        entrypoint_resources = (entrypoint_resources or {}) | tpu_res
-
     # Resolve cluster config (required)
     cluster_config = None
     if args.cluster:
@@ -323,6 +342,26 @@ def main():
             cluster_config = find_config_by_region(args.cluster)
 
     _maybe_enable_ray_token_auth(require_token=cluster_config is None)
+
+    entrypoint_resources = args.entrypoint_resources
+    if args.tpu:
+        tpu_type = args.tpu
+        if args.tpu == "auto":
+            if not cluster_config:
+                logger.error("TPU auto-detection requires --cluster to be set.")
+                exit(1)
+            try:
+                tpu_type = tpu_type_from_cluster_config(cluster_config)
+            except ValueError as e:
+                logger.error(str(e))
+                exit(1)
+        try:
+            chips = tpus_per_node(tpu_type)
+        except ValueError as e:
+            logger.error(str(e))
+            exit(1)
+        tpu_res = {f"TPU-{tpu_type}-head": 1, "TPU": chips}
+        entrypoint_resources = (entrypoint_resources or {}) | tpu_res
 
     # Submit the job and track it asynchronously
     if args.submission_id:

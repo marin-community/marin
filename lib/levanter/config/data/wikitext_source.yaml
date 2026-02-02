@@ -1,2 +1,7 @@
-id: dlwh/wikitext_103_detokenized
-cache_dir: "gs://levanter-data/tokenized/wikitext"
+cache_dir: "gs://levanter-data/tokenized"
+components:
+  wikitext:
+    source:
+      type: hf
+      id: dlwh/wikitext_103_detokenized
+    cache_dir: "gs://levanter-data/tokenized/wikitext"

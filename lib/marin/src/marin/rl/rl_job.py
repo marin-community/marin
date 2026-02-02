@@ -112,6 +112,10 @@ class RLJobConfig:
 
     seed: int = 42
 
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
+
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
 
@@ -310,6 +314,7 @@ class RLJob:
                 "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_seq_len=%d", max_seqs, max_seq_len
             )
             inference_config = LevanterInferenceContextConfig(
+                mesh=self.config.trainer.device_mesh,
                 inference_server_config=inference_server_config,
                 tokenizer=tokenizer,
                 axis_mapping=self.config.trainer.compute_axis_mapping,
@@ -329,6 +334,7 @@ class RLJob:
             tokenizer=tokenizer,
             replay_buffer=self.config.train_params.replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,
+            vocab_size=self.config.vocab_size,
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
             seed=self.config.seed,
@@ -343,6 +349,7 @@ class RLJob:
             log_freq=self.config.log_freq,
             max_rollouts=None,  # Run indefinitely by default
             initial_checkpoint=self.config.initial_checkpoint,
+            vocab_size=self.config.vocab_size,
             weight_transfer=weight_transfer_config,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,

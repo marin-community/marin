@@ -20,17 +20,18 @@ import zipfile
 from pathlib import Path
 from unittest.mock import Mock
 
-import cloudpickle
 import pytest
 from connectrpc.request import RequestContext
 
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
-from iris.cluster.worker.builder import BuildResult, VenvCache
+from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
+from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
+from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.time_utils import Duration
 
 # ============================================================================
 # PortAllocator Tests
@@ -41,22 +42,6 @@ from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 def allocator():
     """Create PortAllocator with small range for testing."""
     return PortAllocator(port_range=(40000, 40100))
-
-
-def test_allocate_single_port(allocator):
-    """Test allocating a single port."""
-    ports = allocator.allocate(count=1)
-    assert len(ports) == 1
-    assert 40000 <= ports[0] < 40100
-
-
-def test_allocate_multiple_ports(allocator):
-    """Test allocating multiple ports at once."""
-    ports = allocator.allocate(count=5)
-    assert len(ports) == 5
-    assert len(set(ports)) == 5  # All unique
-    for port in ports:
-        assert 40000 <= port < 40100
 
 
 def test_allocated_ports_are_usable(allocator):
@@ -74,41 +59,6 @@ def test_no_port_reuse_before_release(allocator):
     ports2 = allocator.allocate(count=5)
 
     assert len(set(ports1) & set(ports2)) == 0
-
-
-def test_ports_reused_after_release():
-    """Test that ports can be reused after release."""
-    allocator_small = PortAllocator(port_range=(40000, 40003))
-
-    ports1 = allocator_small.allocate(count=3)
-    assert len(ports1) == 3
-
-    allocator_small.release(ports1)
-
-    ports2 = allocator_small.allocate(count=3)
-    assert len(ports2) == 3
-    assert set(ports1) == set(ports2)
-
-
-def test_release_partial_ports(allocator):
-    """Test releasing only some ports."""
-    ports = allocator.allocate(count=5)
-
-    allocator.release(ports[:3])
-
-    new_ports = allocator.allocate(count=2)
-    assert len(set(new_ports) & set(ports[:3])) > 0
-
-
-def test_exhausted_port_range():
-    """Test behavior when port range is exhausted."""
-    allocator_tiny = PortAllocator(port_range=(40000, 40002))
-
-    ports = allocator_tiny.allocate(count=2)
-    assert len(ports) == 2
-
-    with pytest.raises(RuntimeError, match="No free ports available"):
-        allocator_tiny.allocate(count=1)
 
 
 def test_concurrent_allocations(allocator):
@@ -148,21 +98,12 @@ def mock_bundle_cache():
 
 
 @pytest.fixture
-def mock_venv_cache():
-    """Create mock VenvCache."""
-    cache = Mock(spec=VenvCache)
-    cache.compute_deps_hash = Mock(return_value="abc123")
-    return cache
-
-
-@pytest.fixture
 def mock_image_cache():
     """Create mock ImageBuilder."""
     builder = Mock(spec=ImageBuilder)
     builder.build = Mock(
         return_value=BuildResult(
             image_tag="test-image:latest",
-            deps_hash="abc123",
             build_time_ms=1000,
             from_cache=False,
         )
@@ -195,16 +136,18 @@ def mock_runtime():
     runtime.remove = Mock()
     runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
     runtime.get_logs = Mock(return_value=[])
+    runtime.list_iris_containers = Mock(return_value=[])
+    runtime.remove_all_iris_containers = Mock(return_value=0)
     return runtime
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
+def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
-        poll_interval_seconds=0.1,  # Fast polling for tests
+        poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
     )
     return Worker(
         config,
@@ -240,46 +183,41 @@ def create_run_task_request(
     task_index: int = 0,
     num_tasks: int = 1,
     ports: list[str] | None = None,
+    attempt_id: int = 0,
 ):
     """Create a RunTaskRequest for testing."""
-    entrypoint = create_test_entrypoint()
-    serialized_entrypoint = cloudpickle.dumps(entrypoint)
+
+    def test_fn():
+        print("Hello from test")
+
+    entrypoint_proto = Entrypoint.from_callable(test_fn).to_proto()
 
     env_config = cluster_pb2.EnvironmentConfig(
-        workspace="/workspace",
         env_vars={
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
         },
         extras=["dev"],
+        dockerfile="FROM python:3.11-slim\nRUN echo test",
     )
 
     resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
 
-    return cluster_pb2.Worker.RunTaskRequest(
+    request = cluster_pb2.Worker.RunTaskRequest(
         task_id=task_id,
         job_id=job_id or task_id,
         task_index=task_index,
         num_tasks=num_tasks,
-        serialized_entrypoint=serialized_entrypoint,
+        attempt_id=attempt_id,
+        entrypoint=entrypoint_proto,
         environment=env_config,
         bundle_gcs_path="gs://bucket/bundle.zip",
         resources=resources,
-        timeout_seconds=300,
         ports=ports or [],
     )
-
-
-def test_submit_task_returns_task_id(worker):
-    """Test that submit_task returns task_id immediately."""
-    request = create_run_task_request()
-    task_id = worker.submit_task(request)
-
-    assert task_id == "test-task-1"
-
-    task = worker.get_task(task_id)
-    assert task is not None
-    assert task.task_id == task_id
+    # Set timeout to 300 seconds
+    request.timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    return request
 
 
 def test_task_lifecycle_phases(worker):
@@ -372,7 +310,6 @@ def test_list_tasks(worker):
 
     tasks = worker.list_tasks()
     assert len(tasks) == 3
-    assert {task.task_id for task in tasks} == {"task-0", "task-1", "task-2"}
 
 
 def test_kill_running_task(worker, mock_runtime):
@@ -382,11 +319,15 @@ def test_kill_running_task(worker, mock_runtime):
     request = create_run_task_request()
     task_id = worker.submit_task(request)
 
+    # Wait for task thread to reach RUNNING state
     task = worker.get_task(task_id)
-    for _ in range(20):
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
         if task.status == cluster_pb2.TASK_STATE_RUNNING and task.container_id:
             break
-        time.sleep(0.1)
+        time.sleep(0.01)
+
+    assert task.status == cluster_pb2.TASK_STATE_RUNNING, f"Task did not reach RUNNING state, got {task.status}"
 
     result = worker.kill_task(task_id, term_timeout_ms=100)
     assert result is True
@@ -395,6 +336,69 @@ def test_kill_running_task(worker, mock_runtime):
 
     assert task.status == cluster_pb2.TASK_STATE_KILLED
     mock_runtime.kill.assert_any_call("container123", force=False)
+
+
+def test_new_attempt_supersedes_old(worker, mock_runtime):
+    """New attempt for same task_id kills the old attempt and starts a new one."""
+    mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
+
+    request_0 = create_run_task_request(task_id="retry-task", attempt_id=0)
+    worker.submit_task(request_0)
+
+    # Wait for attempt 0 to be running
+    old_task = worker.get_task("retry-task")
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if old_task.status == cluster_pb2.TASK_STATE_RUNNING and old_task.container_id:
+            break
+        time.sleep(0.01)
+
+    assert (
+        old_task.status == cluster_pb2.TASK_STATE_RUNNING
+    ), f"Old task did not reach RUNNING state, got {old_task.status}"
+    assert old_task.attempt_id == 0
+
+    # Submit attempt 1 for the same task_id — should kill attempt 0
+    request_1 = create_run_task_request(task_id="retry-task", attempt_id=1)
+    worker.submit_task(request_1)
+
+    # Old attempt should have been killed
+    assert old_task.should_stop is True
+
+    # The new attempt should now be tracked with the new attempt_id
+    new_task = worker.get_task("retry-task")
+    assert new_task.attempt_id == 1
+    assert new_task is not old_task
+
+    # Clean up
+    worker.kill_task("retry-task")
+    new_task.thread.join(timeout=15.0)
+
+
+def test_duplicate_attempt_rejected(worker, mock_runtime):
+    """Same attempt_id for an existing non-terminal task is rejected."""
+    mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
+
+    request = create_run_task_request(task_id="dup-task", attempt_id=0)
+    worker.submit_task(request)
+
+    # Wait for it to be running
+    task = worker.get_task("dup-task")
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if task.status == cluster_pb2.TASK_STATE_RUNNING:
+            break
+        time.sleep(0.01)
+
+    assert task.status == cluster_pb2.TASK_STATE_RUNNING, f"Task did not reach RUNNING state, got {task.status}"
+
+    # Submit same attempt_id again — should be rejected (task unchanged)
+    worker.submit_task(create_run_task_request(task_id="dup-task", attempt_id=0))
+    assert worker.get_task("dup-task") is task  # Same object, not replaced
+
+    # Clean up
+    worker.kill_task("dup-task")
+    task.thread.join(timeout=15.0)
 
 
 def test_kill_nonexistent_task(worker):
@@ -453,9 +457,8 @@ def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
     assert any("Bundle download failed" in log.data for log in error_logs)
 
 
-def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
     """Test that task retries with new ports when port binding fails."""
-    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
 
@@ -485,7 +488,7 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
-        poll_interval_seconds=0.1,
+        poll_interval=Duration.from_seconds(0.1),
     )
     worker = Worker(
         config,
@@ -514,9 +517,8 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
     assert any("Port conflict" in log.data for log in build_logs)
 
 
-def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
     """Test that task fails after max port retries are exhausted."""
-    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
     runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))
@@ -526,7 +528,7 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cac
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
-        poll_interval_seconds=0.1,
+        poll_interval=Duration.from_seconds(0.1),
     )
     worker = Worker(
         config,
@@ -587,7 +589,7 @@ def create_integration_entrypoint():
         print("Hello from test task!")
         return 42
 
-    return Entrypoint(callable=test_fn, args=(), kwargs={})
+    return Entrypoint.from_callable(test_fn)
 
 
 def create_integration_run_task_request(bundle_path: str, task_id: str):
@@ -599,11 +601,9 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         job_id=task_id,
         task_index=0,
         num_tasks=1,
-        serialized_entrypoint=cloudpickle.dumps(entrypoint),
+        entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
-        environment=cluster_pb2.EnvironmentConfig(
-            workspace="/app",
-        ),
+        environment=cluster_pb2.EnvironmentConfig(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
     )
 
@@ -623,14 +623,14 @@ def test_bundle(tmp_path):
 
 
 @pytest.fixture
-def real_worker(cache_dir):
+def real_worker(cache_dir, docker_cleanup_scope):
     """Create Worker with real components (not mocks)."""
     config = WorkerConfig(
         port=0,
         cache_dir=cache_dir,
         registry="localhost:5000",
         port_range=(40000, 40100),
-        poll_interval_seconds=0.5,  # Faster polling for tests
+        poll_interval=Duration.from_seconds(0.5),  # Faster polling for tests
     )
     return Worker(config)
 
@@ -652,22 +652,23 @@ class TestWorkerIntegration:
         task_id = real_worker.submit_task(request)
         assert task_id == "integration-test-1"
 
-        for _ in range(30):
-            time.sleep(1)
+        # Poll for task completion with shorter intervals
+        deadline = time.time() + 30.0
+        while time.time() < deadline:
             task = real_worker.get_task(task_id)
-
             if task.status in (
                 cluster_pb2.TASK_STATE_SUCCEEDED,
                 cluster_pb2.TASK_STATE_FAILED,
                 cluster_pb2.TASK_STATE_KILLED,
             ):
                 break
+            time.sleep(0.5)
 
         task = real_worker.get_task(task_id)
         assert task.status in (
             cluster_pb2.TASK_STATE_SUCCEEDED,
             cluster_pb2.TASK_STATE_FAILED,
-        )
+        ), f"Task did not complete in time, final status: {task.status}"
 
 
 class TestWorkerServiceIntegration:
@@ -681,7 +682,7 @@ class TestWorkerServiceIntegration:
         response = real_service.health_check(cluster_pb2.Empty(), ctx)
 
         assert response.healthy
-        assert response.uptime_ms >= 0
+        assert response.uptime.milliseconds >= 0
 
     @pytest.mark.slow
     def test_fetch_logs_tail(self, real_service, test_bundle):

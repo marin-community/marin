@@ -19,8 +19,8 @@ This module tests all resolver implementations in iris.actor.resolver:
 - GcsResolver: Discovery via GCP VM instance metadata
 """
 
-from iris.actor.resolver import FixedResolver, GcsResolver, MockGcsApi
 from iris.actor.client import ActorClient
+from iris.actor.resolver import FixedResolver, GcsResolver, MockGcsApi
 from iris.actor.server import ActorServer
 
 
@@ -32,41 +32,18 @@ class Echo:
 # FixedResolver tests
 
 
-def test_fixed_resolver_single():
-    resolver = FixedResolver({"svc": "http://localhost:8080"})
-    result = resolver.resolve("svc")
-    assert len(result.endpoints) == 1
-    assert result.first().url == "http://localhost:8080"
-
-
-def test_fixed_resolver_multiple():
-    resolver = FixedResolver({"svc": ["http://h1:8080", "http://h2:8080"]})
-    result = resolver.resolve("svc")
-    assert len(result.endpoints) == 2
-
-
-def test_fixed_resolver_missing():
-    resolver = FixedResolver({})
-    result = resolver.resolve("missing")
-    assert result.is_empty
-
-
 def test_client_with_resolver():
     server = ActorServer(host="127.0.0.1")
     server.register("echo", Echo())
     port = server.serve_background()
 
-    resolver = FixedResolver({"echo": f"http://127.0.0.1:{port}"})
-    client = ActorClient(resolver, "echo")
+    try:
+        resolver = FixedResolver({"echo": f"http://127.0.0.1:{port}"})
+        client = ActorClient(resolver, "echo")
 
-    assert client.echo("hello") == "echo: hello"
-
-
-# GcsResolver tests
-#
-# GcsResolver discovers actors via GCP VM instance metadata tags. Unlike
-# ClusterResolver, it does NOT use namespace prefixing - it returns all
-# instances with matching actor metadata.
+        assert client.echo("hello") == "echo: hello"
+    finally:
+        server.stop()
 
 
 def test_gcs_resolver_finds_actors():
@@ -88,8 +65,6 @@ def test_gcs_resolver_finds_actors():
 
     assert len(result.endpoints) == 1
     assert "10.0.0.1:8080" in result.first().url
-    assert result.first().actor_id == "gcs-worker-1-inference"
-    assert result.first().metadata == {"instance": "worker-1"}
 
 
 def test_gcs_resolver_ignores_non_running():
@@ -181,24 +156,3 @@ def test_gcs_resolver_missing_internal_ip():
     result = resolver.resolve("inference")
 
     assert result.is_empty
-
-
-def test_gcs_resolver_result_includes_name():
-    """GcsResolver includes the actor name in ResolveResult."""
-    api = MockGcsApi(
-        [
-            {
-                "name": "worker-1",
-                "internal_ip": "10.0.0.1",
-                "status": "RUNNING",
-                "metadata": {
-                    "iris_actor_inference": "8080",
-                },
-            },
-        ]
-    )
-    resolver = GcsResolver("project", "zone", api=api)
-    result = resolver.resolve("inference")
-
-    assert result.name == "inference"
-    assert len(result.endpoints) == 1

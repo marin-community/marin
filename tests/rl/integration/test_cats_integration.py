@@ -42,7 +42,7 @@ from tests.rl.integration.config import (
 )
 from tests.rl.integration.tasks import create_cats_rollout_batch, validate_cats_model
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
+pytestmark = pytest.mark.skipif(os.environ.get("CI") is not None, reason="Skipping integration tests on CI environment")
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def test_train_worker_with_manual_cats_rollout(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+            rl_loss=RLOOLoss(kl_coef=0.0),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,

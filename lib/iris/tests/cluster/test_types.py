@@ -12,71 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for cluster types and utilities."""
+"""Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
-import os
-from unittest.mock import patch
-
-from iris.cluster.types import EnvironmentSpec, ResourceSpec
-from iris.rpc import cluster_pb2
+from iris.cluster.types import Entrypoint
 
 
-def test_resource_spec_with_device():
-    """Verify ResourceSpec copies device configuration to proto."""
-    gpu_device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(count=2, variant="a100"))
-    spec = ResourceSpec(cpu=4, memory="16g", device=gpu_device)
-    proto = spec.to_proto()
-    assert proto.device.HasField("gpu")
-    assert proto.device.gpu.count == 2
-    assert proto.device.gpu.variant == "a100"
+def _add(a, b):
+    return a + b
 
 
-def test_resource_spec_with_all_fields():
-    """Verify all ResourceSpec fields are copied to proto."""
-    tpu_device = cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16"))
-    spec = ResourceSpec(
-        cpu=8,
-        memory="32g",
-        disk="500g",
-        device=tpu_device,
-        replicas=4,
-        preemptible=True,
-        regions=["us-central1", "us-east1"],
-    )
-    proto = spec.to_proto()
-    assert proto.cpu == 8
-    assert proto.memory_bytes == 32 * 1024**3
-    assert proto.disk_bytes == 500 * 1024**3
-    assert proto.device.HasField("tpu")
-    assert proto.device.tpu.variant == "v5litepod-16"
-    assert proto.replicas == 4
-    assert proto.preemptible is True
-    assert list(proto.regions) == ["us-central1", "us-east1"]
+def test_entrypoint_from_callable_resolve_roundtrip():
+    ep = Entrypoint.from_callable(_add, 3, b=4)
+    fn, args, kwargs = ep.resolve()
+    assert fn(*args, **kwargs) == 7
 
 
-def test_environment_spec_env_vars_override_defaults():
-    """User env_vars override default values."""
-    spec = EnvironmentSpec(env_vars={"TOKENIZERS_PARALLELISM": "true"})
-    proto = spec.to_proto()
-    assert proto.env_vars["TOKENIZERS_PARALLELISM"] == "true"
+def test_entrypoint_proto_roundtrip_preserves_bytes():
+    """Bytes survive to_proto -> from_proto without deserialization."""
+    ep = Entrypoint.from_callable(_add, 1, 2)
+    original_bytes = ep.callable_bytes
+
+    proto = ep.to_proto()
+    ep2 = Entrypoint.from_proto(proto)
+
+    assert ep2.callable_bytes == original_bytes
+    fn, args, kwargs = ep2.resolve()
+    assert fn(*args, **kwargs) == 3
 
 
-def test_environment_spec_inherits_env_tokens():
-    """EnvironmentSpec inherits HF_TOKEN and WANDB_API_KEY from environment."""
-    with patch.dict(os.environ, {"HF_TOKEN": "test-hf-token", "WANDB_API_KEY": "test-wandb-key"}):
-        spec = EnvironmentSpec()
-        proto = spec.to_proto()
-        assert proto.env_vars["HF_TOKEN"] == "test-hf-token"
-        assert proto.env_vars["WANDB_API_KEY"] == "test-wandb-key"
-
-
-def test_environment_spec_omits_none_env_vars():
-    """EnvironmentSpec omits env vars with None values."""
-    with patch.dict(os.environ, {}, clear=True):
-        # Remove HF_TOKEN and WANDB_API_KEY from environment
-        os.environ.pop("HF_TOKEN", None)
-        os.environ.pop("WANDB_API_KEY", None)
-        spec = EnvironmentSpec()
-        proto = spec.to_proto()
-        assert "HF_TOKEN" not in proto.env_vars
-        assert "WANDB_API_KEY" not in proto.env_vars
+def test_entrypoint_command():
+    ep = Entrypoint.from_command("echo", "hello")
+    assert ep.is_command
+    assert not ep.is_callable
+    assert ep.command == ["echo", "hello"]

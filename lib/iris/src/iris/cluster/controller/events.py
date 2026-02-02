@@ -23,7 +23,7 @@ from typing import Any
 
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 # =============================================================================
 # Typed Event Classes
@@ -44,7 +44,7 @@ class WorkerRegisteredEvent(Event):
     worker_id: WorkerId
     address: str
     metadata: cluster_pb2.WorkerMetadata
-    timestamp_ms: int
+    timestamp: Timestamp
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,15 @@ class WorkerHeartbeatEvent(Event):
     """Worker heartbeat timestamp update."""
 
     worker_id: WorkerId
-    timestamp_ms: int
+    timestamp: Timestamp
+
+
+@dataclass(frozen=True)
+class WorkerHeartbeatFailedEvent(Event):
+    """Single heartbeat failure for a worker. State layer tracks consecutive count."""
+
+    worker_id: WorkerId
+    error: str
 
 
 @dataclass(frozen=True)
@@ -69,7 +77,7 @@ class JobSubmittedEvent(Event):
 
     job_id: JobId
     request: cluster_pb2.Controller.LaunchJobRequest
-    timestamp_ms: int
+    timestamp: Timestamp
 
 
 @dataclass(frozen=True)
@@ -94,6 +102,7 @@ class TaskStateChangedEvent(Event):
 
     task_id: TaskId
     new_state: int  # cluster_pb2.TaskState
+    attempt_id: int
     error: str | None = None
     exit_code: int | None = None
 
@@ -107,7 +116,7 @@ class TaskStateChangedEvent(Event):
 class Action:
     """Single action taken during event handling."""
 
-    timestamp_ms: int
+    timestamp: Timestamp
     action: str
     entity_id: str
     details: dict[str, Any] = field(default_factory=dict)
@@ -124,7 +133,7 @@ class TransactionLog:
     """
 
     event: Event
-    timestamp_ms: int = field(default_factory=now_ms)
+    timestamp: Timestamp = field(default_factory=Timestamp.now)
     actions: list[Action] = field(default_factory=list)
     tasks_to_kill: set[TaskId] = field(default_factory=set)
 
@@ -132,7 +141,7 @@ class TransactionLog:
         """Record an action taken during event handling."""
         self.actions.append(
             Action(
-                timestamp_ms=now_ms(),
+                timestamp=Timestamp.now(),
                 action=action,
                 entity_id=str(entity_id),
                 details=details,

@@ -14,7 +14,56 @@
 
 # Test configuration for iris
 
+import logging
+import os
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 import pytest
+from iris.managed_thread import thread_container_scope
+from iris.test_util import SentinelFile
+from iris.time_utils import Deadline, Duration
+
+# httpx logs every HTTP request at INFO level, which floods test output
+# during polling loops (status checks, log fetching).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+@pytest.fixture(autouse=True, scope="function")
+def _ensure_logging_health():
+    """Ensure logging handlers are healthy before and after each test.
+
+    Removes any closed or invalid handlers before test setup to prevent
+    "I/O operation on closed file" errors. Flushes after test completion
+    to ensure buffered messages are written.
+    """
+    # Before test: remove any closed handlers from previous tests
+    for handler in logging.root.handlers[:]:
+        if hasattr(handler, "stream"):
+            try:
+                # Test if stream is writable
+                handler.stream.closed  # noqa: B018
+                if handler.stream.closed:
+                    logging.root.removeHandler(handler)
+            except (AttributeError, ValueError):
+                # Handler doesn't have a stream or stream is invalid
+                pass
+
+    yield
+
+    # After test: flush all handlers
+    for handler in logging.root.handlers[:]:
+        try:
+            handler.flush()
+        except (OSError, ValueError):
+            # Handler may be closed or invalid
+            pass
 
 
 def pytest_addoption(parser):
@@ -24,8 +73,156 @@ def pytest_addoption(parser):
         default=False,
         help="Use real Docker containers instead of in-process mocks",
     )
+    parser.addoption(
+        "--update-snapshots",
+        action="store_true",
+        default=False,
+        help="Update golden snapshot files instead of comparing",
+    )
 
 
 @pytest.fixture(scope="session")
 def use_docker(request):
     return request.config.getoption("--use-docker")
+
+
+# =============================================================================
+# Docker Cleanup Utilities
+# =============================================================================
+# TODO: This before/after snapshot approach can accidentally delete containers
+# created by other processes during the test window. Fix by patching
+# DockerRuntime -> TrackingDockerRuntime at the module level so all Docker
+# operations are tracked explicitly. See review.md for details.
+
+
+def _get_container_ids() -> set[str]:
+    """Get all container IDs (running and stopped)."""
+    result = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True, check=False)
+    return set(result.stdout.strip().split()) if result.stdout.strip() else set()
+
+
+def _get_image_ids() -> set[str]:
+    """Get all image IDs."""
+    result = subprocess.run(["docker", "images", "-q"], capture_output=True, text=True, check=False)
+    return set(result.stdout.strip().split()) if result.stdout.strip() else set()
+
+
+@contextmanager
+def _docker_cleanup(*, cleanup_images: bool = True) -> Iterator[None]:
+    """Context manager that cleans up Docker artifacts created during its scope."""
+    containers_before = _get_container_ids()
+    images_before = _get_image_ids() if cleanup_images else set()
+
+    try:
+        yield
+    finally:
+        for cid in _get_container_ids() - containers_before:
+            subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
+        if cleanup_images:
+            for iid in _get_image_ids() - images_before:
+                subprocess.run(["docker", "rmi", "-f", iid], capture_output=True, check=False)
+
+
+@pytest.fixture
+def docker_cleanup_scope():
+    """Cleans up all Docker containers and images created during the test."""
+    with _docker_cleanup(cleanup_images=True):
+        yield
+
+
+@pytest.fixture(scope="session")
+def docker_cleanup_session(use_docker):
+    """Session-scoped cleanup for e2e tests that use real Docker."""
+    if use_docker:
+        with _docker_cleanup(cleanup_images=True):
+            yield
+    else:
+        # Skip Docker cleanup when not using Docker
+        yield
+
+
+@pytest.fixture
+def sentinel(tmp_path) -> SentinelFile:
+    """Per-test sentinel file for blocking/unblocking job threads."""
+    return SentinelFile(str(tmp_path / "sentinel"))
+
+
+@pytest.fixture
+def container():
+    """Provides an isolated thread container for the test.
+
+    Automatically cleans up all threads spawned within the container when
+    the test completes. This is the recommended way to use ThreadContainer
+    in tests that need explicit thread management.
+
+    Example:
+        def test_with_threads(container):
+            container.spawn(my_thread_fn, name="test-thread")
+            # Test code...
+            # Cleanup happens automatically
+    """
+    with thread_container_scope("test") as cont:
+        yield cont
+
+
+@pytest.fixture(autouse=True)
+def _thread_cleanup():
+    """Ensure no new non-daemon threads leak from each test.
+
+    Takes a snapshot of threads before the test and checks that no new
+    non-daemon threads remain after teardown. Waits briefly for threads
+    that are in the process of shutting down.
+
+    This fixture helps catch tests that don't properly clean up their threads,
+    which can cause tests to hang or interfere with each other.
+    """
+    before = {t.ident for t in threading.enumerate()}
+    yield
+
+    deadline = Deadline.from_now(Duration.from_seconds(5.0))
+    while not deadline.expired():
+        leaked = [
+            t
+            for t in threading.enumerate()
+            if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
+        ]
+        if not leaked:
+            return
+        time.sleep(0.1)
+
+    # Generate detailed warning about leaked threads
+    thread_info = []
+    for t in leaked:
+        thread_info.append(f"{t.name} (daemon={t.daemon}, ident={t.ident})")
+
+    warnings.warn(
+        f"Threads leaked from test: {thread_info}\n"
+        "All threads should be stopped via ThreadContainer.stop() or similar cleanup.\n"
+        "See lib/iris/tests/test_utils.py for best practices.",
+        stacklevel=1,
+    )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Hook to debug pytest exit status - dump any non-daemon threads still alive.
+
+    Uses os._exit() to force-terminate if orphaned non-daemon threads would
+    otherwise prevent process exit.
+    """
+    alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
+    if alive:
+        tty = os.fdopen(os.dup(2), "w")
+        tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
+        frames = sys._current_frames()
+        for t in alive:
+            tty.write(f"\n  Thread: {t.name} (daemon={t.daemon}, ident={t.ident})\n")
+            frame = frames.get(t.ident)
+            if frame:
+                for line in traceback.format_stack(frame):
+                    tty.write(f"    {line.rstrip()}\n")
+        tty.flush()
+        tty.close()
+        # Force exit to prevent orphaned non-daemon threads from blocking
+        # Only force-exit on failure to avoid skipping atexit handlers on clean runs
+        if exitstatus != 0:
+            os._exit(exitstatus)

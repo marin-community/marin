@@ -11,3 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Import order matters for proto descriptor pool: each module must be loaded
+# after its dependencies. Chain: time → config → vm → cluster.
+from iris.rpc import time_pb2 as time_pb2
+from iris.rpc import config_pb2 as config_pb2
+from iris.rpc import vm_pb2 as vm_pb2
+from iris.rpc import cluster_pb2 as cluster_pb2

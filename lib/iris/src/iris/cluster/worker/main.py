@@ -14,12 +14,14 @@
 
 """Click-based CLI for the Iris worker daemon."""
 
+import logging
 import shutil
 from pathlib import Path
 
 import click
 
 from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.logging import configure_logging
 
 
 @click.group()
@@ -32,8 +34,11 @@ def cli():
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=8080, type=int, help="Bind port")
 @click.option("--cache-dir", default="~/.cache/iris-worker", help="Cache directory")
-@click.option("--registry", required=True, help="Docker registry for built images")
-@click.option("--max-concurrent-jobs", default=10, type=int, help="Max concurrent jobs")
+@click.option(
+    "--registry",
+    default="localhost:5000",
+    help="Docker registry for built images (optional for autoscaler-managed workers)",
+)
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
 @click.option(
     "--controller-address", default=None, help="Controller URL for auto-registration (e.g., http://controller:8080)"
@@ -49,6 +54,8 @@ def serve(
     worker_id: str | None,
 ):
     """Start the Iris worker service."""
+    configure_logging(level=logging.INFO)
+
     port_start, port_end = map(int, port_range.split("-"))
 
     config = WorkerConfig(
@@ -68,7 +75,8 @@ def serve(
     click.echo(f"  Cache dir: {config.cache_dir}")
     if controller_address:
         click.echo(f"  Controller: {controller_address}")
-    worker._run_server()
+    worker.start()
+    worker.wait()  # Block until worker is stopped
 
 
 @cli.command()

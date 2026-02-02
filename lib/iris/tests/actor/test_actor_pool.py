@@ -48,15 +48,17 @@ def test_pool_round_robin():
         servers.append(server)
         urls.append(f"http://127.0.0.1:{port}")
 
-    resolver = FixedResolver({"counter": urls})
-    pool = ActorPool(resolver, "counter")
+    try:
+        resolver = FixedResolver({"counter": urls})
+        pool = ActorPool(resolver, "counter")
 
-    assert pool.size == 3
-
-    # Round-robin should cycle through servers
-    results = [pool.call().get() for _ in range(6)]
-    # Should see values from all three servers (0, 100, 200, 0, 100, 200)
-    assert set(results) == {0, 100, 200}
+        # Round-robin should cycle through servers
+        results = [pool.call().get() for _ in range(6)]
+        # Should see values from all three servers (0, 100, 200, 0, 100, 200)
+        assert set(results) == {0, 100, 200}
+    finally:
+        for server in servers:
+            server.stop()
 
 
 def test_pool_broadcast():
@@ -72,13 +74,17 @@ def test_pool_broadcast():
         servers.append(server)
         urls.append(f"http://127.0.0.1:{port}")
 
-    resolver = FixedResolver({"counter": urls})
-    pool = ActorPool(resolver, "counter")
+    try:
+        resolver = FixedResolver({"counter": urls})
+        pool = ActorPool(resolver, "counter")
 
-    # Broadcast get() to all endpoints
-    broadcast = pool.broadcast().get()
-    results = broadcast.wait_all()
+        # Broadcast get() to all endpoints
+        broadcast = pool.broadcast().get()
+        results = broadcast.wait_all()
 
-    assert len(results) == 3
-    assert all(r.success for r in results)
-    assert {r.value for r in results} == {0, 1, 2}
+        assert len(results) == 3
+        assert all(r.success for r in results)
+        assert {r.value for r in results} == {0, 1, 2}
+    finally:
+        for server in servers:
+            server.stop()

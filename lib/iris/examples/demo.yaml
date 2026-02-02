@@ -1,0 +1,86 @@
+# Iris demo configuration
+# Multiple scale groups for realistic testing with diverse scenarios
+# Uses env var for controller address (external controller)
+# Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_16
+
+region: europe-west4
+zone: europe-west4-b
+
+bootstrap:
+  docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+  worker_port: 10001
+  controller_address: "${IRIS_CONTROLLER_ADDRESS}"
+
+timeouts:
+  boot_timeout:
+    milliseconds: 300000
+  init_timeout:
+    milliseconds: 600000
+  ssh_poll_interval:
+    milliseconds: 5000
+
+scale_groups:
+  # Active scale group with capacity
+  tpu_v5e_4:
+    provider:
+      tpu:
+        project_id: hai-gcp-models
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-4
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 2
+    max_slices: 10
+    zones: [europe-west4-b]
+    preemptible: true
+
+  # Scale group with some capacity but lower limits
+  tpu_v5e_16:
+    provider:
+      tpu:
+        project_id: hai-gcp-models
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-16
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 1
+    max_slices: 5
+    zones: [europe-west4-b]
+    preemptible: true
+
+  # Zero quota group - simulates quota exhaustion
+  tpu_v6e_256_no_quota:
+    provider:
+      tpu:
+        project_id: hai-gcp-models
+    accelerator_type: tpu
+    accelerator_variant: v6e-256
+    runtime_version: v2-alpha-tpuv6e
+    min_slices: 0
+    max_slices: 0  # ZERO MAX - simulates no quota available
+    zones: [europe-west4-b]
+    preemptible: true
+
+  # Disabled group - min and max both zero
+  gpu_disabled:
+    provider:
+      tpu:
+        project_id: hai-gcp-models
+    accelerator_type: gpu
+    accelerator_variant: a100-40gb
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 0
+    max_slices: 0
+    zones: [europe-west4-b]
+    preemptible: false
+
+  # Group with multi-zone configuration
+  tpu_v5e_8_multizone:
+    provider:
+      tpu:
+        project_id: hai-gcp-models
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 0
+    max_slices: 3
+    zones: [europe-west4-a, europe-west4-b, europe-west4-c]
+    preemptible: true

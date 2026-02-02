@@ -151,6 +151,10 @@ class RolloutWorkerConfig:
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
+
     system_prompt: str | None = None
     """System prompt to use for inference."""
 
@@ -412,7 +416,7 @@ class RolloutWorker:
 
         if self.config.inference_type == "levanter":
             key = jrandom.PRNGKey(self.config.seed)
-            vocab_size = self._tokenizer.vocab_size
+            vocab_size = self.config.vocab_size if self.config.vocab_size is not None else len(self._tokenizer)
             Vocab = hax.Axis("vocab", vocab_size)
 
             initial_model = load_model_from_checkpoint(
