@@ -34,18 +34,35 @@ from iris.test_util import SentinelFile
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-@pytest.fixture(autouse=True)
-def _reset_logging():
-    """Reset logging between tests to prevent closed stream errors.
+@pytest.fixture(autouse=True, scope="function")
+def _ensure_logging_health():
+    """Ensure logging handlers are healthy before and after each test.
 
-    Ensures all log handlers properly flush before test teardown, preventing
-    race conditions where background threads try to log to closed streams.
+    Removes any closed or invalid handlers before test setup to prevent
+    "I/O operation on closed file" errors. Flushes after test completion
+    to ensure buffered messages are written.
     """
+    # Before test: remove any closed handlers from previous tests
+    for handler in logging.root.handlers[:]:
+        if hasattr(handler, "stream"):
+            try:
+                # Test if stream is writable
+                handler.stream.closed  # noqa: B018
+                if handler.stream.closed:
+                    logging.root.removeHandler(handler)
+            except (AttributeError, ValueError):
+                # Handler doesn't have a stream or stream is invalid
+                pass
+
     yield
-    # Flush all handlers to ensure buffered messages are written
-    logging.shutdown()
-    # Reinitialize logging for the next test
-    # Note: pytest will reconfigure logging for the next test automatically
+
+    # After test: flush all handlers
+    for handler in logging.root.handlers[:]:
+        try:
+            handler.flush()
+        except (OSError, ValueError):
+            # Handler may be closed or invalid
+            pass
 
 
 def pytest_addoption(parser):
@@ -129,25 +146,13 @@ def sentinel(tmp_path) -> SentinelFile:
     return SentinelFile(str(tmp_path / "sentinel"))
 
 
-@pytest.fixture(autouse=True)
-def _auto_thread_registry():
-    """Automatically provide an isolated thread registry for every test.
-
-    This ensures all tests run with a fresh ThreadRegistry that is properly
-    cleaned up, preventing thread leaks and test isolation issues. Tests can
-    use get_thread_registry() to access the current registry implicitly.
-    """
-    with thread_registry_scope("test"):
-        yield
-
-
 @pytest.fixture
 def registry():
-    """Provides explicit access to the current thread registry.
+    """Provides an isolated thread registry for the test.
 
-    Since _auto_thread_registry already sets up a thread_registry_scope,
-    this fixture just returns the current registry for tests that need
-    explicit access.
+    Automatically cleans up all threads spawned within the registry when
+    the test completes. This is the recommended way to use ThreadContainer
+    in tests that need explicit thread management.
 
     Example:
         def test_with_threads(registry):
@@ -155,9 +160,8 @@ def registry():
             # Test code...
             # Cleanup happens automatically
     """
-    from iris.managed_thread import get_thread_registry
-
-    return get_thread_registry()
+    with thread_registry_scope("test") as reg:
+        yield reg
 
 
 @pytest.fixture(autouse=True)
