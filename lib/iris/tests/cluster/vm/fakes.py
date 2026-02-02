@@ -51,8 +51,8 @@ from enum import Enum, auto
 from iris.cluster.types import get_tpu_topology
 from iris.cluster.vm.managed_vm import QuotaExceededError
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
-from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from iris.rpc import time_pb2, config_pb2, vm_pb2
+from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +88,8 @@ class FakeVm:
             scale_group=scale_group,
             state=vm_pb2.VM_STATE_BOOTING,
             zone=zone,
-            created_at_ms=created_at_ms,
-            state_changed_at_ms=created_at_ms,
+            created_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
+            state_changed_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
         )
         self._boot_delay_ms = boot_delay_ms
         self._init_delay_ms = init_delay_ms
@@ -97,18 +97,18 @@ class FakeVm:
     def tick(self, ts: int) -> None:
         """Process state transitions based on elapsed time."""
         if self.info.state == vm_pb2.VM_STATE_BOOTING:
-            elapsed = ts - self.info.state_changed_at_ms
+            elapsed = ts - self.info.state_changed_at.epoch_ms
             if elapsed >= self._boot_delay_ms:
                 self.info.state = vm_pb2.VM_STATE_INITIALIZING
-                self.info.state_changed_at_ms = ts
+                self.info.state_changed_at.CopyFrom(time_pb2.Timestamp(epoch_ms=ts))
 
         if self.info.state == vm_pb2.VM_STATE_INITIALIZING:
-            elapsed = ts - self.info.state_changed_at_ms
+            elapsed = ts - self.info.state_changed_at.epoch_ms
             if elapsed >= self._init_delay_ms:
                 self.info.state = vm_pb2.VM_STATE_READY
                 self.info.worker_id = f"worker-{self.info.vm_id}"
                 self.info.worker_healthy = True
-                self.info.state_changed_at_ms = ts
+                self.info.state_changed_at.CopyFrom(time_pb2.Timestamp(epoch_ms=ts))
 
 
 class FakeVmGroup:
@@ -130,7 +130,7 @@ class FakeVmGroup:
         self._scale_group = scale_group
         self._zone = zone
         self._vms = vms
-        self._created_at_ms = created_at_ms if created_at_ms is not None else now_ms()
+        self._created_at = Timestamp.from_ms(created_at_ms) if created_at_ms is not None else Timestamp.now()
         self._terminated = False
 
     @property
@@ -147,7 +147,8 @@ class FakeVmGroup:
 
     @property
     def created_at_ms(self) -> int:
-        return self._created_at_ms
+        """Timestamp when this VM group was created (milliseconds since epoch)."""
+        return self._created_at.epoch_ms()
 
     def status(self) -> VmGroupStatus:
         """Compute status from current VM states."""
@@ -173,10 +174,10 @@ class FakeVmGroup:
 
     def terminate(self) -> None:
         """Mark VM group as terminated."""
-        ts = now_ms()
+        ts = Timestamp.now().epoch_ms()
         for vm in self._vms:
             vm.info.state = vm_pb2.VM_STATE_TERMINATED
-            vm.info.state_changed_at_ms = ts
+            vm.info.state_changed_at.CopyFrom(time_pb2.Timestamp(epoch_ms=ts))
         self._terminated = True
 
     def to_proto(self) -> vm_pb2.SliceInfo:
@@ -184,7 +185,7 @@ class FakeVmGroup:
         return vm_pb2.SliceInfo(
             slice_id=self._slice_id,
             scale_group=self._scale_group,
-            created_at_ms=self._created_at_ms,
+            created_at=self._created_at.to_proto(),
             vms=[vm.info for vm in self._vms],
         )
 
@@ -237,7 +238,7 @@ class FakeVmManager:
         with self._lock:
             self._slice_counter += 1
             slice_id = f"fake-slice-{self._config.config.name}-{self._slice_counter}"
-            ts = now_ms()
+            ts = Timestamp.now().epoch_ms()
 
             topology = get_tpu_topology(self._config.config.accelerator_variant)
             vm_count = topology.vm_count
@@ -278,7 +279,7 @@ class FakeVmManager:
 
         Call this to simulate time passing and VMs completing boot/init.
         """
-        ts = ts or now_ms()
+        ts = ts or Timestamp.now().epoch_ms()
         with self._lock:
             for fake_vm_group in self._slices.values():
                 fake_vm_group.tick(ts)

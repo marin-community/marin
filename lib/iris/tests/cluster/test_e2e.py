@@ -39,6 +39,7 @@ from iris.cluster.worker.docker import DockerRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Duration
 
 
 def find_free_port() -> int:
@@ -76,7 +77,9 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     config.scale_groups["local-cpu"].CopyFrom(sg)
 
     # Fast autoscaler evaluation for tests
-    config.autoscaler.evaluation_interval_seconds = 0.5
+    from iris.time_utils import Duration
+
+    config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
 
     return config
 
@@ -165,7 +168,7 @@ class E2ECluster:
                 cache_dir=cache_path,
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
-                poll_interval_seconds=0.1,  # Fast polling for tests
+                poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
             )
             worker = Worker(
                 worker_config,
@@ -222,7 +225,7 @@ class E2ECluster:
         cpu: int = 1,
         memory: str = "1g",
         ports: list[str] | None = None,
-        scheduling_timeout_seconds: int = 0,
+        scheduling_timeout: Duration | None = None,
         replicas: int = 1,
         **kwargs,
     ):
@@ -236,7 +239,7 @@ class E2ECluster:
             resources=resources,
             environment=environment,
             ports=ports,
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
+            scheduling_timeout=scheduling_timeout,
             replicas=replicas,
         )
 
@@ -312,16 +315,16 @@ class E2ECluster:
 # =============================================================================
 
 
-@pytest.fixture(scope="session")
-def test_cluster(use_docker, docker_cleanup_session):
-    """Provide a running test cluster for E2E tests (session-scoped)."""
+@pytest.fixture
+def test_cluster(use_docker, docker_cleanup_scope):
+    """Provide a running test cluster for E2E tests."""
     with E2ECluster(use_docker=use_docker) as cluster:
         yield cluster
 
 
-@pytest.fixture(scope="session")
-def multi_worker_cluster(use_docker, docker_cleanup_session):
-    """Provide a cluster with multiple workers (session-scoped)."""
+@pytest.fixture
+def multi_worker_cluster(use_docker, docker_cleanup_scope):
+    """Provide a cluster with multiple workers."""
     with E2ECluster(num_workers=3, use_docker=use_docker) as cluster:
         yield cluster
 
@@ -366,13 +369,13 @@ class TestJobLifecycle:
             status = test_cluster.wait(job_id, timeout=30)
             assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_kill_running_job(self, test_cluster):
+    def test_kill_running_job(self, test_cluster, sentinel):
         """Running job can be killed."""
 
-        def long_job():
-            time.sleep(60)
+        def long_job(s):
+            s.wait()
 
-        job_id = test_cluster.submit(long_job, name=unique_name("long-job"))
+        job_id = test_cluster.submit(long_job, sentinel, name=unique_name("long-job"))
 
         # Wait for job to start running
         for _ in range(50):
@@ -382,6 +385,7 @@ class TestJobLifecycle:
             time.sleep(0.1)
 
         test_cluster.kill(job_id)
+        sentinel.signal()
         status = test_cluster.wait(job_id, timeout=10)
         assert status["state"] == "JOB_STATE_KILLED"
 
@@ -427,7 +431,7 @@ class TestResourceScheduling:
             lambda: None,
             name=unique_name("impossible-job"),
             cpu=10000,
-            scheduling_timeout_seconds=1,
+            scheduling_timeout=Duration.from_seconds(1),
         )
 
         # Should become UNSCHEDULABLE

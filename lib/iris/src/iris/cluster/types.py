@@ -285,6 +285,70 @@ class ResourceSpec:
         return spec
 
 
+DOCKERFILE_TEMPLATE = """FROM {base_image}
+
+RUN apt-get update && apt-get install -y git curl build-essential && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /usr/local/bin/uv
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:$PATH"
+
+ENV UV_CACHE_DIR=/opt/uv-cache
+ENV UV_LINK_MODE=copy
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+WORKDIR /app
+
+COPY . .
+
+RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
+    --mount=type=cache,id=iris-cargo,sharing=shared,target=/root/.cargo/registry \\
+    --mount=type=cache,id=iris-cargo-git,sharing=shared,target=/root/.cargo/git \\
+    uv sync {extras_flags}
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+RUN uv pip install cloudpickle
+{pip_install_step}"""
+
+
+def generate_dockerfile(
+    python_version: str,
+    extras: list[str] | None = None,
+    pip_packages: list[str] | None = None,
+) -> str:
+    """Generate a Dockerfile for an Iris job container.
+
+    Uses the full Python image when pip_packages are specified (native wheels
+    often depend on system libraries stripped from slim images).
+
+    Extras can be specified in two formats:
+    - "extra_name" -> "--extra extra_name"
+    - "package:extra_name" -> "--package package --extra extra_name"
+    """
+    base_image = f"python:{python_version}" if pip_packages else f"python:{python_version}-slim"
+
+    # Parse extras: support both "extra" and "package:extra" syntax
+    extras_parts = []
+    for e in extras or []:
+        if ":" in e:
+            package, extra = e.split(":", 1)
+            extras_parts.append(f"--package {package} --extra {extra}")
+        else:
+            extras_parts.append(f"--extra {e}")
+    extras_flags = " ".join(extras_parts)
+
+    pip_install_step = ""
+    if pip_packages:
+        packages_str = " ".join(f'"{pkg}"' for pkg in pip_packages)
+        pip_install_step = f"\nRUN uv pip install {packages_str}\n"
+
+    return DOCKERFILE_TEMPLATE.format(
+        base_image=base_image,
+        extras_flags=extras_flags,
+        pip_install_step=pip_install_step,
+    )
+
+
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -301,9 +365,14 @@ class EnvironmentSpec:
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
+    dockerfile: str | None = None
 
     def to_proto(self) -> cluster_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied."""
+        """Convert to wire format with sensible defaults applied.
+
+        Generates the dockerfile on the client side so the worker can use it
+        directly without regenerating (which would lose extras like package:extra).
+        """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -313,11 +382,23 @@ class EnvironmentSpec:
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
+        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+        if self.dockerfile is not None:
+            dockerfile = self.dockerfile
+        else:
+            dockerfile = generate_dockerfile(
+                python_version=py_version,
+                extras=list(self.extras or []),
+                pip_packages=list(self.pip_packages or []),
+            )
+
         return cluster_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
-            python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
+            python_version=py_version,
+            dockerfile=dockerfile,
         )
 
 

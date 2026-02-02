@@ -109,4 +109,8 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     ring_handler.setFormatter(formatter)
     root.addHandler(ring_handler)
 
+    # Suppress noisy HTTP client logging (httpx and httpcore)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     return _global_buffer

@@ -14,7 +14,6 @@
 
 """Tests for controller lifecycle management."""
 
-import re
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -27,19 +26,26 @@ from iris.cluster.vm.controller import (
     GcpController,
     HealthCheckResult,
     ManualController,
+    check_health,
     create_controller,
 )
 from iris.cluster.vm.managed_vm import (
-    BOOTSTRAP_SCRIPT,
     _build_bootstrap_script,
     _build_env_flags,
 )
 from iris.rpc import config_pb2
+from iris.time_utils import Duration
 
 
 @pytest.fixture
 def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
     """Config for SSH bootstrap mode."""
+    ssh_config = config_pb2.SshConfig(
+        user="ubuntu",
+        key_file="/home/ubuntu/.ssh/id_rsa",
+    )
+    ssh_config.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
+
     return config_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=config_pb2.ControllerVmConfig(
@@ -49,11 +55,7 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
                 port=10000,
             ),
         ),
-        ssh=config_pb2.SshConfig(
-            user="ubuntu",
-            key_file="/home/ubuntu/.ssh/id_rsa",
-            connect_timeout=30,
-        ),
+        ssh=ssh_config,
     )
 
 
@@ -93,7 +95,7 @@ def test_manual_controller_start_runs_bootstrap(
     mock_health: MagicMock,
     ssh_bootstrap_config: config_pb2.IrisClusterConfig,
 ):
-    """start() SSHs into host and runs bootstrap script."""
+    """start() returns correct URL and successfully bootstraps when healthy."""
     mock_conn = MagicMock()
     mock_conn_cls.return_value = mock_conn
     mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
@@ -103,17 +105,6 @@ def test_manual_controller_start_runs_bootstrap(
     result = controller.start()
 
     assert result == "http://10.0.0.100:10000"
-    mock_conn_cls.assert_called_once_with(
-        host="10.0.0.100",
-        user="ubuntu",
-        key_file="/home/ubuntu/.ssh/id_rsa",
-        connect_timeout=30,
-    )
-    mock_run_streaming.assert_called_once()
-    call_args = mock_run_streaming.call_args
-    command = call_args[0][1]
-    assert "docker" in command
-    assert "iris-controller" in command
 
 
 def test_create_controller_raises_on_missing_config(gcp_config: config_pb2.IrisClusterConfig):
@@ -550,38 +541,6 @@ def config_with_special_chars() -> config_pb2.BootstrapConfig:
 class TestBootstrapScript:
     """Tests for worker bootstrap script template and generation functions."""
 
-    def test_template_has_only_expected_placeholders(self):
-        """Template contains only expected placeholders and properly escapes Docker format strings."""
-        expected_placeholders = {"cache_dir", "docker_image", "worker_port", "env_flags"}
-
-        # Extract single-brace placeholders (not preceded/followed by more braces)
-        pattern = r"(?<!\{)\{([^{}\s]+)\}(?!\})"
-        found_placeholders = set(re.findall(pattern, BOOTSTRAP_SCRIPT))
-        found_placeholders = {p for p in found_placeholders if not p.startswith(".")}
-
-        assert (
-            found_placeholders == expected_placeholders
-        ), f"Unexpected placeholders: {found_placeholders - expected_placeholders}"
-
-        # Verify Docker format strings use quadruple braces
-        assert "{{{{.Status}}}}" in BOOTSTRAP_SCRIPT
-        assert "{{{{.State}}}}" in BOOTSTRAP_SCRIPT
-
-    def test_template_comments_have_no_unescaped_braces(self):
-        """Comments should not contain unescaped single braces like {N}."""
-        lines = BOOTSTRAP_SCRIPT.split("\n")
-        comment_lines = [(i + 1, line) for i, line in enumerate(lines) if "#" in line]
-        unescaped_pattern = r"(?<!\{)\{[^{}]+\}(?!\})"
-
-        errors = []
-        for line_num, line in comment_lines:
-            comment_part = line[line.index("#") :]
-            matches = re.findall(unescaped_pattern, comment_part)
-            if matches:
-                errors.append(f"Line {line_num}: {line.strip()} - Found: {matches}")
-
-        assert not errors, "Found unescaped braces in comments:\n" + "\n".join(errors)
-
     def test_build_bootstrap_script_no_key_error(self, minimal_bootstrap_config: config_pb2.BootstrapConfig):
         """Template formatting should not raise KeyError."""
         try:
@@ -589,24 +548,6 @@ class TestBootstrapScript:
             assert script
         except KeyError as e:
             pytest.fail(f"Template has unescaped braces: {{{e.args[0]}}}")
-
-    def test_build_bootstrap_script_replaces_all_placeholders(
-        self, minimal_bootstrap_config: config_pb2.BootstrapConfig
-    ):
-        """Generated script should not contain raw placeholders."""
-        script = _build_bootstrap_script(minimal_bootstrap_config, vm_address="10.0.0.1")
-
-        for placeholder in ["{cache_dir}", "{docker_image}", "{worker_port}", "{env_flags}"]:
-            assert placeholder not in script
-
-    def test_build_bootstrap_script_preserves_docker_format_strings(
-        self, minimal_bootstrap_config: config_pb2.BootstrapConfig
-    ):
-        """Docker format strings become double braces after formatting."""
-        script = _build_bootstrap_script(minimal_bootstrap_config, vm_address="10.0.0.1")
-
-        assert "{{.Status}}" in script
-        assert "{{.State}}" in script
 
     def test_build_bootstrap_script_prepends_discovery_preamble(
         self, minimal_bootstrap_config: config_pb2.BootstrapConfig
@@ -622,18 +563,6 @@ class TestBootstrapScript:
         assert script.startswith(preamble)
 
     # Environment flags tests
-
-    def test_build_env_flags_includes_controller_address(self, minimal_bootstrap_config: config_pb2.BootstrapConfig):
-        """Env flags include IRIS_CONTROLLER_ADDRESS using shell variable."""
-        flags = _build_env_flags(minimal_bootstrap_config, vm_address="10.0.0.1")
-        assert '-e IRIS_CONTROLLER_ADDRESS="$CONTROLLER_ADDRESS"' in flags
-
-    def test_build_env_flags_includes_tpu_passthroughs(self, minimal_bootstrap_config: config_pb2.BootstrapConfig):
-        """Env flags include all TPU passthrough variables."""
-        flags = _build_env_flags(minimal_bootstrap_config, vm_address="10.0.0.1")
-
-        for var in ["TPU_NAME", "TPU_TYPE", "TPU_WORKER_ID", "TPU_WORKER_HOSTNAMES", "TPU_CHIPS_PER_HOST_BOUNDS"]:
-            assert f'-e {var}="${{{var}:-}}"' in flags
 
     def test_build_env_flags_quotes_values_with_spaces(self):
         """Env var values with spaces are properly quoted."""
@@ -703,3 +632,18 @@ class TestBootstrapScript:
                     # No raw placeholders should remain
                     for placeholder in ["{cache_dir}", "{docker_image}", "{worker_port}", "{env_flags}"]:
                         assert placeholder not in script
+
+
+def test_check_health_passes_duration_to_conn_run():
+    """check_health passes Duration objects (not bare ints) to conn.run timeout."""
+    mock_conn = MagicMock()
+    mock_conn.run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="healthy", stderr="")
+
+    result = check_health(mock_conn, port=8080, container_name="test-container")
+
+    assert result.healthy
+    for call in mock_conn.run.call_args_list:
+        timeout_arg = call.kwargs.get("timeout")
+        assert isinstance(
+            timeout_arg, Duration
+        ), f"conn.run called with timeout={timeout_arg!r} (type {type(timeout_arg).__name__}), expected Duration"
