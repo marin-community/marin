@@ -34,13 +34,13 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -177,6 +177,7 @@ class Autoscaler:
         scale_groups: dict[str, ScalingGroup],
         vm_registry: VmRegistry,
         config: config_pb2.AutoscalerConfig | None = None,
+        threads: ThreadContainer | None = None,
     ):
         self._groups = scale_groups
         self._vm_registry = vm_registry
@@ -195,10 +196,13 @@ class Autoscaler:
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
 
-        # Thread pool for async scale-up (scale with number of groups, min 4)
-        self._scale_up_executor = ThreadPoolExecutor(
+        # Thread management
+        from iris.managed_thread import get_thread_registry
+
+        self._threads = threads if threads is not None else get_thread_registry().container
+        self._scale_up_executor = self._threads.spawn_executor(
             max_workers=max(len(scale_groups), 4),
-            thread_name_prefix="scale-up",
+            prefix="scale-up",
         )
 
     def _wait_for_inflight(self) -> None:
@@ -208,21 +212,24 @@ class Autoscaler:
         """
         self._scale_up_executor.shutdown(wait=True)
         # Re-create executor so the autoscaler remains usable after waiting
-        self._scale_up_executor = ThreadPoolExecutor(
+        self._scale_up_executor = self._threads.spawn_executor(
             max_workers=max(len(self._groups), 4),
-            thread_name_prefix="scale-up",
+            prefix="scale-up",
         )
 
     def shutdown(self) -> None:
         """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups.
 
         Shutdown ordering:
-        1. Stop accepting new scale-up work (shutdown executor)
+        1. Wait for in-flight scale-ups (executor will be stopped by ThreadContainer)
         2. Stop all VM bootstrap threads (call vm.stop() on each VM)
         3. Terminate VMs and cleanup (group.terminate_all())
         4. Stop VM managers (cleanup local platform threads if present)
+
+        Note: The executor is owned by ThreadContainer and will be shut down when
+        the parent container stops. We just wait for pending work here.
         """
-        # Step 1: Stop accepting new scale-up work
+        # Step 1: Wait for in-flight scale-ups
         self._scale_up_executor.shutdown(wait=True)
 
         # Step 2: Stop all VM bootstrap threads
