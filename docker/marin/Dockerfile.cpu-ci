@@ -51,6 +51,6 @@ WORKDIR /home/${RUNNER_USER}/actions-runner
 
 # Entrypoint script: registers, runs one job, then exits.
 # The host systemd service restarts the container to pick up the next job.
-COPY cpu-ci-entrypoint.sh /entrypoint.sh
+COPY docker/marin/cpu-ci-entrypoint.sh /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

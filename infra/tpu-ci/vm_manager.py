@@ -924,9 +924,10 @@ def _build_and_push_cpu_ci_image():
             latest_tag,
             "-f",
             config.DOCKERFILE_CPU_CI_PATH,
-            str(project_root),
+            ".",
         ],
         check=True,
+        cwd=str(project_root),
     )
 
     logging.info(f"✓ Pushed {latest_tag}")
@@ -966,7 +967,7 @@ def test_cpu_runner(name: str):
     zone = extract_zone_from_name(name)
     logging.info(f"Testing CPU runner on: {name} in {zone}")
 
-    # Step 1: Build and push image
+    # Step 1: Build and push image to ghcr.io
     _build_and_push_cpu_ci_image()
 
     # Step 2: Start runner in detached mode on the VM
