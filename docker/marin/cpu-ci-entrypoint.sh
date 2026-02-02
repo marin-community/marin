@@ -2,11 +2,33 @@
 set -e
 
 # Required environment variables:
-#   GITHUB_TOKEN - PAT with repo scope for runner registration
-#   RUNNER_NAME  - unique name for this runner instance
+#   RUNNER_NAME   - unique name for this runner instance
 #   RUNNER_LABELS - comma-separated labels
+#
+# The GitHub token is fetched at runtime from GCP Secret Manager via the
+# metadata server, so it never needs to be stored in systemd unit files.
 
 REPO_URL="https://github.com/marin-community/marin"
+GCP_SECRET="tpu-ci-github-token"
+
+# Fetch GitHub PAT from Secret Manager using the VM's service account.
+# Uses the metadata server to get an access token, then calls the Secret Manager REST API.
+ACCESS_TOKEN=$(curl -sSf -H "Metadata-Flavor: Google" \
+  "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+  | jq -r .access_token)
+
+PROJECT_ID=$(curl -sSf -H "Metadata-Flavor: Google" \
+  "http://metadata.google.internal/computeMetadata/v1/project/project-id")
+
+GITHUB_TOKEN=$(curl -sSf \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/${GCP_SECRET}/versions/latest:access" \
+  | jq -r '.payload.data' | base64 -d)
+
+if [ -z "$GITHUB_TOKEN" ]; then
+    echo "Failed to fetch GitHub token from Secret Manager"
+    exit 1
+fi
 
 # Get a registration token from the PAT
 REGISTRATION_TOKEN=$(curl -s -X POST \

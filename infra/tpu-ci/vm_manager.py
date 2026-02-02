@@ -329,7 +329,6 @@ ExecStart=/usr/bin/docker run --rm \\
   --name $SERVICE_NAME \\
   --cpus={config.CPU_RUNNER_CPUS} \\
   --memory={config.CPU_RUNNER_MEMORY_GB}g \\
-  -e GITHUB_TOKEN=$GITHUB_TOKEN \\
   -e RUNNER_NAME=$RUNNER_NAME \\
   -e RUNNER_LABELS={",".join(config.CPU_RUNNER_LABELS)} \\
   -v /var/cache/uv:/opt/uv-cache:rw \\
@@ -975,11 +974,6 @@ def test_cpu_runner(name: str):
 
 sudo docker pull {config.CPU_CI_IMAGE}
 
-PROJECT_ID=$(curl -sSf -H "Metadata-Flavor: Google" \
-  http://metadata.google.internal/computeMetadata/v1/project/project-id)
-GITHUB_TOKEN=$(gcloud secrets versions access latest \
-  --secret="tpu-ci-github-token" --project="$PROJECT_ID")
-
 INSTANCE_NAME=$(curl -sSf -H "Metadata-Flavor: Google" \
   http://metadata.google.internal/computeMetadata/v1/instance/name)
 
@@ -989,7 +983,6 @@ sudo docker run -d \
   --name cpu-runner-test \
   --cpus={config.CPU_RUNNER_CPUS} \
   --memory={config.CPU_RUNNER_MEMORY_GB}g \
-  -e GITHUB_TOKEN=$GITHUB_TOKEN \
   -e RUNNER_NAME="cpu-test-$INSTANCE_NAME" \
   -e RUNNER_LABELS={",".join(config.CPU_RUNNER_LABELS)} \
   {config.CPU_CI_IMAGE}
