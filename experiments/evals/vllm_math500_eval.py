@@ -36,7 +36,7 @@ from marin.execution.executor import (
 from zephyr import Backend, Dataset, load_jsonl
 from datasets import load_dataset
 
-from experiments.models import qwen2_5_7b
+from experiments.models import qwen2_5_7b, olmo_2_base_32b
 
 
 @dataclass(frozen=True)
@@ -189,13 +189,13 @@ def run_math500_eval(config: Math500EvalConfig):
 
 @dataclass(frozen=True)
 class Math500ProcessConfig:
-    input_path: str
+    eval_path: str
     output_path: str
 
     filter: str = "all" # "correct", "incorrect", "all"
 
 def process_math500_data(config: Math500ProcessConfig):
-    with fsspec.open(os.path.join(config.input_path, "results.json.gz"), "rt", compression="gzip") as f:
+    with fsspec.open(os.path.join(config.eval_path, "results.json.gz"), "rt", compression="gzip") as f:
         output = json.load(f)
     
     with fsspec.open(os.path.join(config.output_path, "data.jsonl.gz"), "wt", compression="gzip") as f:
@@ -238,8 +238,27 @@ def math500_eval_step(model_step: ExecutorStep, name: str) -> ExecutorStep:
         pip_dependency_groups=["vllm", "math"],
     )
 
+name = "olmo-stuff"
+model_step = olmo_2_base_32b
 
-eval_step = math500_eval_step(qwen2_5_7b, name="qwen2.5-7b")
+eval_step = ExecutorStep(
+    name=f"rohith_math500_eval/analysis/{name}",
+    fn=run_math500_eval,
+    config=Math500EvalConfig(
+        model_path=output_path_of(model_step),
+        output_path=this_output_path(),
+    ),
+    resources=ResourceConfig.with_tpu("v5p-8"),
+    pip_dependency_groups=["vllm", "math"],
+)
+process_step = ExecutorStep(
+    name=f"rohith_math500_eval/documents/{name}",
+    fn=process_math500_data,
+    config=Math500ProcessConfig(
+        eval_path=output_path_of(eval_step),
+        output_path=this_output_path(),
+    ),
+)
 
 if __name__ == "__main__":
-    executor_main(steps=[eval_step], description="MATH-500 evaluation with vLLM.")
+    executor_main(steps=[eval_step, process_step], description="MATH-500 evaluation with vLLM.")
