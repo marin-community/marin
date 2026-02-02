@@ -231,6 +231,13 @@ If you prefer a simpler wrapper, `docs/dev-guide/dev_tpu.md` and
 `scripts/ray/dev_tpu.py` provide a more guided TPU workflow. Use whichever fits
 your setup best; both paths are compatible with the kernel recipe.
 
+Quick start on the staging cluster we commonly use for kernel work:
+
+```sh
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central2-staging.yaml allocate
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central2-staging.yaml execute -- python path/to/bench.py
+```
+
 ##### Profiling with Levanter (recommended)
 
 Whenever possible, use Levanter's built-in profiler wiring so profiles are captured consistently and uploaded via

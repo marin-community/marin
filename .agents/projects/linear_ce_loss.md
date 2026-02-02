@@ -135,14 +135,34 @@ keep using the faster native lowering.
   - Tries the Pallas path on v4 and prints the failure.
 - `lib/levanter/scripts/debug/fused_ce_v4_workaround.py`
   - Forces XLA path; useful for baseline comparisons.
+- `lib/levanter/scripts/debug/splash_attention_v4_repro.py`
+  - Uses splash attention with `v=I` to recover softmax; works on v4.
+- `lib/levanter/scripts/debug/splash_like_logsumexp_v4_repro.py`
+  - Minimal splash-style logsumexp + in-kernel label logits; works on v4.
+
+### V4 work log (2026-02-02)
+- Built a splash-style logsumexp Pallas kernel that runs on TPU v4 with
+  `dimension_semantics=("parallel","arbitrary","arbitrary")` and streaming `m/l`
+  accumulation (no gather). Matches reference logsumexp within ~2e-6.
+- Extended it to compute cross-entropy in-kernel by accumulating label logits
+  via a one-hot compare within each V tile (no dynamic_gather). Also matches
+  reference CE within ~2e-6.
+- Added a v4-safe fused CE forward kernel (streaming logsumexp + label logits, no gather)
+  plus emulated one-hot for backward; auto-selected on v4 via `_is_tpu_v4()`.
+- Added v4 smoke scripts (`v4_ce_smoke.py`, `v4_ce_smoke_bwd.py`) to validate fwd/bwd
+  correctness and bypass sublane gather issues.
+- Tune results (value+grad) on v4:
+  - B=65536, H=512, V=128256: only `v_block_size=1024` fits; best `b=1024,h=512,v=1024`
+    at ~293k tokens/s; larger v_block sizes hit VMEM OOM.
+  - B=16384, H=2048, V=128256: only `v_block_size=1024` fits; best `b=1024,h=512,v=1024`
+    at ~89k tokens/s; larger v_block sizes hit VMEM OOM.
+- Registered v4 tuned block sizes in `tuned_block_sizes.py` (including new
+  `medium-batch-medium-h` bucket for H≈2048).
 
 ### Next steps
-- Add a tiny standalone kernel that **only** does one-hot to isolate the crash
-  (even smaller than the fused CE kernel), then verify it fails on v4.
-- Implement a v4-safe one-hot emulation in the Pallas CE kernel, guarded by
-  device kind (or a new config flag).
-- If a clean emulation is found, re-enable v4 support and add a regression test
-  that exercises the emulated one-hot on v4.
+- Consider adding a tiny standalone kernel that **only** does one-hot to isolate
+  the crash (even smaller than the fused CE kernel), then verify it fails on v4.
+- Add a regression test that exercises the emulated one-hot path on v4.
 
 ## How to run TPU tests
 ```bash
@@ -152,3 +172,28 @@ RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-centra
 ## Perf bench
 - `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py`
 - Added roofline estimate and grug-wrapped bench variant.
+
+### V4 bench snapshots (pallas_tpu, infer block sizes)
+- B=65536, H=512, V=128256 (batch=64, pos=1024):
+  - roofline tokens/s ~8.38M (4 chips)
+  - fwd tokens/s ~1.17M
+  - bwd tokens/s ~0.293M
+- B=16384, H=2048, V=128256 (batch=16, pos=1024):
+  - roofline tokens/s ~2.09M (4 chips)
+  - fwd tokens/s ~0.410M
+  - bwd tokens/s ~0.089M
+- XLA reference path OOMs on bwd for B=65536 due to full BxV temporary (>56GB HBM).
+
+### V4 head-to-head (fits reference/XLA)
+Shape: B=32768, H=512, V=128256 (batch=32, pos=1024), v4-8 (4 chips)
+- pallas_tpu:
+  - fwd ~1.17M tokens/s (0.0281s)
+  - bwd ~0.292M tokens/s (0.112s)
+- xla:
+  - fwd ~0.787M tokens/s (0.0417s)
+  - bwd ~0.107M tokens/s (0.307s)
+- reference:
+  - fwd ~0.938M tokens/s (0.0349s)
+  - bwd ~0.354M tokens/s (0.0926s)
+Notes:
+- pallas is now faster than reference on forward, and ~2.7× faster than xla on bwd at this shape.
