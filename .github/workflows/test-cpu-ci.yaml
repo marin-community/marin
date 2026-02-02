@@ -1,0 +1,31 @@
+name: Test CPU CI Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: [cpu-ci]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify environment
+        run: |
+          echo "CPU CI runner is working!"
+          echo "Runner: $(hostname)"
+          echo "CPUs: $(nproc)"
+          echo "Memory: $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "Python: $(python3 --version)"
+          echo "uv: $(uv --version)"
+          echo "Git: $(git --version)"
+
+      - name: Test uv sync
+        run: |
+          uv sync --package marin --extra cpu --group test --frozen
+          echo "uv sync succeeded"
+
+      - name: Run a small test
+        run: |
+          uv run --package marin --extra cpu --frozen python -c "import marin; print('marin imported successfully')"

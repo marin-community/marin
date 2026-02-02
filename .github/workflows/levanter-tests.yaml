@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   cpu-unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -50,7 +50,7 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
 
   cpu-ray-tests:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -76,7 +76,7 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
 
   cpu-entry-tests:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -102,7 +102,7 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
 
   cpu-torch-tests:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     strategy:
       matrix:
         python-version: ["3.11"]

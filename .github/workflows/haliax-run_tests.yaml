@@ -17,7 +17,7 @@ on:
 jobs:
   cpu-test:
 
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
 
     strategy:
       matrix:

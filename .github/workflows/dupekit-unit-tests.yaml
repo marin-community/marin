@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   unit-test:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     timeout-minutes: 10
     strategy:
       matrix:

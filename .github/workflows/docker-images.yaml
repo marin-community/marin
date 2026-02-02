@@ -185,6 +185,42 @@ jobs:
             --tag ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.HASH_TAG }} \
             --push .
 
+  # CPU CI Runner Image - For self-hosted CPU CI runners in Docker containers
+  marin-cpu-ci-images:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: 'actions/checkout@v4'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set tags
+        id: set-tags
+        run: |
+          echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
+          echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push CPU CI image
+        run: |
+          docker buildx build --file docker/marin/Dockerfile.cpu-ci \
+            --provenance=false \
+            --tag ghcr.io/marin-community/marin/cpu-ci:latest \
+            --tag ghcr.io/marin-community/marin/cpu-ci:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag ghcr.io/marin-community/marin/cpu-ci:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --push .
+
   # Levanter TPU Base Image - Foundation for TPU deployments
   levanter-base-image:
     # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)

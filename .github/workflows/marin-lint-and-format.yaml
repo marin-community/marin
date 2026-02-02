@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint-and-format:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
 
     steps:
     - name: Checkout code

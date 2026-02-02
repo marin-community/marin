@@ -1,0 +1,56 @@
+# CPU CI Runner Docker Image
+# Runs a GitHub Actions self-hosted runner inside a Docker container.
+# Multiple instances of this image run per TPU VM to utilize spare CPU/RAM
+# for CPU-only CI jobs.
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG RUNNER_VERSION=2.331.0
+ARG RUNNER_USER=runner
+ARG RUNNER_UID=1000
+ARG RUNNER_GID=1000
+
+RUN groupadd -g ${RUNNER_GID} ${RUNNER_USER} \
+    && useradd -m -u ${RUNNER_UID} -g ${RUNNER_GID} -s /bin/bash ${RUNNER_USER}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    jq \
+    libssl-dev \
+    nodejs \
+    npm \
+    python3.11 \
+    python3.11-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Install GitHub Actions runner
+RUN mkdir -p /home/${RUNNER_USER}/actions-runner \
+    && cd /home/${RUNNER_USER}/actions-runner \
+    && curl -o actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz -L \
+       https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
+    && tar xzf actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
+    && rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
+    && chown -R ${RUNNER_USER}:${RUNNER_USER} /home/${RUNNER_USER}/actions-runner
+
+# Install runner dependencies
+RUN /home/${RUNNER_USER}/actions-runner/bin/installdependencies.sh
+
+# Install uv
+USER ${RUNNER_USER}
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/home/${RUNNER_USER}/.uv/bin:/home/${RUNNER_USER}/.local/bin:${PATH}"
+
+WORKDIR /home/${RUNNER_USER}/actions-runner
+
+# Entrypoint script: registers, runs one job, then exits.
+# The host systemd service restarts the container to pick up the next job.
+COPY cpu-ci-entrypoint.sh /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
