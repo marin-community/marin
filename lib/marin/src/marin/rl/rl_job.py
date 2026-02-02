@@ -314,6 +314,7 @@ class RLJob:
                 "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_seq_len=%d", max_seqs, max_seq_len
             )
             inference_config = LevanterInferenceContextConfig(
+                mesh=self.config.trainer.device_mesh,
                 inference_server_config=inference_server_config,
                 tokenizer=tokenizer,
                 axis_mapping=self.config.trainer.compute_axis_mapping,

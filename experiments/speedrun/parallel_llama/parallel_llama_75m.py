@@ -43,7 +43,6 @@ parallel_llama_75m = ParallelLlamaConfig(
     layer_norm_epsilon=1e-5,
     tie_word_embeddings=False,
     use_parallel_blocks=True,
-    cross_entropy_block_size=32000,
 )
 
 train_config = SimpleTrainConfig(

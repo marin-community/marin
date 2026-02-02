@@ -126,23 +126,3 @@ def test_compute_next_token_loss_includes_aux_loss():
     with_aux = model_with_aux.compute_next_token_loss(example)
 
     assert pytest.approx(float(base) + 0.25, rel=1e-6, abs=1e-6) == float(with_aux)
-
-
-def test_compute_next_token_loss_passes_block_size(monkeypatch):
-    import levanter.models.lm_model as lm_model
-
-    Vocab = Axis("vocab", 32)
-    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16, cross_entropy_block_size=7)
-    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
-
-    Batch = Axis("batch", 4)
-    Pos = cfg.max_Pos.resize(8)
-    example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
-
-    def _stubbed_loss(*args, **kwargs):
-        assert kwargs["block_size"] == 7
-        return jnp.array(0.0, dtype=jnp.float32)
-
-    monkeypatch.setattr(lm_model, "maybe_fused_next_token_loss", _stubbed_loss)
-    out = model.compute_next_token_loss(example)
-    assert float(out) == 0.0

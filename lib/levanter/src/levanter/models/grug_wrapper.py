@@ -24,7 +24,6 @@ class GrugConfigLike(Protocol):
     vocab_size: int
     max_seq_len: int
     hidden_dim: int
-    cross_entropy_block_size: int | None = None
 
 
 class GrugForwardFn(Protocol):

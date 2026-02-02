@@ -89,7 +89,7 @@ def _resource_presets(use_tpu: bool = False):
 
 
 def _batch_sizes() -> dict[str, int]:
-    return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 256}
+    return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 128}
 
 
 @LmConfig.register_subclass("grugformer")
@@ -181,12 +181,12 @@ def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]
     )
 
     run_name = f"grugformer_starter_{size}"
-    desc = f"Grugformer starter ({size})."
+    desc = f"Grugformer starter ({size}) with new cross entropy kernel."
     cfg = SpeedrunConfig(
         author=Author(
-            name="__YOUR_NAME__",
-            affiliation="__YOUR_AFFILIATION__",
-            url="__YOUR_URL__",
+            name="David Hall",
+            affiliation="Open Athena",
+            url="http://github.com/dlwh",
         ),
         description=desc,
         model_config=model_cfg,
@@ -207,7 +207,7 @@ def main() -> None:
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
 
-    executor_main(steps=steps, description="Grugformer starter.")
+    executor_main(steps=steps, description="Grugformer starter")
 
 
 if __name__ == "__main__":

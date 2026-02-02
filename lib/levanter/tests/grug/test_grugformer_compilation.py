@@ -49,7 +49,6 @@ def test_grug_loss_can_lower_on_abstract_4_device_mesh(data: int, model: int):
         num_heads=8,
         num_kv_heads=8,
         max_seq_len=256,  # splash attention requires KV seq multiple of 128
-        cross_entropy_block_size=None,  # single full-vocab block for faster compilation
     )
 
     mesh = _make_abstract_mesh(data=data, model=model)

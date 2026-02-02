@@ -1,108 +1,113 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Blockwise linear softmax cross-entropy for grug.
+"""Fused linear softmax cross-entropy for grug.
 
-This is the "large vocab friendly" alternative to materializing full logits
-`hidden @ lm_head` with shape (batch, seq, vocab).
-
-Design notes:
-  - Works on plain `jax.Array` inputs (grug core doesn't use NamedArray).
-  - Computes `logsumexp` over vocab in blocks to reduce peak memory.
-  - Computes the correct-class logit via gather+dot (O(N*H)), avoiding a full
-    logits materialization.
+This wraps the shared fused kernel API for TPU and falls back to a full-logits
+reference implementation on non-TPU backends.
 """
-
-from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
-from haliax.types import PrecisionLike
-from levanter.grug.sharding import Pbatch
+from haliax.jax_utils import named_call
+from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    fused_cross_entropy_loss_and_logsumexp_penalty,
+)
 
 
-def linear_softmax_cross_entropy_loss_and_logz(
+@named_call
+def fused_linear_softmax_cross_entropy_loss(
     hidden: jax.Array,
     lm_head: jax.Array,
     labels: jax.Array,
     *,
-    p_batch: P = Pbatch,
-    block_size: int | None = None,
+    weight: jax.Array | None = None,
+    reduction: str = "mean",
+    logsumexp_weight: float | None = None,
     dtype: jnp.dtype = jnp.float32,
-    precision: PrecisionLike = None,
-) -> tuple[jax.Array, jax.Array]:
-    """Compute per-position cross entropy without materializing full logits.
+    precision: jax.lax.PrecisionLike = None,
+) -> jax.Array:
+    """Compute cross-entropy loss via the fused kernel path.
 
     Args:
         hidden: Array with shape (..., hidden_dim).
         lm_head: Array with shape (hidden_dim, vocab_size).
         labels: Integer array with shape (...,).
-        block_size: Vocab block size for logsumexp.
-        dtype: Accumulator dtype for logsumexp.
-        p_batch: Sharding for the gathered correct-class weights. Defaults to Pbatch.
+        weight: Optional per-example weights with shape matching labels.
+        reduction: One of {"mean", "sum", "none"}.
+        logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
+        dtype: Accumulator dtype for logits/logsumexp.
+        precision: Optional matmul precision override for XLA/reference paths.
 
     Returns:
-        (loss, logz) each with shape labels.shape.
+        If reduction=="none": array with shape labels.shape.
+        Else: scalar array.
     """
-    if block_size is None:
-        block_size = lm_head.shape[1]
-
-    hidden_dim = hidden.shape[-1]
     if lm_head.ndim != 2:
         raise ValueError(f"lm_head must be 2D (hidden_dim, vocab), got shape={lm_head.shape}")
+    hidden_dim = hidden.shape[-1]
     if lm_head.shape[0] != hidden_dim:
         raise ValueError(f"hidden_dim mismatch: hidden={hidden_dim}, lm_head={lm_head.shape[0]}")
 
-    vocab_size = lm_head.shape[1]
-    nblocks = (vocab_size + block_size - 1) // block_size
-    vocab_padded = nblocks * block_size
-    if vocab_padded != vocab_size:
-        # We pad the vocab dimension so we can `dynamic_slice_in_dim(..., slice_size=block_size)`
-        # for every block. Use `lax.pad` (rather than concatenating a freshly-created zeros array)
-        # so sharding stays consistent under explicit meshes.
-        lm_head = jax.lax.pad(
-            lm_head,
-            jnp.array(0, dtype=lm_head.dtype),
-            padding_config=((0, 0, 0), (0, vocab_padded - vocab_size, 0)),
-        )
-    flat_hidden = hidden.reshape((-1, hidden_dim)).astype(dtype)
-    flat_labels = labels.reshape((-1,)).astype(jnp.int32)
+    reduction_mode: str | None
+    if reduction == "none":
+        reduction_mode = None
+    elif reduction in ("sum", "mean"):
+        reduction_mode = reduction
+    else:
+        raise ValueError(f"Unknown reduction: {reduction}")
 
-    w_y = lm_head.T.at[flat_labels].get(out_sharding=p_batch).astype(dtype)
-    logit_y = jnp.sum(flat_hidden * w_y, axis=-1)
-    neg_inf = jnp.array(-jnp.inf, dtype=dtype)
-    # Match the sharding of the computed per-example logits so the loop carry types are stable.
-    m0 = jnp.full_like(logit_y, neg_inf)
-    s0 = jnp.zeros_like(logit_y, dtype=dtype)
+    weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
 
-    neg_inf_logits = jnp.array(-jnp.inf, dtype=dtype)
+    def _loss_shard(
+        shard_hidden: jax.Array,
+        shard_lm_head: jax.Array,
+        shard_labels: jax.Array,
+        shard_weight: jax.Array,
+    ) -> jax.Array:
+        print(f"hid sharding: {jax.typeof(shard_hidden)}")
+        flat_hidden = shard_hidden.reshape((-1, hidden_dim))
+        flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
+        flat_weight = shard_weight.reshape((-1,))
+        print(f"flat sharding: {jax.typeof(flat_hidden)}")
+        print(flat_hidden.shape, flat_labels.shape, flat_weight.shape)
 
-    def _body(i: int, state: tuple[jax.Array, jax.Array]) -> tuple[jax.Array, jax.Array]:
-        m, s = state
-        start = i * block_size
-        w_block = jax.lax.dynamic_slice_in_dim(lm_head, start_index=start, slice_size=block_size, axis=1).astype(dtype)
-        logits = jax.lax.dot_general(
+        loss = fused_cross_entropy_loss_and_logsumexp_penalty(
             flat_hidden,
-            w_block,
-            dimension_numbers=(((1,), (0,)), ((), ())),
+            flat_labels,
+            shard_lm_head,
+            reduction=None,
+            weight=flat_weight,
+            logsumexp_weight=logsumexp_weight,
+            dtype=dtype,
+            logit_soft_cap=None,
             precision=precision,
+            # implementation="reference"
+            # implementation="xla"
         )
-        valid = jnp.arange(block_size) < (vocab_size - start)
-        logits = jnp.where(valid[None, :], logits, neg_inf_logits)
-        block_max = jnp.max(logits, axis=-1)
-        new_m = jnp.maximum(m, block_max)
-        s = s * jnp.exp(m - new_m) + jnp.sum(jnp.exp(logits - new_m[:, None]), axis=-1)
-        return new_m, s
 
-    m, s = jax.lax.fori_loop(0, nblocks, _body, (m0, s0))
-    logz = m + jnp.log(s)
-    loss = logz - logit_y
+        if reduction_mode is None:
+            return loss.reshape(shard_labels.shape)
 
-    return loss.reshape(labels.shape), logz.reshape(labels.shape)
+        local_sum = jnp.sum(loss)
+        local_denom = jnp.sum(flat_weight)
+        total_sum = jax.lax.psum(local_sum, "data")
+        if reduction_mode == "sum":
+            return total_sum
+        total_denom = jax.lax.psum(local_denom, "data")
+        return jnp.where(total_denom != 0, total_sum / total_denom, jnp.zeros_like(total_denom))
+
+    out_specs = P(("data",)) if reduction_mode is None else P()
+    return jax.shard_map(
+        _loss_shard,
+        in_specs=(P(("data",)), P(None, None), P(("data",)), P(("data",))),
+        out_specs=out_specs,
+        check_vma=False,
+    )(hidden, lm_head, labels, weight_array)
 
 
 __all__ = [
-    "linear_softmax_cross_entropy_loss_and_logz",
+    "fused_linear_softmax_cross_entropy_loss",
 ]

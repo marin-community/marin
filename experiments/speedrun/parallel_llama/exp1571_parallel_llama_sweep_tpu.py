@@ -59,7 +59,6 @@ def _to_parallel_llama_from_llama(llama_cfg, *, seq_len_override=None) -> Parall
         use_layer_norm_weight=True,
         tie_word_embeddings=False,
         use_parallel_blocks=True,
-        cross_entropy_block_size=32000,
     )
     return parallel_llama
 

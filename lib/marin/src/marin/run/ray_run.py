@@ -216,7 +216,7 @@ def main():
         nargs="+",
         metavar=("KEY", "VALUE"),
         help="Set environment variables for the job. If only a KEY is provided, "
-        "the VALUE will be set to an empty string.",
+        "the VALUE will be set to an empty string. Supports KEY=VALUE form.",
     )
     parser.add_argument(
         "--extra",
@@ -312,13 +312,16 @@ def main():
             elif len(item) == 1:
                 # If only the key is provided, set its value to an empty string
                 if "=" in item[0]:
-                    logger.error(
-                        f"Invalid key provided for environment variable: {' '.join(item)}. "
-                        f"Key should not contain '='.\n\n"
-                        f"You probably meant to do '-e {' '.join(item[0].split('='))}'."
-                    )
-                    exit(1)
-                env_vars[item[0]] = ""
+                    key, value = item[0].split("=", 1)
+                    if not key:
+                        logger.error(
+                            f"Invalid key provided for environment variable: {' '.join(item)}. "
+                            f"Key should not be empty."
+                        )
+                        exit(1)
+                    env_vars[key] = value
+                else:
+                    env_vars[item[0]] = ""
             elif len(item) == 2:
                 # If both key and value are provided, store them as a key-value pair
                 if "=" in item[0]:
