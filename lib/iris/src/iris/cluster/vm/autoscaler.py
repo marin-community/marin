@@ -40,7 +40,7 @@ from enum import Enum
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.managed_thread import ThreadContainer
+from iris.managed_thread import ThreadContainer, get_thread_registry
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -197,8 +197,6 @@ class Autoscaler:
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
 
         # Thread management
-        from iris.managed_thread import get_thread_registry
-
         self._threads = threads if threads is not None else get_thread_registry().container
         self._scale_up_executor = self._threads.spawn_executor(
             max_workers=max(len(scale_groups), 4),

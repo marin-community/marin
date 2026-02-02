@@ -126,12 +126,7 @@ class ManagedThread:
 
                 # Remove self from container when thread completes
                 if self._container is not None:
-                    with self._container._lock:
-                        try:
-                            self._container._threads.remove(self)
-                        except ValueError:
-                            # Already removed, that's fine
-                            pass
+                    self._container.remove(self)
 
         self._thread = threading.Thread(
             target=_safe_target,
@@ -232,6 +227,18 @@ class ThreadContainer:
         with self._lock:
             self._children.append(child)
         return child
+
+    def remove(self, thread: ManagedThread) -> None:
+        """Remove a thread from this container.
+
+        Called automatically when threads complete. Thread-safe.
+        """
+        with self._lock:
+            try:
+                self._threads.remove(thread)
+            except ValueError:
+                # Already removed, that's fine
+                pass
 
     @property
     def is_alive(self) -> bool:
