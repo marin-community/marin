@@ -133,7 +133,7 @@ def _save_eval_checkpoint(
     checkpoint_data = {
         "benchmark": benchmark,
         "results": {str(k): v for k, v in results.items()},  # Convert keys to strings for JSON
-        "processed_indices": [int(idx) for idx in processed_indices],
+        "processed_indices": list(processed_indices),  # Keep original type (int or str)
         "total_samples": total_samples,
     }
 
@@ -159,8 +159,14 @@ def _load_eval_checkpoint(checkpoint_path: str) -> Optional[dict]:
         with fs.open(plain_path, "r") as f:
             checkpoint_data = json.load(f)
 
-        # Convert string keys back to integers
-        checkpoint_data["results"] = {int(k): v for k, v in checkpoint_data["results"].items()}
+        # Convert string keys back to their original type (int if possible, otherwise keep as string)
+        def _try_parse_key(k):
+            try:
+                return int(k)
+            except ValueError:
+                return k
+
+        checkpoint_data["results"] = {_try_parse_key(k): v for k, v in checkpoint_data["results"].items()}
         checkpoint_data["processed_indices"] = set(checkpoint_data["processed_indices"])
 
         logger.info(f"Loaded checkpoint: {checkpoint_path} ({len(checkpoint_data['processed_indices'])}/{checkpoint_data['total_samples']} samples)")
@@ -440,9 +446,11 @@ def main(config: EvalVLMEvalKitConfig):
         logger.info(f"Starting VLMEvalKit evaluation on benchmarks: {config.benchmarks}")
 
         # Setup working directory
-        work_dir = config.output_dir or "./vlm_evalkit_results"
-        if not work_dir.startswith("gs://"):
-            os.makedirs(work_dir, exist_ok=True)
+        # VLMEvalKit requires local paths for intermediate files (uses os.path.exists internally)
+        # Use local temp dir for VLMEvalKit, then save final results to output_dir (which may be GCS)
+        output_dir = config.output_dir or "./vlm_evalkit_results"
+        local_work_dir = "./vlm_evalkit_work"
+        os.makedirs(local_work_dir, exist_ok=True)
         model_name = "levanter_vlm"
 
         # Get checkpoint name for this evaluation run
@@ -474,7 +482,7 @@ def main(config: EvalVLMEvalKitConfig):
                 num_batches = (len(data) + batch_size - 1) // batch_size
 
                 # Try to load checkpoint for resume
-                checkpoint_path = _get_checkpoint_path(work_dir, eval_checkpoint_name, benchmark)
+                checkpoint_path = _get_checkpoint_path(output_dir, eval_checkpoint_name, benchmark)
                 if config.auto_resume:
                     checkpoint_data = _load_eval_checkpoint(checkpoint_path)
                     if checkpoint_data is not None:
@@ -564,7 +572,7 @@ def main(config: EvalVLMEvalKitConfig):
                         )
 
                 # Save predictions to Excel file
-                result_file = os.path.join(work_dir, f'{model_name}_{dataset_name}.xlsx')
+                result_file = os.path.join(local_work_dir, f'{model_name}_{dataset_name}.xlsx')
                 pred_data = data.copy()
                 pred_data['prediction'] = [str(results.get(x, '')) for x in pred_data['index']]
                 if 'image' in pred_data.columns:
@@ -575,7 +583,7 @@ def main(config: EvalVLMEvalKitConfig):
                 # Collect predictions for JSON output
                 all_predictions[benchmark] = [
                     {
-                        "index": int(row['index']),
+                        "index": row['index'],  # Keep original type (int or str)
                         "question": str(row.get('question', '')),
                         "answer": str(row.get('answer', '')),
                         "prediction": str(row.get('prediction', '')),
@@ -633,8 +641,8 @@ def main(config: EvalVLMEvalKitConfig):
 
         print("=" * 60)
 
-        # Save results (supports both local and GCS paths)
-        output_dir = config.output_dir or "./vlm_evalkit_results"
+        # Save results (supports both local and GCS paths via fsspec)
+        # output_dir was set earlier and supports GCS paths
 
         # Use checkpoint name instead of timestamp for better tracking and resume support
         checkpoint_name = _extract_checkpoint_name(config.checkpoint_path, str(config.hf_checkpoint) if config.hf_checkpoint else None)
