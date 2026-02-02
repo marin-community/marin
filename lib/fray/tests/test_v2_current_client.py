@@ -50,50 +50,47 @@ def test_set_current_client_restores_on_exception():
 def test_iris_auto_detection_with_context():
     """Should auto-detect Iris when get_iris_ctx() returns a context."""
     mock_ctx = MagicMock()
-    mock_ctx.client._controller_address = "http://controller:8080"
+    mock_iris_client_lib = MagicMock()
+    mock_ctx.client = mock_iris_client_lib
 
-    with patch("fray.v2.client.get_iris_ctx", return_value=mock_ctx):
-        with patch("fray.v2.client.FrayIrisClient") as mock_client_cls:
-            mock_iris_client = MagicMock()
-            mock_client_cls.return_value = mock_iris_client
+    with patch("iris.client.get_iris_ctx", return_value=mock_ctx):
+        with patch("fray.v2.iris_backend.FrayIrisClient") as mock_client_cls:
+            mock_fray_client = MagicMock()
+            mock_client_cls.from_iris_client.return_value = mock_fray_client
 
             client = current_client()
-            assert client is mock_iris_client
-            mock_client_cls.assert_called_once_with("http://controller:8080", bundle_gcs_path=None)
+            assert client is mock_fray_client
+            mock_client_cls.from_iris_client.assert_called_once_with(mock_iris_client_lib)
 
 
-def test_iris_auto_detection_with_bundle_path(monkeypatch):
-    """Should pass bundle_gcs_path when IRIS_BUNDLE_GCS_PATH is set."""
-    monkeypatch.setenv("IRIS_BUNDLE_GCS_PATH", "gs://bucket/bundle.tar.gz")
-
+def test_iris_auto_detection_reuses_client():
+    """Should reuse the existing Iris client from the context."""
     mock_ctx = MagicMock()
-    mock_ctx.client._controller_address = "http://controller:8080"
+    mock_iris_client_lib = MagicMock()
+    mock_ctx.client = mock_iris_client_lib
 
-    with patch("fray.v2.client.get_iris_ctx", return_value=mock_ctx):
-        with patch("fray.v2.client.FrayIrisClient") as mock_client_cls:
-            mock_iris_client = MagicMock()
-            mock_client_cls.return_value = mock_iris_client
+    with patch("iris.client.get_iris_ctx", return_value=mock_ctx):
+        with patch("fray.v2.iris_backend.FrayIrisClient") as mock_client_cls:
+            mock_fray_client = MagicMock()
+            mock_client_cls.from_iris_client.return_value = mock_fray_client
 
             client = current_client()
-            assert client is mock_iris_client
-            mock_client_cls.assert_called_once_with(
-                "http://controller:8080", bundle_gcs_path="gs://bucket/bundle.tar.gz"
-            )
+            assert client is mock_fray_client
+            mock_client_cls.from_iris_client.assert_called_once_with(mock_iris_client_lib)
 
 
 def test_iris_not_detected_when_no_context():
     """Should not detect Iris when get_iris_ctx() returns None."""
-    with patch("fray.v2.client.get_iris_ctx", return_value=None):
+    with patch("iris.client.get_iris_ctx", return_value=None):
         client = current_client()
         assert isinstance(client, LocalClient)
 
 
 def test_ray_auto_detection():
     """Should auto-detect Ray when ray.is_initialized() is True."""
-    with patch("fray.v2.client.get_iris_ctx", return_value=None):
-        with patch("fray.v2.client.ray") as mock_ray:
-            mock_ray.is_initialized.return_value = True
-            with patch("fray.v2.client.RayClient") as mock_client_cls:
+    with patch("iris.client.get_iris_ctx", return_value=None):
+        with patch("ray.is_initialized", return_value=True):
+            with patch("fray.v2.ray.backend.RayClient") as mock_client_cls:
                 mock_ray_client = MagicMock()
                 mock_client_cls.return_value = mock_ray_client
 
@@ -104,9 +101,8 @@ def test_ray_auto_detection():
 
 def test_ray_not_detected_when_not_initialized():
     """Should not detect Ray when ray.is_initialized() is False."""
-    with patch("fray.v2.client.get_iris_ctx", return_value=None):
-        with patch("fray.v2.client.ray") as mock_ray:
-            mock_ray.is_initialized.return_value = False
+    with patch("iris.client.get_iris_ctx", return_value=None):
+        with patch("ray.is_initialized", return_value=False):
             client = current_client()
             assert isinstance(client, LocalClient)
 
@@ -114,10 +110,11 @@ def test_ray_not_detected_when_not_initialized():
 def test_explicit_client_overrides_auto_detection():
     """Explicitly set client should override auto-detection."""
     mock_ctx = MagicMock()
-    mock_ctx.client._controller_address = "http://controller:8080"
+    mock_iris_client_lib = MagicMock()
+    mock_ctx.client = mock_iris_client_lib
 
     explicit = LocalClient(max_threads=1)
-    with patch("fray.v2.client.get_iris_ctx", return_value=mock_ctx):
+    with patch("iris.client.get_iris_ctx", return_value=mock_ctx):
         with set_current_client(explicit):
             # Should return explicit client, not auto-detected Iris client
             assert current_client() is explicit
@@ -126,15 +123,15 @@ def test_explicit_client_overrides_auto_detection():
 def test_iris_takes_priority_over_ray():
     """Iris auto-detection should take priority over Ray."""
     mock_ctx = MagicMock()
-    mock_ctx.client._controller_address = "http://controller:8080"
+    mock_iris_client_lib = MagicMock()
+    mock_ctx.client = mock_iris_client_lib
 
-    with patch("fray.v2.client.get_iris_ctx", return_value=mock_ctx):
-        with patch("fray.v2.client.ray") as mock_ray:
-            mock_ray.is_initialized.return_value = True
-            with patch("fray.v2.client.FrayIrisClient") as mock_iris_cls:
-                mock_iris_client = MagicMock()
-                mock_iris_cls.return_value = mock_iris_client
+    with patch("iris.client.get_iris_ctx", return_value=mock_ctx):
+        with patch("ray.is_initialized", return_value=True):
+            with patch("fray.v2.iris_backend.FrayIrisClient") as mock_iris_cls:
+                mock_fray_client = MagicMock()
+                mock_iris_cls.from_iris_client.return_value = mock_fray_client
 
                 client = current_client()
                 # Should get Iris client, not Ray client
-                assert client is mock_iris_client
+                assert client is mock_fray_client
