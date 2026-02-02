@@ -369,6 +369,7 @@ RestartSec=5
 ExecStartPre=-/usr/bin/docker rm -f $SERVICE_NAME
 ExecStart=/usr/bin/docker run --rm \\
   --name $SERVICE_NAME \\
+  --network=host \\
   --cpus={config.CPU_RUNNER_CPUS} \\
   --memory={config.CPU_RUNNER_MEMORY_GB}g \\
   -e RUNNER_NAME=$RUNNER_NAME \\
@@ -377,6 +378,7 @@ ExecStart=/usr/bin/docker run --rm \\
   -v /var/cache/git:/var/cache/git:ro \\
   -e UV_CACHE_DIR=/opt/uv-cache \\
   -e UV_LINK_MODE=copy \\
+  -e UV_HTTP_TIMEOUT=120 \\
   -e GIT_ALTERNATE_OBJECT_DIRECTORIES=/var/cache/git/marin.git/objects \\
   {config.CPU_CI_IMAGE}
 ExecStop=/usr/bin/docker stop $SERVICE_NAME
