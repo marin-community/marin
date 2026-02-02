@@ -22,9 +22,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     jq \
     libssl-dev \
-    nodejs \
-    npm \
+    python3-pip \
     software-properties-common \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 via NodeSource (used by setup-node in workflows)
+ARG NODE_MAJOR=20
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python 3.11 and 3.12 from deadsnakes PPA, then pre-populate the
@@ -52,6 +57,13 @@ RUN for pyver in 3.11 3.12; do \
         ln -s /usr/bin/python${pyver} "${dir}/python3"; \
         touch "${dir}.complete"; \
     done \
+    && node_full=$(node -v | sed 's/^v//') \
+    && node_dir="${AGENT_TOOLSDIRECTORY}/node/${node_full}/x64" \
+    && mkdir -p "${node_dir}" \
+    && ln -s /usr/bin/node "${node_dir}/node" \
+    && ln -s /usr/bin/npm "${node_dir}/npm" \
+    && ln -s /usr/bin/npx "${node_dir}/npx" \
+    && touch "${node_dir}.complete" \
     && chmod -R 777 "${AGENT_TOOLSDIRECTORY}"
 
 # Install GitHub Actions runner
