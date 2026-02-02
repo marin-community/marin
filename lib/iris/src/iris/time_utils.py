@@ -350,12 +350,12 @@ class ExponentialBackoff:
             time.sleep(backoff.next_interval())
 
     Example - wait for condition:
-        ExponentialBackoff().wait_until(lambda: server.ready, timeout=30.0)
+        ExponentialBackoff().wait_until(lambda: server.ready, timeout=Duration.from_seconds(30.0))
 
     Example - wait with custom backoff:
         ExponentialBackoff(initial=0.1, maximum=5.0).wait_until_or_raise(
             lambda: connection.established,
-            timeout=60.0,
+            timeout=Duration.from_seconds(60.0),
             error_message="Connection failed",
         )
     """
@@ -396,28 +396,27 @@ class ExponentialBackoff:
     def reset(self) -> None:
         self._attempt = 0
 
-    def wait_until(self, condition: Callable[[], bool], timeout: float) -> bool:
+    def wait_until(self, condition: Callable[[], bool], timeout: Duration) -> bool:
         """Wait for a condition to become true with exponential backoff.
 
         Args:
             condition: Callable that returns True when the wait should end
-            timeout: Maximum time to wait in seconds
+            timeout: Maximum duration to wait
 
         Returns:
             True if condition was met, False if timeout expired
         """
-        start = time.monotonic()
+        deadline = Deadline.from_now(timeout)
 
         while True:
             if condition():
                 return True
 
-            elapsed = time.monotonic() - start
-            if elapsed >= timeout:
+            if deadline.expired():
                 return False
 
             interval = self.next_interval()
-            remaining = timeout - elapsed
+            remaining = deadline.remaining_seconds()
             interval = min(interval, remaining)
 
             if interval > 0:
@@ -426,7 +425,7 @@ class ExponentialBackoff:
     def wait_until_or_raise(
         self,
         condition: Callable[[], bool],
-        timeout: float,
+        timeout: Duration,
         error_message: str,
     ) -> None:
         if not self.wait_until(condition, timeout):

@@ -61,4 +61,5 @@ jobs:
           # prompt: 'Update the pull request description to include a summary of changes.'
 
           # Allow rebase and pre-commit operations
-          claude_args: '--allowed-tools "Bash(git rebase:*)" "Bash(git fetch:*)" "Bash(./infra/pre-commit.py:*)" "Bash(uv run:*)" Base(uv run --script:*)"'
+          claude_args: '--allowed-tools "Bash(git *)" "Bash(./infra/pre-commit.py:*)" "Bash(uv *)" "Bash(pytest *)" "Bash(gh *)"'
+

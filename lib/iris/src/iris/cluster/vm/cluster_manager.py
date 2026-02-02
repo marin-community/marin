@@ -27,6 +27,7 @@ from contextlib import contextmanager
 
 from iris.cluster.vm.controller import ControllerProtocol, create_controller
 from iris.cluster.vm.debug import controller_tunnel
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
@@ -75,8 +76,13 @@ class ClusterManager:
         manager.stop()
     """
 
-    def __init__(self, config: config_pb2.IrisClusterConfig):
+    def __init__(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        threads: ThreadContainer | None = None,
+    ):
         self._config = config
+        self._threads = threads if threads is not None else get_thread_container()
         self._controller: ControllerProtocol | None = None
 
     @property
@@ -89,17 +95,24 @@ class ClusterManager:
         For GCP: creates a GCE VM, bootstraps, returns internal IP.
         For local: starts in-process Controller, returns localhost URL.
         """
-        self._controller = create_controller(self._config)
+        self._controller = create_controller(self._config, threads=self._threads)
         address = self._controller.start()
         logger.info("Controller started at %s (local=%s)", address, self.is_local)
         return address
 
     def stop(self) -> None:
-        """Stop the controller and clean up resources."""
+        """Stop the controller and clean up resources.
+
+        Shutdown ordering:
+        1. Stop the controller (which stops its threads and autoscaler)
+        2. Wait on the root ThreadContainer to verify all threads have exited
+        """
         if self._controller:
             self._controller.stop()
             self._controller = None
             logger.info("Controller stopped")
+
+        self._threads.wait()
 
     def reload(self) -> str:
         """Reload cluster by reloading the controller.
@@ -118,7 +131,7 @@ class ClusterManager:
             RuntimeError: If controller VM doesn't exist
         """
         # Reload controller - it will re-bootstrap workers on startup
-        self._controller = create_controller(self._config)
+        self._controller = create_controller(self._config, threads=self._threads)
         address = self._controller.reload()
         logger.info("Controller reloaded at %s", address)
 

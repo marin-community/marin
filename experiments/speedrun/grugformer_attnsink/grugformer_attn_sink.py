@@ -147,10 +147,6 @@ class GrugformerAttnSinkModelConfig:
     def hidden_dim(self) -> int:
         return self.core.hidden_dim
 
-    @property
-    def cross_entropy_block_size(self):
-        return 32000
-
 
 def _init_grugformer_with_sinks(cfg: GrugformerAttnSinkModelConfig, *, key: PRNGKeyArray) -> dict:
     core = _init_core(cfg.core, key)
