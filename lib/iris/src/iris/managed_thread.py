@@ -243,20 +243,31 @@ class ThreadContainer:
     @property
     def is_alive(self) -> bool:
         """True if any thread in this container or its children is still running."""
-        return any(t.is_alive for t in self._threads) or any(c.is_alive for c in self._children)
+        with self._lock:
+            threads = list(self._threads)
+            children = list(self._children)
+        return any(t.is_alive for t in threads) or any(c.is_alive for c in children)
 
     def alive_threads(self) -> list[ManagedThread]:
         """Return threads that are still alive, including those in child containers."""
-        alive = [t for t in self._threads if t.is_alive]
-        for child in self._children:
+        with self._lock:
+            threads = list(self._threads)
+            children = list(self._children)
+
+        alive = [t for t in threads if t.is_alive]
+        for child in children:
             alive.extend(child.alive_threads())
         return alive
 
     def wait(self) -> None:
         """Block until all threads have exited."""
-        for child in self._children:
+        with self._lock:
+            children = list(self._children)
+            threads = list(self._threads)
+
+        for child in children:
             child.wait()
-        for thread in self._threads:
+        for thread in threads:
             thread.join()
 
     def stop(self, timeout: float = 5.0) -> None:
@@ -266,21 +277,33 @@ class ThreadContainer:
         to executors; signaling threads to exit first avoids
         'cannot schedule new futures after shutdown' errors.
         """
-        for child in self._children:
+        # Take snapshot of children, threads, and executors under lock
+        with self._lock:
+            children = list(self._children)
+            threads = list(self._threads)
+            executors = list(self._executors)
+
+        # Stop children first (recursive)
+        for child in children:
             child.stop(timeout=timeout)
 
-        for thread in self._threads:
+        # Signal all threads to stop
+        for thread in threads:
             thread.stop()
+
+        # Wait for threads to exit with shared deadline
         deadline = time.monotonic() + timeout
-        for thread in self._threads:
+        for thread in threads:
             remaining = max(0, deadline - time.monotonic())
             thread.join(timeout=remaining)
 
-        for thread in self._threads:
+        # Warn about threads that didn't exit
+        for thread in threads:
             if thread.is_alive:
                 logger.warning("Thread %s did not exit within %s seconds", thread.name, timeout)
 
-        for executor in self._executors:
+        # Shutdown executors last
+        for executor in executors:
             executor.shutdown(wait=True)
 
 
