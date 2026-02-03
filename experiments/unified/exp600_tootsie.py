@@ -200,15 +200,24 @@ tootsie_1b_train_config = SimpleTrainConfig(
     steps_per_export=10000,
 )
 
+_llama_1b_tootsie_step = default_train(
+    name=EXP_NAME,
+    tokenized=nemotron_hq_data_config,
+    model_config=llama_3_2_1b,
+    train_config=tootsie_1b_train_config,
+    tags=["llama", "1b", "nemotron-hq", "exp600"],
+    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+)
+
+# Allow cross-region tokenizer access (tokenizer in us-central2, VM in us-west4)
+_updated_config = dataclasses.replace(
+    _llama_1b_tootsie_step.config,
+    allow_out_of_region=("data.tokenizer",),
+)
+
 llama_1b_tootsie = dataclasses.replace(
-    default_train(
-        name=EXP_NAME,
-        tokenized=nemotron_hq_data_config,
-        model_config=llama_3_2_1b,
-        train_config=tootsie_1b_train_config,
-        tags=["llama", "1b", "nemotron-hq", "exp600"],
-        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-    ),
+    _llama_1b_tootsie_step,
+    config=_updated_config,
     override_output_path=f"checkpoints/{EXP_NAME}",
 )
 

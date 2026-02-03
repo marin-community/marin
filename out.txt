@@ -1,95 +1,839 @@
-st4/checkpoints/vlm-official-qwen3-1.7b-stage1–1e4-2-74f4e0/hf/vlm-official-qwen3-1.7b-stage1–1e4-2-74f4e0/step-725
-(<lambda> pid=4487, ip=10.164.0.169) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7fcf39280d60>
-(<lambda> pid=4470, ip=10.164.0.132) Traceback (most recent call last):
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=4470, ip=10.164.0.132)     conn.teardown(hooks.exit_code)
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=4470, ip=10.164.0.132)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
-(<lambda> pid=4470, ip=10.164.0.132)     return future.result()
-(<lambda> pid=4470, ip=10.164.0.132)            ^^^^^^^^^^^^^^^
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=4470, ip=10.164.0.132)     return self.__get_result()
-(<lambda> pid=4470, ip=10.164.0.132)            ^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=4470, ip=10.164.0.132)     raise self._exception
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=4470, ip=10.164.0.132)     return await fn()
-(<lambda> pid=4470, ip=10.164.0.132)          
-(<lambda> pid=4449, ip=10.164.0.156)            ^^^^^^^^^^^
-(<lambda> pid=4981, ip=10.164.0.170)          
-(<lambda> pid=4487, ip=10.164.0.169) 
-(<lambda> pid=4470, ip=10.164.0.132)   ^^^^^^^^^^
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=4470, ip=10.164.0.132)     await self._client.close()
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=4470, ip=10.164.0.132)     await self._writer.wait_closed()
-(<lambda> pid=4470, ip=10.164.0.132)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=4470, ip=10.164.0.132)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=4470, ip=10.164.0.132) BrokenPipeError: [Errno 32] Broken pipe
-(<lambda> pid=4501, ip=10.164.0.185)     
-(<lambda> pid=4449, ip=10.164.0.156) ^^^^^^^^
-(<lambda> pid=4981, ip=10.164.0.170)            ^^^^
-(<lambda> pid=4487, ip=10.164.0.169)     
-(<lambda> pid=4477, ip=10.164.0.138) 
-(<lambda> pid=4477, ip=10.164.0.138)     
-(<lambda> pid=4462, ip=10.164.0.171)            ^^
-(<lambda> pid=4449, ip=10.164.0.156) 
-(<lambda> pid=4559, ip=10.164.0.184)     
-(<lambda> pid=4493, ip=10.164.0.197)          
-(<lambda> pid=4981, ip=10.164.0.170) ^^^^^^
-(<lambda> pid=4477, ip=10.164.0.138)       
-(<lambda> pid=4462, ip=10.164.0.171) ^^^^^^^^^^^^^^^^^
-(<lambda> pid=4462, ip=10.164.0.171)            ^^^
-(<lambda> pid=4541, ip=10.164.0.175) 
-(<lambda> pid=4541, ip=10.164.0.175) BrokenPipeError: 
-(<lambda> pid=4462, ip=10.164.0.171) ^^^^^^^
-(<lambda> pid=4541, ip=10.164.0.175) [Errno 32] Broken pipe
-(<lambda> pid=4472, ip=10.164.0.161) 
-(<lambda> pid=4507, ip=10.164.0.196)       
-(<lambda> pid=4507, ip=10.164.0.196) 
-(<lambda> pid=4507, ip=10.164.0.196)     
-(<lambda> pid=4507, ip=10.164.0.196) BrokenPipeError
-(<lambda> pid=4507, ip=10.164.0.196) : [Errno 32] Broken pipe
-2026-02-02 21:57:49,884 INFO executor.py:796 -- Waiting for 134581397349328 to finish for step checkpoints/vlm-official-qwen3-1.7b-stage1–1e4-2
-2026-02-02 21:57:49,884 - INFO - Starting wait for job 134581397349328
-2026-02-02 21:57:49,884 - INFO - Job 134581397349328 completed with status succeeded
-2026-02-02 21:57:50,164 INFO executor.py:748 -- ### Waiting for all steps to finish ###
-2026-02-02 21:57:50,164 - INFO - Starting wait for job 134581397349328
-2026-02-02 21:57:50,164 - INFO - Job 134581397349328 completed with status succeeded
-2026-02-02 21:57:50,378 INFO executor.py:1254 -- Executor run took 1804.58s
-2026-02-02 21:57:50,379 INFO executor.py:1256 -- Executor info written to gs://marin-eu-west4/experiments/demo_vlm_train_4b-b4ad02.json
-2026-02-02 21:57:50,379 INFO executor.py:1259 -- View the experiment at https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/demo_vlm_train_4b-b4ad02.json
-(<lambda> pid=4537, ip=10.164.0.127) 2026-02-02T21:57:48 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:944 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB [repeated 63x across cluster]
-(<lambda> pid=4449, ip=10.164.0.156) 2026-02-02T21:57:48 - 56 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.89GB/8.89GB rate:121,585,047.9B/s remaining:00:00 elapsed:01:38 postfix:- [repeated 64x across cluster]
-(<lambda> pid=4546, ip=10.164.0.90) 2026-02-02T21:57:47 - 6 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage1–1e4-2-74f4e0/hf/vlm-official-qwen3-1.7b-stage1–1e4-2-74f4e0/step-725 [repeated 63x across cluster]
-(<lambda> pid=4537, ip=10.164.0.127) 2026-02-02T21:57:48 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage1–1e4-2-74f4e0/hf/vlm-official-qwen3-1.7b-stage1–1e4-2-74f4e0/step-725 via temp path /tmp/tmpnvqr0n5g [repeated 59x across cluster]
-(<lambda> pid=4537, ip=10.164.0.127) 2026-02-02T21:57:48 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer [repeated 63x across cluster]
-(<lambda> pid=4449, ip=10.164.0.156) 2026-02-02T21:57:48 - 56 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage1–1e4-2-74f4e0/hf/vlm-official-qwen3-1.7b-stage1–1e4-2-74f4e0/step-725 [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f5251940d60> [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186) Traceback (most recent call last): [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     conn.teardown(hooks.exit_code) [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     self._asyncer.run(publish_teardown_and_close) [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     return future.result() [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)            ^^^^^^^^^^^^^^^ [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     return self.__get_result() [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)            ^^^^^^^^^^^^^^^^^^^ [repeated 60x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     raise self._exception [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     return await fn() [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)            ^^^^^^^^^^ [repeated 61x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     await self._client.close() [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     await self._writer.wait_closed() [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186)     await self._protocol._get_close_waiter(self) [repeated 63x across cluster]
-(<lambda> pid=4473, ip=10.164.0.186) BrokenPipeError: [Errno 32] Broken pipe [repeated 61x across cluster]
-(<lambda> pid=4507, ip=10.164.0.196)            ^^
-(<lambda> pid=4507, ip=10.164.0.196) ^^^^^^^^^^^^^^^^^
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 
+(pid=) I0203 06:03:46.413841 3827936 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 19.483751515s
+(pid=) I0203 06:03:56.307828 3827936 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 8,439 instructions, modules: jit__run_generation_loop
+(pid=) I0203 06:03:56.307858 3827936 2a886c8_compiler_base.cc:7488] Initial HLO module: jit__run_generation_loop instructions: 8,439 fingerprint: 
+(pid=) I0203 06:03:56.393998 3827936 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit__run_generation_loop instructions: 7,787
+(pid=) I0203 06:03:56.394016 3827936 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
+(pid=) W0203 06:03:57.135688 3828716 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0203 06:03:57.135688 3828716 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0203 06:03:57.135688 3828716 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) 111.46M (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (111.46M))
+(pid=) I0203 06:03:46.325144 3828716 2a886c8_compiler_base.cc:3687] Program smem requirement 8.4K:
+(pid=) I0203 06:03:46.325145 3828716 2a886c8_compiler_base.cc:3687]     scoped             4.4K
+(pid=) I0203 06:03:46.325146 3828716 2a886c8_compiler_base.cc:3687]     HLO temp           4.0K (100.0% utilization: Unpadded (8B) Padded (8B), 99.8% fragmentation (4.0K))
+(pid=) I0203 06:03:46.325146 3828716 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
+(pid=) I0203 06:03:46.325147 3828716 2a886c8_compiler_base.cc:3695] XLA::TPU program SMEM usage: 10.7K / 1.00M (104 parameters)
+(pid=) I0203 06:03:46.325230 3828716 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 7.14869608s
+(pid=) I0203 06:03:46.413610 3828716 isa_program_util_common.cc:520] (HLO module jit__run_prefill): Executable fingerprint:1ecb01d64cdeabfaf9e9005da948a304f8bbdacc6de5bd8018efc19605775ffd
+(pid=) I0203 06:03:46.413626 3828716 isa_program_util_common.cc:524] (HLO module jit__run_prefill): Executable fingerprint (including data segments):01acf0e8807049e5b52c653d2528075ec2b55c1bc3a62ab0350aceb4d45cca65
+(pid=) I0203 06:03:46.413628 3828716 isa_program_util_common.cc:527] (HLO module jit__run_prefill): Host transfer fingerprint:98f66e81560722518628400f4c4c4d610f064c6c7e9e7dadf1c9c0f4e7030ec7
+(pid=) I0203 06:03:46.413841 3827936 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 19.483751515s
+(pid=) I0203 06:03:56.307828 3827936 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 8,439 instructions, modules: jit__run_generation_loop
+(pid=) I0203 06:03:56.307858 3827936 2a886c8_compiler_base.cc:7488] Initial HLO module: jit__run_generation_loop instructions: 8,439 fingerprint: 
+(pid=) I0203 06:03:56.393998 3827936 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit__run_generation_loop instructions: 7,787
+(pid=) I0203 06:03:56.394016 3827936 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
+(pid=) W0203 06:03:57.135688 3828716 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) I0203 06:03:57.247223 3828716 shardy_xla_pass.cc:316] Using Shardy for XLA SPMD propagation.
+(pid=) I0203 06:03:59.252671 3827936 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
+(pid=) I0203 06:03:59.867900 3827936 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 3.56195575775s
+(pid=) I0203 06:03:59.904943 3862854 memory_space_assignment_util.cc:730] MSA Vmem breakdown: default scoped vmem (from flag): 16777216; does_msa_directly_allocate_scoped_vmem: F; bytes_for_msa_to_allocate: 117440512
+(pid=) I0203 06:04:02.366751 3828716 2a886c8_compiler_base.cc:10953] BACKEND_PASSES stage duration: 2.46264160625s
+(pid=) I0203 06:04:04.233956 3828716 2a886c8_compiler_base.cc:3026] final program bundle count: 726,914 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:04:04.296257 3828716 2a886c8_compiler_base.cc:3026] final program bundle count: 107 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:04:05.085359 3828716 2a886c8_compiler_base.cc:3444] Program divided into 42 overlays without HLO functions (44.43M).
+(pid=) I0203 06:04:05.090522 3828716 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__run_generation_loop
+(pid=) I0203 06:04:05.090531 3828716 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 96.71M / 15.75G
+(pid=) I0203 06:04:05.090535 3828716 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 104.80M / 128.00M
+(pid=) I0203 06:04:05.090547 3828716 2a886c8_compiler_base.cc:3683] Total hbm usage >= 2.91G:
+(pid=) I0203 06:04:05.090548 3828716 2a886c8_compiler_base.cc:3683]     reserved        258.00M 
+(pid=) I0203 06:04:05.090548 3828716 2a886c8_compiler_base.cc:3683]     program          96.71M 
+(pid=) I0203 06:04:05.090549 3828716 2a886c8_compiler_base.cc:3683]     arguments         2.56G 
+(pid=) I0203 06:04:05.090550 3828716 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:04:05.090550 3828716 2a886c8_compiler_base.cc:3683] Output size 72.03M; shares 72.03M with arguments.
+(pid=) I0203 06:04:05.090551 3828716 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:04:05.090552 3828716 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
+(pid=) I0203 06:04:05.090553 3828716 2a886c8_compiler_base.cc:3683]     reserved             0B 
+(pid=) I0203 06:04:05.090553 3828716 2a886c8_compiler_base.cc:3683]     program         unknown size 
+(pid=) I0203 06:04:05.090554 3828716 2a886c8_compiler_base.cc:3683]     arguments            0B 
+(pid=) I0203 06:04:05.090554 3828716 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:04:05.090555 3828716 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
+(pid=) I0203 06:04:05.090556 3828716 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:04:05.090586 3828716 2a886c8_compiler_base.cc:3687] Program sflag requirement 272B:
+(pid=) I0203 06:04:05.090587 3828716 2a886c8_compiler_base.cc:3687]     reserved           204B
+(pid=) I0203 06:04:05.090588 3828716 2a886c8_compiler_base.cc:3687]     scoped              44B
+(pid=) I0203 06:04:05.090589 3828716 2a886c8_compiler_base.cc:3687]     HLO temp            24B (100.0% utilization: Unpadded (24B) Padded (24B), 0.0% fragmentation (0B))
+(pid=) I0203 06:04:05.090589 3828716 2a886c8_compiler_base.cc:3687] Program hbm requirement 96.71M:
+(pid=) I0203 06:04:05.090590 3828716 2a886c8_compiler_base.cc:3687]     global            97.0K
+(pid=) I0203 06:04:05.090591 3828716 2a886c8_compiler_base.cc:3687]     HLO temp         52.19M (99.9% utilization: Unpadded (45.19M) Padded (45.22M), 13.3% fragmentation (6.96M))
+(pid=) I0203 06:04:05.090591 3828716 2a886c8_compiler_base.cc:3687]     overlays         44.43M
+(pid=) I0203 06:04:05.090592 3828716 2a886c8_compiler_base.cc:3687] Program vmem requirement 104.80M:
+(pid=) I0203 06:04:05.090593 3828716 2a886c8_compiler_base.cc:3687]     scoped            7.50M
+(pid=) I0203 06:04:05.090593 3828716 2a886c8_compiler_base.cc:3687]     HLO temp         97.30M (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (97.30M))
+(pid=) I0203 06:04:05.090594 3828716 2a886c8_compiler_base.cc:3687] Program smem requirement 2.8K:
+(pid=) I0203 06:04:05.090595 3828716 2a886c8_compiler_base.cc:3687]     scoped             2.8K
+(pid=) I0203 06:04:05.090595 3828716 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
+(pid=) I0203 06:04:05.090597 3828716 2a886c8_c
+(pid=) I0203 06:03:57.247223 3828716 shardy_xla_pass.cc:316] Using Shardy for XLA SPMD propagation.
+(pid=) I0203 06:03:59.252671 3827936 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
+(pid=) I0203 06:03:59.867900 3827936 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 3.56195575775s
+(pid=) I0203 06:03:59.904943 3862854 memory_space_assignment_util.cc:730] MSA Vmem breakdown: default scoped vmem (from flag): 16777216; does_msa_directly_allocate_scoped_vmem: F; bytes_for_msa_to_allocate: 117440512
+(pid=) I0203 06:04:02.366751 3828716 2a886c8_compiler_base.cc:10953] BACKEND_PASSES stage duration: 2.46264160625s
+(pid=) I0203 06:04:04.233956 3828716 2a886c8_compiler_base.cc:3026] final program bundle count: 726,914 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:04:04.296257 3828716 2a886c8_compiler_base.cc:3026] final program bundle count: 107 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:04:05.085359 3828716 2a886c8_compiler_base.cc:3444] Program divided into 42 overlays without HLO functions (44.43M).
+(pid=) I0203 06:04:05.090522 3828716 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__run_generation_loop
+(pid=) I0203 06:04:05.090531 3828716 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 96.71M / 15.75G
+(pid=) I0203 06:04:05.090535 3828716 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 104.80M / 128.00M
+(pid=) I0203 06:04:05.090547 3828716 2a886c8_compiler_base.cc:3683] Total hbm usage >= 2.91G:
+(pid=) I0203 06:04:05.090548 3828716 2a886c8_compiler_base.cc:3683]     reserved        258.00M 
+(pid=) I0203 06:04:05.090548 3828716 2a886c8_compiler_base.cc:3683]     program          96.71M 
+(pid=) I0203 06:04:05.090549 3828716 2a886c8_compiler_base.cc:3683]     arguments         2.56G 
+(pid=) I0203 06:04:05.090550 3828716 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:04:05.090550 3828716 2a886c8_compiler_base.cc:3683] Output size 72.03M; shares 72.03M with arguments.
+(pid=) I0203 06:04:05.090551 3828716 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:04:05.090552 3828716 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
+(pid=) I0203 06:04:05.090553 3828716 2a886c8_compiler_base.cc:3683]     reserved             0B 
+(pid=) I0203 06:04:05.090553 3828716 2a886c8_compiler_base.cc:3683]     program         unknown size 
+(pid=) I0203 06:04:05.090554 3828716 2a886c8_compiler_base.cc:3683]     arguments            0B 
+(pid=) I0203 06:04:05.090554 3828716 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:04:05.090555 3828716 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
+(pid=) I0203 06:04:05.090556 3828716 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:04:05.090586 3828716 2a886c8_compiler_base.cc:3687] Program sflag requirement 272B:
+(pid=) I0203 06:04:05.090587 3828716 2a886c8_compiler_base.cc:3687]     reserved           204B
+(pid=) I0203 06:04:05.090588 3828716 2a886c8_compiler_base.cc:3687]     scoped              44B
+(pid=) I0203 06:04:05.090589 3828716 2a886c8_compiler_base.cc:3687]     HLO temp            24B (100.0% utilization: Unpadded (24B) Padded (24B), 0.0% fragmentation (0B))
+(pid=) I0203 06:04:05.090589 3828716 2a886c8_compiler_base.cc:3687] Program hbm requirement 96.71M:
+(pid=) I0203 06:04:05.090590 3828716 2a886c8_compiler_base.cc:3687]     global            97.0K
+(pid=) I0203 06:04:05.090591 3828716 2a886c8_compiler_base.cc:3687]     HLO temp         52.19M (99.9% utilization: Unpadded (45.19M) Padded (45.22M), 13.3% fragmentation (6.96M))
+(pid=) I0203 06:04:05.090591 3828716 2a886c8_compiler_base.cc:3687]     overlays         44.43M
+(pid=) I0203 06:04:05.090592 3828716 2a886c8_compiler_base.cc:3687] Program vmem requirement 104.80M:
+(pid=) I0203 06:04:05.090593 3828716 2a886c8_compiler_base.cc:3687]     scoped            7.50M
+(pid=) I0203 06:04:05.090593 3828716 2a886c8_compiler_base.cc:3687]     HLO temp         97.30M (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (97.30M))
+(pid=) I0203 06:04:05.090594 3828716 2a886c8_compiler_base.cc:3687] Program smem requirement 2.8K:
+(pid=) I0203 06:04:05.090595 3828716 2a886c8_compiler_base.cc:3687]     scoped             2.8K
+(pid=) I0203 06:04:05.090595 3828716 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
+(pid=) I0203 06:04:05.090597 3828716 2a886c8_c
+(pid=) ompiler_base.cc:3695] XLA::TPU program SMEM usage: 4.9K / 1.00M (67 parameters)
+(pid=) I0203 06:04:05.090615 3828716 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 2.72342249875s
+(pid=) I0203 06:04:05.120172 3828716 isa_program_util_common.cc:520] (HLO module jit__run_generation_loop): Executable fingerprint:259fdab128e66a9202baef321ffb6979f40f79d5904fa8eb5f3d87d5baa62d3e
+(pid=) I0203 06:04:05.120179 3828716 isa_program_util_common.cc:524] (HLO module jit__run_generation_loop): Executable fingerprint (including data segments):ea29a6ade4f78f5fad7d06b4e0f6c1b334d0784e169f1642dc2d3a20e8e44d69
+(pid=) I0203 06:04:05.120180 3828716 isa_program_util_common.cc:527] (HLO module jit__run_generation_loop): Host transfer fingerprint:e81c6e213bf9e0671d4562234be113f75249e83db7cec4bd37cb4b5a539371f5
+(pid=) I0203 06:04:05.120346 3827936 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 8.83768798525s
+(pid=) I0203 06:04:09.542690 3827936 allocator_stats_reporter.cc:147] Stopping AllocatorStatsReporter. Reporting one last time first.
+(pid=) W0203 06:04:10.107148 3828428 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.107148 3828428 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.107148 3828428 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) ompiler_base.cc:3695] XLA::TPU program SMEM usage: 4.9K / 1.00M (67 parameters)
+(pid=) I0203 06:04:05.090615 3828716 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 2.72342249875s
+(pid=) I0203 06:04:05.120172 3828716 isa_program_util_common.cc:520] (HLO module jit__run_generation_loop): Executable fingerprint:259fdab128e66a9202baef321ffb6979f40f79d5904fa8eb5f3d87d5baa62d3e
+(pid=) I0203 06:04:05.120179 3828716 isa_program_util_common.cc:524] (HLO module jit__run_generation_loop): Executable fingerprint (including data segments):ea29a6ade4f78f5fad7d06b4e0f6c1b334d0784e169f1642dc2d3a20e8e44d69
+(pid=) I0203 06:04:05.120180 3828716 isa_program_util_common.cc:527] (HLO module jit__run_generation_loop): Host transfer fingerprint:e81c6e213bf9e0671d4562234be113f75249e83db7cec4bd37cb4b5a539371f5
+(pid=) I0203 06:04:05.120346 3827936 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 8.83768798525s
+(pid=) I0203 06:04:09.542690 3827936 allocator_stats_reporter.cc:147] Stopping AllocatorStatsReporter. Reporting one last time first.
+(pid=) W0203 06:04:10.107148 3828428 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.346915 3847458 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.346915 3847458 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.346915 3847458 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.346915 3847458 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.375159 3828731 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.375159 3828731 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.375159 3828731 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.375159 3828731 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.664470 3864388 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.664470 3864388 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.664470 3864388 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.664470 3864388 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.911695 3858539 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.911800 3828737 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.911695 3858539 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.911800 3828737 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.911695 3858539 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.911800 3828737 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.911695 3858539 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:10.911800 3828737 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) I0203 06:04:10.912935 3828428 async_driver.cc:1071] [/dev/vfio/0 tpu16:pe1:1] vf_id:0 Driver closed.
+(pid=) I0203 06:04:11.032892 3847458 async_driver.cc:1071] [/dev/vfio/6 tpu16:pe4:3] vf_id:0 Driver closed.
+(pid=) W0203 06:04:11.050933 3828430 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:11.050933 3828430 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:11.050933 3828430 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) I0203 06:04:10.912935 3828428 async_driver.cc:1071] [/dev/vfio/0 tpu16:pe1:1] vf_id:0 Driver closed.
+(pid=) I0203 06:04:11.032892 3847458 async_driver.cc:1071] [/dev/vfio/6 tpu16:pe4:3] vf_id:0 Driver closed.
+(pid=) W0203 06:04:11.050933 3828430 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:11.484743 3866867 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:11.484743 3866867 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:11.484743 3866867 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:04:11.484743 3866867 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) I0203 06:04:11.485071 3828731 async_driver.cc:1071] [/dev/vfio/1 tpu16:pe1:0] vf_id:0 Driver closed.
+(pid=) I0203 06:04:11.980549 3828737 async_driver.cc:1071] [/dev/vfio/5 tpu16:pe4:0] vf_id:0 Driver closed.
+(pid=) I0203 06:04:11.980723 3864388 async_driver.cc:1071] [/dev/vfio/2 tpu16:pe1:3] vf_id:0 Driver closed.
+(pid=) I0203 06:04:12.246799 3858539 async_driver.cc:1071] [/dev/vfio/7 tpu16:pe4:2] vf_id:0 Driver closed.
+(pid=) I0203 06:04:12.327624 3828430 async_driver.cc:1071] [/dev/vfio/3 tpu16:pe1:2] vf_id:0 Driver closed.
+(pid=) I0203 06:04:12.537852 3866867 async_driver.cc:1071] [/dev/vfio/4 tpu16:pe4:1] vf_id:0 Driver closed.
+(pid=) I0203 06:04:12.540528 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540586 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540656 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540712 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540759 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540831 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540877 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540946 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:11.485071 3828731 async_driver.cc:1071] [/dev/vfio/1 tpu16:pe1:0] vf_id:0 Driver closed.
+(pid=) I0203 06:04:11.980549 3828737 async_driver.cc:1071] [/dev/vfio/5 tpu16:pe4:0] vf_id:0 Driver closed.
+(pid=) I0203 06:04:11.980723 3864388 async_driver.cc:1071] [/dev/vfio/2 tpu16:pe1:3] vf_id:0 Driver closed.
+(pid=) I0203 06:04:12.246799 3858539 async_driver.cc:1071] [/dev/vfio/7 tpu16:pe4:2] vf_id:0 Driver closed.
+(pid=) I0203 06:04:12.327624 3828430 async_driver.cc:1071] [/dev/vfio/3 tpu16:pe1:2] vf_id:0 Driver closed.
+(pid=) I0203 06:04:12.537852 3866867 async_driver.cc:1071] [/dev/vfio/4 tpu16:pe4:1] vf_id:0 Driver closed.
+(pid=) I0203 06:04:12.540528 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540586 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540656 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540712 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540759 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540831 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540877 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:04:12.540946 3827936 pending_event_logger.cc:160] Waiting for pending events to become available
+(autoscaler +2m16s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +2m51s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +3m26s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +4m1s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +4m36s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +5m11s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +5m46s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +6m22s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +6m57s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +7m32s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +8m7s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +8m42s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +9m17s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +9m52s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +10m27s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +11m2s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +11m37s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12m12s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12m47s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +13m22s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +13m57s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +14m32s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +15m7s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +15m42s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +16m17s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +16m52s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +17m27s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +18m2s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +18m37s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +19m12s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +19m47s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +20m22s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +20m57s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +21m32s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +22m7s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +22m42s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +23m17s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +23m52s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +24m27s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +25m2s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +25m37s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +26m12s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +26m47s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +27m22s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +27m57s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +28m33s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +29m8s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +29m42s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +30m18s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +30m53s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +31m28s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +32m3s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +32m38s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +33m13s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +33m48s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +34m23s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +34m58s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +35m33s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +36m8s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +36m43s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +37m18s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +37m53s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +38m28s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +39m3s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +39m38s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +40m13s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +40m48s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +41m23s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +41m58s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +42m33s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +43m8s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +43m43s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +44m18s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +44m53s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +45m28s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(pid=) Log file created at: 2026/02/03 06:47:56
+(pid=) Running on machine: t1v-n-f57f207c-w-0
+(pid=) Binary: Built on Oct 1 2025 15:38:51 (1759358331)
+(pid=) Binary: Built at rbex-enqueue-targets@oqj20.prod.google.com:/google/src/cloud/buildrabbit-username/buildrabbit-client/g3     
+(pid=) Binary: Built for gcc-4.X.Y-crosstool-v18-llvm-grtev4-k8.k8
+(pid=) Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+(pid=) I0203 06:47:56.650954 4011915 b295d63588a.cc:755] Linux version 6.5.0-1013-gcp (buildd@lcy02-amd64-064) (x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #13~22.04.1-Ubuntu SMP Wed Jan 24 23:39:40 UTC 2024
+(pid=) I0203 06:47:56.651303 4011915 b295d63588a.cc:837] Process id 4011915
+(pid=) I0203 06:47:56.651319 4011915 b295d63588a.cc:842] Current working directory /home/ruili/marin_private3
+(pid=) I0203 06:47:56.651321 4011915 b295d63588a.cc:844] Current timezone is UTC (currently UTC +00:00)
+(pid=) I0203 06:47:56.651324 4011915 b295d63588a.cc:848] Built on Oct 1 2025 15:38:51 (1759358331)
+(pid=) I0203 06:47:56.651325 4011915 b295d63588a.cc:849]  at rbex-enqueue-targets@oqj20.prod.google.com:/google/src/cloud/buildrabbit-username/buildrabbit-client/g3     
+(pid=) I0203 06:47:56.651326 4011915 b295d63588a.cc:850]  as //learning/45eac/tfrc/executor:_libtpu.so.native
+(pid=) I0203 06:47:56.651327 4011915 b295d63588a.cc:851]  for gcc-4.X.Y-crosstool-v18-llvm-grtev4-k8.k8
+(pid=) I0203 06:47:56.651329 4011915 b295d63588a.cc:854]  from changelist 813921542 with baseline 811842129 in a mint client based on __ar56t/branches/libtpu_lts_release_branch/811842129.1/g3     
+(pid=) I0203 06:47:56.651334 4011915 b295d63588a.cc:858] Build label: libtpu_lts_20250926_a_RC00
+(pid=) I0203 06:47:56.651339 4011915 b295d63588a.cc:860] Build tool: Bazel, release r4rca-2025.09.16-1 (mainline @807405679)
+(pid=) I0203 06:47:56.651340 4011915 b295d63588a.cc:861] Build target: 
+(pid=) I0203 06:47:56.651346 4011915 b295d63588a.cc:868] Command line arguments:
+(pid=) I0203 06:47:56.651347 4011915 b295d63588a.cc:870] argv[0]: './tpu_driver'
+(pid=) I0203 06:47:56.651349 4011915 b295d63588a.cc:870] argv[1]: '--minloglevel=0'
+(pid=) I0203 06:47:56.651351 4011915 b295d63588a.cc:870] argv[2]: '--stderrthreshold=3'
+(pid=) I0203 06:47:56.651352 4011915 b295d63588a.cc:870] argv[3]: '--v=0'
+(pid=) I0203 06:47:56.651353 4011915 b295d63588a.cc:870] argv[4]: '--vmodule='
+(pid=) I0203 06:47:56.651354 4011915 b295d63588a.cc:870] argv[5]: '--log_dir=/tmp/tpu_logs'
+(pid=) I0203 06:47:56.651355 4011915 b295d63588a.cc:870] argv[6]: '--max_log_size=1024'
+(pid=) I0203 06:47:56.651356 4011915 b295d63588a.cc:870] argv[7]: '--enforce_kernel_ipv6_support=0'
+(pid=) I0203 06:47:56.651357 4011915 b295d63588a.cc:870] argv[8]: '--next_pluggable_device_use_c_api=0'
+(pid=) I0203 06:47:56.651358 4011915 b295d63588a.cc:870] argv[9]: '--2a886c8_wrap=false,false,false'
+(pid=) I0203 06:47:56.651359 4011915 b295d63588a.cc:870] argv[10]: '--2a886c8_chips_per_host_bounds=2,4,1'
+(pid=) I0203 06:47:56.651361 4011915 b295d63588a.cc:870] argv[11]: '--2a886c8_host_bounds=1,1,1'
+(pid=) I0203 06:47:56.651362 4011915 b295d63588a.cc:870] argv[12]: '--2a886c8_slice_builder_worker_port=8471'
+(pid=) I0203 06:47:56.651363 4011915 b295d63588a.cc:870] argv[13]: '--2a886c8_slice_builder_worker_addresses=10.182.0.51:8471'
+(pid=) I0203 06:47:56.651364 4011915 b295d63588a.cc:870] argv[14]: '--tpu_slice_builder_dump_chip=true'
+(pid=) I0203 06:47:56.651365 4011915 b295d63588a.cc:870] argv[15]: '--tpu_slice_builder_dump_chip_force=false'
+(pid=) I0203 06:47:56.651366 4011915 b295d63588a.cc:870] argv[16]: '--tpu_slice_builder_dump_to_localhost=1'
+(pid=) I0203 06:47:56.651367 4011915 b295d63588a.cc:870] argv[17]: '--bypass_vbar_control_service=0'
+(pid=) I0203 06:47:56.651368 4011915 b295d63588a.cc:870] argv[18]: '--runtime_metric_service_port=8431'
+(pid=) I0203 06:47:56.651369 4011915 b295d63588a.cc:870] argv[19]: '--tpu_hbm_report_enable=1'
+(pid=) I0203 06:47:56.651370 4011915 b295d63588a.cc:870] argv[20]: '--tpu_hbm_report_frequency=5s'
+(pid=) I0203 06:47:56.651371 4011915 b295d63588a.cc:870] argv[21]: '--enable_runtime_uptime_telemetry=true'
+(pid=) I0203 06:47:56.651372 4011915 b295d63588a.cc:870] argv[22]: ''
+(pid=) I0203 06:47:56.651374 4011915 b295d63588a.cc:870] argv[23]: '--xla_tpu_use_enhanced_launch_barrier=true'
+(pid=) Log file created at: 2026/02/03 06:47:56
+(pid=) Running on machine: t1v-n-f57f207c-w-0
+(pid=) Binary: Built on Oct 1 2025 15:38:51 (1759358331)
+(pid=) Binary: Built at rbex-enqueue-targets@oqj20.prod.google.com:/google/src/cloud/buildrabbit-username/buildrabbit-client/g3     
+(pid=) Binary: Built for gcc-4.X.Y-crosstool-v18-llvm-grtev4-k8.k8
+(pid=) Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+(pid=) I0203 06:47:56.650954 4011915 b295d63588a.cc:755] Linux version 6.5.0-1013-gcp (buildd@lcy02-amd64-064) (x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #13~22.04.1-Ubuntu SMP Wed Jan 24 23:39:40 UTC 2024
+(pid=) I0203 06:47:56.651303 4011915 b295d63588a.cc:837] Process id 4011915
+(pid=) I0203 06:47:56.651319 4011915 b295d63588a.cc:842] Current working directory /home/ruili/marin_private3
+(pid=) I0203 06:47:56.651321 4011915 b295d63588a.cc:844] Current timezone is UTC (currently UTC +00:00)
+(pid=) I0203 06:47:56.651324 4011915 b295d63588a.cc:848] Built on Oct 1 2025 15:38:51 (1759358331)
+(pid=) I0203 06:47:56.651325 4011915 b295d63588a.cc:849]  at rbex-enqueue-targets@oqj20.prod.google.com:/google/src/cloud/buildrabbit-username/buildrabbit-client/g3     
+(pid=) I0203 06:47:56.651326 4011915 b295d63588a.cc:850]  as //learning/45eac/tfrc/executor:_libtpu.so.native
+(pid=) I0203 06:47:56.651327 4011915 b295d63588a.cc:851]  for gcc-4.X.Y-crosstool-v18-llvm-grtev4-k8.k8
+(pid=) I0203 06:47:56.651329 4011915 b295d63588a.cc:854]  from changelist 813921542 with baseline 811842129 in a mint client based on __ar56t/branches/libtpu_lts_release_branch/811842129.1/g3     
+(pid=) I0203 06:47:56.651334 4011915 b295d63588a.cc:858] Build label: libtpu_lts_20250926_a_RC00
+(pid=) I0203 06:47:56.651339 4011915 b295d63588a.cc:860] Build tool: Bazel, release r4rca-2025.09.16-1 (mainline @807405679)
+(pid=) I0203 06:47:56.651340 4011915 b295d63588a.cc:861] Build target: 
+(pid=) I0203 06:47:56.651346 4011915 b295d63588a.cc:868] Command line arguments:
+(pid=) I0203 06:47:56.651347 4011915 b295d63588a.cc:870] argv[0]: './tpu_driver'
+(pid=) I0203 06:47:56.651349 4011915 b295d63588a.cc:870] argv[1]: '--minloglevel=0'
+(pid=) I0203 06:47:56.651351 4011915 b295d63588a.cc:870] argv[2]: '--stderrthreshold=3'
+(pid=) I0203 06:47:56.651352 4011915 b295d63588a.cc:870] argv[3]: '--v=0'
+(pid=) I0203 06:47:56.651353 4011915 b295d63588a.cc:870] argv[4]: '--vmodule='
+(pid=) I0203 06:47:56.651354 4011915 b295d63588a.cc:870] argv[5]: '--log_dir=/tmp/tpu_logs'
+(pid=) I0203 06:47:56.651355 4011915 b295d63588a.cc:870] argv[6]: '--max_log_size=1024'
+(pid=) I0203 06:47:56.651356 4011915 b295d63588a.cc:870] argv[7]: '--enforce_kernel_ipv6_support=0'
+(pid=) I0203 06:47:56.651357 4011915 b295d63588a.cc:870] argv[8]: '--next_pluggable_device_use_c_api=0'
+(pid=) I0203 06:47:56.651358 4011915 b295d63588a.cc:870] argv[9]: '--2a886c8_wrap=false,false,false'
+(pid=) I0203 06:47:56.651359 4011915 b295d63588a.cc:870] argv[10]: '--2a886c8_chips_per_host_bounds=2,4,1'
+(pid=) I0203 06:47:56.651361 4011915 b295d63588a.cc:870] argv[11]: '--2a886c8_host_bounds=1,1,1'
+(pid=) I0203 06:47:56.651362 4011915 b295d63588a.cc:870] argv[12]: '--2a886c8_slice_builder_worker_port=8471'
+(pid=) I0203 06:47:56.651363 4011915 b295d63588a.cc:870] argv[13]: '--2a886c8_slice_builder_worker_addresses=10.182.0.51:8471'
+(pid=) I0203 06:47:56.651364 4011915 b295d63588a.cc:870] argv[14]: '--tpu_slice_builder_dump_chip=true'
+(pid=) I0203 06:47:56.651365 4011915 b295d63588a.cc:870] argv[15]: '--tpu_slice_builder_dump_chip_force=false'
+(pid=) I0203 06:47:56.651366 4011915 b295d63588a.cc:870] argv[16]: '--tpu_slice_builder_dump_to_localhost=1'
+(pid=) I0203 06:47:56.651367 4011915 b295d63588a.cc:870] argv[17]: '--bypass_vbar_control_service=0'
+(pid=) I0203 06:47:56.651368 4011915 b295d63588a.cc:870] argv[18]: '--runtime_metric_service_port=8431'
+(pid=) I0203 06:47:56.651369 4011915 b295d63588a.cc:870] argv[19]: '--tpu_hbm_report_enable=1'
+(pid=) I0203 06:47:56.651370 4011915 b295d63588a.cc:870] argv[20]: '--tpu_hbm_report_frequency=5s'
+(pid=) I0203 06:47:56.651371 4011915 b295d63588a.cc:870] argv[21]: '--enable_runtime_uptime_telemetry=true'
+(pid=) I0203 06:47:56.651372 4011915 b295d63588a.cc:870] argv[22]: ''
+(pid=) I0203 06:47:56.651374 4011915 b295d63588a.cc:870] argv[23]: '--xla_tpu_use_enhanced_launch_barrier=true'
+(pid=) I0203 06:47:56.651676 4011915 init.cc:78] Remote crash gathering hook installed.
+(pid=) I0203 06:47:56.651734 4011915 tpu_runtime_type_flags.cc:79] --tpu_use_tfrt not specified. Using default value: true
+(pid=) I0203 06:47:56.723849 4011915 tpu_hal.cc:436] Registered plugin from module: breakpoint_debugger_server
+(pid=) I0203 06:47:56.724137 4011915 log_message_host_command_handler.cc:70] Registering LogMessageHostCommandHandler
+(pid=) I0203 06:47:56.724147 4011915 host_command_handler_factory.cc:31] Skipping registration of host command handler for opcode Log because it is not in the allowlist.
+(pid=) I0203 06:47:56.724166 4011915 tpu_hal.cc:436] Registered plugin from module: megascale_sync_flag_logger
+(pid=) I0203 06:47:56.726397 4011915 tpu_hal.cc:436] Registered plugin from module: RuntimeMetricHelper
+(pid=) I0203 06:47:56.726485 4011915 tf_tpu_flags.cc:63] 2a886c8Platform is NOT registered.
+(pid=) I0203 06:47:56.726716 4011915 logger.cc:310] Enabling threaded logging for severity WARNING
+(pid=) I0203 06:47:56.726737 4011915 tpu_hal.cc:436] Registered plugin from module: sdc_checker_callback
+(pid=) I0203 06:47:56.726825 4011915 tpu_hal.cc:436] Registered plugin from module: xsc_explicit_checksum_tracing_callback
+(pid=) I0203 06:47:56.726928 4011915 mlock.cc:219] mlock()-ed 4096 bytes for BuildID, using 1 syscalls.
+(pid=) I0203 06:47:56.912145 4011915 config.cc:256] gRPC experiments enabled: error_flatten, event_engine_callback_cq, event_engine_channelz_socket_info, event_engine_client, event_engine_dns, event_engine_dns_non_client_channel, event_engine_listener, google_no_envelope_resolver, max_age_filter_float_to_top, monitoring_experiment, p2p_fallback_trafficdirector, tsi_frame_protector_without_locks
+(pid=) I0203 06:47:56.919265 4011915 init-domain.cc:126] Fiber init: default domain = futex, concurrency = 246, prefix = futex-default
+(pid=) I0203 06:47:56.919438 4011915 stackdriver_metric_reporter.cc:69] Starting StackdriverMetricReporter fiber loop with options stackdriver_project_name_or_number = "", prepare_client_context = 32-byte object <60-89 AE-11 00-00 00-00 A0-88 AE-11 00-00 00-00 A0-6A 2B-55 89-7F 00-00 E8-E5 DF-56 89-7F 00-00>, reporting_interval = 1m, use_borg_stub = false, project_resource_labels = ["project_id"], create_time_series = 0, clock = 0x178a2ba0
+(pid=) I0203 06:47:56.927031 4012365 cachednslookup.cc:391] TTL not found in response, not caching response
+(pid=) I0203 06:47:56.935069 4011915 debug_manager.cc:229] Registering error handler with name: libtpu_telemetry_handler
+(pid=) I0203 06:47:56.950247 4011915 singleton_tpu_states_manager.cc:73] TPU premapped buffer enabled. Size: 4294967296 Threshold: 4294967296
+(pid=) I0203 06:47:56.950254 4011915 singleton_tpu_states_manager.cc:96] TpuStatesManager::GetOrCreate(): no tpu system exists. Creating a new tpu system.
+(pid=) I0203 06:47:56.953890 4011915 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.953897 4011915 tpu_version_flag.cc:54] Using auto-detected TPU version TPU v5 lite
+(pid=) I0203 06:47:56.957046 4011915 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.960270 4011915 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.963429 4011915 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.963648 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963652 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963671 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963680 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963682 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963684 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963687 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963695 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.968692 4012645 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.968715 4012645 flags_util.cc:318] Using 8471 from --2a886c8_slic
+(pid=) I0203 06:47:56.651676 4011915 init.cc:78] Remote crash gathering hook installed.
+(pid=) I0203 06:47:56.651734 4011915 tpu_runtime_type_flags.cc:79] --tpu_use_tfrt not specified. Using default value: true
+(pid=) I0203 06:47:56.723849 4011915 tpu_hal.cc:436] Registered plugin from module: breakpoint_debugger_server
+(pid=) I0203 06:47:56.724137 4011915 log_message_host_command_handler.cc:70] Registering LogMessageHostCommandHandler
+(pid=) I0203 06:47:56.724147 4011915 host_command_handler_factory.cc:31] Skipping registration of host command handler for opcode Log because it is not in the allowlist.
+(pid=) I0203 06:47:56.724166 4011915 tpu_hal.cc:436] Registered plugin from module: megascale_sync_flag_logger
+(pid=) I0203 06:47:56.726397 4011915 tpu_hal.cc:436] Registered plugin from module: RuntimeMetricHelper
+(pid=) I0203 06:47:56.726485 4011915 tf_tpu_flags.cc:63] 2a886c8Platform is NOT registered.
+(pid=) I0203 06:47:56.726716 4011915 logger.cc:310] Enabling threaded logging for severity WARNING
+(pid=) I0203 06:47:56.726737 4011915 tpu_hal.cc:436] Registered plugin from module: sdc_checker_callback
+(pid=) I0203 06:47:56.726825 4011915 tpu_hal.cc:436] Registered plugin from module: xsc_explicit_checksum_tracing_callback
+(pid=) I0203 06:47:56.726928 4011915 mlock.cc:219] mlock()-ed 4096 bytes for BuildID, using 1 syscalls.
+(pid=) I0203 06:47:56.912145 4011915 config.cc:256] gRPC experiments enabled: error_flatten, event_engine_callback_cq, event_engine_channelz_socket_info, event_engine_client, event_engine_dns, event_engine_dns_non_client_channel, event_engine_listener, google_no_envelope_resolver, max_age_filter_float_to_top, monitoring_experiment, p2p_fallback_trafficdirector, tsi_frame_protector_without_locks
+(pid=) I0203 06:47:56.919265 4011915 init-domain.cc:126] Fiber init: default domain = futex, concurrency = 246, prefix = futex-default
+(pid=) I0203 06:47:56.919438 4011915 stackdriver_metric_reporter.cc:69] Starting StackdriverMetricReporter fiber loop with options stackdriver_project_name_or_number = "", prepare_client_context = 32-byte object <60-89 AE-11 00-00 00-00 A0-88 AE-11 00-00 00-00 A0-6A 2B-55 89-7F 00-00 E8-E5 DF-56 89-7F 00-00>, reporting_interval = 1m, use_borg_stub = false, project_resource_labels = ["project_id"], create_time_series = 0, clock = 0x178a2ba0
+(pid=) I0203 06:47:56.927031 4012365 cachednslookup.cc:391] TTL not found in response, not caching response
+(pid=) I0203 06:47:56.935069 4011915 debug_manager.cc:229] Registering error handler with name: libtpu_telemetry_handler
+(pid=) I0203 06:47:56.950247 4011915 singleton_tpu_states_manager.cc:73] TPU premapped buffer enabled. Size: 4294967296 Threshold: 4294967296
+(pid=) I0203 06:47:56.950254 4011915 singleton_tpu_states_manager.cc:96] TpuStatesManager::GetOrCreate(): no tpu system exists. Creating a new tpu system.
+(pid=) I0203 06:47:56.953890 4011915 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.953897 4011915 tpu_version_flag.cc:54] Using auto-detected TPU version TPU v5 lite
+(pid=) I0203 06:47:56.957046 4011915 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.960270 4011915 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.963429 4011915 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.963648 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963652 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963671 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963680 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963682 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963684 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963687 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.963695 4011915 pending_event_logger.cc:928] Enabling PjRt/TPU event dependency logging
+(pid=) I0203 06:47:56.968692 4012645 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.968715 4012645 flags_util.cc:318] Using 8471 from --2a886c8_slic
+(pid=) Log file created at: 2026/02/03 06:47:59
+(pid=) Running on machine: t1v-n-f57f207c-w-0
+(pid=) Binary: Built on Oct 1 2025 15:38:51 (1759358331)
+(pid=) Binary: Built at rbex-enqueue-targets@oqj20.prod.google.com:/google/src/cloud/buildrabbit-username/buildrabbit-client/g3     
+(pid=) Binary: Built for gcc-4.X.Y-crosstool-v18-llvm-grtev4-k8.k8
+(pid=) Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+(pid=) W0203 06:47:59.695798 4013535 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695823 4013535 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695834 4013533 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695854 4013533 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695845 4013532 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695864 4013532 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695861 4013534 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695874 4013534 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695940 4013538 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695954 4013538 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695951 4013537 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695975 4013537 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695992 4013536 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.696011 4013536 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) e_builder_worker_port as SliceBuilder worker service port.
+(pid=) I0203 06:47:56.971911 4012645 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.971919 4012645 tpu_network_factory.cc:67] tpunetd either not supported or disabled, falling back to Slice Builder
+(pid=) I0203 06:47:58.350857 4012648 async_driver.cc:454] [/dev/vfio/0 tpu16:pe1:1] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.402845 4012651 async_driver.cc:454] [/dev/vfio/3 tpu16:pe1:2] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.421726 4012649 async_driver.cc:454] [/dev/vfio/1 tpu16:pe1:0] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.439990 4012650 async_driver.cc:454] [/dev/vfio/2 tpu16:pe1:3] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.458478 4012654 async_driver.cc:454] [/dev/vfio/6 tpu16:pe4:3] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.458540 4012653 async_driver.cc:454] [/dev/vfio/5 tpu16:pe4:0] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.476686 4012652 async_driver.cc:454] [/dev/vfio/4 tpu16:pe4:1] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.494947 4012655 async_driver.cc:454] [/dev/vfio/7 tpu16:pe4:2] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.602458 4012648 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.618576 4012651 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.626997 4012650 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.627278 4012653 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.631900 4012654 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.636255 4012655 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.636477 4012649 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.637093 4012652 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.637127 4012645 slice_builder_helper.cc:99] Current host is used as SliceBuilder master.
+(pid=) I0203 06:47:58.644168 4012645 legacy_topology_discoverer.cc:55] Target Topology: (2, 4)
+(pid=) I0203 06:47:59.693488 4012645 master.cc:217] Successfully initialized SliceBuilder master session 667ebd97840c4300 with expected topology (2, 4)
+(pid=) I0203 06:47:59.694983 4012645 tpu_hal.cc:203] Starting premapped memory manager initialization...
+(pid=) I0203 06:47:59.695036 4012645 tpu_hal.cc:218] Premapped memory manager initialization took 44.911us (0.044911ms)
+(pid=) W0203 06:47:59.695798 4013535 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695823 4013535 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695834 4013533 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695854 4013533 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695845 4013532 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695864 4013532 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695861 4013534 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695874 4013534 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695940 4013538 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695954 4013538 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695951 4013537 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695975 4013537 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695992 4013536 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.696011 4013536 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) e_builder_worker_port as SliceBuilder worker service port.
+(pid=) I0203 06:47:56.971911 4012645 device_util.cc:149] Found 8 TPU v5 lite chips.
+(pid=) I0203 06:47:56.971919 4012645 tpu_network_factory.cc:67] tpunetd either not supported or disabled, falling back to Slice Builder
+(pid=) I0203 06:47:58.350857 4012648 async_driver.cc:454] [/dev/vfio/0 tpu16:pe1:1] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.402845 4012651 async_driver.cc:454] [/dev/vfio/3 tpu16:pe1:2] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.421726 4012649 async_driver.cc:454] [/dev/vfio/1 tpu16:pe1:0] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.439990 4012650 async_driver.cc:454] [/dev/vfio/2 tpu16:pe1:3] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.458478 4012654 async_driver.cc:454] [/dev/vfio/6 tpu16:pe4:3] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.458540 4012653 async_driver.cc:454] [/dev/vfio/5 tpu16:pe4:0] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.476686 4012652 async_driver.cc:454] [/dev/vfio/4 tpu16:pe4:1] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.494947 4012655 async_driver.cc:454] [/dev/vfio/7 tpu16:pe4:2] vf_id:0 Driver opened.
+(pid=) I0203 06:47:58.602458 4012648 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.618576 4012651 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.626997 4012650 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.627278 4012653 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.631900 4012654 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.636255 4012655 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.636477 4012649 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.637093 4012652 async_driver.cc:1730] All cores supported.
+(pid=) I0203 06:47:58.637127 4012645 slice_builder_helper.cc:99] Current host is used as SliceBuilder master.
+(pid=) I0203 06:47:58.644168 4012645 legacy_topology_discoverer.cc:55] Target Topology: (2, 4)
+(pid=) I0203 06:47:59.693488 4012645 master.cc:217] Successfully initialized SliceBuilder master session 667ebd97840c4300 with expected topology (2, 4)
+(pid=) I0203 06:47:59.694983 4012645 tpu_hal.cc:203] Starting premapped memory manager initialization...
+(pid=) I0203 06:47:59.695036 4012645 tpu_hal.cc:218] Premapped memory manager initialization took 44.911us (0.044911ms)
+(pid=) W0203 06:47:59.695798 4013535 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695823 4013535 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695834 4013533 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695854 4013533 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695845 4013532 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695864 4013532 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695861 4013534 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695874 4013534 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695940 4013538 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695954 4013538 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695951 4013537 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695975 4013537 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695992 4013536 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.696011 4013536 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) Log file created at: 2026/02/03 06:47:59
+(pid=) Running on machine: t1v-n-f57f207c-w-0
+(pid=) Binary: Built on Oct 1 2025 15:38:51 (1759358331)
+(pid=) Binary: Built at rbex-enqueue-targets@oqj20.prod.google.com:/google/src/cloud/buildrabbit-username/buildrabbit-client/g3     
+(pid=) Binary: Built for gcc-4.X.Y-crosstool-v18-llvm-grtev4-k8.k8
+(pid=) Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+(pid=) W0203 06:47:59.695798 4013535 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695823 4013535 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695834 4013533 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695854 4013533 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695845 4013532 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695864 4013532 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695861 4013534 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695874 4013534 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695940 4013538 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695954 4013538 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695951 4013537 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.695975 4013537 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(pid=) W0203 06:47:59.695992 4013536 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.execution.timing.distribution.microseconds
+(pid=) W0203 06:47:59.696011 4013536 libtpu_telemetry_utils.cc:44] Metric already exists: hlo.queue.size.gauge
+(autoscaler +46m3s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +46m38s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +47m13s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +47m48s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +48m23s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +48m58s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(pid=) W0203 06:51:34.567381 4011915 autofdo_agent.cc:201] xla_tpu_autofdo_use_remote_repo is overridden to false because xla_tpu_autofdo_profile_dir is not set.
+(pid=) I0203 06:48:04.160157 4012645 runtime_metric_service.cc:178] Successfully started Runtime Metric Service on port: 8431
+(pid=) I0203 06:48:04.160303 4012645 system.cc:1092] tpu::System initialized, current host id: 0, logical device ids: 0,1,2,3,4,5,6,7
+(pid=) I0203 06:48:04.160363 4011915 tpu_system_state.cc:217] CreateTpuSystemState: TPU initialization is successful and it took 7.195428715s
+(pid=) I0203 06:48:04.160380 4011915 tpu_system_state.cc:221] CreateTpuSystemState: using TPU host premapped buffer of size: 4294967296
+(pid=) I0203 06:48:04.160387 4011915 tpu_host_allocator.cc:64] Premapped buffer is using alignment 512
+(pid=) I0203 06:48:04.160963 4011915 tpu_linearizer.cc:80] Inflight linearization byte limit configured to : 1099511627776
+(pid=) I0203 06:48:04.160967 4011915 tpu_linearizer.cc:93] Inflight delinearization byte limit configured to : 1099511627776
+(pid=) I0203 06:48:04.161414 4011915 allocator_stats_reporter.cc:117] Starting AllocatorStats Reporter with reporting interval: 5s
+(pid=) I0203 06:51:34.567341 4011915 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 12,573 instructions, modules: jit__run_prefill
+(pid=) I0203 06:51:34.567377 4011915 autofdo_agent.cc:198] xla_tpu_autofdo_profile_dir updated to 
+(pid=) W0203 06:51:34.567381 4011915 autofdo_agent.cc:201] xla_tpu_autofdo_use_remote_repo is overridden to false because xla_tpu_autofdo_profile_dir is not set.
+(pid=) I0203 06:48:04.160157 4012645 runtime_metric_service.cc:178] Successfully started Runtime Metric Service on port: 8431
+(pid=) I0203 06:48:04.160303 4012645 system.cc:1092] tpu::System initialized, current host id: 0, logical device ids: 0,1,2,3,4,5,6,7
+(pid=) I0203 06:48:04.160363 4011915 tpu_system_state.cc:217] CreateTpuSystemState: TPU initialization is successful and it took 7.195428715s
+(pid=) I0203 06:48:04.160380 4011915 tpu_system_state.cc:221] CreateTpuSystemState: using TPU host premapped buffer of size: 4294967296
+(pid=) I0203 06:48:04.160387 4011915 tpu_host_allocator.cc:64] Premapped buffer is using alignment 512
+(pid=) I0203 06:48:04.160963 4011915 tpu_linearizer.cc:80] Inflight linearization byte limit configured to : 1099511627776
+(pid=) I0203 06:48:04.160967 4011915 tpu_linearizer.cc:93] Inflight delinearization byte limit configured to : 1099511627776
+(pid=) I0203 06:48:04.161414 4011915 allocator_stats_reporter.cc:117] Starting AllocatorStats Reporter with reporting interval: 5s
+(pid=) I0203 06:51:34.567341 4011915 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 12,573 instructions, modules: jit__run_prefill
+(pid=) I0203 06:51:34.567377 4011915 autofdo_agent.cc:198] xla_tpu_autofdo_profile_dir updated to 
+(pid=) W0203 06:51:34.567381 4011915 autofdo_agent.cc:201] xla_tpu_autofdo_use_remote_repo is overridden to false because xla_tpu_autofdo_profile_dir is not set.
+(pid=) W0203 06:51:34.567381 4011915 autofdo_agent.cc:201] xla_tpu_autofdo_use_remote_repo is overridden to false because xla_tpu_autofdo_profile_dir is not set.
+(autoscaler +49m33s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(pid=) W0203 06:51:35.908382 4012646 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) I0203 06:51:34.567384 4011915 2a886c8_compiler_base.cc:7488] Initial HLO module: jit__run_prefill instructions: 12,573 fingerprint: 
+(pid=) I0203 06:51:34.699696 4011915 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit__run_prefill instructions: 17,272
+(pid=) I0203 06:51:34.699717 4011915 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
+(pid=) W0203 06:51:35.908382 4012646 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) I0203 06:51:34.567384 4011915 2a886c8_compiler_base.cc:7488] Initial HLO module: jit__run_prefill instructions: 12,573 fingerprint: 
+(pid=) I0203 06:51:34.699696 4011915 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit__run_prefill instructions: 17,272
+(pid=) I0203 06:51:34.699717 4011915 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
+(pid=) W0203 06:51:35.908382 4012646 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0203 06:51:35.908382 4012646 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) I0203 06:51:36.016876 4012646 shardy_xla_pass.cc:316] Using Shardy for XLA SPMD propagation.
+(pid=) I0203 06:51:37.944695 4012646 tpu_layout_assignment.cc:3530] Ran 5 additional passes of layout assignment to assign all layouts.
+(pid=) I0203 06:51:39.218008 4011915 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
+(pid=) I0203 06:51:39.756858 4011915 latency_hiding_scheduler.cc:3633] [latency-hiding-scheduler] LatencyHidingScheduler current memory usage: 441370112 bytes. Current limit: 12447059456
+(pid=) I0203 06:51:40.124095 4011915 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 5.55916712s
+(pid=) I0203 06:51:40.229775 4030069 memory_space_assignment_util.cc:730] MSA Vmem breakdown: default scoped vmem (from flag): 16777216; does_msa_directly_allocate_scoped_vmem: F; bytes_for_msa_to_allocate: 117440512
+(pid=) I0203 06:51:46.862259 4012646 2a886c8_compiler_base.cc:10953] BACKEND_PASSES stage duration: 6.6348698535s
+(pid=) I0203 06:51:51.214119 4012646 2a886c8_compiler_base.cc:3026] final program bundle count: 2,176,013 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:51:51.362634 4012646 2a886c8_compiler_base.cc:3026] final program bundle count: 107 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:51:53.643061 4012646 2a886c8_compiler_base.cc:3444] Program divided into 120 overlays without HLO functions (132.94M).
+(pid=) I0203 06:51:53.650521 4012646 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__run_prefill
+(pid=) I0203 06:51:53.650526 4012646 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 485.28M / 15.75G
+(pid=) I0203 06:51:53.650529 4012646 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 121.46M / 128.00M
+(pid=) I0203 06:51:53.650548 4012646 2a886c8_compiler_base.cc:3683] Total hbm usage >= 3.90G:
+(pid=) I0203 06:51:53.650549 4012646 2a886c8_compiler_base.cc:3683]     reserved        258.00M 
+(pid=) I0203 06:51:53.650550 4012646 2a886c8_compiler_base.cc:3683]     program         485.28M 
+(pid=) I0203 06:51:53.650550 4012646 2a886c8_compiler_base.cc:3683]     arguments         3.17G 
+(pid=) I0203 06:51:53.650551 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:51:53.650552 4012646 2a886c8_compiler_base.cc:3683] Output size 72.03M; shares 30.5K with arguments.
+(pid=) I0203 06:51:53.650552 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:51:53.650553 4012646 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
+(pid=) I0203 06:51:53.650554 4012646 2a886c8_compiler_base.cc:3683]     reserved             0B 
+(pid=) I0203 06:51:53.650554 4012646 2a886c8_compiler_base.cc:3683]     program         unknown size 
+(pid=) I0203 06:51:53.650555 4012646 2a886c8_compiler_base.cc:3683]     arguments            0B 
+(pid=) I0203 06:51:53.650556 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:51:53.650556 4012646 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
+(pid=) I0203 06:51:53.650557 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:51:53.650579 4012646 2a886c8_compiler_base.cc:3687] Program sflag requirement 304B:
+(pid=) I0203 06:51:53.650580 4012646 2a886c8_compiler_base.cc:3687]     reserved           204B
+(pid=) I0203 06:51:53.650581 4012646 2a886c8_compiler_base.cc:3687]     scoped              40B
+(pid=) I0203 06:51:53.650582 4012646 2a886c8_compiler_base.cc:3687]     HLO temp            60B (100.0% utilization: Unpadded (60B) Padded (60B), 0.0% fragmentation (0B))
+(pid=) I0203 06:51:53.650582 4012646 2a886c8_compiler_base.cc:3687] Program hbm requirement 485.28M:
+(pid=) I0203 06:51:53.650583 4012646 2a886c8_compiler_base.cc:3687]     global           337.0K
+(pid=) I0203 06:51:53.650584 4012646 2a886c8_compiler_base.cc:3687]     scoped           759.5K
+(pid=) I0203 06:51:53.650584 4012646 2a886c8_compiler_base.cc:3687]     HLO temp        351.27M (100.0% utilization: Unpadded (343.37M) Padded (343.37M), 2.2% fragmentation (7.89M))
+(pid=) I0203 06:51:53.650585 4012646 2a886c8_compiler_base.cc:3687]     overlays        132.94M
+(pid=) I0203 06:51:53.650586 4012646 2a886c8_compiler_base.cc:3687] Program vmem requirement 121.46M:
+(pid=) I0203 06:51:53.650586 4012646 2a886c8_compiler_base.cc:3687]     scoped           10.00M
+(pid=) I0203 06:51:53.650587 4012646 2a886c8_compiler_base.cc:3687]     HLO temp        11
+(pid=) I0203 06:51:36.016876 4012646 shardy_xla_pass.cc:316] Using Shardy for XLA SPMD propagation.
+(pid=) I0203 06:51:37.944695 4012646 tpu_layout_assignment.cc:3530] Ran 5 additional passes of layout assignment to assign all layouts.
+(pid=) I0203 06:51:39.218008 4011915 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
+(pid=) I0203 06:51:39.756858 4011915 latency_hiding_scheduler.cc:3633] [latency-hiding-scheduler] LatencyHidingScheduler current memory usage: 441370112 bytes. Current limit: 12447059456
+(pid=) I0203 06:51:40.124095 4011915 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 5.55916712s
+(pid=) I0203 06:51:40.229775 4030069 memory_space_assignment_util.cc:730] MSA Vmem breakdown: default scoped vmem (from flag): 16777216; does_msa_directly_allocate_scoped_vmem: F; bytes_for_msa_to_allocate: 117440512
+(pid=) I0203 06:51:46.862259 4012646 2a886c8_compiler_base.cc:10953] BACKEND_PASSES stage duration: 6.6348698535s
+(pid=) I0203 06:51:51.214119 4012646 2a886c8_compiler_base.cc:3026] final program bundle count: 2,176,013 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:51:51.362634 4012646 2a886c8_compiler_base.cc:3026] final program bundle count: 107 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:51:53.643061 4012646 2a886c8_compiler_base.cc:3444] Program divided into 120 overlays without HLO functions (132.94M).
+(pid=) I0203 06:51:53.650521 4012646 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__run_prefill
+(pid=) I0203 06:51:53.650526 4012646 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 485.28M / 15.75G
+(pid=) I0203 06:51:53.650529 4012646 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 121.46M / 128.00M
+(pid=) I0203 06:51:53.650548 4012646 2a886c8_compiler_base.cc:3683] Total hbm usage >= 3.90G:
+(pid=) I0203 06:51:53.650549 4012646 2a886c8_compiler_base.cc:3683]     reserved        258.00M 
+(pid=) I0203 06:51:53.650550 4012646 2a886c8_compiler_base.cc:3683]     program         485.28M 
+(pid=) I0203 06:51:53.650550 4012646 2a886c8_compiler_base.cc:3683]     arguments         3.17G 
+(pid=) I0203 06:51:53.650551 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:51:53.650552 4012646 2a886c8_compiler_base.cc:3683] Output size 72.03M; shares 30.5K with arguments.
+(pid=) I0203 06:51:53.650552 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:51:53.650553 4012646 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
+(pid=) I0203 06:51:53.650554 4012646 2a886c8_compiler_base.cc:3683]     reserved             0B 
+(pid=) I0203 06:51:53.650554 4012646 2a886c8_compiler_base.cc:3683]     program         unknown size 
+(pid=) I0203 06:51:53.650555 4012646 2a886c8_compiler_base.cc:3683]     arguments            0B 
+(pid=) I0203 06:51:53.650556 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:51:53.650556 4012646 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
+(pid=) I0203 06:51:53.650557 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:51:53.650579 4012646 2a886c8_compiler_base.cc:3687] Program sflag requirement 304B:
+(pid=) I0203 06:51:53.650580 4012646 2a886c8_compiler_base.cc:3687]     reserved           204B
+(pid=) I0203 06:51:53.650581 4012646 2a886c8_compiler_base.cc:3687]     scoped              40B
+(pid=) I0203 06:51:53.650582 4012646 2a886c8_compiler_base.cc:3687]     HLO temp            60B (100.0% utilization: Unpadded (60B) Padded (60B), 0.0% fragmentation (0B))
+(pid=) I0203 06:51:53.650582 4012646 2a886c8_compiler_base.cc:3687] Program hbm requirement 485.28M:
+(pid=) I0203 06:51:53.650583 4012646 2a886c8_compiler_base.cc:3687]     global           337.0K
+(pid=) I0203 06:51:53.650584 4012646 2a886c8_compiler_base.cc:3687]     scoped           759.5K
+(pid=) I0203 06:51:53.650584 4012646 2a886c8_compiler_base.cc:3687]     HLO temp        351.27M (100.0% utilization: Unpadded (343.37M) Padded (343.37M), 2.2% fragmentation (7.89M))
+(pid=) I0203 06:51:53.650585 4012646 2a886c8_compiler_base.cc:3687]     overlays        132.94M
+(pid=) I0203 06:51:53.650586 4012646 2a886c8_compiler_base.cc:3687] Program vmem requirement 121.46M:
+(pid=) I0203 06:51:53.650586 4012646 2a886c8_compiler_base.cc:3687]     scoped           10.00M
+(pid=) I0203 06:51:53.650587 4012646 2a886c8_compiler_base.cc:3687]     HLO temp        11
+(pid=) W0203 06:52:03.691359 4012646 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) 1.46M (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (111.46M))
+(pid=) I0203 06:51:53.650588 4012646 2a886c8_compiler_base.cc:3687] Program smem requirement 8.4K:
+(pid=) I0203 06:51:53.650588 4012646 2a886c8_compiler_base.cc:3687]     scoped             4.4K
+(pid=) I0203 06:51:53.650589 4012646 2a886c8_compiler_base.cc:3687]     HLO temp           4.0K (100.0% utilization: Unpadded (8B) Padded (8B), 99.8% fragmentation (4.0K))
+(pid=) I0203 06:51:53.650590 4012646 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
+(pid=) I0203 06:51:53.650591 4012646 2a886c8_compiler_base.cc:3695] XLA::TPU program SMEM usage: 10.7K / 1.00M (104 parameters)
+(pid=) I0203 06:51:53.650678 4012646 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 6.788289658s
+(pid=) I0203 06:51:53.738914 4012646 isa_program_util_common.cc:520] (HLO module jit__run_prefill): Executable fingerprint:1ecb01d64cdeabfaf9e9005da948a304f8bbdacc6de5bd8018efc19605775ffd
+(pid=) I0203 06:51:53.738931 4012646 isa_program_util_common.cc:524] (HLO module jit__run_prefill): Executable fingerprint (including data segments):01acf0e8807049e5b52c653d2528075ec2b55c1bc3a62ab0350aceb4d45cca65
+(pid=) I0203 06:51:53.738932 4012646 isa_program_util_common.cc:527] (HLO module jit__run_prefill): Host transfer fingerprint:98f66e81560722518628400f4c4c4d610f064c6c7e9e7dadf1c9c0f4e7030ec7
+(pid=) I0203 06:51:53.739154 4011915 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 19.2030107495s
+(pid=) I0203 06:52:02.916902 4011915 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 8,439 instructions, modules: jit__run_generation_loop
+(pid=) I0203 06:52:02.916934 4011915 2a886c8_compiler_base.cc:7488] Initial HLO module: jit__run_generation_loop instructions: 8,439 fingerprint: 
+(pid=) I0203 06:52:02.993853 4011915 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit__run_generation_loop instructions: 7,787
+(pid=) I0203 06:52:02.993870 4011915 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
+(pid=) W0203 06:52:03.691359 4012646 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) 1.46M (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (111.46M))
+(pid=) I0203 06:51:53.650588 4012646 2a886c8_compiler_base.cc:3687] Program smem requirement 8.4K:
+(pid=) I0203 06:51:53.650588 4012646 2a886c8_compiler_base.cc:3687]     scoped             4.4K
+(pid=) I0203 06:51:53.650589 4012646 2a886c8_compiler_base.cc:3687]     HLO temp           4.0K (100.0% utilization: Unpadded (8B) Padded (8B), 99.8% fragmentation (4.0K))
+(pid=) I0203 06:51:53.650590 4012646 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
+(pid=) I0203 06:51:53.650591 4012646 2a886c8_compiler_base.cc:3695] XLA::TPU program SMEM usage: 10.7K / 1.00M (104 parameters)
+(pid=) I0203 06:51:53.650678 4012646 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 6.788289658s
+(pid=) I0203 06:51:53.738914 4012646 isa_program_util_common.cc:520] (HLO module jit__run_prefill): Executable fingerprint:1ecb01d64cdeabfaf9e9005da948a304f8bbdacc6de5bd8018efc19605775ffd
+(pid=) I0203 06:51:53.738931 4012646 isa_program_util_common.cc:524] (HLO module jit__run_prefill): Executable fingerprint (including data segments):01acf0e8807049e5b52c653d2528075ec2b55c1bc3a62ab0350aceb4d45cca65
+(pid=) I0203 06:51:53.738932 4012646 isa_program_util_common.cc:527] (HLO module jit__run_prefill): Host transfer fingerprint:98f66e81560722518628400f4c4c4d610f064c6c7e9e7dadf1c9c0f4e7030ec7
+(pid=) I0203 06:51:53.739154 4011915 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 19.2030107495s
+(pid=) I0203 06:52:02.916902 4011915 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 8,439 instructions, modules: jit__run_generation_loop
+(pid=) I0203 06:52:02.916934 4011915 2a886c8_compiler_base.cc:7488] Initial HLO module: jit__run_generation_loop instructions: 8,439 fingerprint: 
+(pid=) I0203 06:52:02.993853 4011915 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit__run_generation_loop instructions: 7,787
+(pid=) I0203 06:52:02.993870 4011915 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
+(pid=) W0203 06:52:03.691359 4012646 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0203 06:52:03.691359 4012646 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(autoscaler +50m8s) Error: No available node types can fulfill resource request {'TPU-v4-8-head': 1.0, 'CPU': 1.0}. Add suitable node types to this cluster to resolve this issue.
+(pid=) I0203 06:52:03.799646 4012646 shardy_xla_pass.cc:316] Using Shardy for XLA SPMD propagation.
+(pid=) I0203 06:52:05.701541 4011915 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
+(pid=) I0203 06:52:06.282317 4011915 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 3.36742314675s
+(pid=) I0203 06:52:06.321197 4031203 memory_space_assignment_util.cc:730] MSA Vmem breakdown: default scoped vmem (from flag): 16777216; does_msa_directly_allocate_scoped_vmem: F; bytes_for_msa_to_allocate: 117440512
+(pid=) I0203 06:52:08.800985 4012646 2a886c8_compiler_base.cc:10953] BACKEND_PASSES stage duration: 2.48059262475s
+(pid=) I0203 06:52:10.612586 4012646 2a886c8_compiler_base.cc:3026] final program bundle count: 726,914 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:52:10.670133 4012646 2a886c8_compiler_base.cc:3026] final program bundle count: 107 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:52:11.479624 4012646 2a886c8_compiler_base.cc:3444] Program divided into 42 overlays without HLO functions (44.43M).
+(pid=) I0203 06:52:11.484135 4012646 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__run_generation_loop
+(pid=) I0203 06:52:11.484139 4012646 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 96.71M / 15.75G
+(pid=) I0203 06:52:11.484142 4012646 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 104.80M / 128.00M
+(pid=) I0203 06:52:11.484155 4012646 2a886c8_compiler_base.cc:3683] Total hbm usage >= 2.91G:
+(pid=) I0203 06:52:11.484156 4012646 2a886c8_compiler_base.cc:3683]     reserved        258.00M 
+(pid=) I0203 06:52:11.484157 4012646 2a886c8_compiler_base.cc:3683]     program          96.71M 
+(pid=) I0203 06:52:11.484157 4012646 2a886c8_compiler_base.cc:3683]     arguments         2.56G 
+(pid=) I0203 06:52:11.484158 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:52:11.484159 4012646 2a886c8_compiler_base.cc:3683] Output size 72.03M; shares 72.03M with arguments.
+(pid=) I0203 06:52:11.484159 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:52:11.484160 4012646 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
+(pid=) I0203 06:52:11.484161 4012646 2a886c8_compiler_base.cc:3683]     reserved             0B 
+(pid=) I0203 06:52:11.484161 4012646 2a886c8_compiler_base.cc:3683]     program         unknown size 
+(pid=) I0203 06:52:11.484162 4012646 2a886c8_compiler_base.cc:3683]     arguments            0B 
+(pid=) I0203 06:52:11.484163 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:52:11.484163 4012646 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
+(pid=) I0203 06:52:11.484164 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:52:11.484190 4012646 2a886c8_compiler_base.cc:3687] Program sflag requirement 272B:
+(pid=) I0203 06:52:11.484191 4012646 2a886c8_compiler_base.cc:3687]     reserved           204B
+(pid=) I0203 06:52:11.484192 4012646 2a886c8_compiler_base.cc:3687]     scoped              44B
+(pid=) I0203 06:52:11.484193 4012646 2a886c8_compiler_base.cc:3687]     HLO temp            24B (100.0% utilization: Unpadded (24B) Padded (24B), 0.0% fragmentation (0B))
+(pid=) I0203 06:52:11.484193 4012646 2a886c8_compiler_base.cc:3687] Program hbm requirement 96.71M:
+(pid=) I0203 06:52:11.484194 4012646 2a886c8_compiler_base.cc:3687]     global            97.0K
+(pid=) I0203 06:52:11.484195 4012646 2a886c8_compiler_base.cc:3687]     HLO temp         52.19M (99.9% utilization: Unpadded (45.19M) Padded (45.22M), 13.3% fragmentation (6.96M))
+(pid=) I0203 06:52:11.484195 4012646 2a886c8_compiler_base.cc:3687]     overlays         44.43M
+(pid=) I0203 06:52:11.484196 4012646 2a886c8_compiler_base.cc:3687] Program vmem requirement 104.80M:
+(pid=) I0203 06:52:11.484197 4012646 2a886c8_compiler_base.cc:3687]     scoped            7.50M
+(pid=) I0203 06:52:11.484197 4012646 2a886c8_compiler_base.cc:3687]     HLO temp         97.30M (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (97.30M))
+(pid=) I0203 06:52:11.484198 4012646 2a886c8_compiler_base.cc:3687] Program smem requirement 2.8K:
+(pid=) I0203 06:52:11.484199 4012646 2a886c8_compiler_base.cc:3687]     scoped             2.8K
+(pid=) I0203 06:52:11.484199 4012646 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
+(pid=) I0203 06:52:11.484200 4012646 2a886c8_c
+(pid=) I0203 06:52:03.799646 4012646 shardy_xla_pass.cc:316] Using Shardy for XLA SPMD propagation.
+(pid=) I0203 06:52:05.701541 4011915 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
+(pid=) I0203 06:52:06.282317 4011915 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 3.36742314675s
+(pid=) I0203 06:52:06.321197 4031203 memory_space_assignment_util.cc:730] MSA Vmem breakdown: default scoped vmem (from flag): 16777216; does_msa_directly_allocate_scoped_vmem: F; bytes_for_msa_to_allocate: 117440512
+(pid=) I0203 06:52:08.800985 4012646 2a886c8_compiler_base.cc:10953] BACKEND_PASSES stage duration: 2.48059262475s
+(pid=) I0203 06:52:10.612586 4012646 2a886c8_compiler_base.cc:3026] final program bundle count: 726,914 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:52:10.670133 4012646 2a886c8_compiler_base.cc:3026] final program bundle count: 107 note this count does not reflect cycles spent executing delays.
+(pid=) I0203 06:52:11.479624 4012646 2a886c8_compiler_base.cc:3444] Program divided into 42 overlays without HLO functions (44.43M).
+(pid=) I0203 06:52:11.484135 4012646 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__run_generation_loop
+(pid=) I0203 06:52:11.484139 4012646 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 96.71M / 15.75G
+(pid=) I0203 06:52:11.484142 4012646 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 104.80M / 128.00M
+(pid=) I0203 06:52:11.484155 4012646 2a886c8_compiler_base.cc:3683] Total hbm usage >= 2.91G:
+(pid=) I0203 06:52:11.484156 4012646 2a886c8_compiler_base.cc:3683]     reserved        258.00M 
+(pid=) I0203 06:52:11.484157 4012646 2a886c8_compiler_base.cc:3683]     program          96.71M 
+(pid=) I0203 06:52:11.484157 4012646 2a886c8_compiler_base.cc:3683]     arguments         2.56G 
+(pid=) I0203 06:52:11.484158 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:52:11.484159 4012646 2a886c8_compiler_base.cc:3683] Output size 72.03M; shares 72.03M with arguments.
+(pid=) I0203 06:52:11.484159 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:52:11.484160 4012646 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
+(pid=) I0203 06:52:11.484161 4012646 2a886c8_compiler_base.cc:3683]     reserved             0B 
+(pid=) I0203 06:52:11.484161 4012646 2a886c8_compiler_base.cc:3683]     program         unknown size 
+(pid=) I0203 06:52:11.484162 4012646 2a886c8_compiler_base.cc:3683]     arguments            0B 
+(pid=) I0203 06:52:11.484163 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:52:11.484163 4012646 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
+(pid=) I0203 06:52:11.484164 4012646 2a886c8_compiler_base.cc:3683] 
+(pid=) I0203 06:52:11.484190 4012646 2a886c8_compiler_base.cc:3687] Program sflag requirement 272B:
+(pid=) I0203 06:52:11.484191 4012646 2a886c8_compiler_base.cc:3687]     reserved           204B
+(pid=) I0203 06:52:11.484192 4012646 2a886c8_compiler_base.cc:3687]     scoped              44B
+(pid=) I0203 06:52:11.484193 4012646 2a886c8_compiler_base.cc:3687]     HLO temp            24B (100.0% utilization: Unpadded (24B) Padded (24B), 0.0% fragmentation (0B))
+(pid=) I0203 06:52:11.484193 4012646 2a886c8_compiler_base.cc:3687] Program hbm requirement 96.71M:
+(pid=) I0203 06:52:11.484194 4012646 2a886c8_compiler_base.cc:3687]     global            97.0K
+(pid=) I0203 06:52:11.484195 4012646 2a886c8_compiler_base.cc:3687]     HLO temp         52.19M (99.9% utilization: Unpadded (45.19M) Padded (45.22M), 13.3% fragmentation (6.96M))
+(pid=) I0203 06:52:11.484195 4012646 2a886c8_compiler_base.cc:3687]     overlays         44.43M
+(pid=) I0203 06:52:11.484196 4012646 2a886c8_compiler_base.cc:3687] Program vmem requirement 104.80M:
+(pid=) I0203 06:52:11.484197 4012646 2a886c8_compiler_base.cc:3687]     scoped            7.50M
+(pid=) I0203 06:52:11.484197 4012646 2a886c8_compiler_base.cc:3687]     HLO temp         97.30M (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (97.30M))
+(pid=) I0203 06:52:11.484198 4012646 2a886c8_compiler_base.cc:3687] Program smem requirement 2.8K:
+(pid=) I0203 06:52:11.484199 4012646 2a886c8_compiler_base.cc:3687]     scoped             2.8K
+(pid=) I0203 06:52:11.484199 4012646 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
+(pid=) I0203 06:52:11.484200 4012646 2a886c8_c
+(pid=) W0203 06:52:15.941172 4032210 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) ompiler_base.cc:3695] XLA::TPU program SMEM usage: 4.9K / 1.00M (67 parameters)
+(pid=) I0203 06:52:11.484217 4012646 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 2.68281986425s
+(pid=) I0203 06:52:11.513512 4012646 isa_program_util_common.cc:520] (HLO module jit__run_generation_loop): Executable fingerprint:259fdab128e66a9202baef321ffb6979f40f79d5904fa8eb5f3d87d5baa62d3e
+(pid=) I0203 06:52:11.513516 4012646 isa_program_util_common.cc:524] (HLO module jit__run_generation_loop): Executable fingerprint (including data segments):ea29a6ade4f78f5fad7d06b4e0f6c1b334d0784e169f1642dc2d3a20e8e44d69
+(pid=) I0203 06:52:11.513517 4012646 isa_program_util_common.cc:527] (HLO module jit__run_generation_loop): Host transfer fingerprint:e81c6e213bf9e0671d4562234be113f75249e83db7cec4bd37cb4b5a539371f5
+(pid=) I0203 06:52:11.513899 4011915 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 8.6197569275s
+(pid=) I0203 06:52:15.441754 4011915 allocator_stats_reporter.cc:147] Stopping AllocatorStatsReporter. Reporting one last time first.
+(pid=) W0203 06:52:15.941172 4032210 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) ompiler_base.cc:3695] XLA::TPU program SMEM usage: 4.9K / 1.00M (67 parameters)
+(pid=) I0203 06:52:11.484217 4012646 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 2.68281986425s
+(pid=) I0203 06:52:11.513512 4012646 isa_program_util_common.cc:520] (HLO module jit__run_generation_loop): Executable fingerprint:259fdab128e66a9202baef321ffb6979f40f79d5904fa8eb5f3d87d5baa62d3e
+(pid=) I0203 06:52:11.513516 4012646 isa_program_util_common.cc:524] (HLO module jit__run_generation_loop): Executable fingerprint (including data segments):ea29a6ade4f78f5fad7d06b4e0f6c1b334d0784e169f1642dc2d3a20e8e44d69
+(pid=) I0203 06:52:11.513517 4012646 isa_program_util_common.cc:527] (HLO module jit__run_generation_loop): Host transfer fingerprint:e81c6e213bf9e0671d4562234be113f75249e83db7cec4bd37cb4b5a539371f5
+(pid=) I0203 06:52:11.513899 4011915 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 8.6197569275s
+(pid=) I0203 06:52:15.441754 4011915 allocator_stats_reporter.cc:147] Stopping AllocatorStatsReporter. Reporting one last time first.
+(pid=) W0203 06:52:15.941172 4032210 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:15.941172 4032210 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.008675 4012359 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.008675 4012359 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.008675 4012359 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.008675 4012359 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.469606 4034126 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.469606 4034126 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.469606 4034126 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.469606 4034126 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.691415 4012736 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.691415 4012736 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.691415 4012736 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.691415 4012736 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.914207 4012360 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) I0203 06:52:16.739891 4032210 async_driver.cc:1071] [/dev/vfio/0 tpu16:pe1:1] vf_id:0 Driver closed.
+(pid=) W0203 06:52:16.914207 4012360 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) I0203 06:52:16.739891 4032210 async_driver.cc:1071] [/dev/vfio/0 tpu16:pe1:1] vf_id:0 Driver closed.
+(pid=) W0203 06:52:16.914207 4012360 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:16.914207 4012360 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.333180 4012742 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) I0203 06:52:17.303110 4012359 async_driver.cc:1071] [/dev/vfio/5 tpu16:pe4:0] vf_id:0 Driver closed.
+(pid=) W0203 06:52:17.333180 4012742 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) I0203 06:52:17.303110 4012359 async_driver.cc:1071] [/dev/vfio/5 tpu16:pe4:0] vf_id:0 Driver closed.
+(pid=) W0203 06:52:17.333180 4012742 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.333180 4012742 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.497710 4012361 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.497747 4012735 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.497710 4012361 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.497747 4012735 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.497710 4012361 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.497747 4012735 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.497710 4012361 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) W0203 06:52:17.497747 4012735 firmware_indirect_registers.cc:79] Released last reference with existing Open. Performing implicit close-on-destruction.
+(pid=) I0203 06:52:17.535218 4034126 async_driver.cc:1071] [/dev/vfio/6 tpu16:pe4:3] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.099946 4012736 async_driver.cc:1071] [/dev/vfio/1 tpu16:pe1:0] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.512962 4012360 async_driver.cc:1071] [/dev/vfio/2 tpu16:pe1:3] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.512980 4012742 async_driver.cc:1071] [/dev/vfio/7 tpu16:pe4:2] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.535861 4012361 async_driver.cc:1071] [/dev/vfio/3 tpu16:pe1:2] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.652585 4012735 async_driver.cc:1071] [/dev/vfio/4 tpu16:pe4:1] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.654801 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.654890 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.654941 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.654990 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.655040 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.655097 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.655162 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.655212 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:17.535218 4034126 async_driver.cc:1071] [/dev/vfio/6 tpu16:pe4:3] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.099946 4012736 async_driver.cc:1071] [/dev/vfio/1 tpu16:pe1:0] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.512962 4012360 async_driver.cc:1071] [/dev/vfio/2 tpu16:pe1:3] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.512980 4012742 async_driver.cc:1071] [/dev/vfio/7 tpu16:pe4:2] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.535861 4012361 async_driver.cc:1071] [/dev/vfio/3 tpu16:pe1:2] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.652585 4012735 async_driver.cc:1071] [/dev/vfio/4 tpu16:pe4:1] vf_id:0 Driver closed.
+(pid=) I0203 06:52:18.654801 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.654890 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.654941 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.654990 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.655040 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.655097 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.655162 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
+(pid=) I0203 06:52:18.655212 4011915 pending_event_logger.cc:160] Waiting for pending events to become available
