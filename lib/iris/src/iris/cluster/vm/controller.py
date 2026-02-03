@@ -106,14 +106,18 @@ def check_health(
     result = HealthCheckResult(healthy=False)
 
     try:
+        logger.info("Running health check: curl -sf http://localhost:%d/health", port)
         curl_result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
         if curl_result.returncode == 0:
             result.healthy = True
             result.curl_output = curl_result.stdout.strip()
+            logger.info("Health check succeeded")
             return result
         result.curl_error = curl_result.stderr.strip() or f"exit code {curl_result.returncode}"
+        logger.info("Health check failed: %s", result.curl_error)
     except Exception as e:
         result.curl_error = str(e)
+        logger.info("Health check exception: %s", e)
 
     # Gather diagnostics on failure
     try:
@@ -893,8 +897,11 @@ class ManualController:
         """Check health of controller via SSH."""
         host = self._manual_config.host
         port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
+        logger.info("Connecting to controller host %s via SSH...", host)
         conn = self._create_ssh_connection(host)
+        logger.info("Checking controller health via SSH (port %d, timeout 10s)...", port)
         result = check_health(conn, port, CONTROLLER_CONTAINER_NAME)
+        logger.info("Health check result: %s", "healthy" if result.healthy else result.summary())
         return ControllerStatus(
             running=result.healthy,
             address=self.address,

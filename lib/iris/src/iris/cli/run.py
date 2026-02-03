@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,14 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI for submitting jobs to Iris clusters.
+"""Job submission via command passthrough (replaces ``iris-run``).
 
 Usage:
-    uv run iris-run \\
-        --config lib/iris/examples/eu-west4.yaml \\
-        --tpu v5litepod-16 \\
-        -e WANDB_API_KEY $WANDB_API_KEY \\
-        -- python experiments/train.py --epochs 10
+    iris run --config cluster.yaml -- python train.py --epochs 10
+    iris run --config cluster.yaml --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
 import getpass
@@ -50,7 +46,6 @@ def load_cluster_config(config_path: Path) -> dict:
 
     Returns:
         Dict with 'zone', 'project_id', and optionally 'controller_address' keys.
-        For local clusters, controller_address bypasses SSH tunneling.
 
     Raises:
         FileNotFoundError: If config file doesn't exist
@@ -69,27 +64,22 @@ def load_cluster_config(config_path: Path) -> dict:
     if not zone:
         raise ValueError(f"Missing 'zone' in {config_path}")
 
-    # For remote clusters, project_id is required for SSH tunneling
     if not controller_address and not project_id:
         raise ValueError(f"Missing 'project_id' in {config_path} (required for remote clusters)")
 
     return {"zone": zone, "project_id": project_id, "controller_address": controller_address}
 
 
-def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | None) -> dict[str, str]:
+def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[str, str]:
     """Load environment variables from .marin.yaml and merge with flags.
 
     Args:
-        env_flags: Tuple of (KEY,) or (KEY, VALUE) tuples from Click
+        env_flags: Tuple/list of (KEY,) or (KEY, VALUE) tuples from Click
 
     Returns:
         Merged environment variables
-
-    Raises:
-        ValueError: If key contains '=' or other validation fails
     """
-    # 1. Load from .marin.yaml
-    env_vars = {}
+    env_vars: dict[str, str] = {}
     marin_yaml = Path(".marin.yaml")
     if marin_yaml.exists():
         with open(marin_yaml) as f:
@@ -98,12 +88,10 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | None) -> dict[str, st
             for k, v in cfg["env"].items():
                 env_vars[str(k)] = "" if v is None else str(v)
 
-    # 2. Auto-include tokens from environment
     for key in ("HF_TOKEN", "WANDB_API_KEY"):
         if key not in env_vars and os.environ.get(key):
             env_vars[key] = os.environ[key]
 
-    # 3. Merge flags
     if env_flags:
         for item in env_flags:
             if len(item) > 2:
@@ -119,15 +107,7 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | None) -> dict[str, st
 
 
 def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
-    """Add standard environment variables used by Marin jobs.
-
-    Args:
-        env_vars: Base environment variables
-
-    Returns:
-        New dict with standard variables added (not overriding existing)
-    """
-    # Copy input dict to avoid mutation
+    """Add standard environment variables used by Marin jobs."""
     result = dict(env_vars)
 
     defaults = {
@@ -137,12 +117,10 @@ def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
         "HF_HUB_ENABLE_HF_TRANSFER": "0",
     }
 
-    # Add defaults without overriding user-provided values
     for key, value in defaults.items():
         if key not in result:
             result[key] = value
 
-    # Pass through specific env vars if set
     for key in ("GCS_RESOLVE_REFRESH_SECS",):
         if key not in result and os.environ.get(key):
             result[key] = os.environ[key]
@@ -156,20 +134,7 @@ def build_resources(
     cpu: int | None,
     memory: str | None,
 ) -> ResourceSpec:
-    """Build ResourceSpec from CLI arguments.
-
-    Args:
-        tpu: TPU type (e.g., "v5litepod-16")
-        gpu: Number of GPUs
-        cpu: Number of CPUs
-        memory: Memory size (e.g., "8GB")
-
-    Returns:
-        ResourceSpec with specified resources
-
-    Raises:
-        ValueError: If GPU is requested (not yet supported)
-    """
+    """Build ResourceSpec from CLI arguments."""
     spec = ResourceSpec(
         cpu=cpu or 1,
         memory=memory or "2GB",
@@ -184,15 +149,7 @@ def build_resources(
 
 
 def generate_job_name(command: list[str]) -> str:
-    """Generate a job name from the command.
-
-    Args:
-        command: Command argv
-
-    Returns:
-        Job name with timestamp
-    """
-    # Extract script name if it's a Python script
+    """Generate a job name from the command."""
     script_name = "job"
     for arg in command:
         path = Path(arg)
@@ -220,29 +177,10 @@ def run_iris_job(
     timeout: int = 0,
     extras: list[str] | None = None,
 ) -> int:
-    """Core job submission logic (testable without CLI).
-
-    Args:
-        config_path: Path to cluster config YAML
-        command: Command to run (argv list)
-        env_vars: Environment variables for the job
-        tpu: TPU type to request (e.g., v5litepod-16)
-        gpu: Number of GPUs to request
-        cpu: Number of CPUs to request
-        memory: Memory size to request (e.g., "8GB")
-        wait: Whether to wait for job completion
-        job_name: Custom job name (auto-generated if None)
-        replicas: Number of tasks for gang scheduling
-        max_retries: Max retries on failure
-        timeout: Job timeout in seconds (0 = no timeout)
+    """Core job submission logic.
 
     Returns:
         Exit code: 0 for success, 1 for failure
-
-    Raises:
-        FileNotFoundError: If config file doesn't exist
-        ValueError: If config is invalid or GPU is requested
-        Various exceptions from IrisClient if submission fails
     """
     config = load_cluster_config(config_path)
     env_vars = add_standard_env_vars(env_vars)
@@ -256,9 +194,7 @@ def run_iris_job(
     if resources.device and resources.device.HasField("tpu"):
         logger.info(f"TPU: {resources.device.tpu.variant}")
 
-    # Check if this is a local cluster with direct controller access
     if config["controller_address"]:
-        # Local cluster - connect directly without SSH tunnel
         controller_url = config["controller_address"]
         logger.info(f"Connecting directly to controller: {controller_url}")
         return _submit_and_wait_job(
@@ -274,7 +210,6 @@ def run_iris_job(
             extras=extras,
         )
     else:
-        # Remote cluster - use SSH tunnel
         with controller_tunnel(
             zone=config["zone"],
             project=config["project_id"],
@@ -307,22 +242,7 @@ def _submit_and_wait_job(
     wait: bool,
     extras: list[str] | None = None,
 ) -> int:
-    """Submit job and optionally wait for completion.
-
-    Args:
-        controller_url: Controller URL
-        job_name: Name for the job
-        command: Command to run
-        resources: Resource spec
-        env_vars: Environment variables
-        replicas: Number of replicas
-        max_retries: Max retry attempts
-        timeout: Job timeout in seconds
-        wait: Whether to wait for completion
-
-    Returns:
-        Exit code: 0 for success, 1 for failure
-    """
+    """Submit job and optionally wait for completion."""
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
     entrypoint = Entrypoint.from_command(*command)
 
@@ -359,6 +279,7 @@ def _submit_and_wait_job(
 
 
 @click.command(
+    "run",
     context_settings={"ignore_unknown_options": True},
     help="""Submit jobs to Iris clusters.
 
@@ -366,16 +287,16 @@ Examples:
 
   \b
   # Simple CPU job
-  iris-run --config cluster.yaml -- python script.py
+  iris run --config cluster.yaml -- python script.py
 
   \b
   # TPU job with environment variables
-  iris-run --config cluster.yaml --tpu v5litepod-16 \\
+  iris run --config cluster.yaml --tpu v5litepod-16 \\
     -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 
   \b
   # Submit and detach
-  iris-run --config cluster.yaml --no-wait -- python long_job.py
+  iris run --config cluster.yaml --no-wait -- python long_job.py
 """,
 )
 @click.option(
@@ -392,61 +313,18 @@ Examples:
     type=(str, str),
     help="Set environment variables for the job (KEY VALUE). Can be repeated.",
 )
-@click.option(
-    "--tpu",
-    type=str,
-    help="TPU type to request (e.g., v5litepod-16)",
-)
-@click.option(
-    "--gpu",
-    type=int,
-    help="Number of GPUs to request",
-)
-@click.option(
-    "--cpu",
-    type=int,
-    help="Number of CPUs to request (default: 1)",
-)
-@click.option(
-    "--memory",
-    type=str,
-    help="Memory size to request (e.g., 8GB, 512MB; default: 2GB)",
-)
-@click.option(
-    "--no-wait",
-    is_flag=True,
-    help="Don't wait for job completion",
-)
-@click.option(
-    "--job-name",
-    type=str,
-    help="Custom job name (default: auto-generated)",
-)
-@click.option(
-    "--replicas",
-    type=int,
-    default=1,
-    help="Number of tasks for gang scheduling (default: 1)",
-)
-@click.option(
-    "--max-retries",
-    type=int,
-    default=0,
-    help="Max retries on failure (default: 0)",
-)
-@click.option(
-    "--timeout",
-    type=int,
-    default=0,
-    help="Job timeout in seconds (default: 0 = no timeout)",
-)
-@click.option(
-    "--extra",
-    multiple=True,
-    help="UV extras to install (e.g., --extra cpu). Can be repeated.",
-)
+@click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16)")
+@click.option("--gpu", type=int, help="Number of GPUs to request")
+@click.option("--cpu", type=int, help="Number of CPUs to request (default: 1)")
+@click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 2GB)")
+@click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
+@click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
+@click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
+@click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
+@click.option("--timeout", type=int, default=0, help="Job timeout in seconds (default: 0 = no timeout)")
+@click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
-def main(
+def run(
     config: Path,
     env_vars: tuple[tuple[str, str], ...],
     tpu: str | None,
@@ -462,18 +340,16 @@ def main(
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
 
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
 
-    # Load env vars - let exceptions propagate
     env_vars_dict = load_env_vars(env_vars)
 
-    # Call core logic - let exceptions propagate
     exit_code = run_iris_job(
         config_path=config,
         command=command,
@@ -490,7 +366,3 @@ def main(
         extras=list(extra),
     )
     sys.exit(exit_code)
-
-
-if __name__ == "__main__":
-    main()
