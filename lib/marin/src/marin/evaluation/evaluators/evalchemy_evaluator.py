@@ -67,6 +67,7 @@ N_REPEAT_BENCHMARK_PATHS = {
     "AIME25": "eval/chat_benchmarks/AIME25/eval_instruct.py",
     "AIME24": "eval/chat_benchmarks/AIME24/eval_instruct.py",
     "AMC23": "eval/chat_benchmarks/AMC23/eval_instruct.py",
+    "HMMT": "eval/chat_benchmarks/HMMT/eval_instruct.py",
 }
 
 
