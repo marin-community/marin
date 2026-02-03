@@ -62,7 +62,7 @@ logger = logging.getLogger("ray")
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 
-NAME = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_3"
+NAME = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_4"
 
 # Token budget: 1B tokens (as specified in RegMix paper)
 EXPERIMENT_BUDGET = 1_000_000_000  # Actual tokens we train with
@@ -85,17 +85,22 @@ DOMAIN_NAMES = ["nemotron_full", "starcoder"]
 EVAL_TASKS = CORE_TASKS + CODE_TASKS
 
 # GCS paths for pre-cached data to avoid HuggingFace rate limiting
-# Use us-central1 to match the cluster region
 EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/code-tasks"
 TOKENIZER_CACHE_BASE = "gs://marin-us-central1/raw/tokenizers"
+# EVAL_DATASETS_CACHE_PATH = "gs://marin-us-east5/raw/eval-datasets/code-tasks"
+# TOKENIZER_CACHE_BASE = "gs://marin-us-east5/raw/tokenizers"
 
 # Tokenizer used by regmix_60m_proxy and all domains
 TOKENIZER_NAME = llama3_tokenizer  # "meta-llama/Meta-Llama-3.1-8B"
 
 # Use uniform sampling strategy for weight exploration
 SAMPLING_PARAMS = DirichletSamplingParams(
-    strategy=SamplingStrategy.UNIFORM,
-    min_weight=0.01,
+    strategy=SamplingStrategy.DIRICHLET,
+    min_weight=0.05,
+    min_config_distance=0.001,
+    min_strength=0.2,
+    max_strength=1.0,
+    temp=0.5,
     # min_phase_change=0.15,
 )
 
@@ -314,6 +319,8 @@ def main(
 
     # Set environment variable for tokenizer GCS caching (used by defaults.py)
     os.environ["MARIN_TOKENIZER_CACHE_PATH"] = TOKENIZER_CACHE_BASE
+
+    os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
     # Create step to pre-cache tokenizer to GCS (runs once before training)
     cache_tokenizer_step = create_cache_tokenizer_step(

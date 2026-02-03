@@ -313,6 +313,9 @@ def _cache_eval_datasets(config: CacheEvalDatasetsConfig) -> str:
 
     This is idempotent - if datasets are already cached, it returns immediately.
     """
+    # HF_ALLOW_CODE_EVAL is required for code evaluation tasks like HumanEval
+    os.environ["HF_ALLOW_CODE_EVAL"] = "1"
+
     return save_eval_datasets_to_gcs(
         eval_tasks=config.eval_tasks,
         gcs_path=config.gcs_path,
