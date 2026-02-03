@@ -288,6 +288,7 @@ def cluster_status_cmd(ctx):
     if not config:
         raise click.ClickException("--config is required for cluster status")
     ctrl = create_controller(config)
+    click.echo("Checking controller status...")
     try:
         ctrl_status = ctrl.status()
         click.echo("Controller Status:")
@@ -299,17 +300,22 @@ def cluster_status_cmd(ctx):
     except Exception as e:
         click.echo(f"Failed to get controller status: {e}", err=True)
         click.echo("")
-    try:
-        autoscaler_obj = create_autoscaler_from_config(config)
-        autoscaler_obj.reconcile()
-        status = autoscaler_obj.get_status()
+
+    # Get autoscaler status from controller via RPC
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
         click.echo("\nAutoscaler Status:")
-        if not status.groups:
-            click.echo("  No scale groups configured")
-        else:
-            click.echo(_format_status_table(status))
-    except Exception as e:
-        click.echo(f"Failed to get autoscaler status: {e}", err=True)
+        click.echo("  (Controller not running - status unavailable)")
+    else:
+        try:
+            as_status = _get_autoscaler_status(controller_url)
+            click.echo("\nAutoscaler Status:")
+            if not as_status.groups:
+                click.echo("  No scale groups configured")
+            else:
+                click.echo(_format_status_table(as_status))
+        except Exception as e:
+            click.echo(f"\nFailed to get autoscaler status: {e}", err=True)
 
 
 @cluster.command("dashboard")

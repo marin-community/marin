@@ -18,6 +18,7 @@ Defines the ``iris`` Click group and registers all subcommands.
 """
 
 import logging as _logging_module
+import sys
 
 import click
 
@@ -46,6 +47,10 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     if controller_url and config_file:
         raise click.UsageError("Cannot specify both --controller-url and --config")
 
+    # Skip expensive operations when showing help or doing shell completion
+    if ctx.resilient_parsing or "--help" in sys.argv or "-h" in sys.argv:
+        return
+
     # Load config if provided
     if config_file:
         from iris.cluster.vm.config import load_config
@@ -66,9 +71,12 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
             project = config.project_id
             label_prefix = config.label_prefix or "iris"
 
-            # Establish tunnel and keep it alive for command duration
+            # Establish tunnel with 5-second timeout and keep it alive for command duration
             try:
-                tunnel_cm = controller_tunnel(zone, project, label_prefix=label_prefix)
+                logger.info("Discovering controller VM in %s...", zone)
+                tunnel_cm = controller_tunnel(
+                    zone, project, label_prefix=label_prefix, tunnel_logger=logger, timeout=5.0
+                )
                 tunnel_url = tunnel_cm.__enter__()
                 ctx.obj["controller_url"] = tunnel_url
                 # Clean up tunnel when context closes
@@ -76,7 +84,7 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
             except Exception as e:
                 # If tunnel fails (e.g., no controller VM), continue without controller_url
                 # Commands that need it will fail with clear error
-                logger.debug(f"Failed to establish controller tunnel: {e}")
+                logger.warning("Could not establish controller tunnel (timeout=5s): %s", e)
 
 
 # Register subcommand groups — imported at module level to ensure they are
