@@ -17,7 +17,7 @@ Kelp: Tree Diffusion for Program Synthesis
 
 This module implements tree-based diffusion models for generating Python programs.
 It combines Berkeley's tree diffusion approach (arXiv:2405.20519) with AR-to-diffusion
-transfer learning from pretrained code LLMs.
+transfer learning from pretrained code LLMs (Marin 8B).
 
 Key components:
 - ast_utils: AST parsing and tensor conversion utilities
@@ -26,7 +26,11 @@ Key components:
 - edit_path: Edit path computation for training
 - tree_diffusion: Core tree diffusion model (JAX/Equinox)
 - toy_dataset: Simple dataset for prototyping
-- train: Training loop
+- datasets: Stack-Edu Python dataset integration
+- ar_transfer: AR-to-tree-diffusion transfer from Marin 8B
+- train_local: Local training script
+- train_stackedu: Training on Stack-Edu data
+- train_transfer: Transfer experiment comparing Marin vs random init
 """
 
 from experiments.kelp.ast_utils import TreeTensors, parse_python_to_tensors, tensors_to_code
