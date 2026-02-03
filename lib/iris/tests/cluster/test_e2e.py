@@ -357,6 +357,7 @@ class TestJobLifecycle:
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
+    @pytest.mark.timeout(60)
     def test_multiple_jobs_complete(self, test_cluster):
         """Multiple jobs complete successfully."""
         run_id = uuid.uuid4().hex[:8]
