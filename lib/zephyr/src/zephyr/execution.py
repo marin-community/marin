@@ -38,6 +38,7 @@ from typing import Any, Protocol
 
 import fsspec
 from fray.v2 import ActorHandle, Client, ResourceConfig
+from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
@@ -121,6 +122,11 @@ class Shard:
         for chunk in self.chunks:
             yield from chunk
 
+    def iter_chunks(self) -> Iterator[list]:
+        """Yield each chunk as a materialized list. Used by k-way merge in Reduce."""
+        for chunk in self.chunks:
+            yield list(chunk)
+
 
 @dataclass
 class ResultChunk:
@@ -187,7 +193,7 @@ class ShardTask:
     shard: Shard
     operations: list[PhysicalOp]
     stage_name: str = "output"
-    aux_shards: dict[int, list[Chunk]]
+    aux_shards: dict[int, list[Chunk]] | None = None
 
 
 class ZephyrWorkerError(RuntimeError):
@@ -228,13 +234,16 @@ class JobStatus:
 
 
 class ZephyrCoordinator:
-    """Central coordinator actor. Workers pull tasks from it.
+    """Central coordinator actor that owns and manages the worker pool.
 
-    All state mutations happen through actor method calls, which are serialized
-    by the actor framework — no concurrent access, no locks needed.
+    The coordinator creates workers via current_client(), runs a background
+    loop for discovery and heartbeat checking, and manages all pipeline
+    execution internally. Workers poll the coordinator for tasks until
+    receiving a SHUTDOWN signal.
     """
 
     def __init__(self):
+        # Task management state
         self._task_queue: deque[ShardTask] = deque()
         self._results: dict[int, TaskResult] = {}
         self._worker_states: dict[str, WorkerState] = {}
@@ -246,87 +255,101 @@ class ZephyrCoordinator:
         self._retries: int = 0
         self._in_flight: dict[str, tuple[ShardTask, int]] = {}
         self._task_attempts: dict[int, int] = {}
-        self._done: bool = False
         self._fatal_error: str | None = None
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
 
-    # These are actors in order to allow remotely pushing the shared data context to the coordinator
-    def set_shared_data(self, data: dict[str, Any]) -> None:
-        self._shared_data = data
+        # Worker management state
+        self._worker_group: Any = None
+        self._worker_handles: list[ActorHandle] = []
+        self._worker_futures: list = []
+        self._coordinator_thread: threading.Thread | None = None
+        self._shutdown: bool = False
+        self._initialized: bool = False
 
-    def get_shared_data(self) -> dict[str, Any]:
-        return self._shared_data
+        # Lock for accessing coordinator state from background thread
+        self._lock = threading.Lock()
 
-    def set_chunk_config(self, prefix: str, execution_id: str) -> None:
-        """Configure chunk storage for this execution."""
-        self._chunk_prefix = prefix
-        self._execution_id = execution_id
+    def initialize(
+        self,
+        chunk_prefix: str,
+        coordinator_handle: ActorHandle,
+        worker_group: Any,  # ActorGroup - use Any to avoid import issues
+    ) -> None:
+        """Initialize coordinator with worker group for continuous discovery.
 
-    def get_chunk_config(self) -> dict:
-        """Return chunk storage configuration for workers."""
-        return {
-            "prefix": self._chunk_prefix,
-            "execution_id": self._execution_id,
-        }
+        The worker group is created by ZephyrContext using the appropriate client,
+        then passed here. Coordinator owns the group and polls it for new workers.
 
-    def start_stage(self, stage_name: str, tasks: list[ShardTask]) -> None:
-        """Load a new stage's tasks into the queue."""
-        self._task_queue = deque(tasks)
-        self._results = defaultdict(list)
-        self._stage_name = stage_name
-        self._total_shards = len(tasks)
-        self._completed_shards = 0
-        self._retries = 0
-        self._in_flight = {}
-        self._task_attempts = {task.shard_idx: 0 for task in tasks}
-        self._done = False
-        self._fatal_error = None
+        Args:
+            chunk_prefix: Storage prefix for intermediate chunks
+            coordinator_handle: Handle to this coordinator actor (passed from context)
+            worker_group: ActorGroup with workers - coordinator will poll discover_new()
+        """
+        self._chunk_prefix = chunk_prefix
+        self._self_handle = coordinator_handle
+        self._worker_group = worker_group
 
-    def pull_task(self, worker_id: str) -> tuple[ShardTask, int] | None:
-        """Called by workers to get next task. Returns (task, attempt) or None."""
-        self._last_seen[worker_id] = time.monotonic()
-        self._worker_states[worker_id] = WorkerState.READY
+        # Get initially ready workers
+        initial_handles = worker_group.wait_ready()
+        self._worker_handles.extend(initial_handles)
 
-        if self._done or self._fatal_error:
-            return None
-        if not self._task_queue:
-            return None
+        logger.info("Coordinator initialized with %d workers", len(initial_handles))
 
-        task = self._task_queue.popleft()
-        attempt = self._task_attempts[task.shard_idx]
-        self._in_flight[worker_id] = (task, attempt)
-        self._worker_states[worker_id] = WorkerState.BUSY
-        return (task, attempt)
+        # Start workers polling
+        for w in self._worker_handles:
+            self._worker_futures.append(w.start_polling.remote(self._self_handle))
 
-    def report_result(self, worker_id: str, shard_idx: int, attempt: int, result: TaskResult) -> None:
-        self._last_seen[worker_id] = time.monotonic()
+        # Start coordinator background loop
+        self._coordinator_thread = threading.Thread(
+            target=self._coordinator_loop, daemon=True, name="zephyr-coordinator-loop"
+        )
+        self._coordinator_thread.start()
+        self._initialized = True
 
-        current_attempt = self._task_attempts.get(shard_idx, 0)
-        if attempt != current_attempt:
-            logger.warning(
-                f"Ignoring stale result from worker {worker_id} for shard {shard_idx} "
-                f"(attempt {attempt}, current {current_attempt})"
-            )
-            return
+    def _coordinator_loop(self) -> None:
+        """Background loop for discovery and heartbeat checking."""
+        last_log_time = 0.0
 
-        self._results[shard_idx] = result
-        self._completed_shards += 1
-        self._in_flight.pop(worker_id, None)
-        self._worker_states[worker_id] = WorkerState.READY
+        while not self._shutdown:
+            # Discover newly available workers
+            if self._worker_group:
+                new_handles = self._worker_group.discover_new()
+                if new_handles:
+                    with self._lock:
+                        for handle in new_handles:
+                            self._worker_handles.append(handle)
+                            self._worker_futures.append(handle.start_polling.remote(self._self_handle))
+                    logger.info("Discovered %d new workers, total: %d", len(new_handles), len(self._worker_handles))
 
-    def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
-        """Worker reports a task failure. All errors are fatal."""
-        self._last_seen[worker_id] = time.monotonic()
-        self._in_flight.pop(worker_id, None)
-        self._fatal_error = error_info
-        self._worker_states[worker_id] = WorkerState.DEAD
+            # Check heartbeats, re-queue stale tasks
+            with self._lock:
+                self._check_heartbeats_internal()
 
-    def heartbeat(self, worker_id: str) -> None:
-        self._last_seen[worker_id] = time.monotonic()
+            # Log status periodically during active execution
+            now = time.monotonic()
+            if self._has_active_execution() and now - last_log_time > 5.0:
+                self._log_status()
+                last_log_time = now
 
-    def check_heartbeats(self, timeout: float = 30.0) -> None:
-        """Marks stale workers as FAILED, re-queues their in-flight tasks."""
+            time.sleep(0.5)
+
+    def _has_active_execution(self) -> bool:
+        return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
+
+    def _log_status(self) -> None:
+        logger.info(
+            "[%s] %d/%d complete, %d in-flight, %d queued, %d workers",
+            self._stage_name,
+            self._completed_shards,
+            self._total_shards,
+            len(self._in_flight),
+            len(self._task_queue),
+            len(self._worker_handles),
+        )
+
+    def _check_heartbeats_internal(self, timeout: float = 30.0) -> None:
+        """Internal heartbeat check (called with lock held)."""
         now = time.monotonic()
         for worker_id, last in list(self._last_seen.items()):
             if now - last > timeout and self._worker_states.get(worker_id) != WorkerState.DEAD:
@@ -339,37 +362,284 @@ class ZephyrCoordinator:
                     self._task_queue.append(task)
                     self._retries += 1
 
+    def pull_task(self, worker_id: str) -> tuple[ShardTask, int, dict] | str | None:
+        """Called by workers to get next task.
+
+        Returns:
+            - (task, attempt, config) tuple if task available
+            - "SHUTDOWN" string if coordinator is shutting down
+            - None if no task available (worker should backoff and retry)
+        """
+        with self._lock:
+            self._last_seen[worker_id] = time.monotonic()
+            self._worker_states[worker_id] = WorkerState.READY
+
+            if self._shutdown:
+                return "SHUTDOWN"
+
+            if self._fatal_error:
+                return None
+
+            if not self._task_queue:
+                return None
+
+            task = self._task_queue.popleft()
+            attempt = self._task_attempts[task.shard_idx]
+            self._in_flight[worker_id] = (task, attempt)
+            self._worker_states[worker_id] = WorkerState.BUSY
+
+            config = {
+                "shared_data": self._shared_data,
+                "chunk_prefix": self._chunk_prefix,
+                "execution_id": self._execution_id,
+            }
+            return (task, attempt, config)
+
+    def report_result(self, worker_id: str, shard_idx: int, attempt: int, result: TaskResult) -> None:
+        with self._lock:
+            self._last_seen[worker_id] = time.monotonic()
+
+            current_attempt = self._task_attempts.get(shard_idx, 0)
+            if attempt != current_attempt:
+                logger.warning(
+                    f"Ignoring stale result from worker {worker_id} for shard {shard_idx} "
+                    f"(attempt {attempt}, current {current_attempt})"
+                )
+                return
+
+            self._results[shard_idx] = result
+            self._completed_shards += 1
+            self._in_flight.pop(worker_id, None)
+            self._worker_states[worker_id] = WorkerState.READY
+
+    def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
+        """Worker reports a task failure. All errors are fatal."""
+        with self._lock:
+            self._last_seen[worker_id] = time.monotonic()
+            self._in_flight.pop(worker_id, None)
+            self._fatal_error = error_info
+            self._worker_states[worker_id] = WorkerState.DEAD
+
+    def heartbeat(self, worker_id: str) -> None:
+        with self._lock:
+            self._last_seen[worker_id] = time.monotonic()
+
     def get_status(self) -> JobStatus:
-        return JobStatus(
-            stage=self._stage_name,
-            completed=self._completed_shards,
-            total=self._total_shards,
-            retries=self._retries,
-            in_flight=len(self._in_flight),
-            queue_depth=len(self._task_queue),
-            done=self._done,
-            fatal_error=self._fatal_error,
-            workers={
-                wid: {
-                    "state": state.value,
-                    "last_seen_ago": time.monotonic() - self._last_seen.get(wid, 0),
-                }
-                for wid, state in self._worker_states.items()
-            },
-        )
+        with self._lock:
+            return JobStatus(
+                stage=self._stage_name,
+                completed=self._completed_shards,
+                total=self._total_shards,
+                retries=self._retries,
+                in_flight=len(self._in_flight),
+                queue_depth=len(self._task_queue),
+                done=self._shutdown,
+                fatal_error=self._fatal_error,
+                workers={
+                    wid: {
+                        "state": state.value,
+                        "last_seen_ago": time.monotonic() - self._last_seen.get(wid, 0),
+                    }
+                    for wid, state in self._worker_states.items()
+                },
+            )
+
+    def get_fatal_error(self) -> str | None:
+        with self._lock:
+            return self._fatal_error
+
+    def _start_stage(self, stage_name: str, tasks: list[ShardTask]) -> None:
+        """Load a new stage's tasks into the queue."""
+        with self._lock:
+            self._task_queue = deque(tasks)
+            self._results = {}
+            self._stage_name = stage_name
+            self._total_shards = len(tasks)
+            self._completed_shards = 0
+            self._retries = 0
+            self._in_flight = {}
+            self._task_attempts = {task.shard_idx: 0 for task in tasks}
+            self._fatal_error = None
+
+    def _wait_for_stage(self) -> None:
+        """Block until current stage completes or error occurs."""
+        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        last_log_completed = -1
+
+        while True:
+            with self._lock:
+                if self._fatal_error:
+                    raise ZephyrWorkerError(self._fatal_error)
+                completed = self._completed_shards
+                total = self._total_shards
+                if completed >= total:
+                    return
+
+            if completed != last_log_completed:
+                logger.info("[%s] %d/%d tasks completed", self._stage_name, completed, total)
+                last_log_completed = completed
+                backoff.reset()
+
+            time.sleep(backoff.next_interval())
+
+    def _collect_results(self) -> dict[int, TaskResult]:
+        """Return results for the completed stage."""
+        with self._lock:
+            return dict(self._results)
+
+    def set_execution_config(self, shared_data: dict[str, Any], execution_id: str) -> None:
+        """Set config for the current execution."""
+        with self._lock:
+            self._shared_data = shared_data
+            self._execution_id = execution_id
+
+    def run_pipeline(
+        self,
+        plan: PhysicalPlan,
+        shared_data: dict[str, Any],
+        execution_id: str,
+        hints: ExecutionHint,
+    ) -> list:
+        """Run complete pipeline, blocking until done. Returns flattened results."""
+        with self._lock:
+            self._shared_data = shared_data
+            self._execution_id = execution_id
+
+        shards = _build_source_shards(plan.source_items)
+        if not shards:
+            return []
+
+        for stage_idx, stage in enumerate(plan.stages):
+            stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
+
+            if stage.stage_type == StageType.RESHARD:
+                shards = _reshard_refs(shards, stage.output_shards or len(shards))
+                continue
+
+            # Compute aux data for joins
+            aux_per_shard = self._compute_join_aux(stage.operations, shards, hints, stage_idx)
+
+            # Build and submit tasks
+            tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
+            logger.info("Starting stage %s with %d tasks", stage_label, len(tasks))
+            self._start_stage(stage_label, tasks)
+
+            # Wait for stage completion
+            self._wait_for_stage()
+
+            # Collect and regroup results for next stage
+            result_refs = self._collect_results()
+            shards = _regroup_result_refs(result_refs, len(shards), output_shard_count=stage.output_shards)
+
+        # Flatten final results
+        flat_result = []
+        for shard in shards:
+            for chunk in shard.chunks:
+                flat_result.extend(list(chunk))
+        return flat_result
+
+    def _compute_join_aux(
+        self,
+        operations: list[PhysicalOp],
+        shard_refs: list[Shard],
+        hints: ExecutionHint,
+        parent_stage_idx: int,
+    ) -> list[dict[int, list[list[Chunk]]]] | None:
+        """Execute right sub-plans for join operations, returning aux refs per shard."""
+        all_right_shard_refs: dict[int, list[Shard]] = {}
+
+        for i, op in enumerate(operations):
+            if not isinstance(op, Join) or op.right_plan is None:
+                continue
+
+            right_refs = _build_source_shards(op.right_plan.source_items)
+
+            for stage_idx, right_stage in enumerate(op.right_plan.stages):
+                if right_stage.stage_type == StageType.RESHARD:
+                    right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
+                    continue
+
+                join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
+                right_tasks = _compute_tasks_from_shards(right_refs, right_stage, hints, stage_name=join_stage_label)
+                self._start_stage(join_stage_label, right_tasks)
+                self._wait_for_stage()
+                raw = self._collect_results()
+                right_refs = _regroup_result_refs(raw, len(right_refs), output_shard_count=right_stage.output_shards)
+
+            if len(shard_refs) != len(right_refs):
+                raise ValueError(
+                    f"Sorted merge join requires equal shard counts. "
+                    f"Left has {len(shard_refs)} shards, right has {len(right_refs)} shards."
+                )
+            all_right_shard_refs[i] = right_refs
+
+        if not all_right_shard_refs:
+            return None
+
+        return [
+            {op_idx: right_refs[shard_idx] for op_idx, right_refs in all_right_shard_refs.items()}
+            for shard_idx in range(len(shard_refs))
+        ]
+
+    def shutdown(self) -> None:
+        """Signal workers to exit and terminate the worker group."""
+        self._shutdown = True
+
+        # Wait for coordinator thread to exit
+        if self._coordinator_thread is not None:
+            self._coordinator_thread.join(timeout=5.0)
+
+        # Wait for workers to exit gracefully
+        for f in self._worker_futures:
+            with suppress(Exception):
+                f.result(timeout=10.0)
+
+        # Terminate worker group
+        if self._worker_group is not None:
+            with suppress(Exception):
+                self._worker_group.shutdown()
+
+        logger.info("Coordinator shutdown complete")
+
+    # Legacy compatibility methods (used by tests)
+    def set_shared_data(self, data: dict[str, Any]) -> None:
+        with self._lock:
+            self._shared_data = data
+
+    def get_shared_data(self) -> dict[str, Any]:
+        with self._lock:
+            return self._shared_data
+
+    def set_chunk_config(self, prefix: str, execution_id: str) -> None:
+        """Configure chunk storage for this execution."""
+        with self._lock:
+            self._chunk_prefix = prefix
+            self._execution_id = execution_id
+
+    def get_chunk_config(self) -> dict:
+        """Return chunk storage configuration for workers."""
+        with self._lock:
+            return {
+                "prefix": self._chunk_prefix,
+                "execution_id": self._execution_id,
+            }
+
+    def start_stage(self, stage_name: str, tasks: list[ShardTask]) -> None:
+        """Load a new stage's tasks into the queue (legacy compat)."""
+        self._start_stage(stage_name, tasks)
+
+    def check_heartbeats(self, timeout: float = 30.0) -> None:
+        """Marks stale workers as FAILED, re-queues their in-flight tasks."""
+        with self._lock:
+            self._check_heartbeats_internal(timeout)
 
     def collect_results(self) -> dict[int, TaskResult]:
-        """Return results for the completed stage."""
-        return self._results
+        """Return results for the completed stage (legacy compat)."""
+        return self._collect_results()
 
     def signal_done(self) -> None:
-        """Signal workers that no more stages will be submitted."""
-        self._done = True
-
-    def reset(self) -> None:
-        """Reset coordinator state for reuse across multiple execute() calls."""
-        self._done = False
-        self._fatal_error = None
+        """Signal workers that no more stages will be submitted (legacy compat)."""
+        self._shutdown = True
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +648,13 @@ class ZephyrCoordinator:
 
 
 class ZephyrWorker:
-    """Long-lived worker actor. Pulls tasks from coordinator, executes, reports."""
+    """Long-lived worker actor that polls coordinator for tasks.
+
+    Workers are created by the coordinator and poll continuously until
+    receiving a SHUTDOWN signal. Each task includes the execution config
+    (shared data, chunk prefix, execution ID), so workers can handle
+    multiple executions without restart.
+    """
 
     def __init__(self):
         self._shared_data: dict[str, Any] = {}
@@ -389,92 +665,83 @@ class ZephyrWorker:
     def get_shared(self, name: str) -> Any:
         return self._shared_data[name]
 
-    def run_loop(self, coordinator: ActorHandle) -> None:
-        """Main worker loop. Pulls tasks from coordinator until done."""
+    def start_polling(self, coordinator: ActorHandle) -> None:
+        """Start polling loop. Called once per worker lifetime."""
         worker_id = f"worker-{id(self)}-{os.getpid()}"
+        logger.info("[%s] Starting polling loop", worker_id)
 
-        # Clear shutdown event in case this worker is being reused for a new stage
         self._shutdown_event.clear()
 
-        logger.info(f"[{worker_id}] run_loop starting, fetching shared data...")
-
-        try:
-            self._shared_data = coordinator.get_shared_data.remote().result()
-            logger.info(f"[{worker_id}] Got shared data, fetching chunk config...")
-        except Exception as e:
-            logger.error(f"[{worker_id}] Failed to get shared data: {e}")
-            raise
-
-        try:
-            chunk_config = coordinator.get_chunk_config.remote().result()
-            self._chunk_prefix = chunk_config["prefix"]
-            self._execution_id = chunk_config["execution_id"]
-            logger.info(f"[{worker_id}] Got chunk config, starting heartbeat thread...")
-        except Exception as e:
-            logger.error(f"[{worker_id}] Failed to get chunk config: {e}")
-            raise
-
+        # Start heartbeat thread
         heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
             args=(coordinator, worker_id),
             daemon=True,
         )
         heartbeat_thread.start()
-        logger.info(f"[{worker_id}] Heartbeat thread started, entering work loop...")
 
         try:
-            self._work_loop(coordinator, worker_id)
+            self._poll_loop(coordinator, worker_id)
         finally:
             self._shutdown_event.set()
             heartbeat_thread.join(timeout=5.0)
-            logger.info(f"[{worker_id}] run_loop finished")
+            logger.info("[%s] Polling loop ended", worker_id)
 
     def _heartbeat_loop(self, coordinator: ActorHandle, worker_id: str, interval: float = 5.0) -> None:
-        logger.info(f"[{worker_id}] Heartbeat loop starting...")
+        logger.info("[%s] Heartbeat loop starting", worker_id)
         heartbeat_count = 0
         while not self._shutdown_event.is_set():
             try:
                 coordinator.heartbeat.remote(worker_id)
                 heartbeat_count += 1
-                if heartbeat_count % 10 == 1:  # Log every 10th heartbeat
-                    logger.info(f"[{worker_id}] Sent heartbeat #{heartbeat_count}")
+                if heartbeat_count % 10 == 1:
+                    logger.debug("[%s] Sent heartbeat #%d", worker_id, heartbeat_count)
             except Exception as e:
-                logger.warning(f"[{worker_id}] Heartbeat failed: {e}")
+                logger.warning("[%s] Heartbeat failed: %s", worker_id, e)
             self._shutdown_event.wait(timeout=interval)
-        logger.info(f"[{worker_id}] Heartbeat loop exiting after {heartbeat_count} beats")
+        logger.info("[%s] Heartbeat loop exiting after %d beats", worker_id, heartbeat_count)
 
-    def _work_loop(self, coordinator: ActorHandle, worker_id: str) -> None:
+    def _poll_loop(self, coordinator: ActorHandle, worker_id: str) -> None:
+        """Pure polling loop. Exits only on SHUTDOWN signal."""
         loop_count = 0
         task_count = 0
-        logger.info(f"[{worker_id}] _work_loop starting, shutdown_event is set: {self._shutdown_event.is_set()}")
-        while not self._shutdown_event.is_set():
+        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+
+        while True:
             loop_count += 1
             if loop_count % 100 == 1:
-                logger.info(f"[{worker_id}] Work loop iteration #{loop_count}, tasks completed: {task_count}")
+                logger.debug("[%s] Poll iteration #%d, tasks completed: %d", worker_id, loop_count, task_count)
 
-            logger.debug(f"[{worker_id}] Pulling task...")
-            task_and_attempt = coordinator.pull_task.remote(worker_id).result()
-            logger.debug(f"[{worker_id}] Pull returned: {task_and_attempt is not None}")
+            response = coordinator.pull_task.remote(worker_id).result()
 
-            if task_and_attempt is None:
-                status = coordinator.get_status.remote().result()
-                logger.info(f"[{worker_id}] No task available, status: {status}")
-                if status.done:
-                    logger.info(f"[{worker_id}] Stage done (done={status.done}, error={status.fatal_error}), exiting")
-                    break
-                time.sleep(0.1)
+            # SHUTDOWN signal - exit cleanly
+            if response == "SHUTDOWN":
+                logger.info("[%s] Received SHUTDOWN", worker_id)
+                break
+
+            # No task available - backoff and retry
+            if response is None:
+                time.sleep(backoff.next_interval())
                 continue
 
-            task, attempt = task_and_attempt
-            logger.info(f"[{worker_id}] Executing task for shard {task.shard_idx} (attempt {attempt})")
+            backoff.reset()
+
+            # Unpack task and config
+            task, attempt, config = response
+
+            # Update config for this execution
+            self._shared_data = config["shared_data"]
+            self._chunk_prefix = config["chunk_prefix"]
+            self._execution_id = config["execution_id"]
+
+            logger.info("[%s] Executing task for shard %d (attempt %d)", worker_id, task.shard_idx, attempt)
             try:
                 result = self._execute_shard(task)
-                logger.info(f"[{worker_id}] Task complete, reporting result for shard {task.shard_idx}")
+                logger.info("[%s] Task complete, reporting result for shard %d", worker_id, task.shard_idx)
                 coordinator.report_result.remote(worker_id, task.shard_idx, attempt, result)
-                logger.info(f"[{worker_id}] Result reported for shard {task.shard_idx}")
                 task_count += 1
             except Exception as e:
-                logger.error(f"Worker {worker_id} error on shard {task.shard_idx}: {e}")
+                logger.error("Worker %s error on shard %d: %s", worker_id, task.shard_idx, e)
                 import traceback
 
                 coordinator.report_error.remote(
@@ -543,36 +810,10 @@ class ZephyrWorker:
         self._shutdown_event.set()
 
 
-# ---------------------------------------------------------------------------
-# _run_stage_on_coordinator — shared poll-loop for executing a stage
-# ---------------------------------------------------------------------------
-
-
-def _run_stage_on_coordinator(
-    coordinator: ActorHandle,
-    stage_name: str,
-    tasks: list[ShardTask],
-) -> dict[int, list[TaskResult]]:
-    """Submit tasks to coordinator, poll until complete, return raw results."""
-    coordinator.start_stage.remote(stage_name, tasks).result()
-    last_log_completed = -1
-    while True:
-        coordinator.check_heartbeats.remote()
-        status = coordinator.get_status.remote().result()
-        if status.fatal_error:
-            raise ZephyrWorkerError(status.fatal_error)
-        if status.completed != last_log_completed:
-            logger.info("[%s] %d/%d tasks completed", stage_name, status.completed, status.total)
-            last_log_completed = status.completed
-        if status.completed >= status.total:
-            break
-        time.sleep(0.1)
-    return coordinator.collect_results.remote().result()
-
-
 def _regroup_result_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
+    output_shard_count: int | None = None,
 ) -> list[Shard]:
     """Regroup worker output refs by output shard index without loading data."""
     output_by_shard: dict[int, list[DiskChunk]] = defaultdict(list)
@@ -582,6 +823,8 @@ def _regroup_result_refs(
             output_by_shard[chunk.target_shard].append(chunk.data)
 
     num_output = max(max(output_by_shard.keys(), default=0) + 1, input_shard_count)
+    if output_shard_count is not None:
+        num_output = max(num_output, output_shard_count)
     return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_output)]
 
 
@@ -589,10 +832,10 @@ def _regroup_result_refs(
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
 
-    Creates and manages a coordinator actor and a pool of long-lived worker
-    actors. Workers persist across pipeline stages, allowing cached state
-    (tokenizers, models) to be reused. Shared data broadcast via put() is
-    delivered to workers through the coordinator.
+    Creates a coordinator actor on __enter__ which owns and manages the worker
+    pool. Workers persist across pipeline stages and execute() calls, allowing
+    cached state (tokenizers, models) to be reused. Shared data broadcast via
+    put() is delivered to workers with each task.
     """
 
     client: Client
@@ -603,11 +846,8 @@ class ZephyrContext:
 
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
-    _workers: list[ActorHandle] = field(default_factory=list, repr=False)
-    _worker_futures: list = field(default_factory=list, repr=False)
-    _instance_id: str = field(default_factory=lambda: __import__("uuid").uuid4().hex[:8], repr=False)
     _coordinator_group: Any = field(default=None, repr=False)
-    _worker_group: Any = field(default=None, repr=False)
+    _instance_id: str = field(default_factory=lambda: __import__("uuid").uuid4().hex[:8], repr=False)
 
     def __post_init__(self):
         if self.chunk_storage_prefix is None:
@@ -632,7 +872,11 @@ class ZephyrContext:
         verbose: bool = False,
         dry_run: bool = False,
     ) -> Sequence:
-        """Execute a dataset pipeline on the worker pool."""
+        """Execute a dataset pipeline on the worker pool.
+
+        Workers persist across execute() calls, so cached state (tokenizers,
+        models) will be reused.
+        """
         plan = compute_plan(dataset, hints)
         if dry_run:
             _print_plan(dataset.operations, plan)
@@ -641,113 +885,73 @@ class ZephyrContext:
         execution_id = _generate_execution_id()
 
         try:
-            coordinator = self._get_or_create_coordinator()
-            coordinator.set_chunk_config.remote(self.chunk_storage_prefix, execution_id).result()
-            coordinator.set_shared_data.remote(self._shared_data).result()
+            # Ensure coordinator is initialized
+            self._ensure_coordinator()
 
-            # Reset coordinator done flag in case this context is being reused
-            coordinator.reset.remote().result()
+            # Run pipeline on coordinator (blocking call)
+            results = self._coordinator.run_pipeline.remote(plan, self._shared_data, execution_id, hints).result()
 
-            # Start run loops for whatever workers are ready now
-            self._worker_futures = [w.run_loop.remote(coordinator) for w in self._workers]
+            return results
 
-            shards = _build_source_shards(plan.source_items)
-
-            for stage_idx, stage in enumerate(plan.stages):
-                # Pick up any newly-available workers and start their run loops
-                for new_worker in self._discover_workers():
-                    self._worker_futures.append(new_worker.run_loop.remote(coordinator))
-                stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
-
-                if stage.stage_type == StageType.RESHARD:
-                    shards = _reshard_refs(shards, stage.output_shards or len(shards))
-                    continue
-
-                aux_per_shard = _compute_join_aux(
-                    stage.operations, shards, coordinator, self.chunk_storage_prefix, hints, execution_id
-                )
-
-                tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
-                logger.info("Starting stage %s with %d tasks", stage_label, len(tasks))
-
-                result_refs = _run_stage_on_coordinator(coordinator, stage_label, tasks)
-                shards = _regroup_result_refs(result_refs, len(shards))
-
-            coordinator.signal_done.remote().result()
-
-            for f in self._worker_futures:
-                with suppress(Exception):
-                    f.result(timeout=10.0)
-            self._worker_futures = []
-            flat_result = []
-            for shard in shards:
-                for chunk in shard.chunks:
-                    flat_result.extend(list(chunk))
-            return flat_result
+        except Exception:
+            # Re-raise without cleanup - workers will be reused
+            raise
 
         finally:
+            # Clean up chunks for this execution only (workers persist)
             _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
-    def _get_or_create_coordinator(self) -> ActorHandle:
-        if self._coordinator is None:
-            coordinator_resources = ResourceConfig(cpu=1, ram="2g")
-            coordinator_group = self.client.create_actor_group(
-                ZephyrCoordinator,
-                name=f"zephyr-controller-{self._instance_id}",
-                count=1,
-                resources=coordinator_resources,
-            )
-            self._coordinator = coordinator_group.wait_ready()[0]
-            self._coordinator_group = coordinator_group
+    def _ensure_coordinator(self) -> None:
+        """Create coordinator and workers if not already initialized."""
+        if self._coordinator is not None:
+            return
 
-            worker_group = self.client.create_actor_group(
-                ZephyrWorker,
-                name=f"zephyr-worker-{self._instance_id}",
-                count=self.num_workers,
-                resources=self.resources,
-            )
-            self._workers = worker_group.wait_ready()
-            self._worker_group = worker_group
-        return self._coordinator
+        # Create coordinator actor with high max_concurrency to allow
+        # workers to call pull_task/report_result while run_pipeline blocks
+        coordinator_resources = ResourceConfig(cpu=1, ram="2g", max_concurrency=100)
+        self._coordinator_group = self.client.create_actor_group(
+            ZephyrCoordinator,
+            name=f"zephyr-coordinator-{self._instance_id}",
+            count=1,
+            resources=coordinator_resources,
+        )
+        self._coordinator = self._coordinator_group.wait_ready()[0]
 
-    def _discover_workers(self) -> list[ActorHandle]:
-        """Discover newly available workers and return them."""
-        group = self._worker_group
-        if group is None:
-            return []
-        new_handles = group.discover_new()
-        if new_handles:
-            self._workers.extend(new_handles)
-            logger.info("Discovered %d new workers, total now %d", len(new_handles), len(self._workers))
-        return new_handles
+        # Create worker group using the context's client (avoids auto-detection issues)
+        worker_group = self.client.create_actor_group(
+            ZephyrWorker,
+            name=f"zephyr-workers-{self._instance_id}",
+            count=self.num_workers,
+            resources=self.resources,
+        )
+
+        # Pass worker group to coordinator - it will poll discover_new() for new workers
+        self._coordinator.initialize.remote(
+            self.chunk_storage_prefix,
+            self._coordinator,
+            worker_group,
+        ).result()
+
+        logger.info("ZephyrContext initialized with coordinator and %d workers", self.num_workers)
 
     def shutdown(self) -> None:
-        # TODO: terminate the jobs isntead of the signals
+        """Shutdown coordinator and all workers."""
         if self._coordinator is not None:
+            # Tell coordinator to shutdown workers gracefully
             with suppress(Exception):
-                self._coordinator.signal_done.remote()
-            for w in self._workers:
-                with suppress(Exception):
-                    w.shutdown.remote()
+                self._coordinator.shutdown.remote().result()
 
-            for f in self._worker_futures:
-                with suppress(Exception):
-                    f.result(timeout=5.0)
-
+            # Terminate coordinator actor group
             if self._coordinator_group is not None:
                 with suppress(Exception):
                     self._coordinator_group.shutdown()
-            if self._worker_group is not None:
-                with suppress(Exception):
-                    self._worker_group.shutdown()
 
             self._coordinator = None
-            self._workers = []
-            self._worker_futures = []
             self._coordinator_group = None
-            self._worker_group = None
 
     def __enter__(self) -> ZephyrContext:
+        # Eagerly initialize coordinator and workers on context entry
+        self._ensure_coordinator()
         return self
 
     def __exit__(self, *exc) -> None:
@@ -812,50 +1016,6 @@ def _compute_tasks_from_shards(
         )
 
     return tasks
-
-
-def _compute_join_aux(
-    operations: list[PhysicalOp],
-    shard_refs: list[Shard],
-    coordinator: ActorHandle,
-    chunk_storage_prefix: str,
-    hints: ExecutionHint,
-    execution_id: str,
-) -> list[dict[int, list[list[DiskChunk]]]] | None:
-    """Execute right sub-plans for join operations, returning aux refs per shard."""
-    all_right_shard_refs: dict[int, list[list[Chunk]]] = {}
-
-    for i, op in enumerate(operations):
-        if not isinstance(op, Join) or op.right_plan is None:
-            continue
-
-        right_refs = _build_source_shards(op.right_plan.source_items)
-        # now run and produce the results for this
-
-        for stage_idx, right_stage in enumerate(op.right_plan.stages):
-            if right_stage.stage_type == StageType.RESHARD:
-                right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
-                continue
-
-            join_stage_label = f"join-right-{i}-stage{stage_idx}"
-            right_tasks = _compute_tasks_from_shards(right_refs, right_stage, hints, stage_name=join_stage_label)
-            raw = _run_stage_on_coordinator(coordinator, join_stage_label, right_tasks)
-            right_refs = _regroup_result_refs(raw, len(right_refs))
-
-        if len(shard_refs) != len(right_refs):
-            raise ValueError(
-                f"Sorted merge join requires equal shard counts. "
-                f"Left has {len(shard_refs)} shards, right has {len(right_refs)} shards."
-            )
-        all_right_shard_refs[i] = right_refs
-
-    if not all_right_shard_refs:
-        return None
-
-    return [
-        {op_idx: [right_refs.shards[shard_idx]] for op_idx, right_refs in all_right_shard_refs.items()}
-        for shard_idx in range(len(shard_refs))
-    ]
 
 
 _default_zephyr_context: ContextVar[ZephyrContext | None] = ContextVar("zephyr_context", default=None)

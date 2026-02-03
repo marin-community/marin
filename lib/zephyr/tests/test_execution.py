@@ -134,16 +134,17 @@ def test_chunk_cleanup(fray_client, tmp_path):
 def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
-    from zephyr.execution import DiskChunk, ShardTask, ZephyrCoordinator
+    from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
 
     task = ShardTask(
         shard_idx=0,
         total_shards=1,
         chunk_size=100,
-        chunk_refs=[],
+        shard=Shard(chunks=[]),
         operations=[],
         stage_name="test",
     )
@@ -152,7 +153,8 @@ def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     # Worker A pulls task (attempt 0)
     pulled = coord.pull_task("worker-A")
     assert pulled is not None
-    _, attempt_a = pulled
+    assert pulled != "SHUTDOWN"
+    task_a, attempt_a, _config = pulled
 
     # Simulate heartbeat timeout: mark worker-A stale and requeue
     coord._last_seen["worker-A"] = 0.0
@@ -164,26 +166,26 @@ def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     # Worker B picks up the requeued task (attempt 1)
     pulled_b = coord.pull_task("worker-B")
     assert pulled_b is not None
-    _, attempt_b = pulled_b
+    assert pulled_b != "SHUTDOWN"
+    _task_b, attempt_b, _config = pulled_b
     assert attempt_b == 1
 
     # Worker B reports success
-    coord.report_result("worker-B", 0, attempt_b, [])
+    coord.report_result("worker-B", 0, attempt_b, TaskResult(chunks=[]))
 
     # Worker A's stale result (attempt 0) should be ignored
-    coord.report_result("worker-A", 0, attempt_a, [({}, DiskChunk(path="fake", count=1))])
+    coord.report_result("worker-A", 0, attempt_a, TaskResult(chunks=[]))
 
     # Only one completion should be counted
     assert coord._completed_shards == 1
 
 
 def test_chunk_streaming_low_memory(tmp_path):
-    """_SerializableShard loads chunks one at a time from disk, not all at once.
+    """Shard loads chunks one at a time from disk via iter_chunks.
 
-    Verifies the class has no caching attribute and that iter_chunks yields
-    data lazily by checking each chunk is independently loaded.
+    Verifies iter_chunks yields data lazily and flat iteration works.
     """
-    from zephyr.execution import DiskChunk, _SerializableShard
+    from zephyr.execution import DiskChunk, Shard
 
     # Write 3 chunks to disk
     refs = []
@@ -191,10 +193,7 @@ def test_chunk_streaming_low_memory(tmp_path):
         path = str(tmp_path / f"chunk-{i}.pkl")
         refs.append(DiskChunk.write(path, [i * 10 + j for j in range(5)]))
 
-    shard = _SerializableShard(refs)
-
-    # No _chunks caching attribute (it was removed in the streaming fix)
-    assert not hasattr(shard, "_chunks")
+    shard = Shard(chunks=refs)
 
     # iter_chunks yields correct data
     chunks = list(shard.iter_chunks())
@@ -209,8 +208,8 @@ def test_chunk_streaming_low_memory(tmp_path):
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
 
 
-def test_resource_cleanup_after_execute(fray_client, tmp_path):
-    """Actors remain alive during the context block and are cleaned up on exit."""
+def test_workers_persist_across_executes(fray_client, tmp_path):
+    """Workers persist across multiple execute() calls within a context."""
     chunk_prefix = str(tmp_path / "chunks")
 
     with ZephyrContext(
@@ -223,15 +222,18 @@ def test_resource_cleanup_after_execute(fray_client, tmp_path):
         results = list(zctx.execute(ds))
         assert sorted(results) == [2, 3, 4]
 
-        # Inside the block: actors should be alive
+        # After execute(): coordinator still exists (workers persist)
         assert zctx._coordinator is not None
-        assert len(zctx._workers) == 2
+        assert zctx._coordinator_group is not None
 
-    # After exiting: shutdown should have cleared actor references
+        # Can execute again (reuses same workers)
+        ds2 = Dataset.from_list([10, 20]).map(lambda x: x * 2)
+        results2 = list(zctx.execute(ds2))
+        assert sorted(results2) == [20, 40]
+
+    # After context exit: all resources are cleaned up
     assert zctx._coordinator is None
-    assert zctx._workers == []
     assert zctx._coordinator_group is None
-    assert zctx._worker_group is None
 
 
 def test_fatal_errors_fail_fast(fray_client, tmp_path):

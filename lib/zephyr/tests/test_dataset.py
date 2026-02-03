@@ -861,12 +861,8 @@ def test_sorted_merge_join_shard_mismatch(zephyr_ctx):
 
 
 def test_sorted_merge_join_empty_datasets(zephyr_ctx):
-    """Test sorted merge join with empty datasets.
-
-    Note: Empty datasets with group_by create 0 shards, so shard counts won't match.
-    This test verifies that mismatched shard counts raise an error.
-    """
-    # Empty left dataset - will create 0 shards
+    """Test sorted merge join with empty datasets produces empty results."""
+    # Empty left dataset
     left = Dataset.from_list([]).group_by(
         key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
@@ -875,12 +871,9 @@ def test_sorted_merge_join_empty_datasets(zephyr_ctx):
     )
 
     joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+    assert list(zephyr_ctx.execute(joined)) == []
 
-    # Empty dataset creates 0 shards, non-empty creates N shards - this is a mismatch
-    with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
-        list(zephyr_ctx.execute(joined))
-
-    # Empty right dataset - will create 0 shards
+    # Empty right dataset
     left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
         key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
@@ -889,10 +882,7 @@ def test_sorted_merge_join_empty_datasets(zephyr_ctx):
     )
 
     joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
-
-    # Empty dataset creates 0 shards, non-empty creates N shards - this is a mismatch
-    with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
-        list(zephyr_ctx.execute(joined))
+    assert list(zephyr_ctx.execute(joined)) == []
 
 
 def test_map_shard_stateful_deduplication(zephyr_ctx):

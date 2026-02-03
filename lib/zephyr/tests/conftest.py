@@ -15,7 +15,13 @@
 """Pytest fixtures for zephyr tests."""
 
 import logging
+import os
 from pathlib import Path
+
+# Disable Ray's automatic UV runtime env propagation BEFORE importing ray.
+# This prevents Ray from packaging the entire working directory (~38MB) for actors.
+os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+os.environ["MARIN_CI_DISABLE_RUNTIME_ENVS"] = "1"
 
 import pytest
 import ray
@@ -54,11 +60,6 @@ def ray_cluster():
     """Initialize Ray cluster for testing - reused across all tests."""
     if not ray.is_initialized():
         logging.info("Initializing Ray cluster for zephyr tests")
-        import os
-
-        # Disable Ray's automatic UV runtime env propagation which packages the
-        # entire working directory (~38MB) for every actor. Not needed for local tests.
-        os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
         ray.init(
             address="local",
             num_cpus=8,
@@ -71,7 +72,7 @@ def ray_cluster():
     # Don't shutdown - Ray will be reused across test sessions
 
 
-@pytest.fixture(params=["local", "iris", "ray"])
+@pytest.fixture(params=["local", "iris", "ray"], scope="module")
 def fray_client(request):
     """Parametrized fixture providing Local, Iris, and Ray clients.
 

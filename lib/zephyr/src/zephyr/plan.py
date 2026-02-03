@@ -810,6 +810,7 @@ def run_stage(
                 if output_chunks[shard_idx]:
                     for chunk in output_chunks[shard_idx]:
                         yield StageResultChunk(source_shard=ctx.shard_idx, target_shard=shard_idx, chunk=chunk)
+            return
 
         elif isinstance(op, Reduce):
             # Merge sorted chunks and reduce per key

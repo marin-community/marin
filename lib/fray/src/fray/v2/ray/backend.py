@@ -387,6 +387,7 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
     across nodes instead of piling onto one.
 
     preemptible=False pins the actor to the head node via a custom resource.
+    max_concurrency>1 enables concurrent method calls (threaded actor).
     """
     options: dict[str, Any] = {
         "num_cpus": resources.cpu,
@@ -396,6 +397,8 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
         options["memory"] = humanfriendly.parse_size(resources.ram, binary=True)
     if not resources.preemptible:
         options["resources"] = {"head_node": 0.0001}
+    if resources.max_concurrency > 1:
+        options["max_concurrency"] = resources.max_concurrency
     return options
 
 
