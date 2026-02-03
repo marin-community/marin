@@ -131,7 +131,7 @@ def _make_tags(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="OLMoE-M LR sweep on Nemotron+DCLM+FineWeb (token budget; 3 variants × 4 LR multipliers)."
+        description="OLMoE-M LR sweep on Nemotron+DCLM+FineWeb (token budget; 3 variants x 4 LR multipliers)."
     )
     parser.add_argument("--tpu-type", default="v5p-16")
     parser.add_argument("--seq-len", type=int, default=4096)

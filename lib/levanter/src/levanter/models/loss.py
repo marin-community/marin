@@ -214,8 +214,11 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     Contract = pred_embeddings.resolve_axis(Contract)
     Label = pred_lm_head.resolve_axis(Label)
     batch_axes = hax.axis.without_axes(pred_embeddings.axes, Contract)
-    flat_embeddings, _ = flatten_all_axes_but(pred_embeddings, "__BATCH__", batch_axes, reorder_to_front=True)
-    batch_axis = flat_embeddings.resolve_axis("__BATCH__")
+    # IMPORTANT: keep the flattened batch axis named `token` so it picks up the standard axis mapping
+    # (e.g. `token -> (replica_dcn, replica, data)`) and stays sharded in `shard_map` rather than being
+    # replicated. Replicating `B = batch*seq` can lead to massive intermediates and TPU compile failures.
+    flat_embeddings, _ = flatten_all_axes_but(pred_embeddings, "token", batch_axes, reorder_to_front=True)
+    batch_axis = flat_embeddings.resolve_axis("token")
     flat_embeddings = flat_embeddings.rearrange((batch_axis, Contract))
 
     flat_labels = hax.flatten_axes(target_y, target_y.axes, batch_axis)

@@ -214,7 +214,9 @@ def main() -> None:
         explicit_mesh_axes=True,
     )
 
-    default_suffix = f"grugformer_moe_olmoe1b7b_{args.tpu_type}_bs{args.global_batch_size}_{args.dataset}_seq{args.seq_len}"
+    default_suffix = (
+        f"grugformer_moe_olmoe1b7b_{args.tpu_type}_bs{args.global_batch_size}_{args.dataset}_seq{args.seq_len}"
+    )
     run_suffix = args.run_suffix or default_suffix
     wandb_group = args.wandb_group if args.wandb_group is not None else os.environ.get("WANDB_GROUP")
 
