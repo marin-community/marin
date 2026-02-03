@@ -23,18 +23,18 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast package management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+# Install uv from official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Copy iris package
+# Copy pyproject.toml first and sync dependencies (cached layer)
 COPY pyproject.toml ./
-COPY src/ ./src/
+RUN uv sync --no-install-project
 
-# Install iris
-RUN uv pip install --system .
+# Copy source and install the project
+COPY src/ ./src/
+RUN uv sync
 
 # Default cache directory
 RUN mkdir -p /var/cache/iris
@@ -44,4 +44,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:10000/health || exit 1
 
 # Controller entrypoint
-CMD ["python", "-m", "iris.cluster.controller.main", "serve", "--host", "0.0.0.0", "--port", "10000"]
+CMD [".venv/bin/python", "-m", "iris.cluster.controller.main", "serve", "--host", "0.0.0.0", "--port", "10000"]
