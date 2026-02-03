@@ -14,6 +14,9 @@ on:
       - uv.lock
       - .github/workflows/haliax-*.yaml
 
+env:
+  UV_HTTP_TIMEOUT: "120"
+
 jobs:
   cpu-test:
 

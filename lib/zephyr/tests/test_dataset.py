@@ -41,6 +41,7 @@ def test_from_list(sample_data, backend):
     assert list(Backend.execute(ds, context=backend)) == sample_data
 
 
+@pytest.mark.timeout(120)
 def test_dataclass_round_trip_preserves_type(backend):
     """Ensure dataclass items are not downcast to dicts during execution."""
     items = [SampleDataclass("alpha", 1), SampleDataclass("beta", 2)]

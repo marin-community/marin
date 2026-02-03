@@ -15,6 +15,9 @@ on:
       - uv.lock
       - .github/workflows/zephyr-unit-tests.yaml
 
+env:
+  UV_HTTP_TIMEOUT: "120"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
