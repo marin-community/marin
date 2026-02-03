@@ -1050,7 +1050,30 @@ class LmEvalHarnessConfig:
         Returns:
             List of task specifications, with TaskConfig objects converted to dictionaries
         """
-        return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
+        result = []
+        for task in self.task_spec:
+            if isinstance(task, TaskConfig):
+                result.append(task.to_dict())
+            elif isinstance(task, str):
+                result.append(task)
+            elif dataclasses.is_dataclass(task) and hasattr(task, "to_dict"):
+                # Handle case where TaskConfig class reference differs after cloudpickle deserialization
+                result.append(task.to_dict())
+            elif dataclasses.is_dataclass(task) and hasattr(task, "task"):
+                # Fallback: convert dataclass with 'task' attribute to dict
+                base_dict = dataclasses.asdict(task)
+                result.append({k: v for k, v in base_dict.items() if v is not None})
+            elif isinstance(task, dict):
+                # Validate that dict has required 'task' field
+                if "task" not in task:
+                    logger.warning(
+                        f"Task dict is missing required 'task' field: {task}. "
+                        "This may indicate a serialization issue with TaskConfig objects."
+                    )
+                result.append(task)
+            else:
+                result.append(task)
+        return result
 
     def to_task_dict(self) -> dict:
         """
@@ -1071,7 +1094,17 @@ class LmEvalHarnessConfig:
                 if isinstance(task, str):
                     this_tasks.update(_load_task_with_retry(tasks.get_task_dict, task, manager))
                 else:
-                    our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
+                    if isinstance(task, dict):
+                        if "task" not in task:
+                            raise ValueError(
+                                f"Task dict is missing required 'task' field: {task}. "
+                                "This typically indicates a serialization issue where TaskConfig objects "
+                                "were not properly converted to dicts. Ensure TaskConfig objects are used "
+                                "and not plain dicts missing the 'task' field."
+                            )
+                        our_name = task.get("task_alias", task["task"])
+                    else:
+                        our_name = task
                     assert isinstance(our_name, str)
                     our_name = our_name.replace(" ", "_")
                     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
@@ -1094,7 +1127,18 @@ class LmEvalHarnessConfig:
         """
         import lm_eval.tasks as tasks
 
-        task_name = task if isinstance(task, str) else task["task"]
+        if isinstance(task, str):
+            task_name = task
+        elif isinstance(task, dict):
+            if "task" not in task:
+                raise ValueError(
+                    f"Task dict is missing required 'task' field: {task}. "
+                    "This typically indicates a serialization issue where TaskConfig objects "
+                    "were not properly converted to dicts."
+                )
+            task_name = task["task"]
+        else:
+            task_name = task
 
         task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
         assert len(task_dict) == 1, f"Expected 1 task, got {len(task_dict)}"
