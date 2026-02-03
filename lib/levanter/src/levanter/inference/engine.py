@@ -96,6 +96,11 @@ class InferenceEngineConfig:
     max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
+    # Device override for multi-host inference
+    devices: Optional[Sequence] = None
+    """Devices to use for inference. If None, uses jax.devices(). For multi-host inference,
+    pass jax.local_devices() to run inference on a single host's devices only."""
+
     def __post_init__(self):
         # this one is only required because of clones. If we really care, we could relax this
         if self.max_queued_tokens < self.max_seqs:
@@ -123,13 +128,19 @@ def _tree_byte_size(tree) -> int:
     return sharded_tree_size(tree)
 
 
-def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
-    """Estimate the per-device HBM budget available to the KV cache."""
+def _available_hbm_budget_bytes(hbm_utilization: float, devices: Sequence | None = None) -> int:
+    """Estimate the per-device HBM budget available to the KV cache.
+
+    Args:
+        hbm_utilization: Fraction of HBM to use (0, 1].
+        devices: Devices to consider. If None, uses jax.devices().
+    """
 
     if not (0.0 < hbm_utilization <= 1.0):
         raise ValueError("hbm_utilization must be in the interval (0, 1].")
 
-    devices = jax.devices()
+    if devices is None:
+        devices = jax.devices()
     if not devices:
         raise RuntimeError("No JAX devices available for inference.")
 
@@ -154,7 +165,7 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
     max_pages_per_seq = config.max_pages_per_seq
 
     try:
-        budget = _available_hbm_budget_bytes(config.hbm_utilization)
+        budget = _available_hbm_budget_bytes(config.hbm_utilization, devices=config.devices)
     except Exception as exc:  # pragma: no cover - depends on runtime environment
         logger.warning(
             "Falling back to max_seqs * max_pages_per_seq for KV cache sizing because HBM budget "
@@ -530,7 +541,9 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     return jax.lax.fori_loop(0, max_slots, body, gen_state)
 
 
-@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
+@hax.named_jit(
+    donate_args=(True, False, False, False, False),
+)
 def _run_prefill(
     gen_state: GenState,
     model: LmHeadModel,
@@ -653,7 +666,9 @@ def _handle_clones(
 
 
 # @hax.named_jit(donate_args=(True, False, False))
-@functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
+@hax.named_jit(
+    donate_args=(True, False, False, False, False),
+)
 def _run_generation_loop(
     gen_state: GenState,
     model: LmHeadModel,
@@ -852,7 +867,11 @@ class InferenceEngine:
         if prefill_work is None:
             return None
         new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
+            self.gen_state,
+            self.model,
+            self.sampler,
+            prefill_work,
+            int(self.config.max_seqs_in_prefill),
         )
 
         # _run_prefill returns (GenState, _DecodeOutputs)
@@ -1116,8 +1135,8 @@ class InferenceEngine:
                 self.model,
                 self.sampler,
                 # TODO: tune max_tokens_per_round
-                self.config.imputed_max_tokens_per_round,
-                self.config.max_rounds,
+                int(self.config.imputed_max_tokens_per_round),
+                int(self.config.max_rounds),
             )
             submit_done = time.time()
             # Time spent with device executing (and the host thread waiting)
@@ -1186,18 +1205,26 @@ class InferenceEngine:
         """
         Write out jaxpr and hlo for the generation loop to the given path.
         """
-        traced = _run_generation_loop.trace(
+        traced = jax.make_jaxpr(_run_generation_loop.__wrapped__)(
             self.gen_state,
             self.model,
             self.sampler,
             # TODO: tune max_tokens_per_round
-            self.config.imputed_max_tokens_per_round,
-            self.config.max_rounds,
+            int(self.config.imputed_max_tokens_per_round),
+            int(self.config.max_rounds),
         )
         with fsspec.open(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(traced.jaxpr))
         with fsspec.open(os.path.join(path, "gen_loop.hlo.txt.gz"), "w", compression="infer") as f:
-            f.write(traced.lower().as_text())
+            f.write(
+                _run_generation_loop.lower(
+                    self.gen_state,
+                    self.model,
+                    self.sampler,
+                    int(self.config.imputed_max_tokens_per_round),
+                    int(self.config.max_rounds),
+                ).as_text()
+            )
 
         def _create_dummy_work():
             max_slots = self.config.max_seqs_in_prefill
@@ -1224,17 +1251,25 @@ class InferenceEngine:
                 ),
             )
 
-        prefill_traced = _run_prefill.trace(
+        prefill_traced = jax.make_jaxpr(_run_prefill.__wrapped__)(
             self.gen_state,
             self.model,
             self.sampler,
             eqx.filter_eval_shape(_create_dummy_work),
-            self.config.max_seqs_in_prefill,
+            int(self.config.max_seqs_in_prefill),
         )
         with fsspec.open(os.path.join(path, "run_prefill.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(prefill_traced.jaxpr))
         with fsspec.open(os.path.join(path, "run_prefill.hlo.txt.gz"), "w", compression="infer") as f:
-            f.write(prefill_traced.lower().as_text())
+            f.write(
+                _run_prefill.lower(
+                    self.gen_state,
+                    self.model,
+                    self.sampler,
+                    eqx.filter_eval_shape(_create_dummy_work),
+                    int(self.config.max_seqs_in_prefill),
+                ).as_text()
+            )
 
         if log_artifacts:
             levanter.tracker.current_tracker().log_artifact(path, name="generation_kernels")

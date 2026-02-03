@@ -187,6 +187,40 @@ def create_mesh_from_axis_specs(
     return Mesh(device_mesh, tuple(axis_names), axis_types=axis_types)
 
 
+def create_local_mesh(
+    devices: Sequence | None = None,
+    ici_axes: Mapping[str, int] | None = None,
+) -> Mesh:
+    """Create a mesh using only local devices (for single-host inference).
+
+    This is useful for running inference on a single host during multi-host training,
+    where each host runs inference independently using only its local devices.
+
+    Args:
+        devices: The devices to include in the mesh. If None, uses jax.local_devices().
+        ici_axes: ICI axis sizes. If None, defaults to all devices on the DATA axis with
+            MODEL=1 (fully data-parallel). The key with value -1 absorbs remaining devices.
+
+    Returns:
+        A Mesh configured for single-host inference with the specified devices.
+    """
+    if devices is None:
+        devices = jax.local_devices()
+    devices = list(devices)
+
+    if ici_axes is None:
+        ici_axes = {
+            ResourceAxis.DATA: len(devices),
+            ResourceAxis.MODEL: 1,
+        }
+
+    return create_mesh_from_axis_specs(
+        ici_axes=ici_axes,
+        dcn_axes={},  # No cross-host axes for local mesh
+        devices=devices,
+    )
+
+
 def _norm(v: Union[str, Sequence[str]]) -> Union[str, Tuple[str, ...]]:
     if isinstance(v, (list, tuple)):
         v = tuple(v)

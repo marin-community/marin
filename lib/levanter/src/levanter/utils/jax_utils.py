@@ -7,7 +7,7 @@ import json
 import warnings
 import zlib
 from dataclasses import fields
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import haliax as hax
@@ -142,6 +142,30 @@ def barrier_sync(timeout: float = 200):
 
     _sync_counter += 1
     client.wait_at_barrier(f"levanter_barrier_sync_{_sync_counter}", timeout_in_ms=int(timeout * 1000.0))
+
+
+def barrier_sync_with_tag(tag: str, timeout: float = 200):
+    """
+    Deterministic barrier using a caller-supplied tag. Use when all hosts must rendezvous
+    on the same barrier name to avoid per-host counter drift.
+    """
+    if jax.process_count() == 1:
+        return
+    import jax._src.distributed as distributed
+
+    try:
+        from jaxlib.xla_extension import DistributedRuntimeClient
+    except ModuleNotFoundError:  # jaxlib>=0.6.2
+        from jax._src.lib import _jax as _jax_lib
+
+        DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
+
+    client: Optional[DistributedRuntimeClient] = distributed.global_state.client
+
+    if client is None:
+        raise RuntimeError("barrier_sync_with_tag requires jax distributed client to be initialized")
+
+    client.wait_at_barrier(tag, timeout_in_ms=int(timeout * 1000.0))
 
 
 # from https://stackoverflow.com/questions/2166818/how-to-check-if-an-object-is-an-instance-of-a-namedtuple
@@ -516,6 +540,49 @@ def sync_global_devices(name: str):
     """Creates a barrier across all hosts/devices."""
     h = np.uint32(zlib.crc32(name.encode()))
     assert_equal(h, f"sync_global_devices name mismatch ('{name}')")
+
+
+def replicate_model_to_local_mesh(
+    model: PyTree,
+    local_devices: Sequence[jax.Device] | None = None,
+) -> PyTree:
+    """Convert a globally-sharded model to a fully-replicated copy on local devices.
+
+    This triggers an all-gather operation to collect all shards, creating a full
+    model copy on each host's local devices. This is useful for running inference
+    on a single host during multi-host training without requiring cross-host
+    communication during inference.
+
+    Args:
+        model: A PyTree (typically a model) that may be sharded across multiple hosts.
+        local_devices: The local devices to replicate the model to. If None, uses
+            jax.local_devices().
+
+    Returns:
+        A PyTree with the same structure as the input, but with all arrays fully
+        replicated on the local devices.
+    """
+    if local_devices is None:
+        local_devices = jax.local_devices()
+
+    # Create a local mesh with local devices only
+    local_mesh = Mesh(np.array(local_devices).reshape(-1), axis_names=("local",))
+
+    # PartitionSpec() = fully replicated (no sharding)
+    replicated_sharding = NamedSharding(local_mesh, PartitionSpec())
+
+    def _to_local_replica(x):
+        if not is_jax_array_like(x):
+            return x
+
+        if isinstance(x, hax.NamedArray):
+            inner = x.array
+            local_inner = jax.device_put(inner, replicated_sharding)
+            return hax.NamedArray(local_inner, x.axes)
+        else:
+            return jax.device_put(x, replicated_sharding)
+
+    return jax.tree.map(_to_local_replica, model, is_leaf=is_named_array)
 
 
 def sharded_tree_size(
