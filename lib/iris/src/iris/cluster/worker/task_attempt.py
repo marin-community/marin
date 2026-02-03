@@ -96,9 +96,7 @@ def build_iris_env(
     # N.B. This needs to mirror JobInfo.from_env()
     # XXX: Should we move this code there instead?
     # Core task metadata
-    env["IRIS_JOB_ID"] = task.job_id
-    env["IRIS_TASK_ID"] = task.task_id
-    env["IRIS_TASK_INDEX"] = str(task.task_index)
+    env["IRIS_JOB_ID"] = task.task_id
     env["IRIS_NUM_TASKS"] = str(task.num_tasks)
     env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
     env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
@@ -527,9 +525,17 @@ class TaskAttempt:
                 elif status.exit_code == 0:
                     self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
+                    stderr_line = None
+                    for entry in reversed(self._runtime.get_logs(container_id)):
+                        if entry.source == "stderr" and entry.data:
+                            stderr_line = entry.data
+                            break
+                    error = f"Exit code: {status.exit_code}"
+                    if stderr_line:
+                        error = f"{error}. stderr: {stderr_line}"
                     self.transition_to(
                         cluster_pb2.TASK_STATE_FAILED,
-                        error=f"Exit code: {status.exit_code}",
+                        error=error,
                         exit_code=status.exit_code or -1,
                     )
                 break

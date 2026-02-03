@@ -112,13 +112,20 @@ class _LocalContainer:
         cmd = self._build_command()
 
         try:
+            env = dict(self.config.env)
+            iris_root = Path(__file__).resolve().parents[4]
+            extra_paths = [str(iris_root / "src"), str(iris_root)]
+            existing = env.get("PYTHONPATH", "")
+            prefix = os.pathsep.join(p for p in extra_paths if p not in existing.split(os.pathsep))
+            env["PYTHONPATH"] = f"{prefix}{os.pathsep}{existing}" if existing else prefix
+
             # Use process groups on Unix for clean termination
             # Set PR_SET_PDEATHSIG on Linux for automatic cleanup if parent dies
             popen_kwargs: dict[str, Any] = {
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
                 "text": True,
-                "env": self.config.env,
+                "env": env,
                 "bufsize": 1,  # Line buffered
             }
 
@@ -159,10 +166,8 @@ class _LocalContainer:
 
         # Build job_info setup from environment variables
         env = self.config.env
+        task_id_str = env.get("IRIS_JOB_ID")
         job_info_setup = f"""
-job_id='{env.get("IRIS_JOB_ID", "")}',
-task_id={env.get("IRIS_TASK_ID")!r},
-task_index={env.get("IRIS_TASK_INDEX", "0")},
 num_tasks={env.get("IRIS_NUM_TASKS", "1")},
 attempt_id={env.get("IRIS_ATTEMPT_ID", "0")},
 worker_id={env.get("IRIS_WORKER_ID")!r},
@@ -179,13 +184,17 @@ import traceback
 # Set up job_info context (same as in-thread execution)
 try:
     from iris.cluster.client.job_info import JobInfo, set_job_info, _parse_ports_from_env
-    job_info = JobInfo(
-        {job_info_setup}
-        ports=_parse_ports_from_env({env!r}),
-    )
-    set_job_info(job_info)
-except ImportError:
-    pass  # job_info not available in subprocess
+    from iris.cluster.types import JobName
+    task_id_str = {task_id_str!r}
+    if task_id_str:
+        job_info = JobInfo(
+            task_id=JobName.from_wire(task_id_str),
+            {job_info_setup}
+            ports=_parse_ports_from_env({env!r}),
+        )
+        set_job_info(job_info)
+except Exception:
+    pass  # Best-effort job_info setup; job execution should still proceed
 
 # Execute cloudpickled function
 try:

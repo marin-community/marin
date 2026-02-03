@@ -31,6 +31,7 @@ from iris.cluster.worker.docker import ContainerRuntime, DockerRuntime
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.types import JobName
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
@@ -361,8 +362,8 @@ class Worker:
         if should_kill_existing:
             self.kill_task(task_id)
 
-        job_id = request.job_id
-        task_index = request.task_index
+        job_name, task_index = JobName.from_wire(task_id).require_task()
+        job_id = job_name.to_wire()
         num_tasks = request.num_tasks
         attempt_id = request.attempt_id
 
@@ -372,8 +373,8 @@ class Worker:
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
         # Create task working directory with attempt isolation
-        # Use safe path component for hierarchical task IDs (e.g., "my-exp/task-0" -> "my-exp__task-0")
-        safe_task_id = task_id.replace("/", "__")
+        # Use safe path component for hierarchical task IDs (e.g., "/my-exp/0" -> "__my-exp__0")
+        safe_task_id = JobName.from_wire(task_id).to_safe_token()
         workdir = Path(tempfile.gettempdir()) / "iris-worker" / "tasks" / f"{safe_task_id}_attempt_{attempt_id}"
         workdir.mkdir(parents=True, exist_ok=True)
 
@@ -486,11 +487,12 @@ class Worker:
 
                 if task is None:
                     # Task not found - report as WORKER_FAILED
+                    job_name, task_index = JobName.from_wire(task_id).require_task()
                     completed_tasks.append(
                         cluster_pb2.Controller.CompletedTaskEntry(
                             task_id=task_id,
-                            job_id="",  # We don't have this information
-                            task_index=0,
+                            job_id=job_name.to_wire(),
+                            task_index=task_index,
                             state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                             exit_code=0,
                             error="Task not found on worker",

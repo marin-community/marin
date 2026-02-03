@@ -21,7 +21,7 @@ to handlers based on event type and logs actions to a transaction log for debugg
 from dataclasses import dataclass, field
 from typing import Any
 
-from iris.cluster.types import JobId, TaskId, WorkerId
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
@@ -75,7 +75,7 @@ class WorkerFailedEvent(Event):
 class JobSubmittedEvent(Event):
     """New job submission."""
 
-    job_id: JobId
+    job_id: JobName
     request: cluster_pb2.Controller.LaunchJobRequest
     timestamp: Timestamp
 
@@ -84,7 +84,7 @@ class JobSubmittedEvent(Event):
 class JobCancelledEvent(Event):
     """Job termination request."""
 
-    job_id: JobId
+    job_id: JobName
     reason: str
 
 
@@ -92,7 +92,7 @@ class JobCancelledEvent(Event):
 class TaskAssignedEvent(Event):
     """Task assigned to worker (creates attempt, commits resources)."""
 
-    task_id: TaskId
+    task_id: JobName
     worker_id: WorkerId
 
 
@@ -100,7 +100,7 @@ class TaskAssignedEvent(Event):
 class TaskStateChangedEvent(Event):
     """Task state transition."""
 
-    task_id: TaskId
+    task_id: JobName
     new_state: int  # cluster_pb2.TaskState
     attempt_id: int
     error: str | None = None
@@ -135,7 +135,7 @@ class TransactionLog:
     event: Event
     timestamp: Timestamp = field(default_factory=Timestamp.now)
     actions: list[Action] = field(default_factory=list)
-    tasks_to_kill: set[TaskId] = field(default_factory=set)
+    tasks_to_kill: set[JobName] = field(default_factory=set)
 
     def log(self, action: str, entity_id: str, **details: Any) -> None:
         """Record an action taken during event handling."""

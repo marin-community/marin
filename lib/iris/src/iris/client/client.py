@@ -50,7 +50,7 @@ from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
-    JobId,
+    JobName,
     Namespace,
     ResourceSpec,
     is_job_finished,
@@ -87,7 +87,7 @@ class LogEntry:
 class JobFailedError(Exception):
     """Raised when a job ends in a non-SUCCESS terminal state."""
 
-    def __init__(self, job_id: JobId, status: cluster_pb2.JobStatus):
+    def __init__(self, job_id: JobName, status: cluster_pb2.JobStatus):
         self.job_id = job_id
         self.status = status
         state_name = cluster_pb2.JobState.Name(status.state)
@@ -120,7 +120,7 @@ class Task:
                 print(entry.data)
     """
 
-    def __init__(self, client: "IrisClient", job_id: JobId, task_index: int):
+    def __init__(self, client: "IrisClient", job_id: JobName, task_index: int):
         self._client = client
         self._job_id = job_id
         self._task_index = task_index
@@ -131,12 +131,12 @@ class Task:
         return self._task_index
 
     @property
-    def task_id(self) -> str:
-        """Full task identifier (job_id/task-N)."""
-        return f"{self._job_id}/task-{self._task_index}"
+    def task_id(self) -> JobName:
+        """Full task identifier (/job/.../index)."""
+        return self._job_id.task(self._task_index)
 
     @property
-    def job_id(self) -> JobId:
+    def job_id(self) -> JobName:
         """Parent job identifier."""
         return self._job_id
 
@@ -146,7 +146,7 @@ class Task:
         Returns:
             TaskStatus proto containing state, worker assignment, and metrics
         """
-        return self._client._cluster_client.get_task_status(str(self._job_id), self._task_index)
+        return self._client._cluster_client.get_task_status(self.task_id)
 
     @property
     def state(self) -> cluster_pb2.TaskState:
@@ -185,12 +185,12 @@ class Job:
                 print(entry.data)
     """
 
-    def __init__(self, client: "IrisClient", job_id: JobId):
+    def __init__(self, client: "IrisClient", job_id: JobName):
         self._client = client
         self._job_id = job_id
 
     @property
-    def job_id(self) -> JobId:
+    def job_id(self) -> JobName:
         """Unique job identifier."""
         return self._job_id
 
@@ -281,8 +281,8 @@ class Job:
             # Poll logs from all tasks
             for state in log_states:
                 try:
-                    task_id = f"{self._job_id}/task-{state.task_index}"
-                    entries = self._client._cluster_client.fetch_task_logs(task_id, state.last_timestamp, 0)
+                    task_name = self._job_id.task(state.task_index)
+                    entries = self._client._cluster_client.fetch_task_logs(task_name, state.last_timestamp, 0)
                     for proto in entries:
                         entry = LogEntry.from_proto(proto)
                         if state.last_timestamp is None or entry.timestamp > state.last_timestamp:
@@ -295,8 +295,8 @@ class Job:
                 # Final drain to catch any remaining logs
                 for state in log_states:
                     try:
-                        task_id = f"{self._job_id}/task-{state.task_index}"
-                        entries = self._client._cluster_client.fetch_task_logs(task_id, state.last_timestamp, 0)
+                        task_name = self._job_id.task(state.task_index)
+                        entries = self._client._cluster_client.fetch_task_logs(task_name, state.last_timestamp, 0)
                         for proto in entries:
                             entry = LogEntry.from_proto(proto)
                             logger.info("Task %d log: %s", state.task_index, entry.data)
@@ -357,7 +357,7 @@ class NamespacedEndpointRegistry:
         self,
         cluster: LocalClusterClient | RemoteClusterClient,
         namespace: Namespace,
-        job_id: str,
+        job_id: JobName,
     ):
         self._cluster = cluster
         self._namespace = namespace
@@ -403,7 +403,7 @@ class NamespacedEndpointRegistry:
 class NamespacedResolver:
     """Resolver that auto-prefixes names with namespace."""
 
-    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient, namespace: Namespace = Namespace("")):
+    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient, namespace: Namespace | None = None):
         self._cluster = cluster
         self._namespace = namespace
 
@@ -420,11 +420,10 @@ class NamespacedResolver:
         """
         if name.startswith("/"):
             prefixed_name = name
+        elif self._namespace:
+            prefixed_name = f"{self._namespace}/{name}"
         else:
-            if self._namespace:
-                prefixed_name = f"{self._namespace}/{name}"
-            else:
-                prefixed_name = name
+            prefixed_name = name
         matches = self._cluster.list_endpoints(prefix=prefixed_name)
 
         # Filter to exact matches
@@ -537,7 +536,7 @@ class IrisClient:
     def __exit__(self, *_) -> None:
         self.shutdown()
 
-    def resolver_for_job(self, job_id: JobId | str) -> Resolver:
+    def resolver_for_job(self, job_id: JobName) -> Resolver:
         """Get a resolver for endpoints registered by a specific job.
 
         Use this when resolving endpoints from outside a job context, such as
@@ -550,7 +549,7 @@ class IrisClient:
         Returns:
             Resolver that prefixes lookups with the job's namespace
         """
-        namespace = Namespace.from_job_id(str(job_id))
+        namespace = Namespace.from_job_id(job_id)
         return NamespacedResolver(self._cluster_client, namespace=namespace)
 
     def submit(
@@ -601,9 +600,9 @@ class IrisClient:
 
         # Construct full hierarchical name
         if parent_job_id:
-            job_id = JobId(f"{parent_job_id}/{name}")
+            job_id = parent_job_id.child(name)
         else:
-            job_id = JobId(name)
+            job_id = JobName.root(name)
 
         # Convert to wire format
         resources_proto = resources.to_proto()
@@ -628,7 +627,7 @@ class IrisClient:
 
         return Job(self, job_id)
 
-    def status(self, job_id: JobId) -> cluster_pb2.JobStatus:
+    def status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         """Get job status.
 
         Args:
@@ -639,7 +638,7 @@ class IrisClient:
         """
         return self._cluster_client.get_job_status(job_id)
 
-    def terminate(self, job_id: JobId) -> None:
+    def terminate(self, job_id: JobName) -> None:
         """Terminate a running job.
 
         Args:
@@ -651,13 +650,13 @@ class IrisClient:
         self,
         *,
         states: list[cluster_pb2.JobState] | None = None,
-        prefix: str | None = None,
+        prefix: JobName | None = None,
     ) -> list[cluster_pb2.JobStatus]:
         """List jobs with optional filtering.
 
         Args:
             states: If provided, only return jobs in these states
-            prefix: If provided, only return jobs whose job_id starts with this prefix
+            prefix: If provided, only return jobs whose JobName starts with this prefix
 
         Returns:
             List of JobStatus matching the filters
@@ -667,21 +666,22 @@ class IrisClient:
         for job in all_jobs:
             if states is not None and job.state not in states:
                 continue
-            if prefix is not None and not job.job_id.startswith(prefix):
+            job_name = JobName.from_wire(job.job_id)
+            if prefix is not None and not prefix.is_prefix_of(job_name):
                 continue
             result.append(job)
         return result
 
     def terminate_prefix(
         self,
-        prefix: str,
+        prefix: JobName,
         *,
         exclude_finished: bool = True,
-    ) -> list[JobId]:
+    ) -> list[JobName]:
         """Terminate all jobs matching a prefix.
 
         Args:
-            prefix: Job ID prefix to match (e.g., "my-experiment/")
+            prefix: Job name prefix to match (e.g., JobName.root("my-experiment"))
             exclude_finished: If True, skip jobs already in terminal states
 
         Returns:
@@ -699,23 +699,23 @@ class IrisClient:
         for job in jobs:
             if exclude_finished and job.state in terminal_states:
                 continue
-            self.terminate(JobId(job.job_id))
-            terminated.append(JobId(job.job_id))
+            job_id = JobName.from_wire(job.job_id)
+            self.terminate(job_id)
+            terminated.append(job_id)
         return terminated
 
-    def task_status(self, job_id: JobId, task_index: int) -> cluster_pb2.TaskStatus:
-        """Get status of a specific task within a job.
+    def task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
+        """Get status of a specific task.
 
         Args:
-            job_id: Job identifier
-            task_index: 0-indexed task number
+            task_name: Full task name (/job/.../index)
 
         Returns:
             TaskStatus proto containing state, worker assignment, and metrics
         """
-        return self._cluster_client.get_task_status(str(job_id), task_index)
+        return self._cluster_client.get_task_status(task_name)
 
-    def list_tasks(self, job_id: JobId) -> list[cluster_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
         """List all tasks for a job.
 
         Args:
@@ -724,11 +724,11 @@ class IrisClient:
         Returns:
             List of TaskStatus protos, one per task
         """
-        return self._cluster_client.list_tasks(str(job_id))
+        return self._cluster_client.list_tasks(job_id)
 
     def fetch_task_logs(
         self,
-        job_id: JobId,
+        job_id: JobName,
         task_index: int,
         *,
         start: Timestamp | None = None,
@@ -745,8 +745,8 @@ class IrisClient:
         Returns:
             List of LogEntry objects from the task
         """
-        task_id = f"{job_id}/task-{task_index}"
-        entries = self._cluster_client.fetch_task_logs(task_id, start, max_lines)
+        task_name = job_id.task(task_index)
+        entries = self._cluster_client.fetch_task_logs(task_name, start, max_lines)
         return [LogEntry.from_proto(e) for e in entries]
 
     def shutdown(self, wait: bool = True) -> None:
@@ -766,14 +766,14 @@ class IrisContext:
     information about the current execution environment.
 
     Attributes:
-        job_id: Unique identifier for this job (hierarchical: "root/parent/child")
+        job_id: Unique identifier for this job (hierarchical: "/root/parent/child")
         attempt_id: Attempt number for this job execution (0-based)
         worker_id: Identifier for the worker executing this job (may be None)
         client: IrisClient for job operations (submit, status, wait, etc.)
         ports: Allocated ports by name (e.g., {"actor": 50001})
     """
 
-    job_id: str
+    job_id: JobName | None
     attempt_id: int = 0
     worker_id: str | None = None
     client: "IrisClient | None" = None
@@ -792,6 +792,8 @@ class IrisContext:
         """
         if self.client is None:
             raise RuntimeError("No client available - ensure controller_address is set")
+        if self.job_id is None:
+            raise RuntimeError("No job id available - ensure IrisContext is initialized from a job")
         return NamespacedEndpointRegistry(
             self.client._cluster_client,
             self.namespace,
@@ -805,19 +807,20 @@ class IrisContext:
         All jobs in a hierarchy share the same namespace, enabling actors
         to be discovered across the job tree.
         """
+        if self.job_id is None:
+            raise RuntimeError("No job id available - ensure IrisContext is initialized from a job")
         return Namespace.from_job_id(self.job_id)
 
     @property
-    def parent_job_id(self) -> str | None:
+    def parent_job_id(self) -> JobName | None:
         """Parent job ID, or None if this is a root job.
 
-        For job_id "root/parent/child", returns "root/parent".
-        For job_id "root", returns None.
+        For job_id "/root/parent/child", returns "/root/parent".
+        For job_id "/root", returns None.
         """
-        parts = self.job_id.rsplit("/", 1)
-        if len(parts) == 1:
+        if self.job_id is None:
             return None
-        return parts[0]
+        return self.job_id.parent
 
     def get_port(self, name: str) -> int:
         """Get an allocated port by name.
@@ -913,7 +916,7 @@ def get_iris_ctx() -> IrisContext | None:
     job_info = get_job_info()
     if job_info is None:
         # If no job info available, create minimal context
-        ctx = IrisContext(job_id="")
+        ctx = IrisContext(job_id=None)
     else:
         # Set up client if controller address is available
         client = None
@@ -942,7 +945,7 @@ def iris_ctx_scope(ctx: IrisContext) -> Generator[IrisContext, None, None]:
         The provided context
 
     Example:
-        ctx = IrisContext(job_id="my-namespace/job-1", worker_id="worker-1")
+        ctx = IrisContext(job_id=JobName.from_string("/my-namespace/job-1"), worker_id="worker-1")
         with iris_ctx_scope(ctx):
             my_job_function()
     """

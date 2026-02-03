@@ -24,7 +24,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, JobName
 from iris.time_utils import Duration
 from iris.cluster.worker.builder import BuildResult, ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
@@ -130,9 +130,7 @@ def create_test_entrypoint():
 
 
 def create_run_task_request(
-    task_id: str = "test-task-1",
-    job_id: str = "test-job-1",
-    task_index: int = 0,
+    task_id: str = JobName.root("test-job-1").task(0).to_wire(),
     num_tasks: int = 1,
     ports: list[str] | None = None,
 ):
@@ -156,8 +154,6 @@ def create_run_task_request(
 
     request = cluster_pb2.Worker.RunTaskRequest(
         task_id=task_id,
-        job_id=job_id,
-        task_index=task_index,
         num_tasks=num_tasks,
         entrypoint=entrypoint_proto,
         environment=env_config,
@@ -205,7 +201,7 @@ def rpc_post(client, method, body=None):
 def test_list_tasks_with_data(client, worker):
     """Test ListTasks RPC returns all tasks."""
     for i in range(3):
-        request = create_run_task_request(task_id=f"task-{i}", job_id=f"job-{i}")
+        request = create_run_task_request(task_id=JobName.root(f"job-{i}").task(0).to_wire())
         worker.submit_task(request)
 
     response = rpc_post(client, "ListTasks")
@@ -215,30 +211,39 @@ def test_list_tasks_with_data(client, worker):
     assert len(tasks) == 3
 
     task_ids = {t["taskId"] for t in tasks}
-    assert task_ids == {"task-0", "task-1", "task-2"}
+    assert task_ids == {
+        JobName.root("job-0").task(0).to_wire(),
+        JobName.root("job-1").task(0).to_wire(),
+        JobName.root("job-2").task(0).to_wire(),
+    }
 
 
 def test_get_task_not_found(client):
     """Test GetTaskStatus RPC with nonexistent task returns error."""
-    response = rpc_post(client, "GetTaskStatus", {"taskId": "nonexistent"})
+    response = rpc_post(
+        client,
+        "GetTaskStatus",
+        {"taskId": JobName.root("nonexistent").task(0).to_wire()},
+    )
     assert response.status_code != 200
 
 
 def test_get_task_success(client, worker):
     """Test GetTaskStatus RPC returns task details."""
-    request = create_run_task_request(task_id="task-details", job_id="job-details", ports=["http", "grpc"])
+    task_id = JobName.root("job-details").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id, ports=["http", "grpc"])
     worker.submit_task(request)
 
     # Wait for task to complete (mock runtime returns running=False immediately)
-    task = worker.get_task("task-details")
+    task = worker.get_task(task_id)
     task.thread.join(timeout=5.0)
 
-    response = rpc_post(client, "GetTaskStatus", {"taskId": "task-details"})
+    response = rpc_post(client, "GetTaskStatus", {"taskId": task_id})
     assert response.status_code == 200
     data = response.json()
 
-    assert data["taskId"] == "task-details"
-    assert data["jobId"] == "job-details"
+    assert data["taskId"] == task_id
+    assert data["jobId"] == JobName.root("job-details").to_wire()
     assert data["state"] == "TASK_STATE_SUCCEEDED"
     assert data["exitCode"] == 0
     assert "http" in data["ports"]
@@ -249,16 +254,17 @@ def test_get_logs_with_tail_parameter(client, worker):
     """Test FetchTaskLogs RPC with negative start_line for tailing."""
     import time
 
-    request = create_run_task_request(task_id="task-tail", job_id="job-tail")
+    task_id = JobName.root("job-tail").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
     # Wait for task to transition out of building state (should be fast with mocked runtime)
     deadline = time.time() + 2.0
-    while time.time() < deadline and worker.get_task("task-tail").status == cluster_pb2.TASK_STATE_BUILDING:
+    while time.time() < deadline and worker.get_task(task_id).status == cluster_pb2.TASK_STATE_BUILDING:
         time.sleep(0.01)
 
     # Inject logs
-    task = worker.get_task("task-tail")
+    task = worker.get_task(task_id)
     for i in range(100):
         task.logs.add("stdout", f"Log line {i}")
 
@@ -266,7 +272,7 @@ def test_get_logs_with_tail_parameter(client, worker):
         client,
         "FetchTaskLogs",
         {
-            "taskId": "task-tail",
+            "taskId": task_id,
             "filter": {"startLine": -5},
         },
     )
@@ -284,11 +290,12 @@ def test_get_logs_with_source_filter(client, worker):
     """Test FetchTaskLogs RPC returns logs that can be filtered client-side."""
     import time
 
-    request = create_run_task_request(task_id="task-source-filter", job_id="job-source-filter")
+    task_id = JobName.root("job-source-filter").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
     # Stop the task thread so it doesn't add more logs
-    task = worker.get_task("task-source-filter")
+    task = worker.get_task(task_id)
     # Give the thread a moment to start
     time.sleep(0.02)
     task.should_stop = True
@@ -302,7 +309,11 @@ def test_get_logs_with_source_filter(client, worker):
     task.logs.add("stderr", "stderr line 1")
     task.logs.add("stderr", "stderr line 2")
 
-    response = rpc_post(client, "FetchTaskLogs", {"taskId": "task-source-filter"})
+    response = rpc_post(
+        client,
+        "FetchTaskLogs",
+        {"taskId": task_id},
+    )
     assert response.status_code == 200
     data = response.json()
     logs = data.get("logs", [])
@@ -316,16 +327,17 @@ def test_get_logs_with_source_filter(client, worker):
 
 def test_fetch_task_logs_tail_with_negative_start_line(service, worker, request_context):
     """Test fetch_task_logs with negative start_line for tailing."""
-    request = create_run_task_request(task_id="task-logs-tail", job_id="job-logs-tail")
+    task_id = JobName.root("job-logs-tail").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
     # Add logs directly to task.logs
-    task = worker.get_task("task-logs-tail")
+    task = worker.get_task(task_id)
     for i in range(10):
         task.logs.add("stdout", f"Log line {i}")
 
     log_filter = cluster_pb2.Worker.FetchLogsFilter(start_line=-3)
-    logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id="task-logs-tail", filter=log_filter)
+    logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter)
     response = service.fetch_task_logs(logs_request, request_context)
 
     assert len(response.logs) == 3
@@ -336,18 +348,19 @@ def test_fetch_task_logs_tail_with_negative_start_line(service, worker, request_
 
 def test_fetch_task_logs_with_regex_filter(service, worker, request_context):
     """Test fetch_task_logs with regex content filter."""
-    request = create_run_task_request(task_id="task-logs-regex", job_id="job-logs-regex")
+    task_id = JobName.root("job-logs-regex").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
     # Add logs with different patterns
-    task = worker.get_task("task-logs-regex")
+    task = worker.get_task(task_id)
     task.logs.add("stdout", "ERROR: something bad")
     task.logs.add("stdout", "INFO: normal log")
     task.logs.add("stdout", "ERROR: another error")
     task.logs.add("stdout", "DEBUG: details")
 
     log_filter = cluster_pb2.Worker.FetchLogsFilter(regex="ERROR")
-    logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id="task-logs-regex", filter=log_filter)
+    logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter)
     response = service.fetch_task_logs(logs_request, request_context)
 
     assert len(response.logs) == 2
@@ -357,11 +370,12 @@ def test_fetch_task_logs_with_regex_filter(service, worker, request_context):
 
 def test_fetch_task_logs_combined_filters(service, worker, request_context):
     """Test fetch_task_logs with multiple filters combined."""
-    request = create_run_task_request(task_id="task-logs-combined", job_id="job-logs-combined")
+    task_id = JobName.root("job-logs-combined").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
     # Add logs
-    task = worker.get_task("task-logs-combined")
+    task = worker.get_task(task_id)
     task.logs.add("stdout", "ERROR: first error")
     task.logs.add("stdout", "INFO: normal")
     task.logs.add("stdout", "ERROR: second error")
@@ -371,7 +385,7 @@ def test_fetch_task_logs_combined_filters(service, worker, request_context):
 
     # Use regex to filter ERRORs, then limit to 2
     log_filter = cluster_pb2.Worker.FetchLogsFilter(regex="ERROR", max_lines=2)
-    logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id="task-logs-combined", filter=log_filter)
+    logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter)
     response = service.fetch_task_logs(logs_request, request_context)
 
     assert len(response.logs) == 2
@@ -393,11 +407,12 @@ def test_task_detail_page_loads(client):
 
 def test_run_task_with_ports(worker):
     """Test run_task allocates ports correctly."""
-    request = create_run_task_request(task_id="task-with-ports", job_id="job-with-ports", ports=["http", "grpc"])
+    task_id = JobName.root("job-with-ports").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id, ports=["http", "grpc"])
     worker.submit_task(request)
 
     # Verify ports were allocated
-    task = worker.get_task("task-with-ports")
+    task = worker.get_task(task_id)
     assert len(task.ports) == 2
     assert "http" in task.ports
     assert "grpc" in task.ports
@@ -405,7 +420,7 @@ def test_run_task_with_ports(worker):
 
 def test_get_task_status_not_found(service, worker, request_context):
     """Test get_task_status raises NOT_FOUND for nonexistent task."""
-    status_request = cluster_pb2.Worker.GetTaskStatusRequest(task_id="nonexistent")
+    status_request = cluster_pb2.Worker.GetTaskStatusRequest(task_id=JobName.root("nonexistent").task(0).to_wire())
 
     with pytest.raises(ConnectError) as exc_info:
         service.get_task_status(status_request, request_context)
@@ -416,18 +431,19 @@ def test_get_task_status_not_found(service, worker, request_context):
 
 def test_get_task_status_completed_task(service, worker, request_context):
     """Test get_task_status for completed task includes timing info."""
-    request = create_run_task_request(task_id="task-completed", job_id="job-completed")
+    task_id = JobName.root("job-completed").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
     # Wait for task to complete
-    task = worker.get_task("task-completed")
+    task = worker.get_task(task_id)
     task.thread.join(timeout=5.0)
 
-    status_request = cluster_pb2.Worker.GetTaskStatusRequest(task_id="task-completed")
+    status_request = cluster_pb2.Worker.GetTaskStatusRequest(task_id=task_id)
     status = service.get_task_status(status_request, request_context)
 
-    assert status.task_id == "task-completed"
-    assert status.job_id == "job-completed"
+    assert status.task_id == task_id
+    assert status.job_id == JobName.root("job-completed").to_wire()
     assert status.state == cluster_pb2.TASK_STATE_SUCCEEDED
     assert status.exit_code == 0
     assert status.started_at.epoch_ms > 0
@@ -485,7 +501,7 @@ def test_rpc_heartbeat_via_connect_client(service):
         # Call heartbeat via sync Connect client
         client = WorkerServiceClientSync(address=f"http://127.0.0.1:{port}", timeout_ms=5000)
 
-        run_req = create_run_task_request(task_id="rpc-test-task", job_id="rpc-test-job")
+        run_req = create_run_task_request(task_id=JobName.root("rpc-test-job").task(0).to_wire())
         heartbeat_req = cluster_pb2.HeartbeatRequest(tasks_to_run=[run_req])
         response = client.heartbeat(heartbeat_req)
 

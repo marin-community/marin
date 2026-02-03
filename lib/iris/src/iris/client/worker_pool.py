@@ -57,7 +57,7 @@ from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
+from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.time_utils import Duration, ExponentialBackoff
 
@@ -150,8 +150,8 @@ def worker_job_entrypoint(pool_id: str) -> None:
     """Job entrypoint that starts a TaskExecutor actor.
 
     This function runs inside each task of the co-scheduled worker pool job.
-    It uses IRIS_TASK_INDEX from the environment to determine which worker
-    index this task represents.
+    It uses IRIS_JOB_ID (task name) from the environment to determine which
+    worker index this task represents.
 
     Args:
         pool_id: Unique identifier for the worker pool
@@ -176,7 +176,7 @@ def worker_job_entrypoint(pool_id: str) -> None:
 
     # Register endpoint with registry
     address = f"{job_info.advertise_host}:{actual_port}"
-    ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
+    ctx.registry.register(worker_name, address, {"job_id": ctx.job_id.to_wire()})
     logger.info("Worker registered: %s at %s", worker_name, address)
 
     # Block until the server is shut down (container kill → registry shutdown → server exit)
@@ -441,7 +441,7 @@ class WorkerPool:
         return sum(1 for w in self._workers.values() if w.status == WorkerStatus.IDLE)
 
     @property
-    def job_id(self) -> JobId | None:
+    def job_id(self) -> JobName | None:
         return self._job.job_id if self._job else None
 
     def _launch_workers(self) -> None:

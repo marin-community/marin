@@ -21,14 +21,14 @@ import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
+from iris.cluster.types import JobName
+
 
 @dataclass
 class JobInfo:
     """Information about the currently running job."""
 
-    job_id: str
-    task_id: str | None = None
-    task_index: int = 0
+    task_id: JobName
     num_tasks: int = 1
     attempt_id: int = 0
     worker_id: str | None = None
@@ -46,6 +46,14 @@ class JobInfo:
     ports: dict[str, int] = field(default_factory=dict)
     """Name to port number mapping for this task."""
 
+    @property
+    def job_id(self) -> JobName:
+        return self.task_id.parent or self.task_id
+
+    @property
+    def task_index(self) -> int:
+        return self.task_id.task_index or 0
+
 
 # Module-level ContextVar for job metadata
 _job_info: ContextVar[JobInfo | None] = ContextVar("job_info", default=None)
@@ -62,12 +70,15 @@ def get_job_info() -> JobInfo | None:
         return info
 
     # Fall back to environment variables
-    job_id = os.environ.get("IRIS_JOB_ID")
-    if job_id:
+    raw_task_id = os.environ.get("IRIS_JOB_ID")
+    if raw_task_id:
+        try:
+            task_id = JobName.from_wire(raw_task_id)
+            task_id.require_task()
+        except ValueError:
+            return None
         info = JobInfo(
-            job_id=job_id,
-            task_id=os.environ.get("IRIS_TASK_ID"),
-            task_index=int(os.environ.get("IRIS_TASK_INDEX", "0")),
+            task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
             attempt_id=int(os.environ.get("IRIS_ATTEMPT_ID", "0")),
             worker_id=os.environ.get("IRIS_WORKER_ID"),

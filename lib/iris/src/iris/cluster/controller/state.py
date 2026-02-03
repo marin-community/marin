@@ -45,7 +45,7 @@ from iris.cluster.controller.events import (
     WorkerHeartbeatFailedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.types import AttributeValue, DeviceType, JobId, TaskId, WorkerId
+from iris.cluster.types import AttributeValue, DeviceType, JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
@@ -276,8 +276,8 @@ class ControllerTask:
     what the caller should do.
     """
 
-    task_id: TaskId
-    job_id: JobId
+    task_id: JobName
+    job_id: JobName
     task_index: int
 
     # Task owns its state directly
@@ -541,7 +541,7 @@ class ControllerJob:
             queue.add(job)  # Caller handles re-queueing
     """
 
-    job_id: JobId
+    job_id: JobName
     request: cluster_pb2.Controller.LaunchJobRequest
     state: int = cluster_pb2.JOB_STATE_PENDING
 
@@ -552,7 +552,7 @@ class ControllerJob:
     max_retries_preemption: int = DEFAULT_MAX_RETRIES_PREEMPTION
 
     # Hierarchical job tracking
-    parent_job_id: JobId | None = None
+    parent_job_id: JobName | None = None
 
     # Timestamps
     submitted_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
@@ -769,7 +769,7 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
     """Expand a job into its constituent tasks based on replicas.
 
     Jobs with replicas=N expand into N tasks. Each task has a unique ID
-    of the form "{job_id}/task-{index}" where index is 0-based.
+    of the form "/job/.../index" where index is 0-based.
 
     Args:
         job: The job to expand
@@ -790,7 +790,7 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
     tasks = []
 
     for i in range(num_replicas):
-        task_id = TaskId(f"{job.job_id}/task-{i}")
+        task_id = job.job_id.task(i)
         task = ControllerTask(
             task_id=task_id,
             job_id=job.job_id,
@@ -852,7 +852,7 @@ class ControllerWorker:
     last_heartbeat: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
     # Currently running tasks
-    running_tasks: set[TaskId] = field(default_factory=set)
+    running_tasks: set[JobName] = field(default_factory=set)
 
     # Committed resources (tracked incrementally)
     committed_cpu: int = 0
@@ -889,7 +889,7 @@ class ControllerWorker:
         """
         return self.last_heartbeat.age_ms() > timeout.to_ms()
 
-    def assign_task(self, task_id: TaskId, resources: cluster_pb2.ResourceSpecProto) -> None:
+    def assign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Assign a task to this worker, updating committed resources."""
         self.running_tasks.add(task_id)
         self.committed_cpu += resources.cpu
@@ -897,7 +897,7 @@ class ControllerWorker:
         self.committed_gpu += get_gpu_count(resources.device)
         self.committed_tpu += get_tpu_chip_count(resources.device)
 
-    def unassign_task(self, task_id: TaskId, resources: cluster_pb2.ResourceSpecProto) -> None:
+    def unassign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Unassign a task from this worker, updating committed resources."""
         self.running_tasks.discard(task_id)
         self.committed_cpu -= resources.cpu
@@ -954,7 +954,7 @@ class ControllerEndpoint:
     endpoint_id: str
     name: str  # Full prefixed name: "{root_job_id}/{actor_name}"
     address: str
-    job_id: JobId
+    job_id: JobName
     metadata: dict[str, str] = field(default_factory=dict)
     registered_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
@@ -990,13 +990,13 @@ class ControllerState:
 
     def __init__(self):
         self._lock = RLock()
-        self._jobs: dict[JobId, ControllerJob] = {}
-        self._tasks: dict[TaskId, ControllerTask] = {}
-        self._tasks_by_job: dict[JobId, list[TaskId]] = {}
+        self._jobs: dict[JobName, ControllerJob] = {}
+        self._tasks: dict[JobName, ControllerTask] = {}
+        self._tasks_by_job: dict[JobName, list[JobName]] = {}
         self._workers: dict[WorkerId, ControllerWorker] = {}
-        self._task_queue: deque[TaskId] = deque()  # FIFO queue of task IDs
+        self._task_queue: deque[JobName] = deque()  # FIFO queue of task IDs
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
-        self._endpoints_by_task: dict[TaskId, set[str]] = {}  # task_id -> endpoint_ids
+        self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
 
     # =========================================================================
@@ -1049,7 +1049,7 @@ class ControllerState:
 
             return txn
 
-    def check_worker_timeouts(self, timeout: Duration) -> set[TaskId]:
+    def check_worker_timeouts(self, timeout: Duration) -> set[JobName]:
         """Check for timed-out workers and mark them as failed.
 
         Atomically identifies all workers that have exceeded the heartbeat timeout,
@@ -1066,7 +1066,7 @@ class ControllerState:
             Set of task IDs that need kill RPCs sent to workers
         """
         with self._lock:
-            tasks_to_kill: set[TaskId] = set()
+            tasks_to_kill: set[JobName] = set()
 
             for worker in self._workers.values():
                 if worker.healthy and worker.is_heartbeat_expired(timeout):
@@ -1155,7 +1155,7 @@ class ControllerState:
     # -------------------------------------------------------------------------
 
     def _on_job_submitted(self, txn: TransactionLog, event: JobSubmittedEvent) -> None:
-        parent_job_id = JobId(event.request.parent_job_id) if event.request.parent_job_id else None
+        parent_job_id = event.job_id.parent
 
         # Read retry limits from request, using defaults if not set
         max_retries_failure = event.request.max_retries_failure  # proto default: 0
@@ -1432,7 +1432,7 @@ class ControllerState:
 
         If tasks are not provided, they are automatically created based on
         the job's replicas field (defaulting to 1). Each task gets
-        a unique ID of the form "{job_id}/task-{index}".
+        a unique ID of the form "/job/.../index".
 
         Args:
             job: The job to add
@@ -1458,7 +1458,7 @@ class ControllerState:
 
             return tasks
 
-    def get_job(self, job_id: JobId) -> ControllerJob | None:
+    def get_job(self, job_id: JobName) -> ControllerJob | None:
         with self._lock:
             return self._jobs.get(job_id)
 
@@ -1466,17 +1466,17 @@ class ControllerState:
         with self._lock:
             return list(self._jobs.values())
 
-    def get_children(self, job_id: JobId) -> list[ControllerJob]:
+    def get_children(self, job_id: JobName) -> list[ControllerJob]:
         with self._lock:
             return [job for job in self._jobs.values() if job.parent_job_id == job_id]
 
     # --- Task Management ---
 
-    def get_task(self, task_id: TaskId) -> ControllerTask | None:
+    def get_task(self, task_id: JobName) -> ControllerTask | None:
         with self._lock:
             return self._tasks.get(task_id)
 
-    def get_job_tasks(self, job_id: JobId) -> list[ControllerTask]:
+    def get_job_tasks(self, job_id: JobName) -> list[ControllerTask]:
         """Get all tasks for a job."""
         with self._lock:
             task_ids = self._tasks_by_job.get(job_id, [])
@@ -1501,18 +1501,18 @@ class ControllerState:
         job: ControllerJob,
         new_state: int,
         txn: TransactionLog,
-    ) -> set[TaskId]:
+    ) -> set[JobName]:
         """Apply a job state change and handle associated actions.
 
         Returns:
-            Set of TaskIds that were killed and had workers assigned. These need
+            Set of JobNames that were killed and had workers assigned. These need
             KILL RPCs sent to workers. Empty for SUCCEEDED state; populated for
             FAILED, KILLED, and UNSCHEDULABLE states.
         """
         job.state = new_state
         job.finished_at = Timestamp.now()
 
-        killed_tasks: set[TaskId] = set()
+        killed_tasks: set[JobName] = set()
         if new_state == cluster_pb2.JOB_STATE_FAILED:
             job.error = self._get_first_task_error(job.job_id)
             killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job exceeded max_task_failures", txn)
@@ -1527,7 +1527,7 @@ class ControllerState:
 
         return killed_tasks
 
-    def _get_first_task_error(self, job_id: JobId) -> str | None:
+    def _get_first_task_error(self, job_id: JobName) -> str | None:
         """Get the first error message from failed/killed tasks in a job."""
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
@@ -1537,23 +1537,23 @@ class ControllerState:
 
     def _mark_remaining_tasks_killed(
         self,
-        job_id: JobId,
+        job_id: JobName,
         error: str,
         txn: TransactionLog,
-    ) -> set[TaskId]:
+    ) -> set[JobName]:
         """Mark all non-finished tasks in a job as killed (state-only).
 
         Updates job.task_state_counts incrementally for each killed task.
         The actual KILL RPCs to workers happen elsewhere; this method only
         updates internal state.
 
-        Returns the set of killed TaskIds that had workers assigned
+        Returns the set of killed JobNames that had workers assigned
         (these are the tasks that need KILL RPCs).
         """
         job = self._jobs.get(job_id)
         now = Timestamp.now()
-        tasks_needing_kill_rpc: set[TaskId] = set()
-        tasks_to_remove_from_queue: set[TaskId] = set()
+        tasks_needing_kill_rpc: set[JobName] = set()
+        tasks_to_remove_from_queue: set[JobName] = set()
 
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
@@ -1633,7 +1633,7 @@ class ControllerState:
 
     # --- Endpoint Management ---
 
-    def add_endpoint(self, endpoint: ControllerEndpoint, task_id: TaskId | None = None) -> None:
+    def add_endpoint(self, endpoint: ControllerEndpoint, task_id: JobName | None = None) -> None:
         """Add an endpoint, optionally associating it with a task."""
         with self._lock:
             self._endpoints[endpoint.endpoint_id] = endpoint
@@ -1675,7 +1675,7 @@ class ControllerState:
         with self._lock:
             return list(self._endpoints.values())
 
-    def _remove_endpoints_for_task(self, task_id: TaskId) -> list[ControllerEndpoint]:
+    def _remove_endpoints_for_task(self, task_id: JobName) -> list[ControllerEndpoint]:
         """Remove all endpoints associated with a task."""
         endpoint_ids = list(self._endpoints_by_task.get(task_id, []))
         removed = []
@@ -1686,7 +1686,7 @@ class ControllerState:
         self._endpoints_by_task.pop(task_id, None)
         return removed
 
-    def remove_endpoints_for_job(self, job_id: JobId) -> list[ControllerEndpoint]:
+    def remove_endpoints_for_job(self, job_id: JobName) -> list[ControllerEndpoint]:
         """Remove all endpoints for a job by removing endpoints for all its tasks."""
         with self._lock:
             all_removed = []

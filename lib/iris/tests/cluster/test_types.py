@@ -14,7 +14,9 @@
 
 """Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
-from iris.cluster.types import Entrypoint
+import pytest
+
+from iris.cluster.types import Entrypoint, JobName
 
 
 def _add(a, b):
@@ -45,3 +47,31 @@ def test_entrypoint_command():
     assert ep.is_command
     assert not ep.is_callable
     assert ep.command == ["echo", "hello"]
+
+
+def test_job_name_roundtrip_and_hierarchy():
+    job = JobName.root("root")
+    child = job.child("child")
+    task = child.task(0)
+
+    assert str(job) == "/root"
+    assert str(child) == "/root/child"
+    assert str(task) == "/root/child/0"
+    assert task.parent == child
+    assert child.parent == job
+    assert job.parent is None
+
+    parsed = JobName.from_string("/root/child/0")
+    assert parsed == task
+    assert parsed.namespace == "root"
+    assert parsed.is_task
+    assert parsed.task_index == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "root", "/root//child", "/root/ ", "/root/child/", "/root/child//0"],
+)
+def test_job_name_rejects_invalid_inputs(value: str):
+    with pytest.raises(ValueError):
+        JobName.from_string(value)

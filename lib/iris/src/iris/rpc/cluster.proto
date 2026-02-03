@@ -60,7 +60,7 @@ enum TaskState {
 
 // Status of a single task within a job
 message TaskStatus {
-  string task_id = 1;                 // "{job_id}/task-{index}"
+  string task_id = 1;                 // "/job/.../index"
   string job_id = 2;
   int32 task_index = 3;               // 0-indexed task number
   TaskState state = 4;
@@ -134,8 +134,7 @@ message JobStatus {
 
   bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
 
-  // Parent job ID for hierarchical job tracking (empty string if root job)
-  string parent_job_id = 14;
+  reserved 14;  // parent_job_id (derived from job_id)
 
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
@@ -352,9 +351,7 @@ message Controller {
     // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
     repeated string ports = 9;
 
-    // Parent job ID for hierarchical job tracking (empty string if root job)
-    // Child job IDs are formed as "{parent_job_id}/{name}"
-    string parent_job_id = 10;
+    reserved 10;  // parent_job_id (derived from name)
 
     // Job-level failure tolerance
     // A job fails when this many tasks have exhausted their retries (default 0 = fail on first task failure)
@@ -412,8 +409,7 @@ message Controller {
 
   // --- Task Operations ---
   message GetTaskStatusRequest {
-    string job_id = 1;
-    int32 task_index = 2;
+    string task_id = 1;
   }
 
   message GetTaskStatusResponse {
@@ -594,18 +590,16 @@ message Controller {
 
 message Worker {
   message RunTaskRequest {
-    string job_id = 1;              // Parent job ID
-    string task_id = 2;             // Full task ID: "{job_id}/task-{index}"
-    int32 task_index = 3;           // 0-indexed task number
-    int32 num_tasks = 4;            // Total tasks in job (for IRIS_NUM_TASKS)
+    string task_id = 1;             // Full task ID: "/job/.../index"
+    int32 num_tasks = 2;            // Total tasks in job (for IRIS_NUM_TASKS)
 
-    Entrypoint entrypoint = 5;      // Job entrypoint (callable or command)
-    EnvironmentConfig environment = 6;
-    string bundle_gcs_path = 7;
-    ResourceSpecProto resources = 8;
-    iris.time.Duration timeout = 9;
-    repeated string ports = 10;
-    int32 attempt_id = 11;
+    Entrypoint entrypoint = 3;      // Job entrypoint (callable or command)
+    EnvironmentConfig environment = 4;
+    string bundle_gcs_path = 5;
+    ResourceSpecProto resources = 6;
+    iris.time.Duration timeout = 7;
+    repeated string ports = 8;
+    int32 attempt_id = 9;
   }
 
   message GetTaskStatusRequest {
