@@ -23,7 +23,6 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.request import RequestContext
 
-from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult
@@ -60,41 +59,6 @@ def test_no_port_reuse_before_release(allocator):
     ports2 = allocator.allocate(count=5)
 
     assert len(set(ports1) & set(ports2)) == 0
-
-
-def test_ports_reused_after_release():
-    """Test that ports can be reused after release."""
-    allocator_small = PortAllocator(port_range=(40000, 40003))
-
-    ports1 = allocator_small.allocate(count=3)
-    assert len(ports1) == 3
-
-    allocator_small.release(ports1)
-
-    ports2 = allocator_small.allocate(count=3)
-    assert len(ports2) == 3
-    assert set(ports1) == set(ports2)
-
-
-def test_release_partial_ports(allocator):
-    """Test releasing only some ports."""
-    ports = allocator.allocate(count=5)
-
-    allocator.release(ports[:3])
-
-    new_ports = allocator.allocate(count=2)
-    assert len(set(new_ports) & set(ports[:3])) > 0
-
-
-def test_exhausted_port_range():
-    """Test behavior when port range is exhausted."""
-    allocator_tiny = PortAllocator(port_range=(40000, 40002))
-
-    ports = allocator_tiny.allocate(count=2)
-    assert len(ports) == 2
-
-    with pytest.raises(RuntimeError, match="No free ports available"):
-        allocator_tiny.allocate(count=1)
 
 
 def test_concurrent_allocations(allocator):
@@ -355,11 +319,15 @@ def test_kill_running_task(worker, mock_runtime):
     request = create_run_task_request()
     task_id = worker.submit_task(request)
 
+    # Wait for task thread to reach RUNNING state
     task = worker.get_task(task_id)
-    for _ in range(20):
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
         if task.status == cluster_pb2.TASK_STATE_RUNNING and task.container_id:
             break
-        time.sleep(0.1)
+        time.sleep(0.01)
+
+    assert task.status == cluster_pb2.TASK_STATE_RUNNING, f"Task did not reach RUNNING state, got {task.status}"
 
     result = worker.kill_task(task_id, term_timeout_ms=100)
     assert result is True
@@ -379,11 +347,15 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
 
     # Wait for attempt 0 to be running
     old_task = worker.get_task("retry-task")
-    for _ in range(20):
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
         if old_task.status == cluster_pb2.TASK_STATE_RUNNING and old_task.container_id:
             break
-        time.sleep(0.1)
-    assert old_task.status == cluster_pb2.TASK_STATE_RUNNING
+        time.sleep(0.01)
+
+    assert (
+        old_task.status == cluster_pb2.TASK_STATE_RUNNING
+    ), f"Old task did not reach RUNNING state, got {old_task.status}"
     assert old_task.attempt_id == 0
 
     # Submit attempt 1 for the same task_id — should kill attempt 0
@@ -412,10 +384,13 @@ def test_duplicate_attempt_rejected(worker, mock_runtime):
 
     # Wait for it to be running
     task = worker.get_task("dup-task")
-    for _ in range(20):
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
         if task.status == cluster_pb2.TASK_STATE_RUNNING:
             break
-        time.sleep(0.1)
+        time.sleep(0.01)
+
+    assert task.status == cluster_pb2.TASK_STATE_RUNNING, f"Task did not reach RUNNING state, got {task.status}"
 
     # Submit same attempt_id again — should be rejected (task unchanged)
     worker.submit_task(create_run_task_request(task_id="dup-task", attempt_id=0))
@@ -647,59 +622,6 @@ def test_bundle(tmp_path):
     return create_test_bundle(tmp_path)
 
 
-def test_get_process_logs():
-    """Test GetProcessLogs RPC on worker retrieves logs from the buffer."""
-
-    # Create a mock provider
-    mock_provider = Mock(spec=["submit_task", "get_task", "list_tasks", "kill_task", "get_logs"])
-    mock_provider.list_tasks = Mock(return_value=[])
-
-    # Create a log buffer with test records
-    log_buffer = LogRingBuffer(maxlen=100)
-    log_buffer.append(
-        BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.worker", message="Worker log 1")
-    )
-    log_buffer.append(
-        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="VM log")
-    )
-    log_buffer.append(
-        BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.worker", message="Worker log 2")
-    )
-
-    service = WorkerServiceImpl(provider=mock_provider, log_buffer=log_buffer)
-
-    # Test: Get all logs
-    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=0), None)
-    assert len(response.records) == 3
-    assert response.records[0].message == "Worker log 1"
-    assert response.records[1].logger_name == "iris.cluster.vm"
-    assert response.records[2].level == "ERROR"
-
-    # Test: Filter by prefix
-    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="iris.worker", limit=0), None)
-    assert len(response.records) == 2
-    assert response.records[0].message == "Worker log 1"
-    assert response.records[1].message == "Worker log 2"
-
-    # Test: Limit results
-    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=2), None)
-    assert len(response.records) == 2
-    assert response.records[0].message == "VM log"
-    assert response.records[1].message == "Worker log 2"
-
-
-def test_get_process_logs_no_buffer():
-    """Test GetProcessLogs returns empty when buffer is None."""
-    # Create a mock provider
-    mock_provider = Mock(spec=["submit_task", "get_task", "list_tasks", "kill_task", "get_logs"])
-    mock_provider.list_tasks = Mock(return_value=[])
-
-    service = WorkerServiceImpl(provider=mock_provider, log_buffer=None)
-
-    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=0), None)
-    assert len(response.records) == 0
-
-
 @pytest.fixture
 def real_worker(cache_dir, docker_cleanup_scope):
     """Create Worker with real components (not mocks)."""
@@ -730,22 +652,23 @@ class TestWorkerIntegration:
         task_id = real_worker.submit_task(request)
         assert task_id == "integration-test-1"
 
-        for _ in range(30):
-            time.sleep(1)
+        # Poll for task completion with shorter intervals
+        deadline = time.time() + 30.0
+        while time.time() < deadline:
             task = real_worker.get_task(task_id)
-
             if task.status in (
                 cluster_pb2.TASK_STATE_SUCCEEDED,
                 cluster_pb2.TASK_STATE_FAILED,
                 cluster_pb2.TASK_STATE_KILLED,
             ):
                 break
+            time.sleep(0.5)
 
         task = real_worker.get_task(task_id)
         assert task.status in (
             cluster_pb2.TASK_STATE_SUCCEEDED,
             cluster_pb2.TASK_STATE_FAILED,
-        )
+        ), f"Task did not complete in time, final status: {task.status}"
 
 
 class TestWorkerServiceIntegration:

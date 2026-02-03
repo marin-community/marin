@@ -52,7 +52,7 @@ We use docker images to run the jobs inside the ray cluster. We provide a convie
 
 1. Install Marin with TPU support:
    ```bash
-   uv sync --extra=tpu
+   uv sync --all-packages --extra=tpu
    ```
 
 2. Set up your GCP environment:
