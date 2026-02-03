@@ -30,9 +30,7 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -42,8 +40,9 @@ from fray.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
-from marin.evaluation.utils import is_remote_path
+from marin.evaluation.utils import download_from_gcs, is_remote_path, upload_to_gcs
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
+from marin.utils import fsspec_exists, fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +86,102 @@ def _env_vars_from_keys(keys: list[str]) -> dict[str, str]:
         if value:
             env_vars[key] = value
     return env_vars
+
+
+def _generate_stable_job_name(dataset: str, version: str, model_name: str, agent: str, task_limit: int | None) -> str:
+    """Generate a deterministic job name for resume capability.
+
+    The job name is based on the key parameters so that re-running the same
+    evaluation will find and resume the previous job.
+    """
+    key = f"{dataset}|{version}|{model_name}|{agent}|{task_limit}"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+    # Sanitize dataset name for use in path
+    safe_dataset = re.sub(r"[^A-Za-z0-9_-]", "_", dataset)[:32]
+    return f"harbor_{safe_dataset}_{digest}"
+
+
+def _get_stable_local_workdir(job_name: str) -> Path:
+    """Get a stable local working directory for Harbor jobs.
+
+    Uses /tmp/harbor_workdir/{job_name} to persist across pre-emptions.
+    """
+    workdir = Path("/tmp/harbor_workdir") / job_name
+    workdir.mkdir(parents=True, exist_ok=True)
+    return workdir
+
+
+def _restore_trials_from_gcs(gcs_output_path: str, local_job_dir: Path) -> int:
+    """Restore completed trials from GCS to enable Harbor resume.
+
+    Harbor's native resume checks for trial directories with result.json.
+    This function downloads completed trials from GCS so Harbor can skip them.
+
+    Returns the number of trials restored.
+    """
+    trials_gcs_path = os.path.join(gcs_output_path, "harbor_trials")
+    if not fsspec_exists(trials_gcs_path):
+        return 0
+
+    # Find completed trials (those with result.json)
+    result_files = fsspec_glob(os.path.join(trials_gcs_path, "*/result.json"))
+
+    restored = 0
+    for result_file in result_files:
+        trial_gcs_dir = os.path.dirname(result_file)
+        trial_name = os.path.basename(trial_gcs_dir)
+        local_trial_dir = local_job_dir / trial_name
+
+        if (local_trial_dir / "result.json").exists():
+            continue  # Already restored
+
+        try:
+            local_trial_dir.mkdir(parents=True, exist_ok=True)
+            download_from_gcs(trial_gcs_dir, str(local_trial_dir))
+            restored += 1
+        except Exception as e:
+            logger.warning(f"Failed to restore trial {trial_name} from GCS: {e}")
+
+    return restored
+
+
+def _create_trial_upload_hook(gcs_output_path: str, local_job_dir: Path):
+    """Create an async hook to upload trial results to GCS after completion.
+
+    This enables incremental saving of results so that pre-emption doesn't
+    lose completed work.
+    """
+
+    async def on_trial_ended(event) -> None:
+        if event.result is None:
+            return
+
+        trial_name = event.result.trial_name
+        local_trial_dir = local_job_dir / trial_name
+
+        if not local_trial_dir.exists():
+            logger.warning(f"Trial directory not found for upload: {local_trial_dir}")
+            return
+
+        # Fix Docker file permissions so we can read them
+        try:
+            subprocess.run(
+                ["sudo", "chmod", "-R", "755", str(local_trial_dir)],
+                check=False,
+                capture_output=True,
+            )
+        except Exception:
+            pass
+
+        # Upload to GCS: {output_path}/harbor_trials/{trial_name}/
+        trial_gcs_path = os.path.join(gcs_output_path, "harbor_trials", trial_name)
+        try:
+            upload_to_gcs(str(local_trial_dir), trial_gcs_path)
+            logger.info(f"Uploaded trial {trial_name} to GCS")
+        except Exception as e:
+            logger.warning(f"Failed to upload trial {trial_name} to GCS: {e}")
+
+    return on_trial_ended
 
 
 class HarborEvaluator(Evaluator):
@@ -265,6 +360,7 @@ class HarborEvaluator(Evaluator):
             n_concurrent=n_concurrent,
             env_type=env_type,
             task_limit=max_eval_instances,
+            output_path=output_path,
         )
 
         parsed_results = self._parse_results(results)
@@ -291,182 +387,199 @@ class HarborEvaluator(Evaluator):
         env_type: str,
         task_limit: int | None = None,
         agent_kwargs: dict | None = None,
+        output_path: str | None = None,
     ) -> dict:
-        """Run Harbor trials using programmatic API."""
+        """Run Harbor trials using programmatic API.
+
+        This method is robust to pre-emptions:
+        - Uses a stable working directory that persists across runs
+        - Incrementally uploads completed trials to GCS
+        - Restores completed trials from GCS on resume
+        - Leverages Harbor's native resume capability
+        """
         from harbor.job import Job
+        from harbor.models.environment_type import EnvironmentType
         from harbor.models.job.config import JobConfig, LocalDatasetConfig, RegistryDatasetConfig
-        from harbor.models.trial.config import AgentConfig, EnvironmentConfig
         from harbor.models.orchestrator_type import OrchestratorType
         from harbor.models.registry import RemoteRegistryInfo
-        from harbor.models.environment_type import EnvironmentType
+        from harbor.models.trial.config import AgentConfig, EnvironmentConfig
 
-        # Create temporary output directory
-        tmpdir = tempfile.mkdtemp(prefix="harbor_eval_")
-        try:
-            output_dir = Path(tmpdir) / "harbor_results"
-            output_dir.mkdir(parents=True, exist_ok=True)
+        # Generate deterministic job name for resume capability
+        job_name = _generate_stable_job_name(dataset, version, model_name, agent, task_limit)
 
-            # Map environment type
-            # "local" in Marin means Docker in Harbor
-            harbor_env_type = EnvironmentType.DOCKER
-            if env_type != "local":
-                try:
-                    harbor_env_type = EnvironmentType(env_type)
-                except ValueError:
-                    logger.warning(f"Unknown environment type: {env_type}, falling back to docker")
+        # Get stable local working directory (NOT temp)
+        workdir = _get_stable_local_workdir(job_name)
+        output_dir = workdir / "harbor_results"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-            dataset_config: LocalDatasetConfig | RegistryDatasetConfig
-            dataset_path = Path(dataset).expanduser()
-            if (
-                dataset.startswith("hf://")
-                or dataset.startswith("hf:")
-                or (version == "hf" and "/" in dataset and not dataset_path.exists())
-            ):
-                if dataset.startswith("hf://"):
-                    hf_repo_id = dataset[len("hf://") :]
-                elif dataset.startswith("hf:"):
-                    hf_repo_id = dataset[len("hf:") :]
-                else:
-                    hf_repo_id = dataset
+        # The job directory where Harbor will store trial results
+        job_dir = output_dir / job_name
 
-                from huggingface_hub import snapshot_download
+        # Restore completed trials from GCS for resume
+        if output_path and is_remote_path(output_path):
+            restored = _restore_trials_from_gcs(output_path, job_dir)
+            if restored > 0:
+                logger.info(f"Restored {restored} completed trial(s) from GCS")
 
-                hf_cache_dir = Path(tmpdir) / "hf_cache"
-                hf_local_dir = Path(tmpdir) / "hf_dataset"
-                hf_local_dir.mkdir(parents=True, exist_ok=True)
-                dataset_root = snapshot_download(
-                    repo_id=hf_repo_id,
-                    repo_type="dataset",
-                    local_dir=str(hf_local_dir),
-                    cache_dir=str(hf_cache_dir),
-                    token=os.environ.get("HF_TOKEN", False),
-                )
-                gitattributes_path = Path(dataset_root) / ".gitattributes"
-                if gitattributes_path.exists():
-                    gitattributes_path.unlink()
+        # Map environment type
+        # "local" in Marin means Docker in Harbor
+        harbor_env_type = EnvironmentType.DOCKER
+        if env_type != "local":
+            try:
+                harbor_env_type = EnvironmentType(env_type)
+            except ValueError:
+                logger.warning(f"Unknown environment type: {env_type}, falling back to docker")
 
-                dataset_config = LocalDatasetConfig(
-                    path=Path(dataset_root),
-                    n_tasks=task_limit,
-                )
-            elif dataset_path.exists():
-                if not dataset_path.is_dir():
-                    raise ValueError(f"Harbor dataset path must be a directory, got: {dataset_path}")
-                dataset_config = LocalDatasetConfig(
-                    path=dataset_path,
-                    n_tasks=task_limit,
-                )
+        dataset_config: LocalDatasetConfig | RegistryDatasetConfig
+        dataset_path = Path(dataset).expanduser()
+        if (
+            dataset.startswith("hf://")
+            or dataset.startswith("hf:")
+            or (version == "hf" and "/" in dataset and not dataset_path.exists())
+        ):
+            if dataset.startswith("hf://"):
+                hf_repo_id = dataset[len("hf://") :]
+            elif dataset.startswith("hf:"):
+                hf_repo_id = dataset[len("hf:") :]
             else:
-                dataset_config = RegistryDatasetConfig(
-                    registry=RemoteRegistryInfo(),
-                    name=dataset,
-                    version=version,
-                    n_tasks=task_limit,
-                )
+                hf_repo_id = dataset
 
-            # Create Harbor JobConfig
-            config = JobConfig(
-                job_name=f"eval_{int(time.time())}",
-                jobs_dir=output_dir,
-                datasets=[dataset_config],
-                agents=[
-                    AgentConfig(
-                        name=agent,
-                        model_name=model_name,
-                        kwargs=agent_kwargs or {},
-                    )
-                ],
-                orchestrator=dict(
-                    type=OrchestratorType.LOCAL,
-                    n_concurrent_trials=n_concurrent,
-                ),
-                environment=EnvironmentConfig(
-                    type=harbor_env_type,
-                ),
+            from huggingface_hub import snapshot_download
+
+            # Use stable cache directories inside workdir
+            hf_cache_dir = workdir / "hf_cache"
+            hf_local_dir = workdir / "hf_dataset"
+            hf_local_dir.mkdir(parents=True, exist_ok=True)
+            dataset_root = snapshot_download(
+                repo_id=hf_repo_id,
+                repo_type="dataset",
+                local_dir=str(hf_local_dir),
+                cache_dir=str(hf_cache_dir),
+                token=os.environ.get("HF_TOKEN", False),
+            )
+            gitattributes_path = Path(dataset_root) / ".gitattributes"
+            if gitattributes_path.exists():
+                gitattributes_path.unlink()
+
+            dataset_config = LocalDatasetConfig(
+                path=Path(dataset_root),
+                n_tasks=task_limit,
+            )
+        elif dataset_path.exists():
+            if not dataset_path.is_dir():
+                raise ValueError(f"Harbor dataset path must be a directory, got: {dataset_path}")
+            dataset_config = LocalDatasetConfig(
+                path=dataset_path,
+                n_tasks=task_limit,
+            )
+        else:
+            dataset_config = RegistryDatasetConfig(
+                registry=RemoteRegistryInfo(),
+                name=dataset,
+                version=version,
+                n_tasks=task_limit,
             )
 
-            job = Job(config)
-            logger.info(f"Starting Harbor job {job.config.job_name} via programmatic API")
-
-            # Run the job
-            asyncio.run(job.run())
-
-            logger.info("Harbor execution completed")
-            job_dir = job.job_dir
-
-            # Fix permissions on Docker-created files so we can read them
-            try:
-                subprocess.run(
-                    ["sudo", "chmod", "-R", "755", str(job_dir)],
-                    check=False,
-                    capture_output=True,
+        # Create Harbor JobConfig with deterministic job name
+        config = JobConfig(
+            job_name=job_name,
+            jobs_dir=output_dir,
+            datasets=[dataset_config],
+            agents=[
+                AgentConfig(
+                    name=agent,
+                    model_name=model_name,
+                    kwargs=agent_kwargs or {},
                 )
-            except Exception:
-                pass  # Continue even if chmod fails
+            ],
+            orchestrator=dict(
+                type=OrchestratorType.LOCAL,
+                n_concurrent_trials=n_concurrent,
+            ),
+            environment=EnvironmentConfig(
+                type=harbor_env_type,
+            ),
+        )
 
-            # Read trial results from Harbor's result.json files
-            results = {"trials": {}}
+        job = Job(config)
 
-            trial_dirs = [d for d in job_dir.iterdir() if d.is_dir()]
-            for trial_dir in trial_dirs:
-                result_file = trial_dir / "result.json"
-                if not result_file.exists():
-                    continue
+        # Register incremental upload hook for GCS
+        if output_path and is_remote_path(output_path):
+            upload_hook = _create_trial_upload_hook(output_path, job.job_dir)
+            job.on_trial_ended(upload_hook)
 
-                trial_result = json.loads(result_file.read_text(encoding="utf-8"))
-                trial_id = trial_result.get("task_name", trial_dir.name)
+        logger.info(
+            f"Starting Harbor job {job.config.job_name} via programmatic API "
+            f"(resuming={job.is_resuming}, remaining_trials={len(job._remaining_trial_configs)})"
+        )
 
-                # Extract reward from verifier_result.rewards.reward
-                verifier_result = trial_result.get("verifier_result") or {}
-                rewards = verifier_result.get("rewards") or {}
-                reward = rewards.get("reward", 0.0)
-                if not isinstance(reward, int | float):
-                    reward = 0.0
+        # Run the job
+        asyncio.run(job.run())
 
-                # Extract error info if present
-                error = None
-                exception_info = trial_result.get("exception_info")
-                if exception_info:
-                    error = {
-                        "type": exception_info.get("exception_type"),
-                        "message": exception_info.get("exception_message"),
-                    }
+        logger.info("Harbor execution completed")
 
-                # Read trajectory from agent/trajectory.json if it exists
-                trajectory_file = trial_dir / "agent" / "trajectory.json"
-                trajectory_content = None
-                trajectory_length = 0
-                if trajectory_file.exists():
-                    try:
-                        trajectory_content = trajectory_file.read_text(encoding="utf-8")
-                        trajectory_data = json.loads(trajectory_content)
-                        trajectory_length = len(trajectory_data.get("steps", []))
-                    except Exception as e:
-                        logger.warning(f"Failed to read trajectory for {trial_id}: {e}")
+        # Fix permissions on Docker-created files so we can read them
+        try:
+            subprocess.run(
+                ["sudo", "chmod", "-R", "755", str(job.job_dir)],
+                check=False,
+                capture_output=True,
+            )
+        except Exception:
+            pass  # Continue even if chmod fails
 
-                results["trials"][trial_id] = {
-                    "reward": reward,
-                    "status": "completed" if not exception_info else "failed",
-                    "task_name": trial_id,
-                    "started_at": trial_result.get("started_at"),
-                    "finished_at": trial_result.get("finished_at"),
-                    "error": error,
-                    "trajectory_content": trajectory_content,
-                    "trajectory_length": trajectory_length,
+        # Read trial results from Harbor's result.json files
+        results = {"trials": {}}
+
+        trial_dirs = [d for d in job.job_dir.iterdir() if d.is_dir()]
+        for trial_dir in trial_dirs:
+            result_file = trial_dir / "result.json"
+            if not result_file.exists():
+                continue
+
+            trial_result = json.loads(result_file.read_text(encoding="utf-8"))
+            trial_id = trial_result.get("task_name", trial_dir.name)
+
+            # Extract reward from verifier_result.rewards.reward
+            verifier_result = trial_result.get("verifier_result") or {}
+            rewards = verifier_result.get("rewards") or {}
+            reward = rewards.get("reward", 0.0)
+            if not isinstance(reward, int | float):
+                reward = 0.0
+
+            # Extract error info if present
+            error = None
+            exception_info = trial_result.get("exception_info")
+            if exception_info:
+                error = {
+                    "type": exception_info.get("exception_type"),
+                    "message": exception_info.get("exception_message"),
                 }
 
-            return results
-        finally:
-            # Clean up temp directory, ignoring permission errors from Docker
-            try:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            except Exception as e:
-                logger.warning(f"Could not fully clean up temp directory {tmpdir}: {e}")
-                # Try using sudo to clean up Docker files if available
+            # Read trajectory from agent/trajectory.json if it exists
+            trajectory_file = trial_dir / "agent" / "trajectory.json"
+            trajectory_content = None
+            trajectory_length = 0
+            if trajectory_file.exists():
                 try:
-                    subprocess.run(["sudo", "rm", "-rf", tmpdir], check=False, capture_output=True)
-                except Exception:
-                    pass
+                    trajectory_content = trajectory_file.read_text(encoding="utf-8")
+                    trajectory_data = json.loads(trajectory_content)
+                    trajectory_length = len(trajectory_data.get("steps", []))
+                except Exception as e:
+                    logger.warning(f"Failed to read trajectory for {trial_id}: {e}")
+
+            results["trials"][trial_id] = {
+                "reward": reward,
+                "status": "completed" if not exception_info else "failed",
+                "task_name": trial_id,
+                "started_at": trial_result.get("started_at"),
+                "finished_at": trial_result.get("finished_at"),
+                "error": error,
+                "trajectory_content": trajectory_content,
+                "trajectory_length": trajectory_length,
+            }
+
+        return results
 
     def _parse_results(self, results: dict) -> dict:
         """Parse Harbor results into Marin format."""
