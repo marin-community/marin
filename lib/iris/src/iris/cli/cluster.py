@@ -31,7 +31,7 @@ from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.platform import create_platform
-from iris.cluster.vm.controller import create_controller
+from iris.cluster.vm.controller_vm import create_controller_vm
 from iris.cluster.vm.debug import controller_tunnel, discover_controller_vm
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
@@ -214,7 +214,12 @@ def cluster_stop(ctx):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster stop")
-    platform = create_platform(config)
+    platform = create_platform(
+        platform_config=config.platform,
+        bootstrap_config=config.defaults.bootstrap,
+        timeout_config=config.defaults.timeouts,
+        ssh_config=config.defaults.ssh,
+    )
     ops = platform.vm_ops()
     slice_ids_by_group: dict[str, list[str]] = {}
 
@@ -234,7 +239,7 @@ def cluster_stop(ctx):
             if slice_ids:
                 slice_ids_by_group[name] = slice_ids
 
-    ctrl = create_controller(config)
+    ctrl = create_controller_vm(config)
     click.echo("Stopping controller...")
     try:
         ctrl.stop()
@@ -304,7 +309,7 @@ def cluster_status_cmd(ctx):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster status")
-    ctrl = create_controller(config)
+    ctrl = create_controller_vm(config)
     click.echo("Checking controller status...")
     try:
         ctrl_status = ctrl.status()

@@ -163,26 +163,14 @@ message ControllerVmConfig {
 }
 
 // ============================================================================
-// AUTOSCALER CONFIGURATION
-// ============================================================================
-
-// Configuration for the autoscaler
-message AutoscalerConfig {
-  iris.time.Duration evaluation_interval = 1;  // Default: 10s
-  iris.time.Duration requesting_timeout = 2;   // Default: 120s
-  iris.time.Duration scale_up_delay = 3;       // Default: 60s
-  iris.time.Duration scale_down_delay = 4;     // Default: 300s
-}
-
-// ============================================================================
 // DEFAULTS CONFIGURATION
 // ============================================================================
 
 message AutoscalerDefaults {
-  iris.time.Duration evaluation_interval = 1;
-  iris.time.Duration requesting_timeout = 2;
-  iris.time.Duration scale_up_delay = 3;
-  iris.time.Duration scale_down_delay = 4;
+  iris.time.Duration evaluation_interval = 1;  // Default: 10s
+  iris.time.Duration requesting_timeout = 2;   // Default: 120s
+  iris.time.Duration scale_up_delay = 3;       // Default: 60s
+  iris.time.Duration scale_down_delay = 4;     // Default: 300s
 }
 
 message DefaultsConfig {
@@ -211,10 +199,5 @@ message IrisClusterConfig {
   map<string, ScaleGroupConfig> scale_groups = 50;
 
   reserved 70;  // label_prefix (moved to PlatformConfig)
-
-  // Nested configuration
-  BootstrapConfig bootstrap = 80;
-  TimeoutConfig timeouts = 81;
-  SshConfig ssh = 82;
-  AutoscalerConfig autoscaler = 83;
+  reserved 80 to 83;  // Duplicate fields removed (use defaults.* instead)
 }

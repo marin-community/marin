@@ -26,10 +26,9 @@ defaults:
       milliseconds: 60000
     scale_down_delay:
       milliseconds: 300000
-
-bootstrap:
-  docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
-  worker_port: 10001
+  bootstrap:
+    docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+    worker_port: 10001
 
 controller:
   image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest

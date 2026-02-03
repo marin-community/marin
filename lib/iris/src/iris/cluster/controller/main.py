@@ -59,7 +59,8 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.vm.autoscaler import Autoscaler
-    from iris.cluster.vm.config import create_autoscaler_from_config, load_config
+    from iris.cluster.vm.config import create_autoscaler, load_config
+    from iris.cluster.vm.platform import create_platform
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -82,7 +83,21 @@ def serve(
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
 
         try:
-            autoscaler = create_autoscaler_from_config(cluster_config)
+            # Create platform with explicit config sections
+            platform = create_platform(
+                platform_config=cluster_config.platform,
+                bootstrap_config=cluster_config.defaults.bootstrap,
+                timeout_config=cluster_config.defaults.timeouts,
+                ssh_config=cluster_config.defaults.ssh,
+            )
+            logger.info("Platform created")
+
+            # Create autoscaler using platform
+            autoscaler = create_autoscaler(
+                platform=platform,
+                autoscaler_config=cluster_config.defaults.autoscaler,
+                scale_groups=cluster_config.scale_groups,
+            )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
             logger.exception("Failed to create autoscaler from config")

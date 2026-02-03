@@ -126,11 +126,27 @@ class _LocalPlatformOps:
 
 
 class GcpPlatform:
-    def __init__(self, config: config_pb2.IrisClusterConfig):
-        self._platform = config.platform.gcp
-        self._label_prefix = config.platform.label_prefix or "iris"
-        self._bootstrap = config.bootstrap
-        self._timeouts = config.timeouts
+    def __init__(
+        self,
+        gcp_config: config_pb2.GcpPlatformConfig,
+        label_prefix: str,
+        bootstrap_config: config_pb2.BootstrapConfig,
+        timeout_config: config_pb2.TimeoutConfig,
+    ):
+        """Create GCP platform with explicit config sections.
+
+        No defaults here - all defaults resolved before this point.
+
+        Args:
+            gcp_config: GCP platform settings (project_id, region, zones, etc.)
+            label_prefix: Prefix for GCP resource labels
+            bootstrap_config: Worker bootstrap settings
+            timeout_config: VM lifecycle timeouts
+        """
+        self._platform = gcp_config
+        self._label_prefix = label_prefix
+        self._bootstrap = bootstrap_config
+        self._timeouts = timeout_config
 
     def vm_ops(self) -> PlatformOps:
         return _GcpPlatformOps(self._platform, self._label_prefix)
@@ -162,11 +178,25 @@ class GcpPlatform:
 
 
 class ManualPlatform:
-    def __init__(self, config: config_pb2.IrisClusterConfig):
-        self._bootstrap = config.bootstrap
-        self._timeouts = config.timeouts
-        self._label_prefix = config.platform.label_prefix or "iris"
-        self._ssh = _resolve_manual_ssh_config(config)
+    def __init__(
+        self,
+        label_prefix: str,
+        bootstrap_config: config_pb2.BootstrapConfig,
+        timeout_config: config_pb2.TimeoutConfig,
+        ssh_config: config_pb2.SshConfig,
+    ):
+        """Create manual platform with explicit config sections.
+
+        Args:
+            label_prefix: Prefix for resource labels
+            bootstrap_config: Worker bootstrap settings
+            timeout_config: VM lifecycle timeouts
+            ssh_config: SSH connection settings
+        """
+        self._bootstrap = bootstrap_config
+        self._timeouts = timeout_config
+        self._label_prefix = label_prefix
+        self._ssh = _ssh_config_to_dataclass(ssh_config)
 
     def vm_ops(self) -> PlatformOps:
         return _ManualPlatformOps(self._ssh, self._bootstrap)
@@ -210,19 +240,53 @@ class LocalPlatform:
         raise NotImplementedError("Local platform uses LocalController autoscaler")
 
 
-def create_platform(config: config_pb2.IrisClusterConfig) -> Platform:
-    if not config.HasField("platform"):
+def create_platform(
+    platform_config: config_pb2.PlatformConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
+    ssh_config: config_pb2.SshConfig,
+) -> Platform:
+    """Create platform from explicit config sections.
+
+    Args:
+        platform_config: Platform type and settings (gcp/manual/local)
+        bootstrap_config: Worker bootstrap settings
+        timeout_config: VM lifecycle timeouts
+        ssh_config: SSH connection settings
+
+    Returns:
+        Platform instance for the configured platform type
+
+    Raises:
+        ValueError: If platform type is unspecified or invalid
+    """
+    if not platform_config.HasField("platform"):
         raise ValueError("platform is required")
-    which = config.platform.WhichOneof("platform")
+
+    which = platform_config.WhichOneof("platform")
+
     if which == "gcp":
-        if not config.platform.gcp.project_id:
+        if not platform_config.gcp.project_id:
             raise ValueError("platform.gcp.project_id is required")
-        return GcpPlatform(config)
+        return GcpPlatform(
+            gcp_config=platform_config.gcp,
+            label_prefix=platform_config.label_prefix or "iris",
+            bootstrap_config=bootstrap_config,
+            timeout_config=timeout_config,
+        )
+
     if which == "manual":
-        return ManualPlatform(config)
+        return ManualPlatform(
+            label_prefix=platform_config.label_prefix or "iris",
+            bootstrap_config=bootstrap_config,
+            timeout_config=timeout_config,
+            ssh_config=ssh_config,
+        )
+
     if which == "local":
         return LocalPlatform()
-    raise ValueError("Unknown platform configuration")
+
+    raise ValueError(f"Unknown platform: {which}")
 
 
 def _resolve_zones(
@@ -297,8 +361,15 @@ def _direct_ssh(ssh_config: SshConfig, host: str) -> DirectSshConnection:
     )
 
 
-def _resolve_manual_ssh_config(config: config_pb2.IrisClusterConfig) -> SshConfig:
-    ssh = config.ssh
+def _ssh_config_to_dataclass(ssh: config_pb2.SshConfig) -> SshConfig:
+    """Convert proto SshConfig to dataclass SshConfig.
+
+    Args:
+        ssh: Proto SSH configuration (should have defaults already applied)
+
+    Returns:
+        SshConfig dataclass for use by SSH connections
+    """
     connect_timeout = (
         Duration.from_proto(ssh.connect_timeout)
         if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0

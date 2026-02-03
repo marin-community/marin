@@ -45,6 +45,30 @@ logger = logging.getLogger(__name__)
 # Re-export IrisClusterConfig from proto for public API
 IrisClusterConfig = config_pb2.IrisClusterConfig
 
+# Single source of truth for all default values
+DEFAULT_CONFIG = config_pb2.DefaultsConfig(
+    timeouts=config_pb2.TimeoutConfig(
+        boot_timeout=Duration.from_seconds(300).to_proto(),
+        init_timeout=Duration.from_seconds(600).to_proto(),
+        ssh_poll_interval=Duration.from_seconds(5).to_proto(),
+    ),
+    ssh=config_pb2.SshConfig(
+        user="root",
+        port=22,
+        connect_timeout=Duration.from_seconds(30).to_proto(),
+    ),
+    autoscaler=config_pb2.AutoscalerDefaults(
+        evaluation_interval=Duration.from_seconds(10).to_proto(),
+        requesting_timeout=Duration.from_seconds(120).to_proto(),
+        scale_up_delay=Duration.from_seconds(60).to_proto(),
+        scale_down_delay=Duration.from_seconds(300).to_proto(),
+    ),
+    bootstrap=config_pb2.BootstrapConfig(
+        worker_port=10001,
+        cache_dir="/var/cache/iris",
+    ),
+)
+
 # Mapping from lowercase accelerator types to proto enum names
 _ACCELERATOR_TYPE_MAP = {
     "cpu": "ACCELERATOR_TYPE_CPU",
@@ -115,117 +139,104 @@ def _validate_vm_types(config: config_pb2.IrisClusterConfig) -> None:
             raise ValueError(f"Scale group '{name}' must set vm_type to tpu_vm, gce_vm, manual_vm, or local_vm.")
 
 
-def _resolve_duration(
-    primary: config_pb2.TimeoutConfig | config_pb2.AutoscalerConfig,
-    fallback: config_pb2.TimeoutConfig | config_pb2.AutoscalerConfig | config_pb2.AutoscalerDefaults,
-    field_name: str,
-    default_value: Duration,
-) -> time_pb2.Duration:
-    if primary.HasField(field_name):
-        field = getattr(primary, field_name)
-        if field.milliseconds > 0:
-            return field
-    if fallback.HasField(field_name):
-        field = getattr(fallback, field_name)
-        if field.milliseconds > 0:
-            return field
-    return default_value.to_proto()
+def _merge_proto_fields(target, source) -> None:
+    """Merge non-empty fields from source into target.
+
+    Args:
+        target: Proto message to merge into (modified in place)
+        source: Proto message to merge from
+    """
+    for field_desc in source.DESCRIPTOR.fields:
+        field_name = field_desc.name
+        if not source.HasField(field_name):
+            continue
+
+        value = getattr(source, field_name)
+
+        # For Duration, check milliseconds > 0
+        if hasattr(value, "milliseconds"):
+            if value.milliseconds == 0:
+                continue
+            # Copy Duration proto
+            target_field = getattr(target, field_name)
+            target_field.CopyFrom(value)
+        # For string, check non-empty
+        elif isinstance(value, str):
+            if not value:
+                continue
+            setattr(target, field_name, value)
+        # For int, check non-zero (except port which can be 0)
+        elif isinstance(value, int):
+            if value == 0 and field_name != "port":
+                continue
+            setattr(target, field_name, value)
+        # For message types, copy
+        elif hasattr(value, "CopyFrom"):
+            target_field = getattr(target, field_name)
+            target_field.CopyFrom(value)
+        else:
+            setattr(target, field_name, value)
 
 
-def _merge_timeouts(
-    timeouts: config_pb2.TimeoutConfig,
-    defaults: config_pb2.TimeoutConfig,
-) -> config_pb2.TimeoutConfig:
-    return config_pb2.TimeoutConfig(
-        boot_timeout=_resolve_duration(timeouts, defaults, "boot_timeout", Duration.from_seconds(300)),
-        init_timeout=_resolve_duration(timeouts, defaults, "init_timeout", Duration.from_seconds(600)),
-        ssh_poll_interval=_resolve_duration(timeouts, defaults, "ssh_poll_interval", Duration.from_seconds(5)),
-    )
+def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.DefaultsConfig) -> None:
+    """Deep merge source defaults into target, field by field.
 
-
-def _merge_autoscaler(
-    autoscaler: config_pb2.AutoscalerConfig,
-    defaults: config_pb2.AutoscalerDefaults,
-) -> config_pb2.AutoscalerConfig:
-    return config_pb2.AutoscalerConfig(
-        evaluation_interval=_resolve_duration(
-            autoscaler,
-            defaults,
-            "evaluation_interval",
-            Duration.from_seconds(10),
-        ),
-        requesting_timeout=_resolve_duration(
-            autoscaler,
-            defaults,
-            "requesting_timeout",
-            Duration.from_seconds(120),
-        ),
-        scale_up_delay=_resolve_duration(
-            autoscaler,
-            defaults,
-            "scale_up_delay",
-            Duration.from_seconds(60),
-        ),
-        scale_down_delay=_resolve_duration(
-            autoscaler,
-            defaults,
-            "scale_down_delay",
-            Duration.from_seconds(300),
-        ),
-    )
-
-
-def _merge_ssh(
-    ssh: config_pb2.SshConfig,
-    defaults: config_pb2.SshConfig,
-) -> config_pb2.SshConfig:
-    connect_timeout = ssh.connect_timeout
-    if not (ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0):
-        connect_timeout = defaults.connect_timeout
-    if not (connect_timeout.milliseconds > 0):
-        connect_timeout = Duration.from_seconds(30).to_proto()
-
-    return config_pb2.SshConfig(
-        user=ssh.user or defaults.user or "root",
-        key_file=ssh.key_file or defaults.key_file,
-        port=ssh.port or defaults.port or 22,
-        connect_timeout=connect_timeout,
-    )
-
-
-def _merge_bootstrap(
-    bootstrap: config_pb2.BootstrapConfig,
-    defaults: config_pb2.BootstrapConfig,
-) -> config_pb2.BootstrapConfig:
-    env_vars: dict[str, str] = {}
-    env_vars.update(defaults.env_vars)
-    env_vars.update(bootstrap.env_vars)
-
-    worker_port = bootstrap.worker_port or defaults.worker_port or 10001
-    cache_dir = bootstrap.cache_dir or defaults.cache_dir or "/var/cache/iris"
-
-    return config_pb2.BootstrapConfig(
-        controller_address=bootstrap.controller_address or defaults.controller_address,
-        worker_id=bootstrap.worker_id or defaults.worker_id,
-        worker_port=worker_port,
-        docker_image=bootstrap.docker_image or defaults.docker_image,
-        cache_dir=cache_dir,
-        env_vars=env_vars,
-    )
+    Args:
+        target: DefaultsConfig to merge into (modified in place)
+        source: DefaultsConfig to merge from
+    """
+    if source.HasField("timeouts"):
+        _merge_proto_fields(target.timeouts, source.timeouts)
+    if source.HasField("ssh"):
+        _merge_proto_fields(target.ssh, source.ssh)
+    if source.HasField("autoscaler"):
+        _merge_proto_fields(target.autoscaler, source.autoscaler)
+    if source.HasField("bootstrap"):
+        # Bootstrap is special because of env_vars map
+        if source.bootstrap.controller_address:
+            target.bootstrap.controller_address = source.bootstrap.controller_address
+        if source.bootstrap.worker_id:
+            target.bootstrap.worker_id = source.bootstrap.worker_id
+        if source.bootstrap.worker_port:
+            target.bootstrap.worker_port = source.bootstrap.worker_port
+        if source.bootstrap.docker_image:
+            target.bootstrap.docker_image = source.bootstrap.docker_image
+        if source.bootstrap.cache_dir:
+            target.bootstrap.cache_dir = source.bootstrap.cache_dir
+        # Merge env_vars map
+        for key, value in source.bootstrap.env_vars.items():
+            target.bootstrap.env_vars[key] = value
 
 
 def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClusterConfig:
-    """Apply defaults to a config and return a new merged config."""
+    """Apply defaults to config and return merged result.
+
+    Resolution order:
+    1. Explicit field in config.defaults.* (if set)
+    2. DEFAULT_CONFIG constant (hardcoded defaults)
+
+    This function is called once during load_config().
+
+    Args:
+        config: Input cluster configuration
+
+    Returns:
+        New IrisClusterConfig with defaults fully resolved
+    """
     merged = config_pb2.IrisClusterConfig()
     merged.CopyFrom(config)
 
-    defaults = config.defaults if config.HasField("defaults") else config_pb2.DefaultsConfig()
+    # Start with DEFAULT_CONFIG, then overlay user-provided defaults
+    result_defaults = config_pb2.DefaultsConfig()
+    result_defaults.CopyFrom(DEFAULT_CONFIG)
 
-    merged.timeouts.CopyFrom(_merge_timeouts(config.timeouts, defaults.timeouts))
-    merged.ssh.CopyFrom(_merge_ssh(config.ssh, defaults.ssh))
-    merged.autoscaler.CopyFrom(_merge_autoscaler(config.autoscaler, defaults.autoscaler))
-    merged.bootstrap.CopyFrom(_merge_bootstrap(config.bootstrap, defaults.bootstrap))
+    # Merge each section
+    if config.HasField("defaults"):
+        _deep_merge_defaults(result_defaults, config.defaults)
 
+    merged.defaults.CopyFrom(result_defaults)
+
+    # Apply scale group defaults
     for group in merged.scale_groups.values():
         if not group.HasField("priority"):
             group.priority = 100
@@ -358,67 +369,49 @@ class ScaleGroupSpec:
     hosts: list[str] = field(default_factory=list)
 
 
-def create_autoscaler_from_config(
-    config: config_pb2.IrisClusterConfig,
-    autoscaler_config: config_pb2.AutoscalerConfig | None = None,
+def create_autoscaler(
+    platform,  # type: Platform (avoiding circular import)
+    autoscaler_config: config_pb2.AutoscalerDefaults,
+    scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     dry_run: bool = False,
 ):
-    """Create autoscaler with per-group managers from configuration.
-
-    This is the main entry point for creating a production autoscaler.
-    It creates:
-    - A shared VmRegistry for global VM tracking
-    - A TrackedVmFactory that registers VMs automatically
-    - A VmManager per scale group via the platform
-    - ScalingGroups that own VM groups and track scaling state
-    - The Autoscaler that coordinates scaling decisions
+    """Create autoscaler from platform and explicit config.
 
     Args:
-        config: Cluster configuration proto with scale groups
-        autoscaler_config: Optional autoscaler configuration proto (overrides config.autoscaler if provided)
-        dry_run: If True, don't actually create VMs
+        platform: Platform instance for creating VM managers
+        autoscaler_config: Autoscaler settings (already resolved with defaults)
+        scale_groups: Map of scale group name to config
+        dry_run: If True, don't actually provision VMs
 
     Returns:
-        A fully configured Autoscaler ready for use
-
-    Raises:
-        ValueError: If a scale group is missing vm_type or platform config is invalid
+        Configured Autoscaler instance
     """
     from iris.cluster.vm.autoscaler import Autoscaler
 
-    config = apply_defaults(config)
-    logger.info("Creating Autoscaler")
-
+    # Create shared infrastructure
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
-    platform = create_platform(config)
 
-    scale_groups: dict[str, ScalingGroup] = {}
-    if autoscaler_config is None:
-        autoscaler_config = config_pb2.AutoscalerConfig(
-            scale_up_delay=Duration.from_seconds(60).to_proto(),
-            scale_down_delay=Duration.from_seconds(300).to_proto(),
-        )
+    # Extract autoscaler settings from config
     scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
     scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
-    scale_up_delay = Duration.from_proto(config.autoscaler.scale_up_delay)
-    scale_down_delay = Duration.from_proto(config.autoscaler.scale_down_delay)
 
-    for name, group_config in config.scale_groups.items():
-        manager = platform.vm_manager(group_config, vm_factory=vm_factory, dry_run=dry_run)
-        scale_groups[name] = ScalingGroup(
+    # Create scale groups using provided platform
+    scaling_groups: dict[str, ScalingGroup] = {}
+    for name, group_config in scale_groups.items():
+        vm_manager = platform.vm_manager(group_config, vm_factory=vm_factory, dry_run=dry_run)
+
+        scaling_groups[name] = ScalingGroup(
             config=group_config,
-            vm_manager=manager,
+            vm_manager=vm_manager,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
         )
         logger.info("Created scale group %s", name)
 
-    if autoscaler_config is None:
-        autoscaler_config = config.autoscaler
-
-    return Autoscaler(
-        scale_groups=scale_groups,
+    # Create autoscaler using from_config classmethod
+    return Autoscaler.from_config(
+        scale_groups=scaling_groups,
         vm_registry=vm_registry,
         config=autoscaler_config,
     )
@@ -430,7 +423,7 @@ def create_autoscaler_from_specs(
     bootstrap_config: config_pb2.BootstrapConfig,
     timeouts: config_pb2.TimeoutConfig,
     ssh_config: SshConfig | None = None,
-    autoscaler_config: config_pb2.AutoscalerConfig | None = None,
+    autoscaler_config: config_pb2.AutoscalerDefaults | None = None,
     label_prefix: str = "iris",
     dry_run: bool = False,
 ):
@@ -458,6 +451,13 @@ def create_autoscaler_from_specs(
 
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
+
+    # Use provided config or DEFAULT_CONFIG
+    if autoscaler_config is None:
+        autoscaler_config = DEFAULT_CONFIG.autoscaler
+
+    scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
+    scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
 
     scale_groups: dict[str, ScalingGroup] = {}
 
@@ -488,7 +488,7 @@ def create_autoscaler_from_specs(
             spec.provider,
         )
 
-    return Autoscaler(
+    return Autoscaler.from_config(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
         config=autoscaler_config,
@@ -545,6 +545,60 @@ def create_manual_autoscaler(
         bootstrap_config=bootstrap_config,
         timeouts=timeouts,
         ssh_config=ssh_config,
+    )
+
+
+def create_local_autoscaler(
+    config: config_pb2.IrisClusterConfig,
+    controller_address: str,
+    cache_path: Path,
+    fake_bundle: Path,
+    threads: ThreadContainer | None = None,
+):
+    """Create Autoscaler with LocalVmManagers for all scale groups.
+
+    Parallels create_autoscaler() but uses LocalVmManagers.
+    Each scale group in the config gets a LocalVmManager that creates
+    in-process workers instead of cloud VMs.
+
+    Args:
+        config: Cluster configuration (with defaults already applied)
+        controller_address: Address for workers to connect to
+        cache_path: Path for worker cache
+        fake_bundle: Path to fake bundle for local workers
+        threads: Optional thread container for testing
+
+    Returns:
+        Configured Autoscaler with local VM managers
+    """
+    from iris.cluster.vm.autoscaler import Autoscaler
+    from iris.cluster.vm.local_platform import LocalVmManager, PortAllocator
+
+    vm_registry = VmRegistry()
+    shared_port_allocator = PortAllocator(port_range=(30000, 40000))
+
+    scale_groups: dict[str, ScalingGroup] = {}
+    for name, sg_config in config.scale_groups.items():
+        manager = LocalVmManager(
+            scale_group_config=sg_config,
+            controller_address=controller_address,
+            cache_path=cache_path,
+            fake_bundle=fake_bundle,
+            vm_registry=vm_registry,
+            port_allocator=shared_port_allocator,
+        )
+        scale_groups[name] = ScalingGroup(
+            config=sg_config,
+            vm_manager=manager,
+            scale_up_cooldown=Duration.from_proto(config.defaults.autoscaler.scale_up_delay),
+            scale_down_cooldown=Duration.from_proto(config.defaults.autoscaler.scale_down_delay),
+        )
+
+    return Autoscaler.from_config(
+        scale_groups=scale_groups,
+        vm_registry=vm_registry,
+        config=config.defaults.autoscaler,
+        threads=threads,
     )
 
 

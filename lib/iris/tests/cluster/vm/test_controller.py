@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from iris.cluster.vm.config import config_to_dict, load_config
-from iris.cluster.vm.controller import (
+from iris.cluster.vm.controller_vm import (
     GcpController,
     HealthCheckResult,
     ManualController,

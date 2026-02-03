@@ -26,10 +26,11 @@ from google.protobuf.json_format import ParseDict
 
 from iris.cluster.vm.config import (
     config_to_dict,
-    create_autoscaler_from_config,
+    create_autoscaler,
     get_ssh_config,
     load_config,
 )
+from iris.cluster.vm.platform import create_platform
 from iris.rpc import config_pb2
 
 
@@ -44,10 +45,11 @@ platform:
     project_id: my-project
     zone: us-central1-a
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
   tpu_v5e_8:
@@ -85,14 +87,14 @@ scale_groups:
 platform:
   manual: {}
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
-
-ssh:
-  user: ubuntu
-  key_file: ~/.ssh/id_rsa
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
+  ssh:
+    user: ubuntu
+    key_file: ~/.ssh/id_rsa
 
 scale_groups:
   manual_hosts:
@@ -256,20 +258,21 @@ scale_groups:
 
 
 class TestCreateAutoscalerFromConfig:
-    """Tests for create_autoscaler_from_config factory function."""
+    """Tests for create_autoscaler factory function."""
 
     def test_creates_autoscaler_with_tpu_provider(self, tmp_path: Path):
-        """create_autoscaler_from_config works with TPU vm_type config."""
+        """create_autoscaler works with TPU vm_type config."""
         config_content = """\
 platform:
   gcp:
     project_id: my-project
     zone: us-central1-a
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
   tpu_v5e_8:
@@ -285,25 +288,36 @@ scale_groups:
         config_path.write_text(config_content)
 
         config = load_config(config_path)
-        autoscaler = create_autoscaler_from_config(config, dry_run=True)
+        platform = create_platform(
+            platform_config=config.platform,
+            bootstrap_config=config.defaults.bootstrap,
+            timeout_config=config.defaults.timeouts,
+            ssh_config=config.defaults.ssh,
+        )
+        autoscaler = create_autoscaler(
+            platform=platform,
+            autoscaler_config=config.defaults.autoscaler,
+            scale_groups=config.scale_groups,
+            dry_run=True,
+        )
 
         assert autoscaler is not None
         assert "tpu_v5e_8" in autoscaler.groups
 
     def test_creates_autoscaler_with_manual_provider(self, tmp_path: Path):
-        """create_autoscaler_from_config works with manual vm_type config."""
+        """create_autoscaler works with manual vm_type config."""
         config_content = """\
 platform:
   manual: {}
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
-
-ssh:
-  user: ubuntu
-  key_file: ~/.ssh/id_rsa
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
+  ssh:
+    user: ubuntu
+    key_file: ~/.ssh/id_rsa
 
 scale_groups:
   manual_hosts:
@@ -316,23 +330,35 @@ scale_groups:
         config_path.write_text(config_content)
 
         config = load_config(config_path)
-        autoscaler = create_autoscaler_from_config(config, dry_run=True)
+        platform = create_platform(
+            platform_config=config.platform,
+            bootstrap_config=config.defaults.bootstrap,
+            timeout_config=config.defaults.timeouts,
+            ssh_config=config.defaults.ssh,
+        )
+        autoscaler = create_autoscaler(
+            platform=platform,
+            autoscaler_config=config.defaults.autoscaler,
+            scale_groups=config.scale_groups,
+            dry_run=True,
+        )
 
         assert autoscaler is not None
         assert "manual_hosts" in autoscaler.groups
 
     def test_creates_autoscaler_after_round_trip(self, tmp_path: Path):
-        """create_autoscaler_from_config works after config round-trip."""
+        """create_autoscaler works after config round-trip."""
         config_content = """\
 platform:
   gcp:
     project_id: my-project
     zone: us-central1-a
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
   tpu_v5e_8:
@@ -357,7 +383,18 @@ scale_groups:
         loaded_config = load_config(round_trip_path)
 
         # Should be able to create autoscaler from round-tripped config
-        autoscaler = create_autoscaler_from_config(loaded_config, dry_run=True)
+        platform = create_platform(
+            platform_config=loaded_config.platform,
+            bootstrap_config=loaded_config.defaults.bootstrap,
+            timeout_config=loaded_config.defaults.timeouts,
+            ssh_config=loaded_config.defaults.ssh,
+        )
+        autoscaler = create_autoscaler(
+            platform=platform,
+            autoscaler_config=loaded_config.defaults.autoscaler,
+            scale_groups=loaded_config.scale_groups,
+            dry_run=True,
+        )
 
         assert autoscaler is not None
         assert "tpu_v5e_8" in autoscaler.groups

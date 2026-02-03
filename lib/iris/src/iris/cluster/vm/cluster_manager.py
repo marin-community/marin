@@ -25,7 +25,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from iris.cluster.vm.controller import ControllerProtocol, create_controller
+from iris.cluster.vm.controller_vm import ControllerProtocol, create_controller_vm
 from iris.cluster.vm.debug import controller_tunnel
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
@@ -100,7 +100,7 @@ class ClusterManager:
         For GCP: creates a GCE VM, bootstraps, returns internal IP.
         For local: starts in-process Controller, returns localhost URL.
         """
-        self._controller = create_controller(self._config, threads=self._threads)
+        self._controller = create_controller_vm(self._config, threads=self._threads)
         address = self._controller.start()
         logger.info("Controller started at %s (local=%s)", address, self.is_local)
         return address
@@ -136,7 +136,7 @@ class ClusterManager:
             RuntimeError: If controller VM doesn't exist
         """
         # Reload controller - it will re-bootstrap workers on startup
-        self._controller = create_controller(self._config, threads=self._threads)
+        self._controller = create_controller_vm(self._config, threads=self._threads)
         address = self._controller.reload()
         logger.info("Controller reloaded at %s", address)
 

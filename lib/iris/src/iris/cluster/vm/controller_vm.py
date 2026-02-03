@@ -985,10 +985,8 @@ class LocalController:
             ControllerConfig as _InnerControllerConfig,
             RpcWorkerStubFactory,
         )
-        from iris.cluster.vm.local_platform import (
-            _create_local_autoscaler,
-            find_free_port,
-        )
+        from iris.cluster.vm.config import create_local_autoscaler
+        from iris.cluster.vm.local_platform import find_free_port
 
         self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_")
         temp = Path(self._temp_dir.name)
@@ -1006,7 +1004,7 @@ class LocalController:
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
-        autoscaler = _create_local_autoscaler(
+        autoscaler = create_local_autoscaler(
             self._config,
             address,
             cache_path,
@@ -1057,11 +1055,11 @@ class LocalController:
         return "(local controller — no startup logs)"
 
 
-def create_controller(
+def create_controller_vm(
     config: config_pb2.IrisClusterConfig,
     threads: ThreadContainer | None = None,
 ) -> ControllerProtocol:
-    """Factory function to create appropriate controller type.
+    """Factory function to create appropriate controller VM type.
 
     Dispatches based on the controller.controller oneof field:
     - gcp: Creates GcpController for GCP-managed VMs

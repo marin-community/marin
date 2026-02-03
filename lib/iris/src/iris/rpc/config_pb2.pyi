@@ -187,18 +187,6 @@ class ControllerVmConfig(_message.Message):
     local: LocalControllerConfig
     def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ...) -> None: ...
 
-class AutoscalerConfig(_message.Message):
-    __slots__ = ("evaluation_interval", "requesting_timeout", "scale_up_delay", "scale_down_delay")
-    EVALUATION_INTERVAL_FIELD_NUMBER: _ClassVar[int]
-    REQUESTING_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    SCALE_UP_DELAY_FIELD_NUMBER: _ClassVar[int]
-    SCALE_DOWN_DELAY_FIELD_NUMBER: _ClassVar[int]
-    evaluation_interval: _time_pb2.Duration
-    requesting_timeout: _time_pb2.Duration
-    scale_up_delay: _time_pb2.Duration
-    scale_down_delay: _time_pb2.Duration
-    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., requesting_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
-
 class AutoscalerDefaults(_message.Message):
     __slots__ = ("evaluation_interval", "requesting_timeout", "scale_up_delay", "scale_down_delay")
     EVALUATION_INTERVAL_FIELD_NUMBER: _ClassVar[int]
@@ -224,7 +212,7 @@ class DefaultsConfig(_message.Message):
     def __init__(self, timeouts: _Optional[_Union[TimeoutConfig, _Mapping]] = ..., ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerDefaults, _Mapping]] = ..., bootstrap: _Optional[_Union[BootstrapConfig, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("platform", "defaults", "controller", "scale_groups", "bootstrap", "timeouts", "ssh", "autoscaler")
+    __slots__ = ("platform", "defaults", "controller", "scale_groups")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -236,16 +224,8 @@ class IrisClusterConfig(_message.Message):
     DEFAULTS_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUPS_FIELD_NUMBER: _ClassVar[int]
-    BOOTSTRAP_FIELD_NUMBER: _ClassVar[int]
-    TIMEOUTS_FIELD_NUMBER: _ClassVar[int]
-    SSH_FIELD_NUMBER: _ClassVar[int]
-    AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
     platform: PlatformConfig
     defaults: DefaultsConfig
     controller: ControllerVmConfig
     scale_groups: _containers.MessageMap[str, ScaleGroupConfig]
-    bootstrap: BootstrapConfig
-    timeouts: TimeoutConfig
-    ssh: SshConfig
-    autoscaler: AutoscalerConfig
-    def __init__(self, platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., bootstrap: _Optional[_Union[BootstrapConfig, _Mapping]] = ..., timeouts: _Optional[_Union[TimeoutConfig, _Mapping]] = ..., ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ...) -> None: ...
