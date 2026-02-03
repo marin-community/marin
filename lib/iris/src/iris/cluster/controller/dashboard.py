@@ -73,8 +73,8 @@ class ControllerDashboard:
 
         routes = [
             Route("/", self._dashboard),
-            Route("/job/{job_id}", self._job_detail_page),
-            Route("/vm/{vm_id}", self._vm_detail_page),
+            Route("/job/{job_id:path}", self._job_detail_page),
+            Route("/vm/{vm_id:path}", self._vm_detail_page),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
