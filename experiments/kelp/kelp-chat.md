@@ -1,4 +1,6 @@
-Can you help me find the right papers? I'd like to read about the latest work in using a pre-trained (or even SFT) auto-regressive language model as a seed to create a diffusion language model.
+Alex: Can you help me find the right papers? I'd like to read about the latest work in using a pre-trained (or even SFT) auto-regressive language model as a seed to create a diffusion language model.
+
+
 9:57 AM
 I'll search for recent papers on using pre-trained autoregressive language models to initialize diffusion language models.
 Searched the web
@@ -75,7 +77,9 @@ Based on my search, here are the most relevant papers on using pre-trained autor
 * DreamOn (arXiv:2602.01326) \- Variable-length generation for code infilling
 
 The Dream 7B and Apple's DiffuGPT/DiffuLLaMA papers are probably your best starting points, as they provide the most comprehensive treatment of the AR-to-diffusion conversion process with detailed ablations and publicly available code.
-The reason I am asking about this background is that I want to create a particular type of diffusion model. I admire these UC Berkeley researcher's work on tree diffusion for program synthesis: [https://arxiv.org/html/2405.20519v1](https://arxiv.org/html/2405.20519v1). Can you recommend me any more specifically relevant papers on the subject of taking AR LLMs and turning them into diffusion models for program synthesis? Even more so, does anyone right now use diffusion over trees (abstract syntax trees)?
+
+Alex: The reason I am asking about this background is that I want to create a particular type of diffusion model. I admire these UC Berkeley researcher's work on tree diffusion for program synthesis: [https://arxiv.org/html/2405.20519v1](https://arxiv.org/html/2405.20519v1). Can you recommend me any more specifically relevant papers on the subject of taking AR LLMs and turning them into diffusion models for program synthesis? Even more so, does anyone right now use diffusion over trees (abstract syntax trees)?
+
 9:59 AM
 Searched the web
 Great question\! Based on my research, here's what I found about combining AR-to-diffusion conversion with tree-structured program synthesis:
@@ -142,7 +146,9 @@ This is actually an exciting open research direction\! Some possible approaches:
 The Berkeley tree diffusion actually uses an autoregressive baseline to initialize search [arXiv](https://arxiv.org/html/2405.20519v1)
 , suggesting that combining AR and tree diffusion is promising but hasn't been fully explored for end-to-end generation.
 Would you like me to search for any additional specific aspects of this problem, or discuss potential approaches to bridge this gap?
-I am planning on pursuing this research opportunity. Based on your initial investigation, how might you recommend I build this on top of this ML research environment? [https://github.com/marin-community/marin/](https://github.com/marin-community/marin/)
+
+Alex: I am planning on pursuing this research opportunity. Based on your initial investigation, how might you recommend I build this on top of this ML research environment? [https://github.com/marin-community/marin/](https://github.com/marin-community/marin/)
+
 10:10 AM
 Searched the web
 Excellent\! Based on my investigation of Marin, here's a comprehensive recommendation for building your tree-diffusion program synthesis research on top of it:
@@ -432,7 +438,9 @@ scratch-trained tree diffusion on CSG2D inverse graphics.
 | Baseline comparison | Implement both token-level diffusion (TreeDiff) and true tree diffusion |
 
 This approach gives you a solid foundation while leveraging Marin's infrastructure for reproducibility and scaling. Would you like me to dive deeper into any specific aspect?
-I like this research plan. What if I wanted to target Python as a first language to pursue LLM coding? Is that too big of scope? What datasets are available to make this kind of language model?
+
+Alex: I like this research plan. What if I wanted to target Python as a first language to pursue LLM coding? Is that too big of scope? What datasets are available to make this kind of language model?
+
 10:13 AM
 Searched the web
 Great question\! Let me give you a realistic assessment of scope and available datasets.
@@ -689,10 +697,12 @@ if __name__ == "__main__":
 ## **The Bottom Line**
 
 Python is NOT too ambitious \- it's actually the best choice because:
-✅ Built-in AST parsing (no custom parser needed)
-✅ Massive high-quality datasets available
-✅ Standard benchmarks for evaluation
-✅ Most prior work uses Python
-✅ Can start with 10K examples and scale gradually
+
+- ✅ Built-in AST parsing (no custom parser needed)
+- ✅ Massive high-quality datasets available
+- ✅ Standard benchmarks for evaluation
+- ✅ Most prior work uses Python
+- ✅ Can start with 10K examples and scale gradually
+ 
 The key is starting with constrained Python (simple functions only) for your proof-of-concept, then expanding once you've proven the tree diffusion approach works.
 Want me to help you draft the specific Marin experiment script for Phase 1 with the constrained Python dataset?
