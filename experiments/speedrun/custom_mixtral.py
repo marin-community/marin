@@ -39,7 +39,8 @@ from levanter.layers.attention import Attention, AttentionBackend, AttentionConf
 from levanter.layers.normalization import LayerNormConfigBase, RmsNormConfig
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.loss import maybe_fused_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.mistral import MistralConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -109,6 +110,10 @@ class CustomMixtralConfig(MistralConfig):
     # (Override per-run if you hit vmem issues at long sequence lengths.)
     flash_attention_block_size: int | None = 1024
 
+    # Cross-entropy (next-token loss) optimization config.
+    cross_entropy_block_size: int | None = 4096
+    cross_entropy_implementation: str | None = None
+
     # QK normalization (applies LayerNorm/RMSNorm in attention on q and k vectors).
     use_qk_norm: bool = False
     qk_norm: LayerNormConfigBase | None = None
@@ -161,13 +166,11 @@ class CustomMixtralConfig(MistralConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        assert (
-            self.num_experts_per_tok <= self.n_routed_experts
-        ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
+        assert self.num_experts_per_tok <= self.n_routed_experts, (
+            f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
+        )
 
-    def hf_checkpoint_converter(
-        self, ref_checkpoint: str | None = None
-    ) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
@@ -591,7 +594,7 @@ class MixtralSparseMoeBlock(eqx.Module):
                 raise ValueError("expert_parallelism is set but no JAX mesh is active.")
             if ep_axis not in mesh.shape:
                 raise ValueError(
-                    f"expert_mesh_axis={ep_axis!r} is not a mesh axis. " f"Available axes: {sorted(mesh.shape.keys())}"
+                    f"expert_mesh_axis={ep_axis!r} is not a mesh axis. Available axes: {sorted(mesh.shape.keys())}"
                 )
 
             ep_size = self.config.expert_parallelism
@@ -871,6 +874,41 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
             return self.embeddings.token_embeddings.weight
         else:
             return self.lm_head.weight
+
+    def compute_next_token_loss(  # type: ignore[override]
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: hax.ReductionFunction | None = hax.mean,
+        reduction_axis: hax.AxisSelection | None = None,
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype | None = jnp.float32,
+        logit_soft_cap: float | None = None,
+    ) -> jnp.ndarray | NamedArray:
+        activations = self.activations(example.tokens, example.attn_mask, key=key)
+
+        aux_loss = 0
+        if isinstance(activations, tuple):
+            activations, aux_loss = activations
+
+        loss = maybe_fused_next_token_loss(
+            self.Pos,
+            self.Embed,
+            self.Vocab,
+            activations,
+            self.get_lm_head(),
+            example.tokens,
+            loss_weight=example.loss_weight,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            block_size=self.config.cross_entropy_block_size,
+            dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+            implementation=self.config.cross_entropy_implementation,
+        )
+        return loss + aux_loss
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[MixtralConfig]":
         new_Vocab = self.Vocab.resize(new_size)
