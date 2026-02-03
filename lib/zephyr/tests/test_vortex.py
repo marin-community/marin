@@ -16,6 +16,7 @@
 
 import pytest
 
+from fray.v2 import ResourceConfig
 from fray.v2.local import LocalClient
 from zephyr import Dataset
 from zephyr.execution import ZephyrContext
@@ -37,7 +38,7 @@ def vortex_file(tmp_path):
 def sync_ctx():
     """ZephyrContext fixture for vortex tests."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=2)
+    ctx = ZephyrContext(client=client, num_workers=2, resources=ResourceConfig(cpu=1, ram="512m"))
     yield ctx
     ctx.shutdown()
 

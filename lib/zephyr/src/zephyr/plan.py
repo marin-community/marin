@@ -30,11 +30,13 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import fsspec
 import msgspec
+
 from zephyr.dataset import (
+    Dataset,
     FilterOp,
     FlatMapOp,
     GroupByOp,
@@ -51,9 +53,6 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
-
-if TYPE_CHECKING:
-    from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -486,7 +485,7 @@ def _compute_file_pushdown(
             ops_to_skip.add(i)
         elif isinstance(op, FilterOp) and op.expr is None:
             continue  # Lambda filter, can't push down
-        elif isinstance(op, (MapOp, FlatMapOp)):
+        elif isinstance(op, (MapOp | FlatMapOp)):
             break  # Transform ops stop pushdown
         else:
             break
@@ -527,22 +526,6 @@ def compute_plan(dataset: Dataset, hints: ExecutionHint = ExecutionHint()) -> Ph
 
     stages = _fuse_operations(operations, hints)
     return PhysicalPlan(source_items=source_items, stages=stages)
-
-
-@dataclass
-class ChunkHeader:
-    """Metadata for a chunk being streamed from a worker."""
-
-    shard_idx: int
-    count: int
-
-
-@dataclass
-class Chunk:
-    """A single chunk of data with count metadata."""
-
-    count: int
-    data: Any  # The actual ref or raw data
 
 
 def deterministic_hash(obj: object) -> int:
@@ -588,21 +571,25 @@ def make_windows(
         yield window
 
 
-def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator[ChunkHeader | list[Any]]:
-    """Stream chunks from an iterator, yielding header/data pairs."""
+@dataclass
+class StageResultChunk:
+    source_shard: int
+    target_shard: int
+    chunk: Iterator[Any]
+
+
+def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator[StageResultChunk]:
+    """Stream chunks from an iterator, breaking at chunk_size boundaries."""
     chunk: list = []
     for item in items:
         chunk.append(item)
         if chunk_size > 0 and len(chunk) >= chunk_size:
-            header = ChunkHeader(shard_idx=shard_idx, count=len(chunk))
-            yield header
-            yield chunk
+            yield StageResultChunk(source_shard=shard_idx, target_shard=shard_idx, chunk=iter(chunk))
             chunk = []
+
     # Yield final partial chunk
     if chunk:
-        header = ChunkHeader(shard_idx=shard_idx, count=len(chunk))
-        yield header
-        yield chunk
+        yield StageResultChunk(source_shard=shard_idx, target_shard=shard_idx, chunk=iter(chunk))
 
 
 def _group_items_by_hash(
@@ -610,7 +597,7 @@ def _group_items_by_hash(
     key_fn: Callable,
     num_output_shards: int,
     chunk_size: int,
-) -> dict[int, list[Chunk]]:
+) -> dict[int, list[list[Any]]]:
     """Group items by hash of key into num_output_shards target shards with sorted chunks.
 
     Args:
@@ -622,7 +609,7 @@ def _group_items_by_hash(
     Returns:
         Dict mapping shard index to list of chunks for that shard
     """
-    output_chunks: dict[int, list[Chunk]] = defaultdict(list)
+    output_chunks: dict[int, list[list[Any]]] = defaultdict(list)
     output_tmp: dict[int, list] = defaultdict(list)
 
     for item in items:
@@ -631,14 +618,14 @@ def _group_items_by_hash(
         output_tmp[target_shard].append(item)
         if chunk_size > 0 and len(output_tmp[target_shard]) >= chunk_size:
             sorted_items = sorted(output_tmp[target_shard], key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
+            output_chunks[target_shard].append(sorted_items)
             output_tmp[target_shard] = []
 
     # Add all remaining chunks
     for target_shard, shard_items in output_tmp.items():
         if shard_items:
             sorted_items = sorted(shard_items, key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
+            output_chunks[target_shard].append(sorted_items)
 
     return output_chunks
 
@@ -722,35 +709,35 @@ class StageContext:
     Encapsulates all the metadata and auxiliary data needed to process a shard.
 
     Attributes:
-        shard: The shard data to process (iterable, typically a Shard object)
+        shard: The shard data to process
         shard_idx: Index of this shard
         total_shards: Total number of shards
         chunk_size: Number of items per output chunk
         aux_shards: Auxiliary shards for joins, keyed by op index
     """
 
-    shard: Any  # Shard object (avoids circular import)
+    shard: Iterable[Any]
     shard_idx: int
     total_shards: int
     chunk_size: int
-    aux_shards: dict[int, list[Any]] = field(default_factory=dict)
+    aux_shards: dict[int, Iterable[Any]] = field(default_factory=dict)
 
-    def get_right_shard(self, op_index: int) -> Any:
+    def get_right_shard(self, op_index: int) -> Iterable[Any]:
         """Get right shard for join at given op index.
 
         Raises:
             ValueError: If no right shard is provided for the join
         """
-        shards = self.aux_shards.get(op_index, [])
-        if len(shards) != 1:
-            raise ValueError(f"Expected exactly 1 right shard for join at op index {op_index}, got {len(shards)}")
-        return shards[0]
+        shard = self.aux_shards.get(op_index)
+        if shard is None:
+            raise ValueError(f"Expected exactly 1 right shard for join at op index {op_index}, got 0")
+        return shard
 
 
 def run_stage(
     ctx: StageContext,
     ops: list[PhysicalOp],
-) -> Iterator[ChunkHeader | list[Any]]:
+) -> Iterator[StageResultChunk]:
     """Execute a stage's physical ops in a single pass.
 
     This is the single worker function that backends call to execute physical ops.
@@ -822,15 +809,7 @@ def run_stage(
             for shard_idx in range(num_output_shards):
                 if output_chunks[shard_idx]:
                     for chunk in output_chunks[shard_idx]:
-                        header = ChunkHeader(shard_idx=shard_idx, count=chunk.count)
-                        yield header
-                        yield chunk.data
-                else:
-                    # Yield empty chunk so controller knows this shard exists
-                    header = ChunkHeader(shard_idx=shard_idx, count=0)
-                    yield header
-                    yield []
-            return
+                        yield StageResultChunk(source_shard=ctx.shard_idx, target_shard=shard_idx, chunk=chunk)
 
         elif isinstance(op, Reduce):
             # Merge sorted chunks and reduce per key

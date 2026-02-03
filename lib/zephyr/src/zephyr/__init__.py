@@ -17,9 +17,9 @@
 import logging
 
 from zephyr.dataset import Dataset
-from zephyr.execution import Backend, ChunkRef, ShardedData, ShardRefs, ZephyrContext, shard_ctx
+from zephyr.execution import Backend, DiskChunk, ZephyrContext, shard_ctx
 from zephyr.expr import Expr, col, lit
-from zephyr.plan import ExecutionHint, PhysicalPlan, PhysicalStage, compute_plan
+from zephyr.plan import ExecutionHint, compute_plan
 from zephyr.readers import InputFileSpec, load_file, load_jsonl, load_parquet, load_vortex, load_zip_members
 from zephyr.writers import atomic_rename, write_jsonl_file, write_levanter_cache, write_parquet_file, write_vortex_file
 
@@ -28,15 +28,10 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "Backend",
-    "ChunkRef",
     "Dataset",
     "ExecutionHint",
     "Expr",
     "InputFileSpec",
-    "PhysicalPlan",
-    "PhysicalStage",
-    "ShardRefs",
-    "ShardedData",
     "ZephyrContext",
     "atomic_rename",
     "col",

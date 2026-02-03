@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 import ray
-
 from fray.v2 import ResourceConfig
 from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.local import LocalClient
@@ -55,7 +54,11 @@ def ray_cluster():
     """Initialize Ray cluster for testing - reused across all tests."""
     if not ray.is_initialized():
         logging.info("Initializing Ray cluster for zephyr tests")
-        # Initialize Ray without runtime_env to prevent automatic working_dir packaging
+        import os
+
+        # Disable Ray's automatic UV runtime env propagation which packages the
+        # entire working directory (~38MB) for every actor. Not needed for local tests.
+        os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
         ray.init(
             address="local",
             num_cpus=8,
@@ -63,7 +66,6 @@ def ray_cluster():
             logging_level="info",
             log_to_driver=True,
             resources={"head_node": 1},
-            runtime_env={},  # Empty runtime_env to prevent inheritance
         )
     yield
     # Don't shutdown - Ray will be reused across test sessions
@@ -107,21 +109,8 @@ def zephyr_ctx(fray_client, tmp_path):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
-        preserve_chunks=False,
     ) as ctx:
         yield ctx
-
-
-@pytest.fixture
-def ctx(zephyr_ctx):
-    """Alias for backward compatibility with existing tests."""
-    return zephyr_ctx
-
-
-@pytest.fixture
-def client(fray_client):
-    """Alias for backward compatibility with existing tests."""
-    return fray_client
 
 
 class CallCounter:

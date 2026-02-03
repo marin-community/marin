@@ -21,22 +21,22 @@ import time
 from pathlib import Path
 
 import pytest
-
+from fray.v2 import ResourceConfig
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, shard_ctx
 
 
-def test_simple_map(ctx):
+def test_simple_map(zephyr_ctx):
     """Map pipeline produces correct results."""
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    results = list(ctx.execute(ds))
+    results = list(zephyr_ctx.execute(ds))
     assert sorted(results) == [2, 4, 6]
 
 
-def test_filter(ctx):
+def test_filter(zephyr_ctx):
     """Filter pipeline produces correct results."""
     ds = Dataset.from_list([1, 2, 3, 4, 5]).filter(lambda x: x > 3)
-    results = list(ctx.execute(ds))
+    results = list(zephyr_ctx.execute(ds))
     assert sorted(results) == [4, 5]
 
 
@@ -47,7 +47,7 @@ def test_shared_data(fray_client):
         multiplier = shard_ctx().get_shared("multiplier")
         return x * multiplier
 
-    zctx = ZephyrContext(client=fray_client, num_workers=1)
+    zctx = ZephyrContext(client=fray_client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"))
     zctx.put("multiplier", 10)
     ds = Dataset.from_list([1, 2, 3]).map(use_shared)
     results = list(zctx.execute(ds))
@@ -55,26 +55,26 @@ def test_shared_data(fray_client):
     zctx.shutdown()
 
 
-def test_multi_stage(ctx):
+def test_multi_stage(zephyr_ctx):
     """Multi-stage pipeline (map + filter) works."""
     ds = Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x * 2).filter(lambda x: x > 5)
-    results = list(ctx.execute(ds))
+    results = list(zephyr_ctx.execute(ds))
     assert sorted(results) == [6, 8, 10]
 
 
 def test_context_manager(fray_client):
     """ZephyrContext works as context manager."""
-    with ZephyrContext(client=fray_client, num_workers=1) as zctx:
+    with ZephyrContext(client=fray_client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m")) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
         results = list(zctx.execute(ds))
     assert sorted(results) == [2, 3, 4]
 
 
-def test_write_jsonl(tmp_path, ctx):
+def test_write_jsonl(tmp_path, zephyr_ctx):
     """Pipeline writing to jsonl file."""
     output = str(tmp_path / "out-{shard}.jsonl")
     ds = Dataset.from_list([{"a": 1}, {"a": 2}, {"a": 3}]).write_jsonl(output)
-    results = list(ctx.execute(ds))
+    results = list(zephyr_ctx.execute(ds))
     assert len(results) == 3
     # Verify all files were written and contain correct data
     all_records = []
@@ -86,24 +86,24 @@ def test_write_jsonl(tmp_path, ctx):
     assert sorted(all_records, key=lambda r: r["a"]) == [{"a": 1}, {"a": 2}, {"a": 3}]
 
 
-def test_dry_run(ctx):
+def test_dry_run(zephyr_ctx):
     """Dry run shows plan without executing."""
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    results = list(ctx.execute(ds, dry_run=True))
+    results = list(zephyr_ctx.execute(ds, dry_run=True))
     assert results == []
 
 
-def test_flat_map(ctx):
+def test_flat_map(zephyr_ctx):
     """FlatMap pipeline produces correct results."""
     ds = Dataset.from_list([1, 2, 3]).flat_map(lambda x: [x, x * 10])
-    results = list(ctx.execute(ds))
+    results = list(zephyr_ctx.execute(ds))
     assert sorted(results) == [1, 2, 3, 10, 20, 30]
 
 
-def test_empty_dataset(ctx):
+def test_empty_dataset(zephyr_ctx):
     """Empty dataset produces empty results."""
     ds = Dataset.from_list([])
-    results = list(ctx.execute(ds))
+    results = list(zephyr_ctx.execute(ds))
     assert results == []
 
 
@@ -113,8 +113,8 @@ def test_chunk_cleanup(fray_client, tmp_path):
     ctx = ZephyrContext(
         client=fray_client,
         num_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
-        preserve_chunks=False,
     )
 
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
@@ -131,32 +131,10 @@ def test_chunk_cleanup(fray_client, tmp_path):
         assert len(files) == 0, f"Expected cleanup but found: {files}"
 
 
-def test_preserve_chunks(fray_client, tmp_path):
-    """Verify preserve_chunks option keeps chunk files."""
-    chunk_prefix = str(tmp_path / "chunks")
-    ctx = ZephyrContext(
-        client=fray_client,
-        num_workers=2,
-        chunk_storage_prefix=chunk_prefix,
-        preserve_chunks=True,
-    )
-
-    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    results = list(ctx.execute(ds))
-
-    assert sorted(results) == [2, 4, 6]
-
-    # Verify chunks exist
-    chunk_dir = Path(chunk_prefix)
-    assert chunk_dir.exists()
-    pkl_files = list(chunk_dir.rglob("*.pkl"))
-    assert len(pkl_files) > 0, "Expected chunk files to be preserved"
-
-
 def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
-    from zephyr.execution import ZephyrCoordinator, ChunkRef, ShardTask
+    from zephyr.execution import DiskChunk, ShardTask, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -193,7 +171,7 @@ def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     coord.report_result("worker-B", 0, attempt_b, [])
 
     # Worker A's stale result (attempt 0) should be ignored
-    coord.report_result("worker-A", 0, attempt_a, [({}, ChunkRef(path="fake", count=1))])
+    coord.report_result("worker-A", 0, attempt_a, [({}, DiskChunk(path="fake", count=1))])
 
     # Only one completion should be counted
     assert coord._completed_shards == 1
@@ -205,13 +183,13 @@ def test_chunk_streaming_low_memory(tmp_path):
     Verifies the class has no caching attribute and that iter_chunks yields
     data lazily by checking each chunk is independently loaded.
     """
-    from zephyr.execution import _SerializableShard, ChunkRef
+    from zephyr.execution import DiskChunk, _SerializableShard
 
     # Write 3 chunks to disk
     refs = []
     for i in range(3):
         path = str(tmp_path / f"chunk-{i}.pkl")
-        refs.append(ChunkRef.write(path, [i * 10 + j for j in range(5)]))
+        refs.append(DiskChunk.write(path, [i * 10 + j for j in range(5)]))
 
     shard = _SerializableShard(refs)
 
@@ -238,6 +216,7 @@ def test_resource_cleanup_after_execute(fray_client, tmp_path):
     with ZephyrContext(
         client=fray_client,
         num_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
     ) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
@@ -267,6 +246,7 @@ def test_fatal_errors_fail_fast(fray_client, tmp_path):
     with ZephyrContext(
         client=fray_client,
         num_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
     ) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(exploding_map)
@@ -286,6 +266,7 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
     ctx = ZephyrContext(
         client=fray_client,
         num_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
     )
 

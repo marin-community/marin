@@ -14,16 +14,14 @@
 
 """Actor-based execution engine for Zephyr pipelines.
 
-Replaces the stateless Backend.execute() dispatch with long-lived worker actors
-managed through a coordinator. Workers pull tasks from the coordinator, execute
-shard operations, and report results back. This enables persistent worker state
-(caches, loaded models), transient error recovery, and backend-agnostic dispatch
-via fray v2's Client protocol.
+Workers pull tasks from the coordinator, execute shard operations, and report
+results back. This enables persistent worker state (caches, loaded models),
+transient error recovery, and backend-agnostic dispatch via fray v2's Client
+protocol.
 """
 
 from __future__ import annotations
 
-import atexit
 import enum
 import logging
 import os
@@ -31,21 +29,18 @@ import pickle
 import threading
 import time
 import uuid
-import weakref
 from collections import defaultdict, deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 import fsspec
-import numpy as np
-
 from fray.v2 import ActorHandle, Client, ResourceConfig
+
 from zephyr.dataset import Dataset
 from zephyr.plan import (
-    ChunkHeader,
     ExecutionHint,
     Join,
     PhysicalOp,
@@ -60,48 +55,23 @@ from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
-# Track live ZephyrContext instances for atexit cleanup via weak references,
-# so contexts that are garbage-collected don't prevent the process from exiting.
-_live_context_refs: list[weakref.ref[ZephyrContext]] = []
 
-
-def _atexit_cleanup() -> None:
-    """Kill orphaned actor jobs when the process exits."""
-    for ref in _live_context_refs:
-        ctx = ref()
-        if ctx is not None:
-            try:
-                ctx.shutdown()
-            except Exception:
-                pass
-    _live_context_refs.clear()
-
-
-atexit.register(_atexit_cleanup)
-
-
-# ---------------------------------------------------------------------------
-# Type wrappers — explicit types for shard/chunk data at different lifecycle
-# stages, replacing the old list[list[list]] / list[list[ChunkRef]] duality.
-# ---------------------------------------------------------------------------
-
-StageResult = tuple[dict, "ChunkRef"]
+class Chunk(Protocol):
+    def __iter__(self) -> Iterator: ...
 
 
 @dataclass(frozen=True)
-class ChunkRef:
-    """Reference to a chunk stored on disk.
-
-    Owns its serialization: use the `write` classmethod to write data
-    to disk with a temp-file pattern (best-effort durability), and the
-    `read` instance method to load it back.
-    """
+class DiskChunk:
+    """Reference to a chunk stored on disk."""
 
     path: str
     count: int
 
+    def __iter__(self) -> Iterator:
+        return iter(self.read())
+
     @classmethod
-    def write(cls, path: str, data: list) -> ChunkRef:
+    def write(cls, path: str, data: list) -> DiskChunk:
         """Write data to path using temp-file pattern.
 
         Uses a .tmp suffix and rename/move to reduce (but not eliminate)
@@ -111,6 +81,8 @@ class ChunkRef:
         ensure_parent_dir(path)
         temp_path = f"{path}.tmp"
         fs = fsspec.core.url_to_fs(path)[0]
+        data = list(data)
+        count = len(data)
         try:
             with fsspec.open(temp_path, "wb") as f:
                 pickle.dump(data, f)
@@ -120,7 +92,7 @@ class ChunkRef:
                 if fs.exists(temp_path):
                     fs.rm(temp_path)
             raise
-        return cls(path=path, count=len(data))
+        return cls(path=path, count=count)
 
     def read(self) -> list:
         """Load chunk data from disk."""
@@ -129,30 +101,13 @@ class ChunkRef:
 
 
 @dataclass
-class ShardRefs:
-    """All shards as disk references — the primary inter-stage representation.
-
-    Data stays on disk between stages. Call `load()` only when you actually
-    need in-memory access (reshard, final materialization).
-    """
-
-    shards: list[list[ChunkRef]]
-
-    def __len__(self) -> int:
-        return len(self.shards)
-
-    def load(self) -> ShardedData:
-        """Load all shard data from disk into memory."""
-        return ShardedData(
-            shards=[Shard(chunks=[Chunk(items=ref.read()) for ref in chunk_refs]) for chunk_refs in self.shards]
-        )
-
-
-@dataclass
-class Chunk:
-    """A list of items that form one unit of processing."""
+class MemChunk:
+    """In-memory chunk."""
 
     items: list[Any]
+
+    def __iter__(self) -> Iterator:
+        return iter(self.items)
 
 
 @dataclass
@@ -161,65 +116,26 @@ class Shard:
 
     chunks: list[Chunk]
 
+    def __iter__(self) -> Iterator:
+        """Flatten iteration over all items, loading chunks as needed."""
+        for chunk in self.chunks:
+            yield from chunk
+
 
 @dataclass
-class ShardedData:
-    """All shards of in-memory data."""
+class ResultChunk:
+    """Output chunk from a single worker task before resharding."""
 
-    shards: list[Shard]
-
-    def __len__(self) -> int:
-        return len(self.shards)
-
-    def materialize(self) -> list:
-        """Flatten all shard chunks into a single list of results."""
-        results = []
-        for shard in self.shards:
-            for chunk in shard.chunks:
-                results.extend(chunk.items)
-        return results
-
-    def write_to_disk(self, prefix: str, execution_id: str, stage_name: str) -> ShardRefs:
-        """Write all shard chunks to disk, return references."""
-        shard_refs = []
-        for shard_idx, shard in enumerate(self.shards):
-            chunk_refs = []
-            for chunk_idx, chunk in enumerate(shard.chunks):
-                path = _chunk_path(prefix, execution_id, stage_name, shard_idx, chunk_idx)
-                chunk_refs.append(ChunkRef.write(path, chunk.items))
-            shard_refs.append(chunk_refs)
-        return ShardRefs(shards=shard_refs)
-
-    def reshard(self, num_shards: int) -> ShardedData:
-        """Redistribute chunks across target number of shards."""
-        all_chunks = [chunk for shard in self.shards for chunk in shard.chunks]
-        if not all_chunks:
-            return ShardedData(shards=[])
-        chunk_groups = np.array_split(all_chunks, num_shards)
-        return ShardedData(shards=[Shard(chunks=list(group)) for group in chunk_groups if len(group) > 0])
+    source_shard: int
+    target_shard: int
+    data: Chunk
 
 
-# ---------------------------------------------------------------------------
-# ShardProtocol — contract for objects passed as StageContext.shard
-# ---------------------------------------------------------------------------
+@dataclass
+class TaskResult:
+    """Result of a single task."""
 
-
-@runtime_checkable
-class ShardProtocol(Protocol):
-    """Protocol for shard objects consumed by run_stage.
-
-    run_stage iterates via `iter(shard)` for flat access and calls
-    `shard.iter_chunks()` for Reduce operations that need chunk boundaries.
-    """
-
-    def iter_chunks(self) -> Iterator[list]: ...
-
-    def __iter__(self) -> Iterator: ...
-
-
-# ---------------------------------------------------------------------------
-# Chunk path generation and cleanup
-# ---------------------------------------------------------------------------
+    chunks: list[ResultChunk]
 
 
 def _generate_execution_id() -> str:
@@ -253,11 +169,6 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
             logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 
 
-# ---------------------------------------------------------------------------
-# Data types
-# ---------------------------------------------------------------------------
-
-
 class WorkerState(enum.Enum):
     INIT = "init"
     READY = "ready"
@@ -273,10 +184,10 @@ class ShardTask:
     shard_idx: int
     total_shards: int
     chunk_size: int
-    chunk_refs: list[ChunkRef]
+    shard: Shard
     operations: list[PhysicalOp]
     stage_name: str = "output"
-    aux_refs: dict[int, list[list[ChunkRef]]] | None = None
+    aux_shards: dict[int, list[Chunk]]
 
 
 class ZephyrWorkerError(RuntimeError):
@@ -299,44 +210,21 @@ def shard_ctx() -> ZephyrWorker:
 
 
 # ---------------------------------------------------------------------------
-# _SerializableShard — lightweight wrapper matching the ShardProtocol
-# ---------------------------------------------------------------------------
-
-
-class _SerializableShard:
-    """Wraps chunk references and streams data one chunk at a time from disk.
-
-    This class implements true chunk-by-chunk streaming to minimize memory pressure.
-    Chunks are loaded one at a time and discarded after iteration, rather than cached.
-    Multiple iterations will re-read from disk, which is an acceptable trade-off for
-    memory efficiency.
-
-    run_stage does `iter(ctx.shard)` for flat iteration and
-    `ctx.shard.iter_chunks()` for Reduce operations.
-    """
-
-    def __init__(self, chunk_refs: list[ChunkRef]):
-        self._chunk_refs = chunk_refs
-
-    def iter_chunks(self) -> Iterator[list]:
-        """Iterate over chunks, loading one at a time from disk."""
-        for ref in self._chunk_refs:
-            yield ref.read()
-
-    def __iter__(self) -> Iterator:
-        """Flatten iteration over all items, loading chunks as needed."""
-        for ref in self._chunk_refs:
-            chunk_data = ref.read()
-            yield from chunk_data
-
-
-def _serialize_error(e: Exception) -> str:
-    return f"{type(e).__name__}: {e}"
-
-
-# ---------------------------------------------------------------------------
 # ZephyrCoordinator
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class JobStatus:
+    stage: str
+    completed: int
+    total: int
+    retries: int
+    in_flight: int
+    queue_depth: int
+    done: bool
+    fatal_error: str
+    workers: dict[str, dict[str, Any]]
 
 
 class ZephyrCoordinator:
@@ -348,7 +236,7 @@ class ZephyrCoordinator:
 
     def __init__(self):
         self._task_queue: deque[ShardTask] = deque()
-        self._results: dict[int, list[StageResult]] = defaultdict(list)
+        self._results: dict[int, TaskResult] = {}
         self._worker_states: dict[str, WorkerState] = {}
         self._last_seen: dict[str, float] = {}
         self._shared_data: dict[str, Any] = {}
@@ -363,6 +251,7 @@ class ZephyrCoordinator:
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
 
+    # These are actors in order to allow remotely pushing the shared data context to the coordinator
     def set_shared_data(self, data: dict[str, Any]) -> None:
         self._shared_data = data
 
@@ -410,7 +299,7 @@ class ZephyrCoordinator:
         self._worker_states[worker_id] = WorkerState.BUSY
         return (task, attempt)
 
-    def report_result(self, worker_id: str, shard_idx: int, attempt: int, result: list[StageResult]) -> None:
+    def report_result(self, worker_id: str, shard_idx: int, attempt: int, result: TaskResult) -> None:
         self._last_seen[worker_id] = time.monotonic()
 
         current_attempt = self._task_attempts.get(shard_idx, 0)
@@ -421,7 +310,7 @@ class ZephyrCoordinator:
             )
             return
 
-        self._results[shard_idx].extend(result)
+        self._results[shard_idx] = result
         self._completed_shards += 1
         self._in_flight.pop(worker_id, None)
         self._worker_states[worker_id] = WorkerState.READY
@@ -450,28 +339,28 @@ class ZephyrCoordinator:
                     self._task_queue.append(task)
                     self._retries += 1
 
-    def get_status(self) -> dict:
-        return {
-            "stage": self._stage_name,
-            "completed": self._completed_shards,
-            "total": self._total_shards,
-            "retries": self._retries,
-            "in_flight": len(self._in_flight),
-            "queue_depth": len(self._task_queue),
-            "done": self._done,
-            "fatal_error": self._fatal_error,
-            "workers": {
+    def get_status(self) -> JobStatus:
+        return JobStatus(
+            stage=self._stage_name,
+            completed=self._completed_shards,
+            total=self._total_shards,
+            retries=self._retries,
+            in_flight=len(self._in_flight),
+            queue_depth=len(self._task_queue),
+            done=self._done,
+            fatal_error=self._fatal_error,
+            workers={
                 wid: {
                     "state": state.value,
                     "last_seen_ago": time.monotonic() - self._last_seen.get(wid, 0),
                 }
                 for wid, state in self._worker_states.items()
             },
-        }
+        )
 
-    def collect_results(self) -> dict[int, list[StageResult]]:
+    def collect_results(self) -> dict[int, TaskResult]:
         """Return results for the completed stage."""
-        return dict(self._results)
+        return self._results
 
     def signal_done(self) -> None:
         """Signal workers that no more stages will be submitted."""
@@ -569,11 +458,9 @@ class ZephyrWorker:
 
             if task_and_attempt is None:
                 status = coordinator.get_status.remote().result()
-                logger.debug(f"[{worker_id}] No task available, status: {status}")
-                if status.get("done") or status.get("fatal_error"):
-                    done = status.get("done")
-                    error = status.get("fatal_error")
-                    logger.info(f"[{worker_id}] Stage done (done={done}, error={error}), exiting")
+                logger.info(f"[{worker_id}] No task available, status: {status}")
+                if status.done:
+                    logger.info(f"[{worker_id}] Stage done (done={status.done}, error={status.fatal_error}), exiting")
                     break
                 time.sleep(0.1)
                 continue
@@ -588,16 +475,18 @@ class ZephyrWorker:
                 task_count += 1
             except Exception as e:
                 logger.error(f"Worker {worker_id} error on shard {task.shard_idx}: {e}")
+                import traceback
+
                 coordinator.report_error.remote(
                     worker_id,
                     task.shard_idx,
-                    _serialize_error(e),
+                    "".join(traceback.format_exc()),
                 )
 
-    def _execute_shard(self, task: ShardTask) -> list[StageResult]:
+    def _execute_shard(self, task: ShardTask) -> TaskResult:
         """Execute a stage's operations on a single shard.
 
-        Returns list of (header_dict, ChunkRef) pairs — one per output chunk.
+        Returns list of TaskResult.
         """
         _shard_ctx_var.set(self)
 
@@ -606,61 +495,49 @@ class ZephyrWorker:
             task.shard_idx,
             task.total_shards,
             task.stage_name,
-            len(task.chunk_refs),
+            len(task.shard.chunks),
             len(task.operations),
         )
 
-        shard = _SerializableShard(task.chunk_refs)
-
-        aux_shards: dict[int, list[Any]] = {}
-        if task.aux_refs:
-            for op_idx, right_shard_refs in task.aux_refs.items():
-                aux_shards[op_idx] = [_SerializableShard(shard_chunk_refs) for shard_chunk_refs in right_shard_refs]
-
         stage_ctx = StageContext(
-            shard=shard,
+            shard=task.shard,
             shard_idx=task.shard_idx,
             total_shards=task.total_shards,
             chunk_size=task.chunk_size,
-            aux_shards=aux_shards,
+            aux_shards=task.aux_shards,
         )
 
-        results: list[StageResult] = []
-        current_header: ChunkHeader | None = None
+        results: list[TaskResult] = []
         chunk_idx = 0
 
-        for item in run_stage(stage_ctx, task.operations):
-            if isinstance(item, ChunkHeader):
-                current_header = item
-            else:
-                assert current_header is not None
-
-                chunk_path = _chunk_path(
-                    self._chunk_prefix,
-                    self._execution_id,
-                    task.stage_name,
+        for stage_output in run_stage(stage_ctx, task.operations):
+            chunk_path = _chunk_path(
+                self._chunk_prefix,
+                self._execution_id,
+                task.stage_name,
+                task.shard_idx,
+                chunk_idx,
+            )
+            chunk = list(stage_output.chunk)
+            chunk_ref = DiskChunk.write(chunk_path, chunk)
+            results.append(
+                ResultChunk(
+                    source_shard=stage_output.source_shard,
+                    target_shard=stage_output.target_shard,
+                    data=chunk_ref,
+                )
+            )
+            chunk_idx += 1
+            if chunk_idx % 10 == 0:
+                logger.info(
+                    "[shard %d] Wrote %d chunks so far (latest: %d items)",
                     task.shard_idx,
                     chunk_idx,
+                    len(stage_output.chunk),
                 )
-
-                chunk_ref = ChunkRef.write(chunk_path, item)
-                results.append(
-                    (
-                        {"shard_idx": current_header.shard_idx, "count": current_header.count},
-                        chunk_ref,
-                    )
-                )
-                chunk_idx += 1
-                if chunk_idx % 10 == 0:
-                    logger.info(
-                        "[shard %d] Wrote %d chunks so far (latest: %d items)",
-                        task.shard_idx,
-                        chunk_idx,
-                        current_header.count,
-                    )
 
         logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, chunk_idx)
-        return results
+        return TaskResult(chunks=results)
 
     def shutdown(self) -> None:
         self._shutdown_event.set()
@@ -675,49 +552,37 @@ def _run_stage_on_coordinator(
     coordinator: ActorHandle,
     stage_name: str,
     tasks: list[ShardTask],
-) -> dict[int, list[StageResult]]:
+) -> dict[int, list[TaskResult]]:
     """Submit tasks to coordinator, poll until complete, return raw results."""
     coordinator.start_stage.remote(stage_name, tasks).result()
     last_log_completed = -1
     while True:
         coordinator.check_heartbeats.remote()
         status = coordinator.get_status.remote().result()
-        if status.get("fatal_error"):
-            raise ZephyrWorkerError(status["fatal_error"])
-        completed = status["completed"]
-        total = status["total"]
-        if completed != last_log_completed:
-            logger.info("[%s] %d/%d tasks completed", stage_name, completed, total)
-            last_log_completed = completed
-        if completed >= total:
+        if status.fatal_error:
+            raise ZephyrWorkerError(status.fatal_error)
+        if status.completed != last_log_completed:
+            logger.info("[%s] %d/%d tasks completed", stage_name, status.completed, status.total)
+            last_log_completed = status.completed
+        if status.completed >= status.total:
             break
-        time.sleep(1.0)
+        time.sleep(0.1)
     return coordinator.collect_results.remote().result()
 
 
-# ---------------------------------------------------------------------------
-# _regroup_result_refs — regroup worker output by output shard without loading
-# ---------------------------------------------------------------------------
-
-
 def _regroup_result_refs(
-    result_refs: dict[int, list[StageResult]],
+    result_refs: dict[int, TaskResult],
     input_shard_count: int,
-) -> ShardRefs:
+) -> list[Shard]:
     """Regroup worker output refs by output shard index without loading data."""
-    output_by_shard: dict[int, list[ChunkRef]] = defaultdict(list)
+    output_by_shard: dict[int, list[DiskChunk]] = defaultdict(list)
 
-    for _input_idx, result_pairs in result_refs.items():
-        for header, chunk_ref in result_pairs:
-            output_by_shard[header["shard_idx"]].append(chunk_ref)
+    for _input_idx, result in result_refs.items():
+        for chunk in result.chunks:
+            output_by_shard[chunk.target_shard].append(chunk.data)
 
     num_output = max(max(output_by_shard.keys(), default=0) + 1, input_shard_count)
-    return ShardRefs(shards=[output_by_shard.get(idx, []) for idx in range(num_output)])
-
-
-# ---------------------------------------------------------------------------
-# ZephyrContext — user-facing entry point
-# ---------------------------------------------------------------------------
+    return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_output)]
 
 
 @dataclass
@@ -735,7 +600,6 @@ class ZephyrContext:
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="16g"))
     max_parallelism: int = 1024
     chunk_storage_prefix: str | None = None
-    preserve_chunks: bool = False
 
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
@@ -752,7 +616,6 @@ class ZephyrContext:
                 self.chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
             else:
                 self.chunk_storage_prefix = "/tmp/zephyr"
-        _live_context_refs.append(weakref.ref(self))
 
     def put(self, name: str, obj: Any) -> None:
         """Register shared data to broadcast to all workers.
@@ -788,9 +651,7 @@ class ZephyrContext:
             # Start run loops for whatever workers are ready now
             self._worker_futures = [w.run_loop.remote(coordinator) for w in self._workers]
 
-            # Build source data and immediately write to disk as refs
-            source_data = _build_source_shards(plan.source_items)
-            shard_refs = source_data.write_to_disk(self.chunk_storage_prefix, execution_id, "source")
+            shards = _build_source_shards(plan.source_items)
 
             for stage_idx, stage in enumerate(plan.stages):
                 # Pick up any newly-available workers and start their run loops
@@ -799,24 +660,18 @@ class ZephyrContext:
                 stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
                 if stage.stage_type == StageType.RESHARD:
-                    loaded = shard_refs.load()
-                    resharded = loaded.reshard(stage.output_shards or len(shard_refs))
-                    shard_refs = resharded.write_to_disk(
-                        self.chunk_storage_prefix,
-                        execution_id,
-                        f"{stage_label}-reshard",
-                    )
+                    shards = _reshard_refs(shards, stage.output_shards or len(shards))
                     continue
 
                 aux_per_shard = _compute_join_aux(
-                    stage.operations, shard_refs, coordinator, self.chunk_storage_prefix, hints, execution_id
+                    stage.operations, shards, coordinator, self.chunk_storage_prefix, hints, execution_id
                 )
 
-                tasks = _shard_refs_to_tasks(shard_refs, stage, hints, aux_per_shard, stage_name=stage_label)
-                logger.info(f"Starting stage {stage_label} with {len(tasks)} tasks")
+                tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
+                logger.info("Starting stage %s with %d tasks", stage_label, len(tasks))
 
                 result_refs = _run_stage_on_coordinator(coordinator, stage_label, tasks)
-                shard_refs = _regroup_result_refs(result_refs, len(shard_refs))
+                shards = _regroup_result_refs(result_refs, len(shards))
 
             coordinator.signal_done.remote().result()
 
@@ -824,12 +679,14 @@ class ZephyrContext:
                 with suppress(Exception):
                     f.result(timeout=10.0)
             self._worker_futures = []
-
-            return shard_refs.load().materialize()
+            flat_result = []
+            for shard in shards:
+                for chunk in shard.chunks:
+                    flat_result.extend(list(chunk))
+            return flat_result
 
         finally:
-            if not self.preserve_chunks:
-                _cleanup_execution(self.chunk_storage_prefix, execution_id)
+            _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
     def _get_or_create_coordinator(self) -> ActorHandle:
         if self._coordinator is None:
@@ -854,11 +711,7 @@ class ZephyrContext:
         return self._coordinator
 
     def _discover_workers(self) -> list[ActorHandle]:
-        """Discover newly available workers and return them.
-
-        For backends that don't support incremental discovery (e.g. LocalClient),
-        this is a no-op since all workers are returned from wait_ready().
-        """
+        """Discover newly available workers and return them."""
         group = self._worker_group
         if group is None:
             return []
@@ -869,9 +722,7 @@ class ZephyrContext:
         return new_handles
 
     def shutdown(self) -> None:
-        # Remove our weak ref from the atexit list
-        _live_context_refs[:] = [r for r in _live_context_refs if r() is not None and r() is not self]
-
+        # TODO: terminate the jobs isntead of the signals
         if self._coordinator is not None:
             with suppress(Exception):
                 self._coordinator.signal_done.remote()
@@ -903,12 +754,18 @@ class ZephyrContext:
         self.shutdown()
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
+    """Reshard shard refs by output shard index without loading data."""
+    output_by_shard: dict[int, list[Chunk]] = defaultdict(list)
+    output_idx = 0
+    for shard in shards:
+        for chunk in shard.chunks:
+            output_idx = (output_idx + 1) % num_shards
+            output_by_shard[output_idx].append(chunk)
+    return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_shards)]
 
 
-def _build_source_shards(source_items: list[SourceItem]) -> ShardedData:
+def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
     """Build shard data from source items.
 
     Each source item becomes a single-element chunk in its assigned shard.
@@ -920,17 +777,16 @@ def _build_source_shards(source_items: list[SourceItem]) -> ShardedData:
     num_shards = max(items_by_shard.keys()) + 1 if items_by_shard else 0
     shards = []
     for i in range(num_shards):
-        chunks = [Chunk(items=[item]) for item in items_by_shard.get(i, [])]
-        shards.append(Shard(chunks=chunks))
+        shards.append(Shard(chunks=[MemChunk(items=items_by_shard.get(i, []))]))
 
-    return ShardedData(shards=shards)
+    return shards
 
 
-def _shard_refs_to_tasks(
-    shard_refs: ShardRefs,
+def _compute_tasks_from_shards(
+    shard_refs: list[Shard],
     stage,
     hints: ExecutionHint,
-    aux_per_shard: list[dict[int, list[list[ChunkRef]]]] | None = None,
+    aux_per_shard: list[dict[int, list[Chunk]]] | None = None,
     stage_name: str | None = None,
 ) -> list[ShardTask]:
     """Convert shard references into ShardTasks for the coordinator."""
@@ -938,20 +794,20 @@ def _shard_refs_to_tasks(
     tasks = []
     output_stage_name = stage_name or stage.stage_name(max_length=60)
 
-    for i, chunk_refs in enumerate(shard_refs.shards):
-        aux_refs = None
+    for i, shard in enumerate(shard_refs):
+        aux_shards = None
         if aux_per_shard and aux_per_shard[i]:
-            aux_refs = aux_per_shard[i]
+            aux_shards = aux_per_shard[i]
 
         tasks.append(
             ShardTask(
                 shard_idx=i,
                 total_shards=total,
                 chunk_size=hints.chunk_size,
-                chunk_refs=chunk_refs,
+                shard=shard,
                 operations=stage.operations,
                 stage_name=output_stage_name,
-                aux_refs=aux_refs,
+                aux_shards=aux_shards,
             )
         )
 
@@ -960,39 +816,29 @@ def _shard_refs_to_tasks(
 
 def _compute_join_aux(
     operations: list[PhysicalOp],
-    shard_refs: ShardRefs,
+    shard_refs: list[Shard],
     coordinator: ActorHandle,
     chunk_storage_prefix: str,
     hints: ExecutionHint,
     execution_id: str,
-) -> list[dict[int, list[list[ChunkRef]]]] | None:
+) -> list[dict[int, list[list[DiskChunk]]]] | None:
     """Execute right sub-plans for join operations, returning aux refs per shard."""
-    all_right_shard_refs: dict[int, ShardRefs] = {}
+    all_right_shard_refs: dict[int, list[list[Chunk]]] = {}
 
     for i, op in enumerate(operations):
         if not isinstance(op, Join) or op.right_plan is None:
             continue
 
-        right_source_data = _build_source_shards(op.right_plan.source_items)
-        right_refs = right_source_data.write_to_disk(
-            chunk_storage_prefix,
-            execution_id,
-            f"join-right-{i}-source",
-        )
+        right_refs = _build_source_shards(op.right_plan.source_items)
+        # now run and produce the results for this
 
         for stage_idx, right_stage in enumerate(op.right_plan.stages):
             if right_stage.stage_type == StageType.RESHARD:
-                right_data = right_refs.load()
-                right_data = right_data.reshard(right_stage.output_shards or len(right_refs))
-                right_refs = right_data.write_to_disk(
-                    chunk_storage_prefix,
-                    execution_id,
-                    f"join-right-{i}-stage{stage_idx}-reshard",
-                )
+                right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
                 continue
 
             join_stage_label = f"join-right-{i}-stage{stage_idx}"
-            right_tasks = _shard_refs_to_tasks(right_refs, right_stage, hints, stage_name=join_stage_label)
+            right_tasks = _compute_tasks_from_shards(right_refs, right_stage, hints, stage_name=join_stage_label)
             raw = _run_stage_on_coordinator(coordinator, join_stage_label, right_tasks)
             right_refs = _regroup_result_refs(raw, len(right_refs))
 
