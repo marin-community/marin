@@ -213,3 +213,4 @@ Notes:
 - Dropped the `use_emulated_one_hot` flag; backward always uses the emulated one-hot path now.
 - Streaming Pallas kernel is the only forward implementation (no legacy selection logic left in code).
 - Updated `BlockSizes` defaults to `b=1024, h=512, v=1024` to match the v4 tuning baseline.
+- Removed the split backward path and unused legacy backward kernels.
