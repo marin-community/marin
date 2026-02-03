@@ -12,16 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Self-Instill: Mixture-of-Thoughts Math Experiment (Qwen3-4B)
+Self-Instill: Mixture-of-Thoughts Math Experiment (Qwen3-4B Instruction-Tuned)
 
 This experiment generates high-quality synthetic reasoning data from the
 open-r1/Mixture-of-Thoughts dataset using the self-instill pipeline.
 
+NOTE: This is for INSTRUCTION-TUNED models (Qwen3-4B), which output in the format:
+    <think> REASONING </think> SUMMARY
+Unlike base models, we do NOT need a separate summarization step.
+
 Pipeline:
 1. Preprocess: Extract user message from messages[0]["content"]
 2. Generate 4 samples per prompt, select longest that passes static check
-3. Summarize selected samples
-4. Validate via LLM:
+   - Static check: must have <think>...</think> format AND \\boxed{}
+3. (SKIPPED for instruction-tuned) Summarization - model already outputs summary
+4. Validate via LLM (using longer prompts for thinking models):
    - Cycle consistency: Infer question from answer, compare to original
    - Factual error: Check for math/logic errors
    - Total correctness: Verify complete and correct solution
@@ -42,12 +47,16 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.export.hf_upload import upload_dir_to_hf
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
+from experiments.self_instill.prompts import REASONING_INSTRUCTION
 
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
 # Model HuggingFace ID (using HF Hub directly instead of local gcsfuse path)
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 
-# Import prompts (only import what's used at module level)
-from experiments.self_instill.prompts import REASONING_LONG_INSTRUCTION
+# Flag to indicate this is an instruction-tuned model
+IS_INSTRUCTION_TUNED = True
 
 # =============================================================================
 # ROUND CONFIGURATION
@@ -56,17 +65,75 @@ from experiments.self_instill.prompts import REASONING_LONG_INSTRUCTION
 ROUND = "round1"
 BASE_PATH = f"documents/self-instill/qwen3-4b/{ROUND}"
 
-# Summarization template with {example} placeholder for marin compatibility
-SUMMARIZATION_TEMPLATE = """Summarize the solution as a clear explanation (like the final write-up), not a one-liner.
-Include the key reasoning steps that justify the result (setup -> method -> crucial computations -> conclusion).
-Paraphrase, don't copy sentences from the original.
-End with the final answer within \\boxed{{...}}
 
-Original solution:
-{example}
+# =============================================================================
+# PROMPTS FOR INSTRUCTION-TUNED MODELS (THINKING MODELS)
+# =============================================================================
+# These prompts are longer and allow the model to think before giving a verdict.
+# The model will output reasoning and then [[Y]] or [[N]] at the end.
+# =============================================================================
 
-Explanation:
-"""
+# Cycle consistency - Step 1: Generate inferred question from answer
+# Used for: instruction-tuned models that can reason before responding
+CYCLE_QUESTION_GENERATION_PROMPT_INSTRUCT = """Given an answer, please generate the most likely question that would have prompted this answer. Focus on inferring the core question that this answer is addressing. Output only the inferred question, without any additional explanation.
+
+Answer:
+{answer}
+
+Inferred Question:"""
+
+# Cycle consistency - Step 2: Compare original and inferred questions
+# Used for: instruction-tuned models that can reason before responding
+CYCLE_COMPARISON_PROMPT_INSTRUCT = """You are evaluating whether an answer is relevant to the original question and touches the core of the question by comparing the original question with an inferred question derived only from the answer.
+
+Original Question: {original_question}
+Inferred Question: {inferred_question}
+
+Compare the two questions and determine:
+1. If the original question and inferred question are asking about the same core topic
+2. If the original question and inferred question share the same key elements and requirements
+3. If answering one question would effectively address the other question
+
+After your analysis, provide your decision: [[Y]] if the questions are semantically equivalent and address the same core problem, or [[N]] if they are asking about different things."""
+
+# Factual error check prompt
+# Used for: instruction-tuned models that can reason before responding
+FACTUAL_ERROR_PROMPT_INSTRUCT = """Please act as an impartial judge and carefully analyze the following answer for any factual errors, logical flaws, or misleading information.
+
+Question: {question}
+Answer: {answer}
+
+Consider the credibility of the claims made in the answer and determine if they align with established knowledge. Evaluate:
+1. Are there any incorrect facts, dates, numbers, formulas, or claims?
+2. Is there any faulty logic, reasoning, or problem-solving approach?
+3. Are there any misleading, incomplete, or ambiguous explanations?
+4. Does the answer introduce any misconceptions or propagate common errors?
+
+Minor typos or grammatical errors are acceptable. But be strict about any factual error, calculation error, or logical flaw. When unsure, lean toward accepting statements unless they contain clear errors.
+
+After a thorough analysis, provide your decision: [[Y]] if the answer has no factual errors or major flaws, or [[N]] if it contains important factual errors or logical flaws that would mislead the user."""
+
+# Total correctness check prompt
+# Used for: instruction-tuned models that can reason before responding
+TOTAL_CORRECTNESS_PROMPT_INSTRUCT = """Please act as an impartial judge and evaluate whether the response is completely correct in both process and conclusion.
+
+Question: {question}
+Answer: {answer}
+
+Consider correctness, usefulness, completeness and depth in your assessment. Consider whether this answer completely solves the question.
+
+You should rely on your own reasoning to form a reference solution and compare the answer to your reasoning.
+
+Begin your evaluation by giving a brief summary of your thoughts on the response. Focus on whether it is accurate, addresses the question well, and is reasonably detailed. Be precise about any errors or gaps you notice.
+
+Notes:
+1. If the answer is partial, high-level, or just states that this is an open problem, you should not accept it.
+2. If the answer lacks details or is not comprehensive, you should not accept it.
+3. If the answer contains any errors, you should not accept it.
+4. You should only accept the answer if it is at least 95% correct and solves the question.
+
+After providing your explanation, decide whether this answer is correct. Think twice about whether this answer solves the question.
+Format: Accepted: [[Y]] if you accept the answer or Accepted: [[N]] if you do not accept."""
 
 
 # =============================================================================
@@ -152,7 +219,8 @@ preprocess_mot = ExecutorStep(
 # STEP 1: GENERATION WITH MULTI-SAMPLE SELECTION
 # =============================================================================
 # Generate 4 samples per prompt, select longest that passes static validation
-# (requires \boxed{}, no non-English characters)
+# For instruction-tuned models: must have <think>...</think> format AND \boxed{}
+# For base models: must have \boxed{} and no non-English characters
 
 generate_with_selection = ExecutorStep(
     name=f"{BASE_PATH}/generated",
@@ -171,12 +239,12 @@ generate_with_selection = ExecutorStep(
         generation_kwargs={
             "temperature": 0.8,
             "top_p": 0.95,
-            "max_tokens": 30000,
+            "max_tokens": 32768,
             "n": 4,  # Generate 4 samples per prompt
         },
 
         # Prompting - use instruction_seed column with reasoning instruction
-        template="{example}\n" + REASONING_LONG_INSTRUCTION + "\n",
+        template="{example}\n" + REASONING_INSTRUCTION + "\n",
         prompt_column="instruction_seed",
         apply_chat_template=True,
         save_templated_prompt=False,
@@ -216,6 +284,8 @@ generate_with_selection = ExecutorStep(
 # =============================================================================
 # STEP 1.5: FILTER - Remove rows where no sample passed static check
 # =============================================================================
+# For instruction-tuned models: check for <think>...</think> format AND \boxed{}
+# This ensures the model output is in the expected reasoning format.
 
 
 @dataclass
@@ -223,19 +293,52 @@ class FilterConfig:
     """Configuration for filtering rows."""
     input_path: str
     output_path: str
+    is_instruction_tuned: bool = True  # Whether this is an instruction-tuned model
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def filter_valid_generations(config: FilterConfig):
-    """Filter out rows where generated_text is None (no sample passed static check)."""
+    """
+    Filter out rows where generated_text doesn't pass static checks.
+
+    For instruction-tuned models:
+        - Must have <think>...</think> format
+        - Must have \\boxed{} for final answer
+
+    For base models:
+        - Must have \\boxed{}
+        - Must not have non-English characters
+    """
+    import re
     import ray.data
+
+    # Regex patterns
+    THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
+    BOXED_PATTERN = re.compile(r"\\boxed\{[^}]+\}")
+
+    def passes_static_check(text: str, is_instruction_tuned: bool) -> bool:
+        """Check if text passes static validation."""
+        if not text or len(text) == 0:
+            return False
+
+        has_boxed = bool(BOXED_PATTERN.search(text))
+
+        if is_instruction_tuned:
+            # Instruction-tuned: must have <think>...</think> AND \boxed{}
+            has_think_format = bool(THINK_PATTERN.search(text))
+            return has_think_format and has_boxed
+        else:
+            # Base model: must have \boxed{} and no non-English characters
+            has_non_english = any(ch.isalpha() and ord(ch) > 127 for ch in text)
+            return has_boxed and not has_non_english
 
     ds = ray.data.read_parquet(config.input_path)
 
-    # Filter to only rows with valid generated text
-    ds = ds.filter(lambda x: x.get("generated_text") is not None and len(x.get("generated_text", "")) > 0)
+    # Filter based on model type
+    is_instruct = config.is_instruction_tuned
+    ds = ds.filter(lambda x: passes_static_check(x.get("generated_text", ""), is_instruct))
 
-    print(f"Rows after filtering: {ds.count()}")
+    print(f"Rows after filtering (is_instruction_tuned={is_instruct}): {ds.count()}")
 
     ds.write_parquet(config.output_path)
 
@@ -246,73 +349,28 @@ filter_valid = ExecutorStep(
     config=FilterConfig(
         input_path=generate_with_selection,
         output_path=this_output_path(),
+        is_instruction_tuned=IS_INSTRUCTION_TUNED,
     ),
     pip_dependency_groups=["vllm"],
 )
 
 
 # =============================================================================
-# STEP 2: SUMMARIZATION
+# STEP 2: SUMMARIZATION (SKIPPED FOR INSTRUCTION-TUNED MODELS)
 # =============================================================================
-# Summarize the selected samples
-
-summarize_selected = ExecutorStep(
-    name=f"{BASE_PATH}/summarized",
-    fn=run_generation_inference,
-    config=TextGenerationInferenceConfig(
-        # IO
-        input_path=filter_valid,
-        output_path=this_output_path(),
-
-        # Model
-        model_name=QWEN3_4B_HF_ID,
-        engine_kwargs={
-            "tensor_parallel_size": 1,
-            "max_model_len": 32768,
-        },
-        generation_kwargs={
-            "temperature": 0.4,
-            "top_p": 0.95,
-            "max_tokens": 10000,
-        },
-
-        # Prompting - use summarization template on generated text
-        template=SUMMARIZATION_TEMPLATE,
-        prompt_column="generated_text",  # Summarize the generated reasoning
-        apply_chat_template=True,
-        save_templated_prompt=False,
-        max_doc_tokens=32768,
-
-        # Ray Data
-        num_instances=(1, 256),
-        batch_size=32,
-        tensor_parallel_size=1,
-        preserve_order=False,
-
-        # File
-        filetype="parquet",
-        output_filetype_override="parquet",
-
-        # Hardware
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
-
-        # Output column
-        generated_text_column_name="summary",
-
-        # Checkpointing
-        checkpoint_id_column="ms_id",
-
-        # Retry settings
-        max_task_retries=10,
-    ),
-    pip_dependency_groups=["vllm"],
-)
+# For instruction-tuned models, the output already contains:
+#   <think> REASONING </think> SUMMARY
+# So we skip the summarization step and go directly to validation.
+#
+# For base models, this step would summarize the raw reasoning into a clean output.
+# =============================================================================
 
 
 # =============================================================================
 # STEP 3: PREPARE VALIDATION PROMPTS
 # =============================================================================
 # Create columns with formatted validation prompts for each validation type
+# Uses longer prompts for instruction-tuned models (thinking models)
 
 
 @dataclass
@@ -320,17 +378,35 @@ class PrepValidationConfig:
     """Configuration for preparing validation prompts."""
     input_path: str
     output_path: str
+    is_instruction_tuned: bool = True
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def prep_validation_prompts(config: PrepValidationConfig):
-    """Create validation prompt columns combining question and answer."""
+    """
+    Create validation prompt columns combining question and answer.
+
+    Uses different prompts based on model type:
+    - Instruction-tuned: Longer prompts that allow thinking before verdict
+    - Base models: Shorter prompts from experiments.self_instill.prompts
+    """
     import ray.data
-    from experiments.self_instill.prompts import (
-        CYCLE_QUESTION_GENERATION_PROMPT,
-        FACTUAL_ERROR_PROMPT,
-        TOTAL_CORRECTNESS_PROMPT,
-    )
+
+    if config.is_instruction_tuned:
+        # Use longer prompts for instruction-tuned models (defined at module level)
+        cycle_gen_prompt_template = CYCLE_QUESTION_GENERATION_PROMPT_INSTRUCT
+        factual_prompt_template = FACTUAL_ERROR_PROMPT_INSTRUCT
+        correctness_prompt_template = TOTAL_CORRECTNESS_PROMPT_INSTRUCT
+    else:
+        # Use shorter prompts for base models
+        from experiments.self_instill.prompts import (
+            CYCLE_QUESTION_GENERATION_PROMPT,
+            FACTUAL_ERROR_PROMPT,
+            TOTAL_CORRECTNESS_PROMPT,
+        )
+        cycle_gen_prompt_template = CYCLE_QUESTION_GENERATION_PROMPT
+        factual_prompt_template = FACTUAL_ERROR_PROMPT
+        correctness_prompt_template = TOTAL_CORRECTNESS_PROMPT
 
     def add_validation_prompts(row):
         """Add validation prompt columns."""
@@ -338,16 +414,16 @@ def prep_validation_prompts(config: PrepValidationConfig):
         answer = row.get("generated_text", "").strip()
 
         # Cycle consistency - step 1: generate inferred question
-        row["cycle_gen_prompt"] = CYCLE_QUESTION_GENERATION_PROMPT.format(answer=answer)
+        row["cycle_gen_prompt"] = cycle_gen_prompt_template.format(answer=answer)
 
         # Factual error prompt
-        row["factual_prompt"] = FACTUAL_ERROR_PROMPT.format(
+        row["factual_prompt"] = factual_prompt_template.format(
             question=question,
             answer=answer,
         )
 
         # Total correctness prompt
-        row["correctness_prompt"] = TOTAL_CORRECTNESS_PROMPT.format(
+        row["correctness_prompt"] = correctness_prompt_template.format(
             question=question,
             answer=answer,
         )
@@ -364,8 +440,9 @@ prep_validation = ExecutorStep(
     name=f"{BASE_PATH}/prep-validation",
     fn=prep_validation_prompts,
     config=PrepValidationConfig(
-        input_path=summarize_selected,
+        input_path=filter_valid,  # Skip summarization for instruction-tuned models
         output_path=this_output_path(),
+        is_instruction_tuned=IS_INSTRUCTION_TUNED,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -392,7 +469,7 @@ cycle_gen_questions = ExecutorStep(
         generation_kwargs={
             "temperature": 0.6,
             "top_p": 0.95,
-            "max_tokens": 200,
+            "max_tokens": 32768,
             "n": 3,  # Generate 3 inferred questions for voting
         },
 
@@ -442,13 +519,20 @@ class PrepCycleCompareConfig:
     """Configuration for preparing cycle comparison prompts."""
     input_path: str
     output_path: str
+    is_instruction_tuned: bool = True
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def prep_cycle_compare_prompts(config: PrepCycleCompareConfig):
     """Create cycle comparison prompts from inferred questions."""
     import ray.data
-    from experiments.self_instill.prompts import CYCLE_COMPARISON_PROMPT
+
+    if config.is_instruction_tuned:
+        # Use longer prompt for instruction-tuned models
+        comparison_template = CYCLE_COMPARISON_PROMPT_INSTRUCT
+    else:
+        from experiments.self_instill.prompts import CYCLE_COMPARISON_PROMPT
+        comparison_template = CYCLE_COMPARISON_PROMPT
 
     def add_compare_prompts(row):
         """Add cycle comparison prompt columns for each inferred question."""
@@ -463,12 +547,21 @@ def prep_cycle_compare_prompts(config: PrepCycleCompareConfig):
         compare_prompts = []
         cleaned_questions = []
         for inferred_q in inferred_questions:
-            # Clean up - take first line only
-            inferred_q_clean = inferred_q.strip().split('\n')[0].strip() if inferred_q else ""
+            # Clean up - take first line only (or extract from thinking output)
+            if inferred_q:
+                # For thinking models, the question might be after </think>
+                if "</think>" in inferred_q:
+                    # Extract content after </think>
+                    parts = inferred_q.split("</think>")
+                    inferred_q_clean = parts[-1].strip().split('\n')[0].strip()
+                else:
+                    inferred_q_clean = inferred_q.strip().split('\n')[0].strip()
+            else:
+                inferred_q_clean = ""
             cleaned_questions.append(inferred_q_clean)
 
             # Create comparison prompt
-            prompt = CYCLE_COMPARISON_PROMPT.format(
+            prompt = comparison_template.format(
                 original_question=original_question,
                 inferred_question=inferred_q_clean,
             )
@@ -478,8 +571,6 @@ def prep_cycle_compare_prompts(config: PrepCycleCompareConfig):
         row["inferred_questions_cleaned"] = cleaned_questions
 
         # For the inference step, we'll use the first prompt
-        # (we'll run with n=1 for each of the 3 prompts via a different approach)
-        # For now, just use the first one and rely on n=3 for voting
         row["cycle_compare_prompt"] = compare_prompts[0] if compare_prompts else ""
 
         return row
@@ -496,6 +587,7 @@ prep_cycle_compare = ExecutorStep(
     config=PrepCycleCompareConfig(
         input_path=cycle_gen_questions,
         output_path=this_output_path(),
+        is_instruction_tuned=IS_INSTRUCTION_TUNED,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -522,7 +614,7 @@ cycle_compare = ExecutorStep(
         generation_kwargs={
             "temperature": 0.6,
             "top_p": 0.95,
-            "max_tokens": 50,
+            "max_tokens": 32768,
             "n": 3,  # 3 samples for unanimous voting
         },
 
@@ -583,7 +675,7 @@ factual_check = ExecutorStep(
         generation_kwargs={
             "temperature": 0.6,
             "top_p": 0.95,
-            "max_tokens": 50,
+            "max_tokens": 32768,
             "n": 3,  # 3 samples for unanimous voting
         },
 
@@ -644,7 +736,7 @@ correctness_check = ExecutorStep(
         generation_kwargs={
             "temperature": 0.6,
             "top_p": 0.95,
-            "max_tokens": 50,
+            "max_tokens": 32768,
             "n": 3,  # 3 samples for unanimous voting
         },
 
@@ -694,6 +786,7 @@ class FilterValidationConfig:
     """Configuration for filtering based on validation results."""
     input_path: str
     output_path: str
+    is_instruction_tuned: bool = True
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
@@ -703,27 +796,50 @@ def filter_and_format_output(config: FilterValidationConfig):
     import ray.data
     from experiments.self_instill.prompts import REASONING_INSTRUCTION
 
-    # Decision extraction pattern
-    decision_re = re.compile(r"\[\[\s*([YN])\s*\]\]", re.IGNORECASE)
+    # ==========================================================================
+    # Decision extraction for thinking models
+    # ==========================================================================
+    # Thinking models output reasoning before the verdict, so we need robust
+    # extraction that finds [[Y]] or [[N]] anywhere in the output (prefer last).
 
-    def extract_decision_local(text: str) -> bool:
-        """Extract Y/N decision from LLM output."""
+    _DECISION_RE = re.compile(r"\[\[\s*([YN])\s*\]\]", re.IGNORECASE)
+
+    def extract_decision_robust(text: str) -> bool:
+        """
+        Robustly extract Y/N decision from judge output.
+
+        Priority:
+          1) Last occurrence of [[Y]] / [[N]]
+          2) Last occurrence of a standalone Y/N token
+          3) Last occurrence of YES/NO
+
+        Returns True for Y, False otherwise.
+        """
         if not text:
             return False
-        matches = list(decision_re.finditer(text))
+
+        # 1) [[Y]] / [[N]] (prefer the last one)
+        matches = list(_DECISION_RE.finditer(text))
         if matches:
             return matches[-1].group(1).upper() == "Y"
-        # Fallback to standalone Y/N
+
+        # 2) Standalone Y/N token (common when small models ignore brackets)
         yn_tokens = re.findall(r"(?<![A-Za-z])([YN])(?![A-Za-z])", text.strip(), flags=re.IGNORECASE)
         if yn_tokens:
             return yn_tokens[-1].upper() == "Y"
+
+        # 3) YES/NO
+        yesno = re.findall(r"\b(YES|NO)\b", text.strip(), flags=re.IGNORECASE)
+        if yesno:
+            return yesno[-1].upper() == "YES"
+
         return False
 
     def check_unanimous(samples: list) -> bool:
         """Check if all samples have Y decision (unanimous voting)."""
         if not samples or not isinstance(samples, list):
             return False
-        decisions = [extract_decision_local(s) for s in samples]
+        decisions = [extract_decision_robust(s) for s in samples]
         return all(decisions) if decisions else False
 
     def check_validation_and_format(row):
@@ -746,11 +862,17 @@ def filter_and_format_output(config: FilterValidationConfig):
         # Format final output if all validations passed
         if row["all_validation_passed"]:
             generated_text = row.get("generated_text", "")
-            summary = row.get("summary", "")
             instruction_seed = row.get("instruction_seed", "")
 
-            # Format as <think>...</think> + summary
-            output_text = f"<think>\n{generated_text}\n</think>\n\n{summary}"
+            if config.is_instruction_tuned:
+                # For instruction-tuned models, the output is already in the format:
+                # <think> REASONING </think> SUMMARY
+                # So we use it directly
+                output_text = generated_text
+            else:
+                # For base models, we would combine reasoning and summary
+                summary = row.get("summary", "")
+                output_text = f"<think>\n{generated_text}\n</think>\n\n{summary}"
 
             # Create conversation format
             user_prompt = instruction_seed.strip() + "\n" + REASONING_INSTRUCTION + "\n"
@@ -784,6 +906,7 @@ filter_validation = ExecutorStep(
     config=FilterValidationConfig(
         input_path=correctness_check,
         output_path=this_output_path(),
+        is_instruction_tuned=IS_INSTRUCTION_TUNED,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -819,44 +942,43 @@ if __name__ == "__main__":
     print("Stage 3: Generating with multi-sample selection...")
     executor_main([generate_with_selection])
 
-    # Stage 4: Filter valid generations
+    # Stage 4: Filter valid generations (checks <think>...</think> format for instruction-tuned)
     print("Stage 4: Filtering valid generations...")
     executor_main([filter_valid])
 
-    # Stage 5: Summarize
-    print("Stage 5: Summarizing...")
-    executor_main([summarize_selected])
+    # NOTE: Summarization step is SKIPPED for instruction-tuned models
+    # The model already outputs in <think>...</think> SUMMARY format
 
-    # Stage 6: Prepare validation prompts
-    print("Stage 6: Preparing validation prompts...")
+    # Stage 5: Prepare validation prompts (uses longer prompts for instruction-tuned)
+    print("Stage 5: Preparing validation prompts...")
     executor_main([prep_validation])
 
-    # Stage 7: Cycle consistency - generate inferred questions
-    print("Stage 7: Cycle consistency - generating inferred questions...")
+    # Stage 6: Cycle consistency - generate inferred questions
+    print("Stage 6: Cycle consistency - generating inferred questions...")
     executor_main([cycle_gen_questions])
 
-    # Stage 8: Cycle consistency - prepare comparison
-    print("Stage 8: Cycle consistency - preparing comparison...")
+    # Stage 7: Cycle consistency - prepare comparison
+    print("Stage 7: Cycle consistency - preparing comparison...")
     executor_main([prep_cycle_compare])
 
-    # Stage 9: Cycle consistency - compare
-    print("Stage 9: Cycle consistency - comparing...")
+    # Stage 8: Cycle consistency - compare
+    print("Stage 8: Cycle consistency - comparing...")
     executor_main([cycle_compare])
 
-    # Stage 10: Factual error check
-    print("Stage 10: Factual error check...")
+    # Stage 9: Factual error check
+    print("Stage 9: Factual error check...")
     executor_main([factual_check])
 
-    # Stage 11: Total correctness check
-    print("Stage 11: Total correctness check...")
+    # Stage 10: Total correctness check
+    print("Stage 10: Total correctness check...")
     executor_main([correctness_check])
 
-    # Stage 12: Filter validation results and format output
-    print("Stage 12: Filtering validation results and formatting output...")
+    # Stage 11: Filter validation results and format output
+    print("Stage 11: Filtering validation results and formatting output...")
     executor_main([filter_validation])
 
-    # Stage 13: Upload to HuggingFace
-    print("Stage 13: Uploading to HuggingFace...")
+    # Stage 12: Upload to HuggingFace
+    print("Stage 12: Uploading to HuggingFace...")
     executor_main([upload_self_instill])
 
     print("Pipeline complete!")
