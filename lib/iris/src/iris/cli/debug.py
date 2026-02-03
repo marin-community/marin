@@ -488,43 +488,41 @@ def autoscaler_status(ctx, json_output: bool):
         click.echo(f"RPC failed: {e}", err=True)
         raise SystemExit(1) from e
 
-        if json_output:
-            output = json_format.MessageToJson(response, preserving_proto_field_name=True)
-            click.echo(output)
-            return
+    if json_output:
+        output = json_format.MessageToJson(response, preserving_proto_field_name=True)
+        click.echo(output)
+        return
 
-        status = response.status
-        click.echo("=== Autoscaler Status ===")
-        click.echo(f"Last evaluation: {status.last_evaluation_ms}ms")
+    status = response.status
+    click.echo("=== Autoscaler Status ===")
+    click.echo(f"Last evaluation: {status.last_evaluation_ms}ms")
 
-        if status.current_demand:
-            click.echo()
-            click.echo("Current Demand:")
-            for group_name, demand in status.current_demand.items():
-                click.echo(f"  {group_name}: {demand}")
+    if status.current_demand:
+        click.echo()
+        click.echo("Current Demand:")
+        for group_name, demand in status.current_demand.items():
+            click.echo(f"  {group_name}: {demand}")
 
-        if status.groups:
-            click.echo()
-            click.echo("Scale Groups:")
-            for group in status.groups:
-                cfg = group.config
-                click.echo(f"  {group.name}:")
-                click.echo(
-                    f"    Accelerator: {format_accelerator_display(cfg.accelerator_type, cfg.accelerator_variant)}"
-                )
-                click.echo(f"    Min/Max slices: {cfg.min_slices}/{cfg.max_slices}")
-                click.echo(f"    Current demand: {group.current_demand}")
-                click.echo(f"    Peak demand: {group.peak_demand}")
-                if group.consecutive_failures > 0:
-                    click.echo(f"    Consecutive failures: {group.consecutive_failures}")
-                if group.backoff_until_ms > 0:
-                    click.echo(f"    Backoff until: {group.backoff_until_ms}ms")
+    if status.groups:
+        click.echo()
+        click.echo("Scale Groups:")
+        for group in status.groups:
+            cfg = group.config
+            click.echo(f"  {group.name}:")
+            click.echo(f"    Accelerator: {format_accelerator_display(cfg.accelerator_type, cfg.accelerator_variant)}")
+            click.echo(f"    Min/Max slices: {cfg.min_slices}/{cfg.max_slices}")
+            click.echo(f"    Current demand: {group.current_demand}")
+            click.echo(f"    Peak demand: {group.peak_demand}")
+            if group.consecutive_failures > 0:
+                click.echo(f"    Consecutive failures: {group.consecutive_failures}")
+            if group.backoff_until_ms > 0:
+                click.echo(f"    Backoff until: {group.backoff_until_ms}ms")
 
-        if status.recent_actions:
-            click.echo()
-            click.echo("Recent Actions:")
-            for action in status.recent_actions[-10:]:
-                click.echo(f"  [{action.timestamp_ms}] {action.action_type} ({action.scale_group}): {action.reason}")
+    if status.recent_actions:
+        click.echo()
+        click.echo("Recent Actions:")
+        for action in status.recent_actions[-10:]:
+            click.echo(f"  [{action.timestamp_ms}] {action.action_type} ({action.scale_group}): {action.reason}")
 
 
 @debug.command("list-workers")
@@ -545,34 +543,34 @@ def list_workers(ctx, json_output: bool):
         click.echo(f"RPC failed: {e}", err=True)
         raise SystemExit(1) from e
 
-        if json_output:
-            output = json_format.MessageToJson(response, preserving_proto_field_name=True)
-            click.echo(output)
-            return
+    if json_output:
+        output = json_format.MessageToJson(response, preserving_proto_field_name=True)
+        click.echo(output)
+        return
 
-        workers = response.workers
-        if not workers:
-            click.echo("No workers registered.")
-            return
+    workers = response.workers
+    if not workers:
+        click.echo("No workers registered.")
+        return
 
-        click.echo(f"=== Workers ({len(workers)}) ===")
-        for worker in workers:
-            status = "healthy" if worker.healthy else "unhealthy"
-            click.echo(f"\n{worker.worker_id}:")
-            click.echo(f"  Address: {worker.address}")
-            click.echo(f"  Status: {status}")
-            click.echo(f"  Running tasks: {len(worker.running_job_ids)}")
-            if worker.running_job_ids:
-                click.echo(f"    Tasks: {', '.join(worker.running_job_ids)}")
-            click.echo(f"  Last heartbeat: {worker.last_heartbeat_ms}")
-            if worker.consecutive_failures > 0:
-                click.echo(f"  Consecutive failures: {worker.consecutive_failures}")
-            if worker.metadata.hostname:
-                click.echo(f"  Hostname: {worker.metadata.hostname}")
-            if worker.metadata.ip_address:
-                click.echo(f"  IP: {worker.metadata.ip_address}")
-            if worker.metadata.tpu_name:
-                click.echo(f"  TPU: {worker.metadata.tpu_name}")
+    click.echo(f"=== Workers ({len(workers)}) ===")
+    for worker in workers:
+        status = "healthy" if worker.healthy else "unhealthy"
+        click.echo(f"\n{worker.worker_id}:")
+        click.echo(f"  Address: {worker.address}")
+        click.echo(f"  Status: {status}")
+        click.echo(f"  Running tasks: {len(worker.running_job_ids)}")
+        if worker.running_job_ids:
+            click.echo(f"    Tasks: {', '.join(worker.running_job_ids)}")
+        click.echo(f"  Last heartbeat: {worker.last_heartbeat_ms}")
+        if worker.consecutive_failures > 0:
+            click.echo(f"  Consecutive failures: {worker.consecutive_failures}")
+        if worker.metadata.hostname:
+            click.echo(f"  Hostname: {worker.metadata.hostname}")
+        if worker.metadata.ip_address:
+            click.echo(f"  IP: {worker.metadata.ip_address}")
+        if worker.metadata.tpu_name:
+            click.echo(f"  TPU: {worker.metadata.tpu_name}")
 
 
 @debug.command()
@@ -662,27 +660,27 @@ def list_jobs(ctx, json_output: bool):
         click.echo(f"RPC failed: {e}", err=True)
         raise SystemExit(1) from e
 
-        if json_output:
-            output = json_format.MessageToJson(response, preserving_proto_field_name=True)
-            click.echo(output)
-            return
+    if json_output:
+        output = json_format.MessageToJson(response, preserving_proto_field_name=True)
+        click.echo(output)
+        return
 
-        jobs = response.jobs
-        if not jobs:
-            click.echo("No jobs found.")
-            return
+    jobs = response.jobs
+    if not jobs:
+        click.echo("No jobs found.")
+        return
 
-        click.echo(f"=== Jobs ({len(jobs)}) ===")
-        for job in jobs:
-            state_name = cluster_pb2.JobState.Name(job.state)
-            click.echo(f"\n{job.job_id}:")
-            click.echo(f"  State: {state_name}")
-            click.echo(f"  Tasks: {job.completed_count}/{job.task_count} completed")
-            if job.task_state_counts:
-                counts = ", ".join(f"{k}={v}" for k, v in job.task_state_counts.items())
-                click.echo(f"  Task states: {counts}")
-            if job.error:
-                click.echo(f"  Error: {job.error}")
+    click.echo(f"=== Jobs ({len(jobs)}) ===")
+    for job in jobs:
+        state_name = cluster_pb2.JobState.Name(job.state)
+        click.echo(f"\n{job.job_id}:")
+        click.echo(f"  State: {state_name}")
+        click.echo(f"  Tasks: {job.completed_count}/{job.task_count} completed")
+        if job.task_state_counts:
+            counts = ", ".join(f"{k}={v}" for k, v in job.task_state_counts.items())
+            click.echo(f"  Task states: {counts}")
+        if job.error:
+            click.echo(f"  Error: {job.error}")
 
 
 @debug.command("show-task-logs")

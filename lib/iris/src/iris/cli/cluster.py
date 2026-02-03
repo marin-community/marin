@@ -40,6 +40,7 @@ from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
 
+from iris.cli.build import _build_image, _push_to_registries
 from iris.cli.debug import debug
 
 # =============================================================================
@@ -128,8 +129,6 @@ def _extract_image_params(image_tag: str, image_type: Literal["worker", "control
 
 
 def _build_and_push_image(params: _ImageBuildParams) -> None:
-    from iris.cli.build import _build_image, _push_to_registries
-
     click.echo(f"Building {params.image_type} image: {params.local_tag}")
     click.echo(f"  Region: {params.region}")
     click.echo(f"  Project: {params.project}")

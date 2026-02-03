@@ -17,11 +17,13 @@
 Defines the ``iris`` Click group and registers all subcommands.
 """
 
-import logging
+import logging as _logging_module
 
 import click
 
 from iris.logging import configure_logging as _configure_logging
+
+logger = _logging_module.getLogger(__name__)
 
 
 @click.group()
@@ -36,9 +38,9 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     ctx.obj["traceback"] = show_traceback
 
     if verbose:
-        _configure_logging(level=logging.DEBUG)
+        _configure_logging(level=_logging_module.DEBUG)
     else:
-        _configure_logging(level=logging.INFO)
+        _configure_logging(level=_logging_module.INFO)
 
     # Validate mutually exclusive options
     if controller_url and config_file:
@@ -71,10 +73,10 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
                 ctx.obj["controller_url"] = tunnel_url
                 # Clean up tunnel when context closes
                 ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
-            except Exception:
+            except Exception as e:
                 # If tunnel fails (e.g., no controller VM), continue without controller_url
                 # Commands that need it will fail with clear error
-                pass
+                logger.debug(f"Failed to establish controller tunnel: {e}")
 
 
 # Register subcommand groups — imported at module level to ensure they are
