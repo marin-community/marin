@@ -1329,13 +1329,24 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
     def _compute_token_ids(self) -> Dict[str, Any]:
         """Compute token IDs for loss mask creation.
 
+        Creates a temporary tokenizer to avoid concurrent access issues with
+        the shared processor's tokenizer (HF fast tokenizers are not thread-safe).
         Returns dict with im_start_id, im_end_id, num_assistant_tokens, and assistant_token_ids_array.
         These are safe to pickle since they're just int/np.array values.
         """
-        final_tokenizer = self.processor.tokenizer
-        im_start_id = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
-        im_end_id = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
-        assistant_ids = final_tokenizer.encode("assistant", add_special_tokens=False)
+        from levanter.compat.hf_checkpoints import load_tokenizer
+
+        # Create a temporary tokenizer instance to avoid "Already borrowed" error
+        # The shared processor.tokenizer may be accessed concurrently by other threads
+        tokenizer_path = self._tokenizer_name_or_path or self._processor_name_or_path
+        if tokenizer_path is None:
+            raise RuntimeError("Cannot compute token IDs: no tokenizer path available")
+
+        temp_tokenizer = load_tokenizer(tokenizer_path, trust_remote_code=True)
+
+        im_start_id = temp_tokenizer.convert_tokens_to_ids("<|im_start|>")
+        im_end_id = temp_tokenizer.convert_tokens_to_ids("<|im_end|>")
+        assistant_ids = temp_tokenizer.encode("assistant", add_special_tokens=False)
         return {
             "im_start_id": im_start_id,
             "im_end_id": im_end_id,
