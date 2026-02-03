@@ -124,8 +124,7 @@ def infer_parquet_type(value):
             nested_fields.append((k, infer_parquet_type(v)))
         return pa.struct(nested_fields)
     elif isinstance(value, list):
-        # Simple list of strings for now
-        return pa.list_(pa.string())
+        return pa.list_(infer_parquet_type(value[0]))
     else:
         return pa.string()
 
