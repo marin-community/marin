@@ -269,7 +269,46 @@ def _tokenize_batches(
         yield from batch_processor(batch)
 
 
-def tokenize(config: TokenizeConfigBase):
+@dataclasses.dataclass(frozen=True)
+class TokenizedDataset:
+    train_path: str | None = None
+    validation_path: str | None = None
+
+
+# TODO: remove ` tokenize` and `TokenizeConfig`
+def tokenize_fn(
+    train_paths: list[str | ExecutorStep],  # path to training data
+    validation_paths: list[str],  # path to validation data
+    cache_path: str,  # base path to save the tokenized files
+    tokenizer: str,  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
+    tags: list[str] | None = None,  # tags to be added to config
+    sample_count: int | None = None,
+    format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
+    window_size_bytes: int = 10_000_000_000,
+    allow_test_in_train: bool = False,
+    zephyr_num_cpus: int = 2,
+    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True),
+) -> TokenizedDataset:
+    tags = tags or []
+    # TODO: remove the config based tokenize?
+    return tokenize(
+        TokenizeConfig(
+            train_paths=train_paths,
+            validation_paths=validation_paths,
+            cache_path=cache_path,
+            tokenizer=tokenizer,
+            tags=tags,
+            sample_count=sample_count,
+            format=format,
+            window_size_bytes=window_size_bytes,
+            allow_test_in_train=allow_test_in_train,
+            zephyr_num_cpus=zephyr_num_cpus,
+            zephyr_memory=zephyr_memory,
+        )
+    )
+
+
+def tokenize(config: TokenizeConfigBase) -> TokenizedDataset:
     """Tokenize datasets using zephyr pipeline.
 
     Processes train and validation splits separately, writing to Levanter cache format.
@@ -306,7 +345,7 @@ def tokenize(config: TokenizeConfigBase):
     if not train_paths and not validation_paths:
         raise ValueError("No input files specified. Nothing to do.")
 
-    def run_pipeline(paths: list[str], split_name: str) -> None:
+    def run_pipeline(paths: list[str], split_name: str) -> str:
         prefix = os.path.join(config.cache_path, split_name)
         ledger_path = os.path.join(prefix, "shard_ledger.json")
 
@@ -316,7 +355,7 @@ def tokenize(config: TokenizeConfigBase):
                 split_name,
                 ledger_path,
             )
-            return
+            return prefix
 
         thread_ctx = create_job_ctx("threadpool")
         file_stats = list(
@@ -387,11 +426,16 @@ def tokenize(config: TokenizeConfigBase):
         with fsspec.open(stats_path, "w") as f:
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
+        return prefix
+
+    train_path, validation_path = None, None
     if train_paths:
-        run_pipeline(train_paths, "train")
+        train_path = run_pipeline(train_paths, "train")
 
     if validation_paths:
-        run_pipeline(validation_paths, "validation")
+        validation_path = run_pipeline(validation_paths, "validation")
+
+    return TokenizedDataset(train_path=train_path, validation_path=validation_path)
 
 
 @draccus.wrap()

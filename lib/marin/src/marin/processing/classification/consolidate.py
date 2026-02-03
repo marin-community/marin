@@ -38,6 +38,8 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
+from marin.execution_v2.output import StepDataset
+from marin.processing.classification.deduplication.dedup_commons import DedupDataset
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
@@ -63,7 +65,7 @@ class FilterConfig:
     type: FilterType
     """The type of filter to apply."""
 
-    attribute_path: str
+    attribute_path: str | DedupDataset
     """Base path where the files with the attributes are stored."""
 
     name: str
@@ -318,6 +320,45 @@ def process_file_shard(*, shard, filters: list[FilterConfig], input_base: str, f
 
         if keep and doc["text"]:
             yield doc
+
+
+# TODO: remove `condolidate` and `ConsolidateConfig`
+def consolidate_fn(
+    input_path: str,
+    output_path: str,
+    filters: list[FilterConfig],
+    filetype: str = "jsonl.gz",
+) -> StepDataset:
+    """Consolidate documents by applying filters based on attributes.
+
+    The output is written to Parquet files in the specified output path.
+    """
+    # TODO: this would go away if we standardize on dataset spec instead of both str and StepDataset
+    # filters = [
+    #     replace(
+    #         filt,
+    #         attribute_path=(
+    #             filt.attribute_path.path if isinstance(filt.attribute_path, DedupDataset) else filt.attribute_path
+    #         ),
+    #     )
+    #     for filt in filters
+    # ]
+    # TODO: make step output passing work with existing Executor
+    filters = [
+        replace(
+            filt,
+            attribute_path=f"{filt.attribute_path}/data",
+        )
+        for filt in filters
+    ]
+    config = ConsolidateConfig(
+        input_path=input_path,
+        output_path=output_path,
+        filters=filters,
+        filetype=filetype,
+    )
+    consolidate(config)
+    return StepDataset(path=output_path)
 
 
 def consolidate(config: ConsolidateConfig):

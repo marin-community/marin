@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 import fsspec
+from marin.execution_v2.output import StepDataset
 import numpy as np
 import pandas as pd
 
@@ -63,7 +64,7 @@ class DatasetConfig:
         max_sample_size (Optional[int]): Maximum number of examples to include in the dataset.
     """
 
-    input_doc_path: str
+    input_doc_path: str | StepDataset
     label: str
     sampling_rate: float = 1.0
     max_sample_size: int | None = None
