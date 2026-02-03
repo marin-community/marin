@@ -62,6 +62,11 @@ class TreeDiffusionConfig:
     node_vocab_size: int = 128  # Python AST node types
     value_vocab_size: int = 256  # Value tokens
 
+    # Conditioning (signature + docstring)
+    use_conditioning: bool = False
+    condition_vocab_size: int = 128  # Character-level vocab
+    max_condition_len: int = 128
+
     # Diffusion parameters (Berkeley: sigma_small=2, s_max=5)
     sigma_small: int = 2
     s_max: int = 5
@@ -114,6 +119,14 @@ class TreeDiffusionConfig:
     @property
     def Layers(self) -> Axis:
         return Axis("layers", self.num_layers)
+
+    @property
+    def CondVocab(self) -> Axis:
+        return Axis("cond_vocab", self.condition_vocab_size)
+
+    @property
+    def CondLen(self) -> Axis:
+        return Axis("cond_len", self.max_condition_len)
 
 
 class TreeEmbedding(eqx.Module):
@@ -271,6 +284,253 @@ class TreeAttention(eqx.Module):
         return output
 
 
+class ConditionEncoder(eqx.Module):
+    """Encoder for conditioning text (signature + docstring).
+
+    Uses character-level embeddings and a small transformer to encode
+    the conditioning text. The encoded conditioning is then used for
+    cross-attention in the tree transformer.
+    """
+
+    token_embed: hnn.Embedding
+    position_embed: hnn.Embedding
+    layers: list["ConditionTransformerLayer"]
+    final_norm: hnn.LayerNorm
+    config: TreeDiffusionConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(config: TreeDiffusionConfig, *, key: PRNGKeyArray) -> "ConditionEncoder":
+        keys = jrandom.split(key, 4)
+
+        token_embed = hnn.Embedding.init(config.CondVocab, config.Embed, key=keys[0])
+        position_embed = hnn.Embedding.init(config.CondLen, config.Embed, key=keys[1])
+
+        # Use fewer layers for conditioning encoder (simpler task)
+        num_cond_layers = max(1, config.num_layers // 2)
+        layer_keys = jrandom.split(keys[2], num_cond_layers)
+        layers = [ConditionTransformerLayer.init(config, key=k) for k in layer_keys]
+
+        final_norm = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon)
+
+        return ConditionEncoder(token_embed, position_embed, layers, final_norm, config)
+
+    @named_call
+    def __call__(
+        self,
+        condition_tokens: NamedArray,  # (CondLen,) int
+        condition_mask: NamedArray | None = None,  # (CondLen,) bool
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> NamedArray:
+        """Encode conditioning text.
+
+        Args:
+            condition_tokens: Character token IDs
+            condition_mask: Valid token mask (1 for valid, 0 for padding)
+
+        Returns:
+            (CondLen, Embed) encoded conditioning
+        """
+        # Token embeddings
+        x = self.token_embed(condition_tokens)
+
+        # Position embeddings
+        positions = hax.arange(self.config.CondLen)
+        pos_emb = self.position_embed(positions)
+        x = x + pos_emb
+
+        # Apply transformer layers
+        for layer in self.layers:
+            x = layer(x, mask=condition_mask, key=key)
+
+        x = self.final_norm(x)
+        return x
+
+
+class ConditionTransformerLayer(eqx.Module):
+    """Transformer layer for conditioning encoder (self-attention only)."""
+
+    attn: "ConditionSelfAttention"
+    mlp: "TreeMLP"
+    ln1: hnn.LayerNorm
+    ln2: hnn.LayerNorm
+    config: TreeDiffusionConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(config: TreeDiffusionConfig, *, key: PRNGKeyArray) -> "ConditionTransformerLayer":
+        k1, k2 = jrandom.split(key, 2)
+
+        attn = ConditionSelfAttention.init(config, key=k1)
+        mlp = TreeMLP.init(config, key=k2)
+        ln1 = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon)
+        ln2 = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon)
+
+        return ConditionTransformerLayer(attn, mlp, ln1, ln2, config)
+
+    @named_call
+    def __call__(
+        self,
+        x: NamedArray,
+        mask: NamedArray | None = None,
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> NamedArray:
+        h = self.ln1(x)
+        h = self.attn(h, mask=mask, key=key)
+        x = x + h
+
+        h = self.ln2(x)
+        h = self.mlp(h, key=key)
+        x = x + h
+
+        return x
+
+
+class ConditionSelfAttention(eqx.Module):
+    """Self-attention for conditioning sequence."""
+
+    q_proj: hnn.Linear
+    k_proj: hnn.Linear
+    v_proj: hnn.Linear
+    o_proj: hnn.Linear
+    config: TreeDiffusionConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(config: TreeDiffusionConfig, *, key: PRNGKeyArray) -> "ConditionSelfAttention":
+        k1, k2, k3, k4 = jrandom.split(key, 4)
+
+        HeadEmbed = Axis("head_embed", config.num_heads * (config.hidden_dim // config.num_heads))
+
+        q_proj = hnn.Linear.init(In=config.Embed, Out=HeadEmbed, key=k1, use_bias=False)
+        k_proj = hnn.Linear.init(In=config.Embed, Out=HeadEmbed, key=k2, use_bias=False)
+        v_proj = hnn.Linear.init(In=config.Embed, Out=HeadEmbed, key=k3, use_bias=False)
+        o_proj = hnn.Linear.init(In=HeadEmbed, Out=config.Embed, key=k4, use_bias=False)
+
+        return ConditionSelfAttention(q_proj, k_proj, v_proj, o_proj, config)
+
+    @named_call
+    def __call__(
+        self,
+        x: NamedArray,  # (CondLen, Embed)
+        mask: NamedArray | None = None,
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> NamedArray:
+        CondLen = self.config.CondLen
+        Heads = self.config.Heads
+        HeadDim = self.config.HeadDim
+
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        HeadEmbed = Axis("head_embed", self.config.num_heads * (self.config.hidden_dim // self.config.num_heads))
+        q = q.unflatten_axis(HeadEmbed, (Heads, HeadDim))
+        k = k.unflatten_axis(HeadEmbed, (Heads, HeadDim))
+        v = v.unflatten_axis(HeadEmbed, (Heads, HeadDim))
+
+        KeyCondLen = CondLen.alias("key_cond_len")
+        k_t = k.rename({CondLen: KeyCondLen})
+        v_t = v.rename({CondLen: KeyCondLen})
+
+        scale = 1.0 / jnp.sqrt(self.config.hidden_dim // self.config.num_heads)
+        scores = hax.dot(q, k_t, axis=HeadDim) * scale
+
+        if mask is not None:
+            key_mask = mask.rename({CondLen: KeyCondLen})
+            scores = hax.where(key_mask, scores, -1e9)
+
+        attn_weights = hax.nn.softmax(scores, axis=KeyCondLen)
+        output = hax.dot(attn_weights, v_t, axis=KeyCondLen)
+
+        output = output.flatten_axes((Heads, HeadDim), HeadEmbed)
+        output = self.o_proj(output)
+
+        return output
+
+
+class CrossAttention(eqx.Module):
+    """Cross-attention from tree nodes to conditioning sequence.
+
+    Allows tree nodes to attend to the conditioning (signature + docstring)
+    to guide generation.
+    """
+
+    q_proj: hnn.Linear
+    k_proj: hnn.Linear
+    v_proj: hnn.Linear
+    o_proj: hnn.Linear
+    config: TreeDiffusionConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(config: TreeDiffusionConfig, *, key: PRNGKeyArray) -> "CrossAttention":
+        k1, k2, k3, k4 = jrandom.split(key, 4)
+
+        HeadEmbed = Axis("head_embed", config.num_heads * (config.hidden_dim // config.num_heads))
+
+        q_proj = hnn.Linear.init(In=config.Embed, Out=HeadEmbed, key=k1, use_bias=False)
+        k_proj = hnn.Linear.init(In=config.Embed, Out=HeadEmbed, key=k2, use_bias=False)
+        v_proj = hnn.Linear.init(In=config.Embed, Out=HeadEmbed, key=k3, use_bias=False)
+        o_proj = hnn.Linear.init(In=HeadEmbed, Out=config.Embed, key=k4, use_bias=False)
+
+        return CrossAttention(q_proj, k_proj, v_proj, o_proj, config)
+
+    @named_call
+    def __call__(
+        self,
+        x: NamedArray,  # (Nodes, Embed) - queries from tree
+        condition: NamedArray,  # (CondLen, Embed) - keys/values from conditioning
+        condition_mask: NamedArray | None = None,  # (CondLen,) - valid conditioning mask
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> NamedArray:
+        """Apply cross-attention from tree to conditioning.
+
+        Args:
+            x: Tree node embeddings (queries)
+            condition: Conditioning embeddings (keys and values)
+            condition_mask: Mask for valid conditioning tokens
+
+        Returns:
+            Output embeddings of same shape as x
+        """
+        Nodes = self.config.Nodes
+        CondLen = self.config.CondLen
+        Heads = self.config.Heads
+        HeadDim = self.config.HeadDim
+
+        # Project queries from tree, keys/values from conditioning
+        q = self.q_proj(x)  # (Nodes, HeadEmbed)
+        k = self.k_proj(condition)  # (CondLen, HeadEmbed)
+        v = self.v_proj(condition)  # (CondLen, HeadEmbed)
+
+        # Reshape to multi-head
+        HeadEmbed = Axis("head_embed", self.config.num_heads * (self.config.hidden_dim // self.config.num_heads))
+        q = q.unflatten_axis(HeadEmbed, (Heads, HeadDim))  # (Nodes, Heads, HeadDim)
+        k = k.unflatten_axis(HeadEmbed, (Heads, HeadDim))  # (CondLen, Heads, HeadDim)
+        v = v.unflatten_axis(HeadEmbed, (Heads, HeadDim))  # (CondLen, Heads, HeadDim)
+
+        # Compute attention: (Nodes, Heads, HeadDim) @ (CondLen, Heads, HeadDim) -> (Nodes, Heads, CondLen)
+        scale = 1.0 / jnp.sqrt(self.config.hidden_dim // self.config.num_heads)
+        scores = hax.dot(q, k, axis=HeadDim) * scale  # (Nodes, Heads, CondLen)
+
+        # Apply conditioning mask
+        if condition_mask is not None:
+            scores = hax.where(condition_mask, scores, -1e9)
+
+        # Softmax over conditioning positions
+        attn_weights = hax.nn.softmax(scores, axis=CondLen)
+
+        # Apply attention to values
+        output = hax.dot(attn_weights, v, axis=CondLen)  # (Nodes, Heads, HeadDim)
+
+        # Reshape and project
+        output = output.flatten_axes((Heads, HeadDim), HeadEmbed)
+        output = self.o_proj(output)
+
+        return output
+
+
 class TreeMLP(eqx.Module):
     """Feed-forward MLP for tree transformer."""
 
@@ -297,38 +557,67 @@ class TreeMLP(eqx.Module):
 
 
 class TreeTransformerLayer(eqx.Module):
-    """Single transformer layer for tree encoding."""
+    """Single transformer layer for tree encoding with optional cross-attention."""
 
     attn: TreeAttention
+    cross_attn: CrossAttention | None
     mlp: TreeMLP
     ln1: hnn.LayerNorm
     ln2: hnn.LayerNorm
+    ln_cross: hnn.LayerNorm | None
     config: TreeDiffusionConfig = eqx.field(static=True)
 
     @staticmethod
     def init(config: TreeDiffusionConfig, *, key: PRNGKeyArray) -> "TreeTransformerLayer":
-        k1, k2 = jrandom.split(key, 2)
+        if config.use_conditioning:
+            k1, k2, k3 = jrandom.split(key, 3)
+        else:
+            k1, k2 = jrandom.split(key, 2)
+            k3 = None
 
         attn = TreeAttention.init(config, key=k1)
         mlp = TreeMLP.init(config, key=k2)
         ln1 = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon)
         ln2 = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon)
 
-        return TreeTransformerLayer(attn, mlp, ln1, ln2, config)
+        # Cross-attention for conditioning
+        if config.use_conditioning:
+            cross_attn = CrossAttention.init(config, key=k3)
+            ln_cross = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon)
+        else:
+            cross_attn = None
+            ln_cross = None
+
+        return TreeTransformerLayer(attn, cross_attn, mlp, ln1, ln2, ln_cross, config)
 
     @named_call
     def __call__(
         self,
         x: NamedArray,
         mask: NamedArray | None = None,
+        condition: NamedArray | None = None,
+        condition_mask: NamedArray | None = None,
         *,
         key: PRNGKeyArray | None = None,
     ) -> NamedArray:
-        """Apply transformer layer with pre-norm residual connections."""
+        """Apply transformer layer with pre-norm residual connections.
+
+        Args:
+            x: Input embeddings (Nodes, Embed)
+            mask: Valid node mask
+            condition: Conditioning embeddings (CondLen, Embed) - optional
+            condition_mask: Valid conditioning mask - optional
+        """
         # Self-attention with residual
         h = self.ln1(x)
         h = self.attn(h, mask=mask, key=key)
         x = x + h
+
+        # Cross-attention with residual (if conditioning is provided)
+        if self.cross_attn is not None and condition is not None:
+            h = self.ln_cross(x)
+            h = self.cross_attn(h, condition, condition_mask=condition_mask, key=key)
+            x = x + h
 
         # MLP with residual
         h = self.ln2(x)
@@ -344,17 +633,29 @@ class TreeEncoder(eqx.Module):
     embedding: TreeEmbedding
     layers: list[TreeTransformerLayer]
     final_norm: hnn.LayerNorm
+    condition_encoder: ConditionEncoder | None
     config: TreeDiffusionConfig = eqx.field(static=True)
 
     @staticmethod
     def init(config: TreeDiffusionConfig, *, key: PRNGKeyArray) -> "TreeEncoder":
-        keys = jrandom.split(key, config.num_layers + 1)
+        if config.use_conditioning:
+            keys = jrandom.split(key, config.num_layers + 2)
+            cond_key = keys[-1]
+        else:
+            keys = jrandom.split(key, config.num_layers + 1)
+            cond_key = None
 
         embedding = TreeEmbedding.init(config, key=keys[0])
         layers = [TreeTransformerLayer.init(config, key=keys[i + 1]) for i in range(config.num_layers)]
         final_norm = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon)
 
-        return TreeEncoder(embedding, layers, final_norm, config)
+        # Conditioning encoder
+        if config.use_conditioning:
+            condition_encoder = ConditionEncoder.init(config, key=cond_key)
+        else:
+            condition_encoder = None
+
+        return TreeEncoder(embedding, layers, final_norm, condition_encoder, config)
 
     @named_call
     def __call__(
@@ -363,27 +664,36 @@ class TreeEncoder(eqx.Module):
         node_values: NamedArray,
         depth: NamedArray,
         mask: NamedArray | None = None,
+        condition_tokens: NamedArray | None = None,
+        condition_mask: NamedArray | None = None,
         *,
         key: PRNGKeyArray | None = None,
     ) -> NamedArray:
-        """Encode tree structure.
+        """Encode tree structure with optional conditioning.
 
         Args:
             node_types: (Nodes,) node type IDs
             node_values: (Nodes, ValueLen) value token IDs
             depth: (Nodes,) depth in tree
             mask: (Nodes,) valid node mask
+            condition_tokens: (CondLen,) conditioning token IDs - optional
+            condition_mask: (CondLen,) valid conditioning mask - optional
 
         Returns:
             (Nodes, Embed) encoded node representations
         """
+        # Encode conditioning if provided
+        condition = None
+        if self.condition_encoder is not None and condition_tokens is not None:
+            condition = self.condition_encoder(condition_tokens, condition_mask, key=key)
+
         # Embed inputs
         x = self.embedding(node_types, node_values, depth, key=key)
 
         # Apply transformer layers
         keys = jrandom.split(key, self.config.num_layers) if key is not None else [None] * self.config.num_layers
         for layer, k in zip(self.layers, keys):
-            x = layer(x, mask=mask, key=k)
+            x = layer(x, mask=mask, condition=condition, condition_mask=condition_mask, key=k)
 
         # Final normalization
         x = self.final_norm(x)
@@ -476,6 +786,9 @@ class TreeDiffusionModel(eqx.Module):
 
     Combines the tree encoder and edit predictor to predict
     the reverse diffusion step (denoising).
+
+    Supports optional conditioning on function signature + docstring
+    for guided generation.
     """
 
     encoder: TreeEncoder
@@ -498,6 +811,8 @@ class TreeDiffusionModel(eqx.Module):
         node_values: NamedArray,
         depth: NamedArray,
         mask: NamedArray | None = None,
+        condition_tokens: NamedArray | None = None,
+        condition_mask: NamedArray | None = None,
         *,
         key: PRNGKeyArray | None = None,
     ) -> tuple[NamedArray, NamedArray, NamedArray]:
@@ -508,13 +823,23 @@ class TreeDiffusionModel(eqx.Module):
             node_values: (Nodes, ValueLen) value token IDs
             depth: (Nodes,) depth in tree
             mask: (Nodes,) valid node mask
+            condition_tokens: (CondLen,) conditioning token IDs - optional
+            condition_mask: (CondLen,) valid conditioning mask - optional
             key: PRNG key for dropout
 
         Returns:
             Tuple of (location_logits, type_logits, value_logits)
         """
-        # Encode the tree
-        encoded = self.encoder(node_types, node_values, depth, mask=mask, key=key)
+        # Encode the tree with optional conditioning
+        encoded = self.encoder(
+            node_types,
+            node_values,
+            depth,
+            mask=mask,
+            condition_tokens=condition_tokens,
+            condition_mask=condition_mask,
+            key=key,
+        )
 
         # Predict edit
         location_logits, type_logits, value_logits = self.predictor(encoded, mask=mask)

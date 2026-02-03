@@ -22,39 +22,89 @@ from experiments.kelp.ast_utils import TreeTensors, parse_python_to_tensors
 from experiments.kelp.python_grammar import PythonNodeVocab, PythonValueVocab
 
 # Simple MBPP-style functions for prototyping
+# Mix of functions with and without docstrings for conditioning experiments
 TOY_PROGRAMS: list[str] = [
-    # Arithmetic
-    "def add(a, b): return a + b",
-    "def subtract(a, b): return a - b",
-    "def multiply(x, y): return x * y",
-    "def divide(x, y): return x / y",
-    "def square(n): return n * n",
-    "def cube(n): return n * n * n",
-    "def double(x): return x * 2",
-    "def triple(x): return x * 3",
+    # Arithmetic with docstrings
+    '''def add(a, b):
+    """Add two numbers together."""
+    return a + b''',
+    '''def subtract(a, b):
+    """Subtract b from a."""
+    return a - b''',
+    '''def multiply(x, y):
+    """Multiply two numbers."""
+    return x * y''',
+    '''def divide(x, y):
+    """Divide x by y."""
+    return x / y''',
+    '''def square(n):
+    """Return the square of n."""
+    return n * n''',
+    '''def cube(n):
+    """Return the cube of n."""
+    return n * n * n''',
+    '''def double(x):
+    """Double the input value."""
+    return x * 2''',
+    '''def triple(x):
+    """Triple the input value."""
+    return x * 3''',
     "def negate(x): return -x",
-    "def absolute(x): return x if x >= 0 else -x",
-    # Predicates
-    "def is_even(n): return n % 2 == 0",
-    "def is_odd(n): return n % 2 != 0",
-    "def is_positive(n): return n > 0",
-    "def is_negative(n): return n < 0",
+    '''def absolute(x):
+    """Return the absolute value of x."""
+    return x if x >= 0 else -x''',
+    # Predicates with docstrings
+    '''def is_even(n):
+    """Check if n is even."""
+    return n % 2 == 0''',
+    '''def is_odd(n):
+    """Check if n is odd."""
+    return n % 2 != 0''',
+    '''def is_positive(n):
+    """Check if n is positive."""
+    return n > 0''',
+    '''def is_negative(n):
+    """Check if n is negative."""
+    return n < 0''',
     "def is_zero(n): return n == 0",
     "def is_equal(a, b): return a == b",
     "def is_greater(a, b): return a > b",
     "def is_less(a, b): return a < b",
-    # Min/Max
-    "def max_two(a, b): return a if a > b else b",
-    "def min_two(a, b): return a if a < b else b",
-    "def clamp(x, lo, hi): return max(lo, min(x, hi))",
-    # List operations
-    "def first(lst): return lst[0]",
-    "def last(lst): return lst[-1]",
-    "def length(lst): return len(lst)",
-    "def is_empty(lst): return len(lst) == 0",
-    "def sum_list(lst): return sum(lst)",
-    "def product_list(lst):\n    result = 1\n    for x in lst:\n        result = result * x\n    return result",
-    "def reverse_list(lst): return lst[::-1]",
+    # Min/Max with docstrings
+    '''def max_two(a, b):
+    """Return the maximum of two values."""
+    return a if a > b else b''',
+    '''def min_two(a, b):
+    """Return the minimum of two values."""
+    return a if a < b else b''',
+    '''def clamp(x, lo, hi):
+    """Clamp x to be within [lo, hi]."""
+    return max(lo, min(x, hi))''',
+    # List operations with docstrings
+    '''def first(lst):
+    """Return the first element of a list."""
+    return lst[0]''',
+    '''def last(lst):
+    """Return the last element of a list."""
+    return lst[-1]''',
+    '''def length(lst):
+    """Return the length of a list."""
+    return len(lst)''',
+    '''def is_empty(lst):
+    """Check if a list is empty."""
+    return len(lst) == 0''',
+    '''def sum_list(lst):
+    """Return the sum of all elements in a list."""
+    return sum(lst)''',
+    '''def product_list(lst):
+    """Return the product of all elements in a list."""
+    result = 1
+    for x in lst:
+        result = result * x
+    return result''',
+    '''def reverse_list(lst):
+    """Return a reversed copy of the list."""
+    return lst[::-1]''',
     "def head(lst): return lst[0]",
     "def tail(lst): return lst[1:]",
     "def init(lst): return lst[:-1]",
@@ -132,6 +182,22 @@ TOY_PROGRAMS: list[str] = [
     "def constant(x, y): return x",
     "def compose(f, g, x): return f(g(x))",
     "def apply(f, x): return f(x)",
+    # Functions with type hints and docstrings
+    '''def add_ints(a: int, b: int) -> int:
+    """Add two integers and return the sum."""
+    return a + b''',
+    '''def multiply_floats(x: float, y: float) -> float:
+    """Multiply two floats."""
+    return x * y''',
+    '''def is_even_typed(n: int) -> bool:
+    """Check if an integer is even."""
+    return n % 2 == 0''',
+    '''def list_sum(numbers: list) -> int:
+    """Sum all numbers in a list."""
+    return sum(numbers)''',
+    '''def string_length(s: str) -> int:
+    """Return the length of a string."""
+    return len(s)''',
 ]
 
 
