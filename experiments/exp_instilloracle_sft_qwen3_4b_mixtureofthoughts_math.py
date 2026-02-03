@@ -55,14 +55,13 @@ tokenized_datasets = {DATASET_SHORT_NAME: tokenized_mot_math}
 mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 
 # Training configuration
-# Using v5p-64 (32 chips)
+# Using v4-64 (32 chips)
 TARGET_EPOCHS = 8
 TRAIN_BATCH_SIZE = 256  # 8x larger batch with 8x more chips
-MICROBATCH_SIZE = 256  # 8 per device on v5p-64 (32 chips), no grad accumulation
+MICROBATCH_SIZE = 256  # 8 per device on v4-64 (32 chips), no grad accumulation
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 
-RESOURCES = ResourceConfig.with_tpu("v5p-64")
-RESOURCES = ResourceConfig.with_tpu("v6e-128")
+RESOURCES = ResourceConfig.with_tpu("v4-64")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
