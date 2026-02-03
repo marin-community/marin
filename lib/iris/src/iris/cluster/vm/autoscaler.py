@@ -210,7 +210,7 @@ class Autoscaler:
         vm_registry: VmRegistry,
         config: config_pb2.AutoscalerDefaults,
         threads: ThreadContainer | None = None,
-    ) -> "Autoscaler":
+    ) -> Autoscaler:
         """Create autoscaler from proto config.
 
         Args:

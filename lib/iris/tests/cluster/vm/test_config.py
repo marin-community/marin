@@ -134,10 +134,11 @@ platform:
     project_id: my-project
     zone: us-central1-a
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
   tpu_group_a:
@@ -206,10 +207,11 @@ scale_groups:
 platform:
   manual: {{}}
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
   test_group:
@@ -234,10 +236,11 @@ platform:
     project_id: my-project
     zone: us-central1-a
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
   tpu_group:
@@ -414,9 +417,8 @@ class TestSshConfigMerging:
         )
         ssh_config_proto.connect_timeout.CopyFrom(Duration.from_seconds(60).to_proto())
 
-        config = config_pb2.IrisClusterConfig(
-            ssh=ssh_config_proto,
-        )
+        config = config_pb2.IrisClusterConfig()
+        config.defaults.ssh.CopyFrom(ssh_config_proto)
 
         ssh_config = get_ssh_config(config)
 
@@ -427,24 +429,22 @@ class TestSshConfigMerging:
 
     def test_applies_per_group_ssh_overrides(self):
         """get_ssh_config applies per-group SSH overrides for manual vm_type."""
-        config = config_pb2.IrisClusterConfig(
-            ssh=config_pb2.SshConfig(
-                user="ubuntu",
-                key_file="~/.ssh/cluster_key",
-                port=22,
-            ),
-            scale_groups={
-                "manual_group": config_pb2.ScaleGroupConfig(
-                    name="manual_group",
-                    vm_type=config_pb2.VM_TYPE_MANUAL_VM,
-                    manual=config_pb2.ManualProvider(
-                        hosts=["10.0.0.1"],
-                        ssh_user="admin",
-                        ssh_key_file="~/.ssh/group_key",
-                        ssh_port=2222,
-                    ),
-                )
-            },
+        config = config_pb2.IrisClusterConfig()
+        config.defaults.ssh.user = "ubuntu"
+        config.defaults.ssh.key_file = "~/.ssh/cluster_key"
+        config.defaults.ssh.port = 22
+
+        config.scale_groups["manual_group"].CopyFrom(
+            config_pb2.ScaleGroupConfig(
+                name="manual_group",
+                vm_type=config_pb2.VM_TYPE_MANUAL_VM,
+                manual=config_pb2.ManualProvider(
+                    hosts=["10.0.0.1"],
+                    ssh_user="admin",
+                    ssh_key_file="~/.ssh/group_key",
+                    ssh_port=2222,
+                ),
+            )
         )
 
         ssh_config = get_ssh_config(config, group_name="manual_group")
@@ -457,25 +457,21 @@ class TestSshConfigMerging:
         """Per-group overrides merge with cluster defaults for unset fields."""
         from iris.time_utils import Duration
 
-        ssh_config_proto = config_pb2.SshConfig(
-            user="ubuntu",
-            key_file="~/.ssh/cluster_key",
-            port=22,
-        )
-        ssh_config_proto.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
+        config = config_pb2.IrisClusterConfig()
+        config.defaults.ssh.user = "ubuntu"
+        config.defaults.ssh.key_file = "~/.ssh/cluster_key"
+        config.defaults.ssh.port = 22
+        config.defaults.ssh.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
 
-        config = config_pb2.IrisClusterConfig(
-            ssh=ssh_config_proto,
-            scale_groups={
-                "manual_group": config_pb2.ScaleGroupConfig(
-                    name="manual_group",
-                    vm_type=config_pb2.VM_TYPE_MANUAL_VM,
-                    manual=config_pb2.ManualProvider(
-                        hosts=["10.0.0.1"],
-                        ssh_user="admin",  # Override user only
-                    ),
-                )
-            },
+        config.scale_groups["manual_group"].CopyFrom(
+            config_pb2.ScaleGroupConfig(
+                name="manual_group",
+                vm_type=config_pb2.VM_TYPE_MANUAL_VM,
+                manual=config_pb2.ManualProvider(
+                    hosts=["10.0.0.1"],
+                    ssh_user="admin",  # Override user only
+                ),
+            )
         )
 
         ssh_config = get_ssh_config(config, group_name="manual_group")
@@ -497,3 +493,150 @@ class TestSshConfigMerging:
         assert ssh_config.key_file is None
         assert ssh_config.port == 22
         assert ssh_config.connect_timeout == Duration.from_seconds(30)
+
+
+class TestLocalConfigTransformation:
+    """Tests for make_local_config transformation."""
+
+    def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
+        """make_local_config transforms GCP config to local mode."""
+        from iris.cluster.vm.config import make_local_config
+
+        config_content = """\
+platform:
+  gcp:
+    project_id: test-project
+    zone: us-central1-a
+
+defaults:
+  bootstrap:
+    docker_image: gcr.io/test/worker:latest
+    worker_port: 10001
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+
+controller:
+  gcp:
+    machine_type: n2-standard-4
+    port: 10000
+
+scale_groups:
+  tpu_group:
+    vm_type: tpu_vm
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
+    min_slices: 1
+    max_slices: 10
+    zones: [us-central1-a]
+"""
+        config_path = tmp_path / "gcp_config.yaml"
+        config_path.write_text(config_content)
+
+        # Load and transform
+        original_config = load_config(config_path)
+        local_config = make_local_config(original_config)
+
+        # Verify platform transformed to local
+        assert local_config.platform.WhichOneof("platform") == "local"
+
+        # Verify controller transformed to local
+        assert local_config.controller.WhichOneof("controller") == "local"
+        assert local_config.controller.local.port == 0  # auto-assign
+
+        # Verify scale groups transformed to local VM
+        assert local_config.scale_groups["tpu_group"].vm_type == config_pb2.VM_TYPE_LOCAL_VM
+
+        # Verify fast timings applied (0.5s eval, 1s scale_up)
+        assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
+        assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
+        # scale_down_delay stays at 5min
+        assert local_config.defaults.autoscaler.scale_down_delay.milliseconds == 300000
+
+    def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
+        """make_local_config preserves accelerator type and other scale group settings."""
+        from iris.cluster.vm.config import make_local_config
+
+        config_content = """\
+platform:
+  gcp:
+    project_id: test-project
+    zone: us-central1-a
+
+defaults:
+  bootstrap:
+    docker_image: gcr.io/test/worker:latest
+
+controller:
+  gcp:
+    port: 10000
+
+scale_groups:
+  cpu_group:
+    vm_type: gce_vm
+    accelerator_type: cpu
+    min_slices: 2
+    max_slices: 5
+    zones: [us-central1-a]
+    priority: 50
+  tpu_group:
+    vm_type: tpu_vm
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-16
+    min_slices: 1
+    max_slices: 3
+    zones: [us-central1-a]
+    priority: 100
+"""
+        config_path = tmp_path / "multi_group.yaml"
+        config_path.write_text(config_content)
+
+        original_config = load_config(config_path)
+        local_config = make_local_config(original_config)
+
+        # Verify VM types changed but other fields preserved
+        cpu_group = local_config.scale_groups["cpu_group"]
+        assert cpu_group.vm_type == config_pb2.VM_TYPE_LOCAL_VM
+        assert cpu_group.accelerator_type == config_pb2.ACCELERATOR_TYPE_CPU
+        assert cpu_group.min_slices == 2
+        assert cpu_group.max_slices == 5
+        assert cpu_group.priority == 50
+
+        tpu_group = local_config.scale_groups["tpu_group"]
+        assert tpu_group.vm_type == config_pb2.VM_TYPE_LOCAL_VM
+        assert tpu_group.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert tpu_group.accelerator_variant == "v5litepod-16"
+        assert tpu_group.min_slices == 1
+        assert tpu_group.max_slices == 3
+        assert tpu_group.priority == 100
+
+    def test_example_configs_load_and_transform(self):
+        """Example configs in examples/ directory load and transform to local correctly."""
+        from iris.cluster.vm.config import make_local_config
+
+        iris_root = Path(__file__).parent.parent.parent.parent
+        example_configs = [
+            iris_root / "examples" / "eu-west4.yaml",
+            iris_root / "examples" / "demo.yaml",
+        ]
+
+        for config_path in example_configs:
+            if not config_path.exists():
+                pytest.skip(f"Example config not found: {config_path}")
+
+            # Load the config
+            config = load_config(config_path)
+            assert config.platform.WhichOneof("platform") in ["gcp", "manual"]
+            assert config.defaults.autoscaler.evaluation_interval.milliseconds > 0
+
+            # Transform to local
+            local_config = make_local_config(config)
+            assert local_config.platform.WhichOneof("platform") == "local"
+            assert local_config.controller.WhichOneof("controller") == "local"
+            # Verify fast timings applied
+            assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
+            assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000

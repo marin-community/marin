@@ -56,15 +56,15 @@ def test_load_cluster_config_missing_zone(tmp_path):
     """Test error on missing zone field."""
     bad_config = tmp_path / "bad.yaml"
     bad_config.write_text(yaml.dump({"project_id": "test"}))
-    with pytest.raises(ValueError, match="Missing 'zone'"):
+    with pytest.raises(ValueError, match="Missing 'platform\\.gcp\\.zone'"):
         load_cluster_config(bad_config)
 
 
 def test_load_cluster_config_missing_project_id(tmp_path):
     """Test error on missing project_id field."""
     bad_config = tmp_path / "bad.yaml"
-    bad_config.write_text(yaml.dump({"zone": "us-central1-a"}))
-    with pytest.raises(ValueError, match="Missing 'project_id'"):
+    bad_config.write_text(yaml.dump({"platform": {"gcp": {"zone": "us-central1-a"}}}))
+    with pytest.raises(ValueError, match="Missing 'platform\\.gcp\\.project_id'"):
         load_cluster_config(bad_config)
 
 

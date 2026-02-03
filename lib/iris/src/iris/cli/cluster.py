@@ -153,7 +153,7 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
 
 
 def _build_cluster_images(config) -> None:
-    for tag, typ in [(config.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
+    for tag, typ in [(config.defaults.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
             params = _extract_image_params(tag, typ)
             if params:

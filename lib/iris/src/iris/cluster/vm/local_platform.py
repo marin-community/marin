@@ -46,9 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from iris.cluster.types import get_tpu_topology, tpu_device
-from iris.cluster.vm.autoscaler import Autoscaler
 from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
-from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
@@ -683,5 +681,3 @@ class LocalVmManager:
     def stop(self) -> None:
         """Stop all container threads managed by this VM manager."""
         self._threads.stop(timeout=Duration.from_seconds(5.0))
-
-

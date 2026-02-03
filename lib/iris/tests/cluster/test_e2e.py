@@ -80,9 +80,9 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     # Fast autoscaler evaluation for tests
     from iris.time_utils import Duration
 
-    config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
-    config.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
-    config.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
+    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
+    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
+    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
 
     return config
 

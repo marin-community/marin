@@ -35,18 +35,15 @@ logger = logging.getLogger(__name__)
 class PlatformOps(Protocol):
     """Direct, non-lifecycle VM operations used by CLI cleanup."""
 
-    def list_slices(self, group_config: config_pb2.ScaleGroupConfig) -> list[str]:
-        ...
+    def list_slices(self, group_config: config_pb2.ScaleGroupConfig) -> list[str]: ...
 
-    def delete_slice(self, group_config: config_pb2.ScaleGroupConfig, slice_id: str) -> None:
-        ...
+    def delete_slice(self, group_config: config_pb2.ScaleGroupConfig, slice_id: str) -> None: ...
 
 
 class Platform(Protocol):
     """Factory for provider-specific VM managers and ops."""
 
-    def vm_ops(self) -> PlatformOps:
-        ...
+    def vm_ops(self) -> PlatformOps: ...
 
     def vm_manager(
         self,
@@ -54,8 +51,7 @@ class Platform(Protocol):
         vm_factory: TrackedVmFactory,
         *,
         dry_run: bool = False,
-    ) -> VmManagerProtocol:
-        ...
+    ) -> VmManagerProtocol: ...
 
 
 class _GcpPlatformOps:

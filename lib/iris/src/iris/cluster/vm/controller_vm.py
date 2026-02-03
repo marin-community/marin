@@ -913,7 +913,7 @@ class ManualController:
 
     def _create_ssh_connection(self, host: str) -> DirectSshConnection:
         """Create SSH connection for the given host."""
-        ssh = self.config.ssh
+        ssh = self.config.defaults.ssh
         connect_timeout = (
             Duration.from_proto(ssh.connect_timeout)
             if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0

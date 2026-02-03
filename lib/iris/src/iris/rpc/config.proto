@@ -18,6 +18,9 @@ package iris.config;
 
 import "time.proto";
 
+// Enable explicit presence tracking for all fields to support HasField on scalars
+option features.field_presence = EXPLICIT;
+
 // ============================================================================
 // PLATFORM CONFIGURATION
 // ============================================================================

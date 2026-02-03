@@ -69,30 +69,6 @@ DEFAULT_CONFIG = config_pb2.DefaultsConfig(
     ),
 )
 
-# Local mode defaults - faster timings for testing
-LOCAL_DEFAULT_CONFIG = config_pb2.DefaultsConfig(
-    timeouts=config_pb2.TimeoutConfig(
-        boot_timeout=Duration.from_seconds(300).to_proto(),
-        init_timeout=Duration.from_seconds(600).to_proto(),
-        ssh_poll_interval=Duration.from_seconds(5).to_proto(),
-    ),
-    ssh=config_pb2.SshConfig(
-        user="root",
-        port=22,
-        connect_timeout=Duration.from_seconds(30).to_proto(),
-    ),
-    autoscaler=config_pb2.AutoscalerDefaults(
-        evaluation_interval=Duration.from_seconds(0.5).to_proto(),  # 0.5s for fast testing
-        requesting_timeout=Duration.from_seconds(120).to_proto(),
-        scale_up_delay=Duration.from_seconds(1).to_proto(),  # 1s for fast testing
-        scale_down_delay=Duration.from_seconds(300).to_proto(),  # 5min (same as production)
-    ),
-    bootstrap=config_pb2.BootstrapConfig(
-        worker_port=10001,
-        cache_dir="/var/cache/iris",
-    ),
-)
-
 # Mapping from lowercase accelerator types to proto enum names
 _ACCELERATOR_TYPE_MAP = {
     "cpu": "ACCELERATOR_TYPE_CPU",
@@ -172,6 +148,8 @@ def _merge_proto_fields(target, source) -> None:
     """
     for field_desc in source.DESCRIPTOR.fields:
         field_name = field_desc.name
+
+        # With EXPLICIT field presence in proto edition, all fields support HasField
         if not source.HasField(field_name):
             continue
 
@@ -337,9 +315,6 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
         if "controller_address" in defaults_bootstrap:
             defaults_bootstrap["controller_address"] = os.path.expandvars(defaults_bootstrap["controller_address"])
 
-    if isinstance(data.get("platform"), str):
-        data["platform"] = {data["platform"]: {}}
-
     # Ensure scale_groups have their name field set (proto uses map key, but config field needs it)
     if "scale_groups" in data:
         for name, sg_data in data["scale_groups"].items():
@@ -348,8 +323,6 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
                 sg_data = data["scale_groups"][name]
             elif "name" not in sg_data:
                 sg_data["name"] = name
-            if "vm_type" not in sg_data and "type" in sg_data:
-                sg_data["vm_type"] = sg_data.pop("type")
 
     # Convert lowercase accelerator types to enum format
     _normalize_accelerator_types(data)
@@ -381,7 +354,7 @@ def get_ssh_config(
 ) -> SshConfig:
     """Get SSH config by merging cluster defaults with per-group overrides.
 
-    If cluster_config.ssh is not set, uses defaults:
+    Uses cluster_config.defaults.ssh for base settings:
     - user: "root"
     - port: 22
     - connect_timeout: 30s
@@ -399,7 +372,7 @@ def get_ssh_config(
     """
     from iris.time_utils import Duration
 
-    ssh = cluster_config.ssh
+    ssh = cluster_config.defaults.ssh
     user = ssh.user or "root"
     key_file = ssh.key_file or None
     port = ssh.port or 22

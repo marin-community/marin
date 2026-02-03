@@ -167,14 +167,27 @@ def autoscaler_with_ready_slices(scale_group_config):
 def make_autoscaler(
     scale_groups: dict[str, ScalingGroup],
     vm_registry: VmRegistry | None = None,
-    config: config_pb2.AutoscalerConfig | None = None,
+    config: config_pb2.AutoscalerDefaults | None = None,
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
-    return Autoscaler(
-        scale_groups=scale_groups,
-        vm_registry=vm_registry or VmRegistry(),
-        config=config,
-    )
+    from iris.time_utils import Duration
+
+    registry = vm_registry or VmRegistry()
+
+    if config:
+        return Autoscaler.from_config(
+            scale_groups=scale_groups,
+            vm_registry=registry,
+            config=config,
+        )
+    else:
+        # Use default fast timings for tests
+        return Autoscaler(
+            scale_groups=scale_groups,
+            vm_registry=registry,
+            evaluation_interval=Duration.from_seconds(0.1),
+            requesting_timeout=Duration.from_seconds(120),
+        )
 
 
 # --- Tests for scaling decisions ---
@@ -646,7 +659,7 @@ class TestAutoscalerIdleVerification:
         )
         group.reconcile()
 
-        autoscaler = Autoscaler(
+        autoscaler = make_autoscaler(
             scale_groups={"test-group": group},
             vm_registry=VmRegistry(),
         )
@@ -782,7 +795,7 @@ class TestAutoscalerFailedSliceCleanup:
         group = ScalingGroup(scale_group_config, manager)
         group.reconcile()
 
-        autoscaler = Autoscaler(
+        autoscaler = make_autoscaler(
             scale_groups={"test-group": group},
             vm_registry=VmRegistry(),
         )
@@ -1101,7 +1114,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerConfig()
+        config = config_pb2.AutoscalerDefaults()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
@@ -1172,7 +1185,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerConfig()
+        config = config_pb2.AutoscalerDefaults()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
@@ -1245,7 +1258,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerConfig()
+        config = config_pb2.AutoscalerDefaults()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
@@ -1346,7 +1359,7 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # Use short evaluation interval to allow rapid re-evaluation
 
-        config = config_pb2.AutoscalerConfig()
+        config = config_pb2.AutoscalerDefaults()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
@@ -1429,7 +1442,7 @@ class TestAutoscalerQuotaHandling:
             scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0), quota_timeout=Duration.from_ms(60_000)
         )
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerConfig()
+        config = config_pb2.AutoscalerDefaults()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
@@ -1472,7 +1485,7 @@ class TestAutoscalerQuotaHandling:
         )
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerConfig()
+        config = config_pb2.AutoscalerDefaults()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback}, config=config)
 
@@ -1518,7 +1531,7 @@ class TestAutoscalerQuotaHandling:
         backoff = Duration.from_seconds(5.0)
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0), backoff_initial=backoff)
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerConfig()
+        config = config_pb2.AutoscalerDefaults()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
