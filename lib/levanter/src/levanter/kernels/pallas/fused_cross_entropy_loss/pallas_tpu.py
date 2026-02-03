@@ -45,12 +45,6 @@ def _labels_one_hot_emulated(
     return (cols == safe_labels[:, None]).astype(dtype)
 
 
-def _is_tpu_v4() -> bool:
-    if not jax.devices():
-        return False
-    return "tpu v4" in jax.devices()[0].device_kind.lower()
-
-
 def _validate_inputs(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -108,7 +102,7 @@ def _infer_num_tensorcores() -> int:
     if jax.default_backend() != "tpu":
         return 1
     device_kind = jax.devices()[0].device_kind.lower()
-    if "tpu v4" in device_kind or "tpu v5" in device_kind or "tpu v7" in device_kind:
+    if "tpu v4" in device_kind or ("tpu v5" in device_kind and "v5e" not in device_kind) or "tpu v7" in device_kind:
         return 2
     return 1
 
@@ -130,77 +124,6 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
     x_ref,
     labels_ref,
     w_ref,
-    loss_ref,
-    lse_ref,
-    xw_tiled,
-    b_block_loss_ref,
-    *,
-    v_dim: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-):
-    """Pallas kernel for per-example loss + logsumexp.
-
-    This follows Tokamax's blockwise B/H/V tiling to keep all intermediates in
-    VMEM. We accumulate logits across H blocks, then fold V blocks into LSE and
-    the label logit contribution.
-    """
-    b_index, v_index, h_index = (pl.program_id(i) for i in range(3))
-    v_block_size = w_ref.shape[1]
-    num_b_blocks, num_v_blocks, num_h_blocks = (pl.num_programs(i) for i in range(3))
-
-    # If V isn't aligned, zero out the tail so the last tile is safe.
-    @pl.when(v_index == num_v_blocks - 1)
-    def pad_non_aligned_v_block():
-        if v_dim % v_block_size != 0:
-            rem = v_dim % v_block_size
-            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
-
-    # Initialize per-B-block loss and LSE at the start of each B tile.
-    @pl.when(jnp.logical_and(v_index == 0, h_index == 0))
-    def init_loss_lse():
-        b_block_loss_ref[...] = jnp.zeros_like(b_block_loss_ref)
-        lse_ref[...] = jnp.full_like(lse_ref, -jnp.inf)
-
-    # Reset the logits accumulator for each V tile.
-    @pl.when(h_index == 0)
-    def init_logits():
-        xw_tiled[...] = jnp.zeros_like(xw_tiled)
-
-    xw_tiled[...] += jax.lax.dot_general(
-        x_ref[...],
-        w_ref[...],
-        (((1,), (0,)), ((), ())),
-        preferred_element_type=jnp.float32,
-        precision=precision,
-    )
-
-    # Once we've accumulated across H, compute label logit + LSE for this V tile.
-    @pl.when(h_index == num_h_blocks - 1)
-    def accumulate_block():
-        logits = xw_tiled[...]
-        if dtype is not None:
-            logits = logits.astype(dtype)
-        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-
-        labels_adjusted = labels_ref[...] - v_index * v_block_size
-        labels_one_hot = jax.nn.one_hot(labels_adjusted, num_classes=v_block_size, dtype=logits.dtype)
-        b_block_loss_ref[...] -= jnp.sum(labels_one_hot * logits, axis=-1)
-        lse_block = jax.nn.logsumexp(logits, axis=-1)
-        lse_ref[...] = jnp.logaddexp(lse_ref[...], lse_block)
-
-    # Finalize per-example loss on the last V/H tile.
-    @pl.when(jnp.logical_and(v_index == num_v_blocks - 1, h_index == num_h_blocks - 1))
-    def finalize_loss():
-        b_block_loss_ref[...] += lse_ref[...]
-        loss_ref[...] = b_block_loss_ref[...]
-
-
-def linear_softmax_cross_entropy_loss_forward_pallas_kernel_v4(
-    x_ref,
-    labels_ref,
-    w_ref,
     lse_ref,
     label_logits_ref,
     xw_tiled,
@@ -213,7 +136,7 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel_v4(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
 ):
-    """V4-safe forward kernel (streaming logsumexp + label logits; no gathers)."""
+    """Forward kernel (streaming logsumexp + label logits; no gathers)."""
     b_index, v_index, h_index = (pl.program_id(i) for i in range(3))
     del b_index
     v_block_size = w_ref.shape[1]
@@ -302,93 +225,9 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
 
     out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
 
-    loss, lse = pl.pallas_call(
-        partial(
-            linear_softmax_cross_entropy_loss_forward_pallas_kernel,
-            v_dim=v_dim,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        ),
-        in_specs=[
-            pl.BlockSpec(
-                (block_sizes.b_block_size, block_sizes.h_block_size),
-                lambda i, j, k: (i, k),
-                memory_space=pltpu.VMEM,
-            ),  # x
-            pl.BlockSpec(
-                (block_sizes.b_block_size,),
-                lambda i, j, k: (i),
-                memory_space=pltpu.VMEM,
-            ),  # labels
-            pl.BlockSpec(
-                (block_sizes.h_block_size, block_sizes.v_block_size),
-                lambda i, j, k: (k, j),
-                memory_space=pltpu.VMEM,
-            ),  # w
-        ],
-        out_specs=[
-            pl.BlockSpec(
-                (block_sizes.b_block_size,),
-                lambda i, j, k: (i),
-                memory_space=pltpu.VMEM,
-            ),  # loss
-            pl.BlockSpec(
-                (block_sizes.b_block_size,),
-                lambda i, j, k: (i),
-                memory_space=pltpu.VMEM,
-            ),  # lse
-        ],
-        out_shape=[
-            jax.ShapeDtypeStruct(shape=(b_dim,), dtype=out_dtype),
-            jax.ShapeDtypeStruct(shape=(b_dim,), dtype=out_dtype),
-        ],
-        scratch_shapes=(
-            pltpu.VMEM(
-                (block_sizes.b_block_size, block_sizes.v_block_size),
-                dtype=out_dtype,
-            ),  # xw_tiled
-            pltpu.VMEM((block_sizes.b_block_size,), dtype=out_dtype),  # b_block_loss
-        ),
-        grid=(num_b_blocks, num_v_blocks, num_h_blocks),
-        compiler_params=pltpu.CompilerParams(
-            dimension_semantics=("parallel", "arbitrary", "arbitrary"),
-        ),
-    )(x, labels, w)
-
-    return loss, lse
-
-
-@partial(
-    jax.jit,
-    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
-)
-def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu_v4(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
-    *,
-    block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
-    precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
-    """V4-safe forward Pallas kernel wrapper (per-example loss + logsumexp)."""
-    _validate_inputs(x, labels, w, block_sizes)
-
-    h_dim = x.shape[-1]
-    v_dim = w.shape[1]
-    b_dim = x.shape[0]
-
-    num_b_blocks = math.ceil(b_dim / block_sizes.b_block_size)
-    num_h_blocks = math.ceil(h_dim / block_sizes.h_block_size)
-    num_v_blocks = math.ceil(v_dim / block_sizes.v_block_size)
-
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
-
     lse_lanes, label_logits_lanes = pl.pallas_call(
         partial(
-            linear_softmax_cross_entropy_loss_forward_pallas_kernel_v4,
+            linear_softmax_cross_entropy_loss_forward_pallas_kernel,
             v_dim=v_dim,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
@@ -467,7 +306,6 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
     *,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
-    use_emulated_one_hot: bool,
     precision: jax.lax.PrecisionLike,
 ):
     """Pallas kernel for backward pass of per-example cross-entropy.
@@ -541,10 +379,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
     @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
     def compute_s():
         labels_adjusted = labels_ref[...] - v_index * v_block_size
-        if use_emulated_one_hot:
-            labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
-        else:
-            labels_one_hot = jax.nn.one_hot(labels_adjusted, num_classes=v_block_size, dtype=x_ref.dtype)
+        labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
         logits = xw_scratch_ref[...]
         if dtype is not None:
             logits = logits.astype(dtype)
@@ -632,7 +467,6 @@ def linear_softmax_cross_entropy_loss_backward_pallas_split_xgrad_kernel(
     v_dim: int,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
-    use_emulated_one_hot: bool,
     precision: jax.lax.PrecisionLike,
 ):
     """Backward kernel computing only x_grad (split strategy)."""
@@ -684,10 +518,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_split_xgrad_kernel(
     @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
     def compute_s():
         labels_adjusted = labels_ref[...] - v_index * v_block_size
-        if use_emulated_one_hot:
-            labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
-        else:
-            labels_one_hot = jax.nn.one_hot(labels_adjusted, num_classes=v_block_size, dtype=x_ref.dtype)
+        labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
         logits = xw_scratch_ref[...]
         if dtype is not None:
             logits = logits.astype(dtype)
@@ -750,7 +581,6 @@ def linear_softmax_cross_entropy_loss_backward_pallas_split_wgrad_kernel(
     *,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
-    use_emulated_one_hot: bool,
     precision: jax.lax.PrecisionLike,
 ):
     """Backward kernel computing only w_grad (split strategy)."""
@@ -807,10 +637,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_split_wgrad_kernel(
     @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
     def compute_s():
         labels_adjusted = labels_ref[...] - v_index * v_block_size
-        if use_emulated_one_hot:
-            labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
-        else:
-            labels_one_hot = jax.nn.one_hot(labels_adjusted, num_classes=v_block_size, dtype=x_ref.dtype)
+        labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
         logits = xw_scratch_ref[...]
         if dtype is not None:
             logits = logits.astype(dtype)
@@ -877,7 +704,6 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
     *,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
-    use_emulated_one_hot: bool,
     precision: jax.lax.PrecisionLike,
 ):
     """Backward kernel with an explicit core grid axis (per-core w_grad partials)."""
@@ -950,10 +776,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
     @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
     def compute_s():
         labels_adjusted = labels_ref[...] - v_index * v_block_size
-        if use_emulated_one_hot:
-            labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
-        else:
-            labels_one_hot = jax.nn.one_hot(labels_adjusted, num_classes=v_block_size, dtype=x_ref.dtype)
+        labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
         logits = xw_scratch_ref[...]
         if dtype is not None:
             logits = logits.astype(dtype)
@@ -1031,7 +854,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
 
 @partial(
     jax.jit,
-    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision", "use_emulated_one_hot"],
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
 )
 def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
     dout_loss: Float[Array, "B"],
@@ -1044,7 +867,6 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
-    use_emulated_one_hot: bool = False,
     precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Backward Pallas kernel wrapper (combined dx/dw)."""
@@ -1062,7 +884,6 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
             linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
-            use_emulated_one_hot=use_emulated_one_hot,
             precision=precision,
         ),
         grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_stages, num_h_blocks),
@@ -1125,7 +946,7 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
 
 @partial(
     jax.jit,
-    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision", "use_emulated_one_hot"],
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
 )
 def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split(
     dout_loss: Float[Array, "B"],
@@ -1138,7 +959,6 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split(
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
-    use_emulated_one_hot: bool = False,
     precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Backward Pallas kernel wrapper (split dx/dw)."""
@@ -1158,7 +978,6 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split(
             v_dim=v_dim,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
-            use_emulated_one_hot=use_emulated_one_hot,
             precision=precision,
         ),
         grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_stages, num_h_blocks),
@@ -1212,7 +1031,6 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split(
             linear_softmax_cross_entropy_loss_backward_pallas_split_wgrad_kernel,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
-            use_emulated_one_hot=use_emulated_one_hot,
             precision=precision,
         ),
         grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_stages, num_h_blocks),
@@ -1266,7 +1084,7 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split(
 
 @partial(
     jax.jit,
-    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision", "use_emulated_one_hot"],
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
 )
 def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
     dout_loss: Float[Array, "B"],
@@ -1279,7 +1097,6 @@ def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
-    use_emulated_one_hot: bool = False,
     precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     if block_sizes.bwd_strategy == "split":
@@ -1293,7 +1110,6 @@ def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
             block_sizes=block_sizes,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
-            use_emulated_one_hot=use_emulated_one_hot,
             precision=precision,
         )
     return _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
@@ -1306,7 +1122,6 @@ def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
         block_sizes=block_sizes,
         dtype=dtype,
         logit_soft_cap=logit_soft_cap,
-        use_emulated_one_hot=use_emulated_one_hot,
         precision=precision,
     )
 
@@ -1333,16 +1148,6 @@ def _make_custom_vjp(
     )
 
     def _forward(x: jax.Array, labels: jax.Array, w: jax.Array):
-        if _is_tpu_v4():
-            return linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu_v4(
-                x,
-                labels,
-                w,
-                block_sizes=block_sizes,
-                dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
-                precision=precision,
-            )
         return linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
             x,
             labels,
@@ -1367,7 +1172,6 @@ def _make_custom_vjp(
         dout_loss = _zeros_like_if_needed(dout_loss, lse)
         dout_lse = _zeros_like_if_needed(dout_lse, lse)
 
-        use_emulated_one_hot = _is_tpu_v4()
         x_grad, w_grad = linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
             dout_loss,
             dout_lse,
@@ -1378,7 +1182,6 @@ def _make_custom_vjp(
             block_sizes=block_sizes,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
-            use_emulated_one_hot=use_emulated_one_hot,
             precision=precision,
         )
         labels_grad = jnp.zeros_like(labels)

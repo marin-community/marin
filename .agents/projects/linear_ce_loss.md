@@ -184,6 +184,17 @@ RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-centra
   - bwd tokens/s ~0.089M
 - XLA reference path OOMs on bwd for B=65536 due to full BxV temporary (>56GB HBM).
 
+### V5p forced-streaming kernel tune (LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000)
+- Forced the streaming (v4-safe) kernel on v5p via `_use_v4_kernel()` and tuned.
+- B=65536, H=512, V=128256: best `b=1024,h=512,v=1024` (~576k tok/s).
+- B=16384, H=2048, V=128256: best `b=1024,h=256,v=2048` (~160k tok/s).
+- v_block_size=4096 configs still hit scoped vmem OOM (~48.8MiB limit even with increased scoped vmem).
+
+### 2026-02-03: Streaming kernel becomes default
+- Removed the legacy Pallas forward kernel and selection logic; the streaming kernel is now the only path.
+- Backward defaults to the emulated one-hot path.
+- Updated v5p/v5 tuned block sizes to match the new default.
+
 ### V4 head-to-head (fits reference/XLA)
 Shape: B=32768, H=512, V=128256 (batch=32, pos=1024), v4-8 (4 chips)
 - pallas_tpu:
@@ -197,3 +208,8 @@ Shape: B=32768, H=512, V=128256 (batch=32, pos=1024), v4-8 (4 chips)
   - bwd ~0.354M tokens/s (0.0926s)
 Notes:
 - pallas is now faster than reference on forward, and ~2.7× faster than xla on bwd at this shape.
+
+### 2026-02-03: Cleanup follow-up
+- Dropped the `use_emulated_one_hot` flag; backward always uses the emulated one-hot path now.
+- Streaming Pallas kernel is the only forward implementation (no legacy selection logic left in code).
+- Updated `BlockSizes` defaults to `b=1024, h=512, v=1024` to match the v4 tuning baseline.

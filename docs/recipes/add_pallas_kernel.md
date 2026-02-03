@@ -22,6 +22,8 @@ For a new kernel `K`, you should produce:
   - the kernel is jittable and works on representative shapes/dtypes,
 - A **perf harness** that compares speeds for configurable shapes and dtypes as appropriate. Should also be suitable for autotuning.
 - **Autotuned block sizes** for a reasonable range of sizes/parameters, to be specified in request.
+- A **running report** in `.agents/projects/<short-topic>.md` that logs nontrivial iterations, perf numbers, tuning results,
+  and any pitfalls; update it whenever you do meaningful work (append-only is preferred).
 - A **short report** (in the PR description) summarizing:
   - the tested shape/dtype grid,
   - perf results,
