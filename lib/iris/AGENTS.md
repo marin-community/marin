@@ -122,7 +122,13 @@ The autoscaler runs inside the Controller process and manages cloud VMs based on
 
 ```
 src/iris/
-├── cli.py                       # Main CLI (cluster start/stop/status, slice/vm commands)
+├── cli/                         # CLI package (cluster, build, run, debug commands)
+│   ├── main.py                  # Top-level iris group
+│   ├── cluster.py               # Cluster lifecycle, controller, VM ops, dashboard
+│   ├── build.py                 # Image build commands
+│   ├── debug.py                 # Debugging & validation
+│   ├── run.py                   # Command passthrough job submission
+│   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler

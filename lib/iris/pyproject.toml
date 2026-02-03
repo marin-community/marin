@@ -30,7 +30,7 @@ scripts = [
 
 [project.scripts]
 iris = "iris.cli:iris"
-iris-run = "iris.iris_run:main"
+iris-run = "iris.cli.run:run"
 
 [dependency-groups]
 examples = [
