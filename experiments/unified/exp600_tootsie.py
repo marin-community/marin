@@ -133,7 +133,7 @@ decay_ratio = 0.2
 # Tokenizer Configuration
 ################################################################
 
-# Use Llama 3.1 tokenizer from GCS
+# Use Llama 3.1 tokenizer from GCS (no HF access needed)
 LLAMA3_TOKENIZER = "gs://marin-us-central2/tokenizers/llama-3.1-8b"
 
 
@@ -144,10 +144,17 @@ LLAMA3_TOKENIZER = "gs://marin-us-central2/tokenizers/llama-3.1-8b"
 # Get all Nemotron tokenized datasets
 nemotron_tokenized = tokenize_nemotron(tokenizer=LLAMA3_TOKENIZER)
 
-# Only use high-quality data (real + synthetic)
+# Use pre-cached tokenized data (same tokenizer, different config string)
+# These were tokenized with "meta-llama/Meta-Llama-3.1-8B" which is equivalent
+NEMOTRON_PRECACHED_OVERRIDES = {
+    "nemotron_cc/hq_actual": "tokenized/nemotron_cc/hq_actual-5af4cc",
+    "nemotron_cc/hq_synth": "tokenized/nemotron_cc/hq_synth-3525e2",
+}
+
+# Only use high-quality data (real + synthetic) with precached paths
 nemotron_hq_components = {
-    "nemotron_cc/hq_actual": nemotron_tokenized["nemotron_cc/hq_actual"],
-    "nemotron_cc/hq_synth": nemotron_tokenized["nemotron_cc/hq_synth"],
+    key: nemotron_tokenized[key].with_output_path(NEMOTRON_PRECACHED_OVERRIDES[key])
+    for key in ["nemotron_cc/hq_actual", "nemotron_cc/hq_synth"]
 }
 
 # Weights based on dataset sizes (in TiB)
