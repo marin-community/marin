@@ -38,24 +38,28 @@ from iris.rpc.cluster_connect import ControllerServiceClientSync
 @pytest.fixture
 def cluster_config_file(tmp_path: Path) -> Path:
     config_path = tmp_path / "cluster.yaml"
-    config_path.write_text(yaml.dump({
-        "project_id": "test-project",
-        "region": "us-central1",
-        "zone": "us-central1-a",
-        "bootstrap": {
-            "docker_image": "test-image:latest",
-            "worker_port": 10001,
-            "controller_address": "127.0.0.1:10000",
-        },
-        "scale_groups": {
-            "local-cpu": {
-                "accelerator_type": "ACCELERATOR_TYPE_CPU",
-                "min_slices": 1,
-                "max_slices": 1,
-                "zones": ["us-central1-a"],
-            },
-        },
-    }))
+    config_path.write_text(
+        yaml.dump(
+            {
+                "project_id": "test-project",
+                "region": "us-central1",
+                "zone": "us-central1-a",
+                "bootstrap": {
+                    "docker_image": "test-image:latest",
+                    "worker_port": 10001,
+                    "controller_address": "127.0.0.1:10000",
+                },
+                "scale_groups": {
+                    "local-cpu": {
+                        "accelerator_type": "ACCELERATOR_TYPE_CPU",
+                        "min_slices": 1,
+                        "max_slices": 1,
+                        "zones": ["us-central1-a"],
+                    },
+                },
+            }
+        )
+    )
     return config_path
 
 
@@ -89,7 +93,7 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
     with patch.object(ClusterManager, "start", patched_start):
         result = runner.invoke(
             iris,
-            ["cluster", "--config", str(cluster_config_file), "start", "--local"],
+            ["--config", str(cluster_config_file), "cluster", "start", "--local"],
         )
 
     assert result.exit_code == 0, f"CLI failed: {result.output}"

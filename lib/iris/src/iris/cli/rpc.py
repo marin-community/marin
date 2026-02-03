@@ -21,7 +21,6 @@ Connect RPC clients, allowing arbitrary RPC calls via CLI.
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import click
@@ -29,8 +28,6 @@ from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
-from iris.cluster.vm.config import load_config
-from iris.cluster.vm.debug import controller_tunnel
 from iris.rpc import actor_connect, cluster_connect
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
@@ -260,53 +257,6 @@ def _build_options_from_proto(input_type: type[Message]) -> list[click.Option]:
     return options
 
 
-def build_command_from_method(service_name: str, method: MethodInfo) -> click.Command:
-    """Build a Click command for an RPC method."""
-    options: list[click.Parameter] = [
-        click.Option(["--json", "json_str"], default=None, help="Full JSON request body"),
-    ]
-
-    options.extend(_build_options_from_proto(method.input_type))
-
-    @click.pass_context
-    def callback(ctx: click.Context, json_str: str | None, **kwargs):
-        url = ctx.obj.get("url")
-        config_file = ctx.obj.get("config_file")
-
-        if url and config_file:
-            raise ValueError("--url and --config are mutually exclusive")
-        if not url and not config_file:
-            raise ValueError("Either --url or --config is required")
-
-        field_values = {k: v for k, v in kwargs.items() if v is not None}
-
-        def _execute_rpc(rpc_url: str):
-            request = build_request(method, json_str, field_values)
-            response = call_rpc(service_name, method.name, rpc_url, request)
-            click.echo(format_response(response))
-
-        if url:
-            _execute_rpc(url)
-        else:
-            config = load_config(Path(config_file))
-            zone = config.zone
-            project = config.project_id
-            label_prefix = config.label_prefix or "iris"
-
-            if not zone or not project:
-                raise ValueError("Config file must specify zone and project_id")
-
-            with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
-                _execute_rpc(tunnel_url)
-
-    return click.Command(
-        name=to_kebab_case(method.name),
-        callback=callback,
-        params=options,
-        help=f"RPC: {get_method_signature(method)}",
-    )
-
-
 class ServiceCommands(click.MultiCommand):
     """Dynamic Click group for RPC service methods.
 
@@ -316,49 +266,16 @@ class ServiceCommands(click.MultiCommand):
     def __init__(self, service_name: str, **attrs):
         super().__init__(**attrs)
         self.service_name = service_name
-        self.params.append(
-            click.Option(
-                ["--url"],
-                required=False,
-                help="Service URL (e.g., http://localhost:10000)",
-                expose_value=False,
-                is_eager=True,
-                callback=self._store_url,
-            )
-        )
-        self.params.append(
-            click.Option(
-                ["--config"],
-                type=click.Path(exists=True),
-                required=False,
-                help="Cluster config file (automatically establishes SSH tunnel)",
-                expose_value=False,
-                is_eager=True,
-                callback=self._store_config,
-            )
-        )
-
-    @staticmethod
-    def _store_url(ctx: click.Context, _param: click.Parameter, value: str | None) -> str | None:
-        ctx.ensure_object(dict)
-        if value:
-            ctx.obj["url"] = value
-        return value
-
-    @staticmethod
-    def _store_config(ctx: click.Context, _param: click.Parameter, value: str | None) -> str | None:
-        ctx.ensure_object(dict)
-        if value:
-            ctx.obj["config_file"] = value
-        return value
+        self.available_methods = {}
 
     def list_commands(self, _ctx: click.Context) -> list[str]:
         svc = get_service(self.service_name)
         if not svc:
             return []
+        self.available_methods = svc.methods
         return [to_kebab_case(m) for m in sorted(svc.methods.keys())]
 
-    def get_command(self, _ctx: click.Context, name: str) -> click.Command | None:
+    def get_command(self, ctx: click.Context, name: str) -> click.Command | None:
         svc = get_service(self.service_name)
         if not svc:
             return None
@@ -366,13 +283,41 @@ class ServiceCommands(click.MultiCommand):
         method = svc.methods.get(pascal_name)
         if not method:
             return None
-        return build_command_from_method(self.service_name, method)
+
+        # Get controller_url from parent context (established in main.py)
+        controller_url = ctx.obj.get("controller_url")
+        if not controller_url:
+            raise click.ClickException(
+                f"Either --controller-url or --config is required for {self.service_name} RPC commands"
+            )
+
+        return self.build_command_from_method(controller_url, method, name)
+
+    def build_command_from_method(self, controller_url: str, method: MethodInfo, name: str) -> click.Command:
+        """Build a Click command for an RPC method with the controller URL already resolved."""
+        options: list[click.Parameter] = [
+            click.Option(["--json", "json_str"], default=None, help="Full JSON request body"),
+        ]
+
+        options.extend(_build_options_from_proto(method.input_type))
+
+        @click.pass_context
+        def callback(ctx: click.Context, json_str: str | None, **kwargs):
+            field_values = {k: v for k, v in kwargs.items() if v is not None}
+            request = build_request(method, json_str, field_values)
+            response = call_rpc(self.service_name, method.name, controller_url, request)
+            click.echo(format_response(response))
+
+        return click.Command(
+            name=to_kebab_case(method.name),
+            callback=callback,
+            params=options,
+            help=f"RPC: {get_method_signature(method)}",
+        )
 
 
 def register_rpc_commands(iris_group: click.Group) -> None:
     """Register RPC service commands on the top-level iris group."""
-    iris_group.add_command(
-        ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods (use --url or --config)")
-    )
+    iris_group.add_command(ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods"))
     iris_group.add_command(ServiceCommands("worker", name="worker-rpc", help="Worker service RPC methods"))
     iris_group.add_command(ServiceCommands("actor", name="actor-rpc", help="Actor service RPC methods"))

@@ -68,10 +68,15 @@ def _push_to_registries(
         dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
 
         click.echo(f"\nConfiguring {r}-docker.pkg.dev...")
-        subprocess.run(
+        result = subprocess.run(
             ["gcloud", "auth", "configure-docker", f"{r}-docker.pkg.dev", "-q"],
-            check=False,
+            capture_output=True,
+            text=True,
         )
+        if result.returncode != 0:
+            click.echo(
+                f"Warning: Failed to configure docker auth for {r}-docker.pkg.dev: {result.stderr.strip()}", err=True
+            )
 
         click.echo(f"Tagging as {dest_tag}")
         result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)

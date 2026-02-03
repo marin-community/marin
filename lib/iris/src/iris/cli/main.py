@@ -27,8 +27,10 @@ from iris.logging import configure_logging as _configure_logging
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")
+@click.option("--controller-url", help="Controller URL (e.g., http://localhost:10000)")
+@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file")
 @click.pass_context
-def iris(ctx, verbose: bool, show_traceback: bool):
+def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, config_file: str | None):
     """Iris cluster management."""
     ctx.ensure_object(dict)
     ctx.obj["traceback"] = show_traceback
@@ -37,6 +39,42 @@ def iris(ctx, verbose: bool, show_traceback: bool):
         _configure_logging(level=logging.DEBUG)
     else:
         _configure_logging(level=logging.INFO)
+
+    # Validate mutually exclusive options
+    if controller_url and config_file:
+        raise click.UsageError("Cannot specify both --controller-url and --config")
+
+    # Load config if provided
+    if config_file:
+        from iris.cluster.vm.config import load_config
+
+        ctx.obj["config"] = load_config(config_file)
+        ctx.obj["config_file"] = config_file
+
+    # Establish controller URL (either direct or via tunnel)
+    if controller_url:
+        ctx.obj["controller_url"] = controller_url
+    elif config_file:
+        # Establish tunnel from config
+        config = ctx.obj["config"]
+        if config.zone and config.project_id:
+            from iris.cluster.vm.debug import controller_tunnel
+
+            zone = config.zone
+            project = config.project_id
+            label_prefix = config.label_prefix or "iris"
+
+            # Establish tunnel and keep it alive for command duration
+            try:
+                tunnel_cm = controller_tunnel(zone, project, label_prefix=label_prefix)
+                tunnel_url = tunnel_cm.__enter__()
+                ctx.obj["controller_url"] = tunnel_url
+                # Clean up tunnel when context closes
+                ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
+            except Exception:
+                # If tunnel fails (e.g., no controller VM), continue without controller_url
+                # Commands that need it will fail with clear error
+                pass
 
 
 # Register subcommand groups — imported at module level to ensure they are

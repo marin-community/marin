@@ -20,7 +20,6 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import signal
 import threading
-import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -33,7 +32,6 @@ from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import (
     create_autoscaler_from_config,
-    load_config,
 )
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.debug import controller_tunnel, discover_controller_vm
@@ -44,18 +42,9 @@ from iris.time_utils import Timestamp
 
 from iris.cli.debug import debug
 
-
 # =============================================================================
 # Helpers
 # =============================================================================
-
-
-def _handle_error(ctx: click.Context, message: str, error: Exception) -> None:
-    """Print error message, optionally show traceback, then exit."""
-    click.echo(f"{message}: {error}", err=True)
-    if ctx.obj and ctx.obj.get("traceback"):
-        traceback.print_exc()
-    raise SystemExit(1)
 
 
 def _format_timestamp(ms: int) -> str:
@@ -133,7 +122,9 @@ def _extract_image_params(image_tag: str, image_type: Literal["worker", "control
     if not parsed:
         return None
     region, project, image_name, version = parsed
-    return _ImageBuildParams(image_type=image_type, region=region, project=project, image_name=image_name, version=version)
+    return _ImageBuildParams(
+        image_type=image_type, region=region, project=project, image_name=image_name, version=version
+    )
 
 
 def _build_and_push_image(params: _ImageBuildParams) -> None:
@@ -144,13 +135,22 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
     click.echo(f"  Project: {params.project}")
     click.echo()
     _build_image(
-        image_type=params.image_type, tag=params.local_tag, push=False,
-        dockerfile=None, context=None, platform="linux/amd64", region=(), project=params.project,
+        image_type=params.image_type,
+        tag=params.local_tag,
+        push=False,
+        dockerfile=None,
+        context=None,
+        platform="linux/amd64",
+        region=(),
+        project=params.project,
     )
     click.echo()
     _push_to_registries(
-        source_tag=params.local_tag, regions=(params.region,),
-        project=params.project, image_name=params.image_name, version=params.version,
+        source_tag=params.local_tag,
+        regions=(params.region,),
+        project=params.project,
+        image_name=params.image_name,
+        version=params.version,
     )
 
 
@@ -169,16 +169,12 @@ def _build_cluster_images(config) -> None:
 
 
 @click.group()
-@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file")
 @click.pass_context
-def cluster(ctx, config_file: str | None):
+def cluster(ctx):
     """Cluster management commands."""
     parent_obj = ctx.obj or {}
     ctx.ensure_object(dict)
     ctx.obj.update(parent_obj)
-    if config_file:
-        ctx.obj["config"] = load_config(config_file)
-        ctx.obj["config_file"] = config_file
 
 
 # =============================================================================
@@ -197,8 +193,7 @@ def cluster_start(ctx, local: bool):
     """
     config = ctx.obj.get("config")
     if not config:
-        click.echo("Error: --config is required", err=True)
-        raise SystemExit(1)
+        raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
     manager = ClusterManager(config)
@@ -221,8 +216,7 @@ def cluster_stop(ctx):
     """Stop controller and terminate all slices."""
     config = ctx.obj.get("config")
     if not config:
-        click.echo("Error: --config is required", err=True)
-        raise SystemExit(1)
+        raise click.ClickException("--config is required for cluster stop")
     ctrl = create_controller(config)
     click.echo("Stopping controller...")
     try:
@@ -266,8 +260,7 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
     """Rebuild images and reload the controller (faster than full restart)."""
     config = ctx.obj.get("config")
     if not config:
-        click.echo("Error: --config is required", err=True)
-        raise SystemExit(1)
+        raise click.ClickException("--config is required for cluster reload")
     if not no_build:
         _build_cluster_images(config)
     manager = ClusterManager(config)
@@ -294,8 +287,7 @@ def cluster_status_cmd(ctx):
     """Show cluster status including controller and autoscaler."""
     config = ctx.obj.get("config")
     if not config:
-        click.echo("Error: --config is required", err=True)
-        raise SystemExit(1)
+        raise click.ClickException("--config is required for cluster status")
     ctrl = create_controller(config)
     try:
         ctrl_status = ctrl.status()
@@ -332,8 +324,7 @@ def cluster_dashboard(ctx, port: int):
     """
     config = ctx.obj.get("config")
     if not config:
-        click.echo("Error: --config is required", err=True)
-        raise SystemExit(1)
+        raise click.ClickException("--config is required for cluster dashboard")
     zone = config.zone
     project = config.project_id
     label_prefix = config.label_prefix or "iris"
@@ -363,68 +354,15 @@ def cluster_dashboard(ctx, port: int):
 
 
 # =============================================================================
-# Controller subcommands
-# =============================================================================
-
-
-@cluster.group()
-@click.pass_context
-def controller(ctx):
-    """Controller VM management."""
-    pass
-
-
-@controller.command("start")
-@click.pass_context
-def controller_start(ctx):
-    """Boot controller GCE VM and wait for health."""
-    config = ctx.obj["config"]
-    params = _extract_image_params(config.controller_vm.image, "controller") if config.controller_vm.image else None
-    if not params:
-        raise click.ClickException(
-            "Cannot extract controller image params. "
-            f"config.controller_vm.image must be a valid Artifact Registry tag. Got: {config.controller_vm.image or 'None'}"
-        )
-    _build_and_push_image(params)
-    click.echo()
-    ctrl = create_controller(config)
-    click.echo("Starting controller...")
-    try:
-        address = ctrl.start()
-        click.echo(f"Controller started successfully at {address}")
-    except Exception as e:
-        _handle_error(ctx, "Failed to start controller", e)
-
-
-@controller.command("status")
-@click.pass_context
-def controller_status(ctx):
-    """Show controller status."""
-    config = ctx.obj["config"]
-    ctrl = create_controller(config)
-    try:
-        status = ctrl.status()
-        click.echo("\nController Status:")
-        click.echo(f"  Running: {status.running}")
-        click.echo(f"  Healthy: {status.healthy}")
-        click.echo(f"  Address: {status.address or 'N/A'}")
-        if status.vm_name:
-            click.echo(f"  VM Name: {status.vm_name}")
-    except Exception as e:
-        _handle_error(ctx, "Failed to get controller status", e)
-
-
-# =============================================================================
 # VM subcommands (always via controller RPC)
 # =============================================================================
 
 
 @cluster.group()
-@click.option("--controller-url", required=True, help="Controller URL (e.g., http://localhost:10000)")
 @click.pass_context
-def vm(ctx, controller_url: str):
+def vm(ctx):
     """VM management commands (via controller RPC)."""
-    ctx.obj["controller_url"] = controller_url
+    pass
 
 
 @vm.command("status")
@@ -432,7 +370,9 @@ def vm(ctx, controller_url: str):
 @click.pass_context
 def vm_status(ctx, scale_group):
     """Show VM and slice status from the controller."""
-    controller_url = ctx.obj["controller_url"]
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
+        raise click.ClickException("Either --controller-url or --config is required")
     try:
         as_status = _get_autoscaler_status(controller_url)
     except Exception as e:
@@ -447,7 +387,8 @@ def vm_status(ctx, scale_group):
         counts = compute_slice_state_counts(group.slices)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
-        click.echo(f"  Accelerator: {format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)}")
+        accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
+        click.echo(f"  Accelerator: {accel_display}")
         click.echo(f"  Slices: {counts.get('ready', 0)}/{total} ready")
         click.echo(f"    Booting: {counts.get('booting', 0)}")
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
@@ -474,7 +415,9 @@ def vm_status(ctx, scale_group):
 @click.pass_context
 def vm_logs(ctx, vm_id, tail):
     """Show VM initialization logs."""
-    controller_url = ctx.obj["controller_url"]
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
+        raise click.ClickException("Either --controller-url or --config is required")
     try:
         log_content, returned_vm_id, state = _get_vm_logs(controller_url, vm_id, tail)
     except ConnectError as e:
@@ -519,7 +462,9 @@ def _validate_cluster_health(config) -> None:
             return 42
 
         click.echo("  Submitting validation job...")
-        job = client.submit(entrypoint=Entrypoint.from_callable(_validate_hello), name="reload-validate", resources=ResourceSpec(cpu=1))
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(_validate_hello), name="reload-validate", resources=ResourceSpec(cpu=1)
+        )
         click.echo(f"  Job submitted: {job.job_id}")
         click.echo("  Waiting for job (workers may need to scale up)...")
         status = job.wait(timeout=600, raise_on_failure=True)

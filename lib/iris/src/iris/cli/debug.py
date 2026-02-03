@@ -32,11 +32,11 @@ from google.protobuf import json_format
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
-from iris.cluster.vm.debug import controller_tunnel, discover_controller_vm
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import format_accelerator_display
 
+# Constants
 CONTROLLER_CONTAINER_NAME = "iris-controller"
 DEFAULT_CONTROLLER_PORT = 10000
 DEFAULT_TPU_TYPE = "v5litepod-16"
@@ -324,9 +324,7 @@ def _list_tpu_slices(zone: str, project: str) -> list[str]:
 
 
 def _delete_vm(name: str, zone: str, project: str) -> bool:
-    result = _run_gcloud(
-        ["compute", "instances", "delete", name, f"--project={project}", f"--zone={zone}", "--quiet"]
-    )
+    result = _run_gcloud(["compute", "instances", "delete", name, f"--project={project}", f"--zone={zone}", "--quiet"])
     if result.returncode != 0:
         error = result.stderr.strip()
         if "not found" in error.lower():
@@ -418,10 +416,19 @@ def ssh_status(ctx, tail: int):
     click.echo("=== Docker Containers ===")
     subprocess.run(
         [
-            "gcloud", "compute", "ssh", vm_name,
-            f"--project={project}", f"--zone={zone}",
-            "--", "sudo", "docker", "ps", "-a",
-            "--format", "table {{.Names}}\t{{.Status}}\t{{.Ports}}",
+            "gcloud",
+            "compute",
+            "ssh",
+            vm_name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--",
+            "sudo",
+            "docker",
+            "ps",
+            "-a",
+            "--format",
+            "table {{.Names}}\t{{.Status}}\t{{.Ports}}",
         ]
     )
 
@@ -429,10 +436,19 @@ def ssh_status(ctx, tail: int):
     click.echo(f"=== Container Logs (last {tail} lines) ===")
     subprocess.run(
         [
-            "gcloud", "compute", "ssh", vm_name,
-            f"--project={project}", f"--zone={zone}",
-            "--", "sudo", "docker", "logs", CONTROLLER_CONTAINER_NAME,
-            "--tail", str(tail),
+            "gcloud",
+            "compute",
+            "ssh",
+            vm_name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--",
+            "sudo",
+            "docker",
+            "logs",
+            CONTROLLER_CONTAINER_NAME,
+            "--tail",
+            str(tail),
         ]
     )
 
@@ -440,35 +456,37 @@ def ssh_status(ctx, tail: int):
 @debug.command()
 @click.pass_context
 def health(ctx):
-    """Check controller health endpoint (auto-establishes tunnel)."""
-    zone, project = _get_zone_project(ctx)
+    """Check controller health endpoint."""
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
+        raise click.ClickException("Either --controller-url or --config is required")
 
-    with controller_tunnel(zone, project) as url:
-        client = ControllerServiceClientSync(url)
-        try:
-            client.list_jobs(cluster_pb2.Controller.ListJobsRequest())
-            click.echo("Health check: OK")
-        except Exception as e:
-            click.echo(f"Health check failed: {e}", err=True)
-            raise SystemExit(1) from e
+    client = ControllerServiceClientSync(controller_url)
+    try:
+        client.list_jobs(cluster_pb2.Controller.ListJobsRequest())
+        click.echo("Health check: OK")
+    except Exception as e:
+        click.echo(f"Health check failed: {e}", err=True)
+        raise SystemExit(1) from e
 
 
 @debug.command("autoscaler-status")
 @click.option("--json-output", is_flag=True, help="Output as JSON")
 @click.pass_context
 def autoscaler_status(ctx, json_output: bool):
-    """Get autoscaler status via RPC (auto-establishes tunnel)."""
-    zone, project = _get_zone_project(ctx)
+    """Get autoscaler status via RPC."""
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
+        raise click.ClickException("Either --controller-url or --config is required")
 
-    with controller_tunnel(zone, project) as url:
-        client = ControllerServiceClientSync(url)
-        request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
+    client = ControllerServiceClientSync(controller_url)
+    request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
 
-        try:
-            response = client.get_autoscaler_status(request)
-        except Exception as e:
-            click.echo(f"RPC failed: {e}", err=True)
-            raise SystemExit(1) from e
+    try:
+        response = client.get_autoscaler_status(request)
+    except Exception as e:
+        click.echo(f"RPC failed: {e}", err=True)
+        raise SystemExit(1) from e
 
         if json_output:
             output = json_format.MessageToJson(response, preserving_proto_field_name=True)
@@ -513,18 +531,19 @@ def autoscaler_status(ctx, json_output: bool):
 @click.option("--json-output", is_flag=True, help="Output as JSON")
 @click.pass_context
 def list_workers(ctx, json_output: bool):
-    """List registered workers (auto-establishes tunnel)."""
-    zone, project = _get_zone_project(ctx)
+    """List registered workers."""
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
+        raise click.ClickException("Either --controller-url or --config is required")
 
-    with controller_tunnel(zone, project) as url:
-        client = ControllerServiceClientSync(url)
-        request = cluster_pb2.Controller.ListWorkersRequest()
+    client = ControllerServiceClientSync(controller_url)
+    request = cluster_pb2.Controller.ListWorkersRequest()
 
-        try:
-            response = client.list_workers(request)
-        except Exception as e:
-            click.echo(f"RPC failed: {e}", err=True)
-            raise SystemExit(1) from e
+    try:
+        response = client.list_workers(request)
+    except Exception as e:
+        click.echo(f"RPC failed: {e}", err=True)
+        raise SystemExit(1) from e
 
         if json_output:
             output = json_format.MessageToJson(response, preserving_proto_field_name=True)
@@ -579,9 +598,14 @@ def logs(ctx, tail: int, follow: bool):
 
     subprocess.run(
         [
-            "gcloud", "compute", "ssh", vm_name,
-            f"--project={project}", f"--zone={zone}",
-            "--", *docker_args,
+            "gcloud",
+            "compute",
+            "ssh",
+            vm_name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--",
+            *docker_args,
         ]
     )
 
@@ -602,10 +626,20 @@ def bootstrap_logs(ctx, tail: int):
 
     subprocess.run(
         [
-            "gcloud", "compute", "ssh", vm_name,
-            f"--project={project}", f"--zone={zone}",
-            "--", "sudo", "journalctl", "-u", "google-startup-scripts.service",
-            "-n", str(tail), "--no-pager",
+            "gcloud",
+            "compute",
+            "ssh",
+            vm_name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--",
+            "sudo",
+            "journalctl",
+            "-u",
+            "google-startup-scripts.service",
+            "-n",
+            str(tail),
+            "--no-pager",
         ]
     )
 
@@ -614,18 +648,19 @@ def bootstrap_logs(ctx, tail: int):
 @click.option("--json-output", is_flag=True, help="Output as JSON")
 @click.pass_context
 def list_jobs(ctx, json_output: bool):
-    """List all jobs (auto-establishes tunnel)."""
-    zone, project = _get_zone_project(ctx)
+    """List all jobs."""
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
+        raise click.ClickException("Either --controller-url or --config is required")
 
-    with controller_tunnel(zone, project) as url:
-        client = ControllerServiceClientSync(url)
-        request = cluster_pb2.Controller.ListJobsRequest()
+    client = ControllerServiceClientSync(controller_url)
+    request = cluster_pb2.Controller.ListJobsRequest()
 
-        try:
-            response = client.list_jobs(request)
-        except Exception as e:
-            click.echo(f"RPC failed: {e}", err=True)
-            raise SystemExit(1) from e
+    try:
+        response = client.list_jobs(request)
+    except Exception as e:
+        click.echo(f"RPC failed: {e}", err=True)
+        raise SystemExit(1) from e
 
         if json_output:
             output = json_format.MessageToJson(response, preserving_proto_field_name=True)
@@ -656,83 +691,79 @@ def list_jobs(ctx, json_output: bool):
 @click.option("--max-entries", default=5000, help="Maximum log entries to fetch")
 @click.pass_context
 def show_task_logs(ctx, job_id: str, category: str | None, max_entries: int):
-    """Show detailed task logs for a job (auto-establishes tunnel)."""
-    zone, project = _get_zone_project(ctx)
+    """Show detailed task logs for a job."""
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
+        raise click.ClickException("Either --controller-url or --config is required")
 
-    with controller_tunnel(zone, project) as url:
-        client = ControllerServiceClientSync(url)
+    client = ControllerServiceClientSync(controller_url)
 
-        try:
-            job_resp = client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id))
-        except Exception as e:
-            click.echo(f"Failed to get job status: {e}", err=True)
-            raise SystemExit(1) from e
+    try:
+        job_resp = client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id))
+    except Exception as e:
+        click.echo(f"Failed to get job status: {e}", err=True)
+        raise SystemExit(1) from e
 
-        job = job_resp.job
-        click.echo(f"Job: {job.job_id}")
-        click.echo(f"State: {cluster_pb2.JobState.Name(job.state)}")
-        click.echo(f"Tasks: {len(job.tasks)}")
-        if job.error:
-            click.echo(f"Error: {job.error}")
+    job = job_resp.job
+    click.echo(f"Job: {job.job_id}")
+    click.echo(f"State: {cluster_pb2.JobState.Name(job.state)}")
+    click.echo(f"Tasks: {len(job.tasks)}")
+    if job.error:
+        click.echo(f"Error: {job.error}")
+    click.echo()
+
+    for task in job.tasks:
+        click.echo(f"=== Task: {task.task_id} (index {task.task_index}) ===")
+        click.echo(f"State: {cluster_pb2.TaskState.Name(task.state)}")
+        if task.worker_id:
+            click.echo(f"Worker: {task.worker_id}")
+        if task.error:
+            click.echo(f"Error: {task.error}")
         click.echo()
 
-        for task in job.tasks:
-            click.echo(f"=== Task: {task.task_id} (index {task.task_index}) ===")
-            click.echo(f"State: {cluster_pb2.TaskState.Name(task.state)}")
-            if task.worker_id:
-                click.echo(f"Worker: {task.worker_id}")
-            if task.error:
-                click.echo(f"Error: {task.error}")
-            click.echo()
-
-            try:
-                logs_resp = client.get_task_logs(
-                    cluster_pb2.Controller.GetTaskLogsRequest(
-                        job_id=job.job_id, task_index=task.task_index, start_ms=0, limit=max_entries
-                    )
+        try:
+            logs_resp = client.get_task_logs(
+                cluster_pb2.Controller.GetTaskLogsRequest(
+                    job_id=job.job_id, task_index=task.task_index, start_ms=0, limit=max_entries
                 )
-            except Exception as e:
-                click.echo(f"Failed to fetch logs for task {task.task_index}: {e}", err=True)
-                continue
+            )
+        except Exception as e:
+            click.echo(f"Failed to fetch logs for task {task.task_index}: {e}", err=True)
+            continue
 
-            log_entries = logs_resp.logs
-            if category:
-                log_entries = [log for log in log_entries if category.lower() in log.source.lower()]
+        log_entries = logs_resp.logs
+        if category:
+            log_entries = [log for log in log_entries if category.lower() in log.source.lower()]
 
-            if not log_entries:
-                click.echo(f"No logs found{f' for category {category}' if category else ''}.")
-            else:
-                click.echo(f"Logs ({len(log_entries)} entries):")
-                for log in log_entries:
-                    click.echo(f"[{log.source}] {log.data}")
-            click.echo()
+        if not log_entries:
+            click.echo(f"No logs found{f' for category {category}' if category else ''}.")
+        else:
+            click.echo(f"Logs ({len(log_entries)} entries):")
+            for log in log_entries:
+                click.echo(f"[{log.source}] {log.data}")
+        click.echo()
 
 
 @debug.command()
-@click.option("--controller-url", help="Direct controller URL (skips SSH tunnel)")
 @click.option("--workspace", type=click.Path(exists=True, path_type=Path), help="Workspace directory")
 @click.option("--tpu-type", default=DEFAULT_TPU_TYPE, help="TPU type for validation jobs")
 @click.pass_context
-def validate(ctx, controller_url: str | None, workspace: Path | None, tpu_type: str):
+def validate(ctx, workspace: Path | None, tpu_type: str):
     """Run validation jobs against an Iris cluster.
 
     Submits TPU test jobs to verify the cluster is functioning correctly.
     """
-    zone, project = _get_zone_project(ctx)
+    controller_url = ctx.obj.get("controller_url")
+    if not controller_url:
+        raise click.ClickException("Either --controller-url or --config is required")
+
     iris_root = Path(__file__).resolve().parents[2]
     ws = workspace or iris_root
 
-    if controller_url:
-        click.echo(f"Connecting to controller at {controller_url}")
-        click.echo(f"Using workspace: {ws}")
-        click.echo(f"TPU type: {tpu_type}")
-        _run_validation(controller_url, ws, tpu_type)
-    else:
-        click.echo(f"Looking for controller VM in {zone}...")
-        with controller_tunnel(zone, project) as url:
-            click.echo(f"Using workspace: {ws}")
-            click.echo(f"TPU type: {tpu_type}")
-            _run_validation(url, ws, tpu_type)
+    click.echo(f"Connecting to controller at {controller_url}")
+    click.echo(f"Using workspace: {ws}")
+    click.echo(f"TPU type: {tpu_type}")
+    _run_validation(controller_url, ws, tpu_type)
 
 
 @debug.command()
