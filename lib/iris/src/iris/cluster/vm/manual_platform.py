@@ -373,3 +373,7 @@ echo "[iris-init] Using static controller at $CONTROLLER_ADDRESS"
     def total_host_count(self) -> int:
         """Total number of hosts in the pool."""
         return len(self._hosts)
+
+    def stop(self) -> None:
+        """No-op: ManualVmManager has no background threads to stop."""
+        pass

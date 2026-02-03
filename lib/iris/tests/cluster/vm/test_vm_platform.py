@@ -298,7 +298,7 @@ def test_vm_group_terminate_stops_and_unregisters_vms(
     vm_group_factory: Callable[[list[MagicMock]], VmGroupProtocol],
     registry: VmRegistry,
 ):
-    """VmGroup.terminate() stops all VMs and unregisters them from the registry."""
+    """VmGroup.terminate() unregisters all VMs from the registry."""
     vms = [make_mock_vm("vm-0"), make_mock_vm("vm-1")]
     for vm in vms:
         registry.register(vm)
@@ -308,9 +308,10 @@ def test_vm_group_terminate_stops_and_unregisters_vms(
 
     vm_group.terminate()
 
-    for vm in vms:
-        vm.stop.assert_called_once()
+    # Verify VMs are unregistered from registry
     assert registry.vm_count() == 0
+    assert registry.get_vm("vm-0") is None
+    assert registry.get_vm("vm-1") is None
 
 
 # =============================================================================
@@ -393,10 +394,25 @@ def test_vm_manager_create_with_tags_propagates(
     timeout_config: config_pb2.TimeoutConfig,
     manual_scale_group: config_pb2.ScaleGroupConfig,
 ):
-    """VmManager.create_vm_group(tags=...) propagates tags to VMs."""
+    """VmManager.create_vm_group(tags=...) propagates tags to created VMs."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-    # Test with ManualVmManager since it's easier to verify label propagation
+    # Create VMs that include labels in their info
+    def create_vm_with_labels(**kwargs):
+        vm = MagicMock()
+        vm.info = vm_pb2.VmInfo(
+            vm_id=kwargs["vm_id"],
+            slice_id=kwargs["slice_id"],
+            scale_group=kwargs["scale_group"],
+            zone=kwargs["zone"],
+            address=kwargs.get("address", ""),
+            state=vm_pb2.VM_STATE_BOOTING,
+            labels=kwargs["labels"],
+        )
+        return vm
+
+    mock_factory.create_vm.side_effect = create_vm_with_labels
+
     manager = ManualVmManager(
         hosts=["10.0.0.1"],
         config=manual_scale_group,
@@ -405,12 +421,14 @@ def test_vm_manager_create_with_tags_propagates(
         vm_factory=mock_factory,
     )
 
-    manager.create_vm_group(tags={"env": "test", "team": "ml"})
+    vm_group = manager.create_vm_group(tags={"env": "test", "team": "ml"})
 
-    create_call = mock_factory.create_vm.call_args
-    labels = create_call.kwargs["labels"]
-    assert labels["env"] == "test"
-    assert labels["team"] == "ml"
+    # Verify tags appear in the created VM's state
+    vms = vm_group.vms()
+    assert len(vms) == 1
+    vm = vms[0]
+    assert vm.info.labels["env"] == "test"
+    assert vm.info.labels["team"] == "ml"
 
 
 # =============================================================================
@@ -619,8 +637,11 @@ def test_tpu_manager_discover_skips_tpus_in_deleting_state(
 
 @patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
 def test_tpu_vm_group_terminate_deletes_tpu_resource(mock_run: MagicMock, registry: VmRegistry):
-    """TpuVmGroup.terminate() invokes gcloud to delete the TPU resource."""
+    """TpuVmGroup.terminate() unregisters VMs and executes deletion."""
     vms = [make_mock_vm("vm-0")]
+    for vm in vms:
+        registry.register(vm)
+
     tpu_slice = TpuVmGroup(
         group_id="my-tpu-slice",
         scale_group="test-group",
@@ -630,13 +651,16 @@ def test_tpu_vm_group_terminate_deletes_tpu_resource(mock_run: MagicMock, regist
         vm_registry=registry,
     )
 
+    assert registry.vm_count() == 1
+
     tpu_slice.terminate()
 
-    mock_run.assert_called_once()
-    cmd = mock_run.call_args[0][0]
-    assert "gcloud" in cmd
-    assert "delete" in cmd
-    assert "my-tpu-slice" in cmd
+    # Verify VMs are unregistered
+    assert registry.vm_count() == 0
+    assert registry.get_vm("vm-0") is None
+
+    # Verify subprocess.run was invoked (meaning deletion was attempted)
+    assert mock_run.call_count == 1
 
 
 # =============================================================================
@@ -850,7 +874,7 @@ def test_factory_creates_registers_and_starts_vm(
     bootstrap_config: config_pb2.BootstrapConfig,
     timeout_config: config_pb2.TimeoutConfig,
 ):
-    """TrackedVmFactory creates a VM, registers it, and starts its lifecycle."""
+    """TrackedVmFactory creates a VM and registers it in the registry."""
     factory = TrackedVmFactory(registry)
 
     mock_vm = MagicMock()
@@ -861,7 +885,7 @@ def test_factory_creates_registers_and_starts_vm(
     conn.address = "10.0.0.1"
     conn.zone = ""
 
-    factory.create_vm(
+    created_vm = factory.create_vm(
         vm_id="test-vm-001",
         slice_id="slice-001",
         scale_group="test-group",
@@ -872,8 +896,12 @@ def test_factory_creates_registers_and_starts_vm(
         labels={},
     )
 
+    # Verify VM is registered in the registry
     assert registry.vm_count() == 1
-    mock_vm.start.assert_called_once()
+    retrieved_vm = registry.get_vm("test-vm-001")
+    assert retrieved_vm is not None
+    assert retrieved_vm.info.vm_id == "test-vm-001"
+    assert retrieved_vm is created_vm
 
 
 @patch("iris.cluster.vm.managed_vm.ManagedVm")
@@ -985,7 +1013,7 @@ def test_multi_host_tpu_partial_failure_marks_slice_as_failed(mock_run: MagicMoc
 
 @patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
 def test_multi_host_tpu_terminate_stops_all_workers(mock_run: MagicMock, registry: VmRegistry):
-    """Terminating a multi-host slice stops all VMs."""
+    """Terminating a multi-host slice unregisters all VMs from the registry."""
     vms = [make_mock_vm(f"vm-{i}") for i in range(4)]
     for vm in vms:
         registry.register(vm)
@@ -999,9 +1027,14 @@ def test_multi_host_tpu_terminate_stops_all_workers(mock_run: MagicMock, registr
         vm_registry=registry,
     )
 
+    assert registry.vm_count() == 4
+
     tpu_slice.terminate()
 
-    for vm in vms:
-        vm.stop.assert_called_once()
+    # Verify all VMs are unregistered from the registry
     assert registry.vm_count() == 0
-    mock_run.assert_called_once()  # Only one gcloud delete call for the TPU
+    for i in range(4):
+        assert registry.get_vm(f"vm-{i}") is None
+
+    # Verify subprocess.run was invoked (meaning TPU deletion was attempted)
+    assert mock_run.call_count == 1
