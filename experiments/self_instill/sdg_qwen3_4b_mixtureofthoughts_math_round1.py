@@ -55,6 +55,9 @@ from experiments.self_instill.prompts import REASONING_INSTRUCTION
 # Model HuggingFace ID (using HF Hub directly instead of local gcsfuse path)
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 
+# TPU resource type for inference steps
+RESOURCE_TYPE = "v6e-8"
+
 # Flag to indicate this is an instruction-tuned model
 IS_INSTRUCTION_TUNED = True
 
@@ -265,7 +268,7 @@ generate_with_selection = ExecutorStep(
         output_filetype_override="parquet",
 
         # Hardware
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
 
         # Output column
         generated_text_column_name="generated_text",
@@ -509,7 +512,7 @@ cycle_gen_questions = ExecutorStep(
         output_filetype_override="parquet",
 
         # Hardware
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
 
         # Output column - save all 3 inferred questions as list
         generated_text_column_name="inferred_questions",
@@ -657,7 +660,7 @@ cycle_compare = ExecutorStep(
         output_filetype_override="parquet",
 
         # Hardware
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
 
         # Output column - save as list for unanimous voting
         generated_text_column_name="cycle_results",
@@ -718,7 +721,7 @@ factual_check = ExecutorStep(
         output_filetype_override="parquet",
 
         # Hardware
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
 
         # Output column - save as list for unanimous voting
         generated_text_column_name="factual_results",
@@ -779,7 +782,7 @@ correctness_check = ExecutorStep(
         output_filetype_override="parquet",
 
         # Hardware
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
 
         # Output column - save as list for unanimous voting
         generated_text_column_name="correctness_results",
