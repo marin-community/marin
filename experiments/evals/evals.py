@@ -378,7 +378,7 @@ def default_key_evals(
 
 def evaluate_harbor(
     model_name: str,
-    model_path: str,
+    model_path: str | None,
     dataset: str,
     version: str = "1.0",
     max_eval_instances: int | None = None,

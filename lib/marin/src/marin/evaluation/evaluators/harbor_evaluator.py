@@ -237,7 +237,7 @@ class HarborEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
-            extras=("harbor", "tpu"),
+            extras=("harbor", "tpu", "vllm"),
             pip_packages=pip_packages,
             env_vars=env_vars,
         )
@@ -294,7 +294,7 @@ class HarborEvaluator(Evaluator):
     ) -> dict:
         """Run Harbor trials using programmatic API."""
         from harbor.job import Job
-        from harbor.models.job.config import JobConfig, RegistryDatasetConfig
+        from harbor.models.job.config import JobConfig, LocalDatasetConfig, RegistryDatasetConfig
         from harbor.models.trial.config import AgentConfig, EnvironmentConfig
         from harbor.models.orchestrator_type import OrchestratorType
         from harbor.models.registry import RemoteRegistryInfo
@@ -315,18 +315,60 @@ class HarborEvaluator(Evaluator):
                 except ValueError:
                     logger.warning(f"Unknown environment type: {env_type}, falling back to docker")
 
+            dataset_config: LocalDatasetConfig | RegistryDatasetConfig
+            dataset_path = Path(dataset).expanduser()
+            if (
+                dataset.startswith("hf://")
+                or dataset.startswith("hf:")
+                or (version == "hf" and "/" in dataset and not dataset_path.exists())
+            ):
+                if dataset.startswith("hf://"):
+                    hf_repo_id = dataset[len("hf://") :]
+                elif dataset.startswith("hf:"):
+                    hf_repo_id = dataset[len("hf:") :]
+                else:
+                    hf_repo_id = dataset
+
+                from huggingface_hub import snapshot_download
+
+                hf_cache_dir = Path(tmpdir) / "hf_cache"
+                hf_local_dir = Path(tmpdir) / "hf_dataset"
+                hf_local_dir.mkdir(parents=True, exist_ok=True)
+                dataset_root = snapshot_download(
+                    repo_id=hf_repo_id,
+                    repo_type="dataset",
+                    local_dir=str(hf_local_dir),
+                    cache_dir=str(hf_cache_dir),
+                    token=os.environ.get("HF_TOKEN", False),
+                )
+                gitattributes_path = Path(dataset_root) / ".gitattributes"
+                if gitattributes_path.exists():
+                    gitattributes_path.unlink()
+
+                dataset_config = LocalDatasetConfig(
+                    path=Path(dataset_root),
+                    n_tasks=task_limit,
+                )
+            elif dataset_path.exists():
+                if not dataset_path.is_dir():
+                    raise ValueError(f"Harbor dataset path must be a directory, got: {dataset_path}")
+                dataset_config = LocalDatasetConfig(
+                    path=dataset_path,
+                    n_tasks=task_limit,
+                )
+            else:
+                dataset_config = RegistryDatasetConfig(
+                    registry=RemoteRegistryInfo(),
+                    name=dataset,
+                    version=version,
+                    n_tasks=task_limit,
+                )
+
             # Create Harbor JobConfig
             config = JobConfig(
-                job_name=f"eval_{dataset}_{int(time.time())}",
+                job_name=f"eval_{int(time.time())}",
                 jobs_dir=output_dir,
-                datasets=[
-                    RegistryDatasetConfig(
-                        registry=RemoteRegistryInfo(),
-                        name=dataset,
-                        version=version,
-                        n_tasks=task_limit,
-                    )
-                ],
+                datasets=[dataset_config],
                 agents=[
                     AgentConfig(
                         name=agent,
