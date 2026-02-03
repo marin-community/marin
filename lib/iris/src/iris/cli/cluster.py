@@ -29,7 +29,8 @@ from connectrpc.errors import ConnectError
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import make_local_config
 from iris.cluster.vm.platform import create_platform
 from iris.cluster.vm.controller_vm import create_controller_vm
 from iris.cluster.vm.debug import controller_tunnel, discover_controller_vm

@@ -29,37 +29,8 @@ from iris.cluster.vm.controller_vm import ControllerProtocol, create_controller_
 from iris.cluster.vm.debug import controller_tunnel
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
-
-
-def make_local_config(
-    base_config: config_pb2.IrisClusterConfig,
-) -> config_pb2.IrisClusterConfig:
-    """Override a GCP/manual config to run locally.
-
-    Replaces the controller oneof with LocalControllerConfig and sets every
-    scale group's vm_type to local. Everything else
-    (accelerator_type, accelerator_variant, min/max_slices) is preserved.
-    """
-    config = config_pb2.IrisClusterConfig()
-    config.CopyFrom(base_config)
-    config.controller.ClearField("controller")
-    config.controller.local.port = 0  # auto-assign
-    config.controller.bundle_prefix = ""  # LocalController will set temp path
-    config.platform.ClearField("platform")
-    config.platform.local.SetInParent()
-    for sg in config.scale_groups.values():
-        sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
-    # Local mode needs fast autoscaler evaluation for tests
-    if not config.autoscaler.HasField("evaluation_interval"):
-        config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
-    if not config.autoscaler.HasField("scale_up_delay"):
-        config.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
-    if not config.autoscaler.HasField("scale_down_delay"):
-        config.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
-    return config
 
 
 class ClusterManager:

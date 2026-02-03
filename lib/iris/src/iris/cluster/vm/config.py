@@ -34,10 +34,10 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from iris.cluster.vm.gcp_tpu_platform import TpuVmManager
 from iris.cluster.vm.managed_vm import SshConfig, TrackedVmFactory, VmRegistry
 from iris.cluster.vm.manual_platform import ManualVmManager
-from iris.cluster.vm.platform import create_platform
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmManagerProtocol
-from iris.rpc import config_pb2, time_pb2
+from iris.managed_thread import ThreadContainer
+from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,30 @@ DEFAULT_CONFIG = config_pb2.DefaultsConfig(
         requesting_timeout=Duration.from_seconds(120).to_proto(),
         scale_up_delay=Duration.from_seconds(60).to_proto(),
         scale_down_delay=Duration.from_seconds(300).to_proto(),
+    ),
+    bootstrap=config_pb2.BootstrapConfig(
+        worker_port=10001,
+        cache_dir="/var/cache/iris",
+    ),
+)
+
+# Local mode defaults - faster timings for testing
+LOCAL_DEFAULT_CONFIG = config_pb2.DefaultsConfig(
+    timeouts=config_pb2.TimeoutConfig(
+        boot_timeout=Duration.from_seconds(300).to_proto(),
+        init_timeout=Duration.from_seconds(600).to_proto(),
+        ssh_poll_interval=Duration.from_seconds(5).to_proto(),
+    ),
+    ssh=config_pb2.SshConfig(
+        user="root",
+        port=22,
+        connect_timeout=Duration.from_seconds(30).to_proto(),
+    ),
+    autoscaler=config_pb2.AutoscalerDefaults(
+        evaluation_interval=Duration.from_seconds(0.5).to_proto(),  # 0.5s for fast testing
+        requesting_timeout=Duration.from_seconds(120).to_proto(),
+        scale_up_delay=Duration.from_seconds(1).to_proto(),  # 1s for fast testing
+        scale_down_delay=Duration.from_seconds(300).to_proto(),  # 5min (same as production)
     ),
     bootstrap=config_pb2.BootstrapConfig(
         worker_port=10001,
@@ -242,6 +266,55 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
             group.priority = 100
 
     return merged
+
+
+def make_local_config(
+    base_config: config_pb2.IrisClusterConfig,
+) -> config_pb2.IrisClusterConfig:
+    """Transform a GCP/manual config for local testing mode.
+
+    This helper transforms any config to run locally:
+    - Sets platform to local
+    - Sets controller to local (in-process)
+    - Sets all scale groups to local VMs
+    - Applies LOCAL_DEFAULT_CONFIG for fast testing timings
+
+    Args:
+        base_config: Base configuration (should already have apply_defaults() called)
+
+    Returns:
+        Transformed config ready for local testing
+    """
+    config = config_pb2.IrisClusterConfig()
+    config.CopyFrom(base_config)
+
+    # Transform platform to local
+    config.platform.ClearField("platform")
+    config.platform.local.SetInParent()
+
+    # Transform controller to local
+    config.controller.ClearField("controller")
+    config.controller.local.port = 0  # auto-assign
+    config.controller.bundle_prefix = ""  # LocalController will set temp path
+
+    # Transform all scale groups to local VMs
+    for sg in config.scale_groups.values():
+        sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
+
+    # Apply local defaults (fast timings for testing)
+    # Unconditionally use fast timings for local mode - this overrides any production timings
+    # from DEFAULT_CONFIG that may have been applied during load_config()
+    if not config.HasField("defaults"):
+        config.defaults.CopyFrom(config_pb2.DefaultsConfig())
+
+    # Set fast autoscaler timings for local testing
+    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
+    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
+    # Keep scale_down_delay at 5min (same as production)
+    if not config.defaults.autoscaler.HasField("scale_down_delay"):
+        config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_seconds(300).to_proto())
+
+    return config
 
 
 def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:

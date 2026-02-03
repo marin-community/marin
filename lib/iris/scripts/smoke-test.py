@@ -59,8 +59,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
-from iris.cluster.vm.config import load_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import load_config, make_local_config
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
     controller_tunnel,

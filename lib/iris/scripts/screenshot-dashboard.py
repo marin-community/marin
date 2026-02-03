@@ -43,8 +43,8 @@ from iris.cluster.types import (
     EnvironmentSpec,
     ResourceSpec,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
-from iris.cluster.vm.config import load_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import load_config, make_local_config
 from iris.rpc import cluster_pb2
 
 IRIS_ROOT = Path(__file__).parent.parent
