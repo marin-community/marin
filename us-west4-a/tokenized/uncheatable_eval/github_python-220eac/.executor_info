@@ -1,6 +1,6 @@
 {
   "name": "tokenized/uncheatable_eval/github_python",
-  "fn_name": "<function tokenize at 0x7feb741982c0>",
+  "fn_name": "<function tokenize at 0x7f98be5d84a0>",
   "config": {
     "train_paths": [],
     "validation_paths": [

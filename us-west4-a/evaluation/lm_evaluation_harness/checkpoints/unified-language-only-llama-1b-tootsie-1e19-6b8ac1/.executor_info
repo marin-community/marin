@@ -1,6 +1,6 @@
 {
   "name": "evaluation/lm_evaluation_harness/checkpoints/unified-language-only-llama-1b-tootsie-1e19",
-  "fn_name": "<function evaluate at 0x7feb728be2a0>",
+  "fn_name": "<function evaluate at 0x7f98bcd2a480>",
   "config": {
     "evaluator": "lm_evaluation_harness",
     "resource_config": {

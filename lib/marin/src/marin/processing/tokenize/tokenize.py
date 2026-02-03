@@ -26,7 +26,10 @@ import os
 import re
 from collections.abc import Iterator, Sequence
 
+import tempfile
+
 import draccus
+import fsspec
 import jax
 import transformers
 from datasets import load_dataset_builder
@@ -246,12 +249,31 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
         yield current_group
 
 
+def _load_tokenizer(tokenizer_path: str) -> transformers.PreTrainedTokenizer:
+    """Load tokenizer from HuggingFace hub or GCS path."""
+    if tokenizer_path.startswith("gs://"):
+        # Download from GCS to a temporary directory
+        # Use mkdtemp instead of TemporaryDirectory to keep files after loading
+        tmp_dir = tempfile.mkdtemp(prefix="tokenizer_")
+        fs = fsspec.filesystem("gcs")
+        # List all files in the GCS tokenizer directory
+        gcs_files = fs.ls(tokenizer_path)
+        for gcs_file in gcs_files:
+            filename = os.path.basename(gcs_file)
+            local_path = os.path.join(tmp_dir, filename)
+            fs.get(gcs_file, local_path)
+        logger.info(f"Downloaded tokenizer from {tokenizer_path} to {tmp_dir}")
+        return transformers.AutoTokenizer.from_pretrained(tmp_dir)
+    else:
+        return transformers.AutoTokenizer.from_pretrained(tokenizer_path)
+
+
 def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
     jax_devices = jax.devices()
     assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    tokenizer = _load_tokenizer(config.tokenizer)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:

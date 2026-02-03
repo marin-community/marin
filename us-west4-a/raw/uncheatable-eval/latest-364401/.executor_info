@@ -1,6 +1,6 @@
 {
   "name": "raw/uncheatable-eval/latest",
-  "fn_name": "<function download_latest_uncheatable_eval at 0x7feb720a7420>",
+  "fn_name": "<function download_latest_uncheatable_eval at 0x7f98bc50f600>",
   "config": {
     "output_path": "us-west4-a/raw/uncheatable-eval/latest-364401",
     "repo_owner": "ziqing-huang",

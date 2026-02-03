@@ -49,6 +49,12 @@ from levanter.utils.mesh import MeshConfig
 from levanter.utils.tree_utils import inference_mode
 
 try:
+    # VLMEvalKit uses LMUDataRoot for saving intermediate files (e.g., score JSONs).
+    # It doesn't support GCS paths, so we set it to a local path if not already local.
+    lmu_data_root = os.environ.get("LMUDataRoot", "")
+    if not lmu_data_root or lmu_data_root.startswith("gs://"):
+        os.environ["LMUDataRoot"] = "/tmp/vlmeval_data"
+
     from vlmeval.smp import dump, load
     from vlmeval.dataset import build_dataset
     from vlmeval.tools import EVAL

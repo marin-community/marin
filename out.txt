@@ -1,202 +1,811 @@
-COMPILATION_CACHE_DIR': 'gs://marin-us-east1/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_8a524834', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_f4a581a0e078ab94.txt'}, 'pip_check': False}
-(<lambda> pid=3502, ip=10.142.0.78) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-(<lambda> pid=3494, ip=10.142.0.93) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-(SliceActor pid=3366, ip=10.142.0.78) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=3351, ip=10.142.0.83)
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/requests/models.py", line 1026, in raise_for_status
-(SliceActor pid=3366, ip=10.142.0.78)     raise HTTPError(http_error_msg, response=self)
-(SliceActor pid=3366, ip=10.142.0.78) requests.exceptions.HTTPError: 504 Server Error: Gateway Time-out for url: https://huggingface.co/api/models/llava-hf/llava-onevision-qwen2-0.5b-ov-hf
-(SliceActor pid=3366, ip=10.142.0.78) 
-(SliceActor pid=3366, ip=10.142.0.78) The above exception was the direct cause of the following exception:
-(SliceActor pid=3366, ip=10.142.0.78) 
-(SliceActor pid=3366, ip=10.142.0.78) ray::<lambda>() (pid=3351, ip=10.142.0.83)
-(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=3366, ip=10.142.0.78)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=3366, ip=10.142.0.78)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/main/train_vlm.py", line 525, in main
-(SliceActor pid=3366, ip=10.142.0.78)     tokenizer = config.data.the_tokenizer
-(SliceActor pid=3366, ip=10.142.0.78)                 ^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/functools.py", line 1001, in __get__
-(SliceActor pid=3366, ip=10.142.0.78)     val = self.func(instance)
-(SliceActor pid=3366, ip=10.142.0.78)           ^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/data/image.py", line 2254, in the_tokenizer
-(SliceActor pid=3366, ip=10.142.0.78)     return self.the_processor.tokenizer
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/functools.py", line 1001, in __get__
-(SliceActor pid=3366, ip=10.142.0.78)     val = self.func(instance)
-(SliceActor pid=3366, ip=10.142.0.78)           ^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/data/image.py", line 2185, in the_processor
-(SliceActor pid=3366, ip=10.142.0.78)     proc = load_processor(self.processor)
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1404, in load_processor
-(SliceActor pid=3366, ip=10.142.0.78)     return _hf_load_with_rank_sync(
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1279, in _hf_load_with_rank_sync
-(SliceActor pid=3366, ip=10.142.0.78)     return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, is_fsspec_path=is_fsspec_path, **kwargs)
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1165, in _hf_load_with_retry
-(SliceActor pid=3366, ip=10.142.0.78)     return load_fn(*args, **kwargs)
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/models/auto/processing_auto.py", line 396, in from_pretrained
-(SliceActor pid=3366, ip=10.142.0.78)     return processor_class.from_pretrained(
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/processing_utils.py", line 1394, in from_pretrained
-(SliceActor pid=3366, ip=10.142.0.78)     args = cls._get_arguments_from_pretrained(pretrained_model_name_or_path, **kwargs)
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/processing_utils.py", line 1453, in _get_arguments_from_pretrained
-(SliceActor pid=3366, ip=10.142.0.78)     args.append(attribute_class.from_pretrained(pretrained_model_name_or_path, **kwargs))
-(SliceActor pid=3366, ip=10.142.0.78)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1156, in from_pretrained
-(SliceActor pid=3366, ip=10.142.0.78)     return tokenizer_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs)
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2113, in from_pretrained
-(SliceActor pid=3366, ip=10.142.0.78)     return cls._from_pretrained(
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2395, in _from_pretrained
-(SliceActor pid=3366, ip=10.142.0.78)     tokenizer = cls._patch_mistral_regex(
-(SliceActor pid=3366, ip=10.142.0.78)                 ^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2442, in _patch_mistral_regex
-(SliceActor pid=3366, ip=10.142.0.78)     _is_local or (not _is_local and is_base_mistral(pretrained_model_name_or_path))
-(SliceActor pid=3366, ip=10.142.0.78)                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2432, in is_base_mistral
-(SliceActor pid=3366, ip=10.142.0.78)     model = model_info(model_id)
-(SliceActor pid=3366, ip=10.142.0.78)             ^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
-(SliceActor pid=3366, ip=10.142.0.78)     return fn(*args, **kwargs)
-(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/hf_api.py", line 2661, in model_info
-(SliceActor pid=3366, ip=10.142.0.78)     hf_raise_for_status(r)
-(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_http.py", line 475, in hf_raise_for_status
-(SliceActor pid=3366, ip=10.142.0.78)     raise _format(HfHubHTTPError, str(e), response) from e
-(SliceActor pid=3366, ip=10.142.0.78) huggingface_hub.errors.HfHubHTTPError: 504 Server Error: Gateway Time-out for url: https://huggingface.co/api/models/llava-hf/llava-onevision-qwen2-0.5b-ov-hf
-(<lambda> pid=3352, ip=10.142.0.101) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 29x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93) Task error ray::<lambda>() (pid=3351, ip=10.142.0.83)
-(run_on_pod_ray pid=3284, ip=10.142.0.93) 
-(run_on_pod_ray pid=3284, ip=10.142.0.93) 
-(run_on_pod_ray pid=3284, ip=10.142.0.93) ray::<lambda>() (pid=3351, ip=10.142.0.83)
-(run_on_pod_ray pid=3284, ip=10.142.0.93) Traceback (most recent call last):
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=3284, ip=10.142.0.93)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return func(*args, **kwargs)
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=3284, ip=10.142.0.93) ray.exceptions.RayTaskError(HfHubHTTPError): ray::<lambda>() (pid=3351, ip=10.142.0.83)
-(run_on_pod_ray pid=3284, ip=10.142.0.93) 
-(run_on_pod_ray pid=3284, ip=10.142.0.93) 
-(run_on_pod_ray pid=3284, ip=10.142.0.93) ray::<lambda>() (pid=3351, ip=10.142.0.83)
-(run_on_pod_ray pid=3284, ip=10.142.0.93) Failed 1 times. Continuing to retry.
-(run_on_pod_ray pid=3284, ip=10.142.0.93) Traceback (most recent call last):
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=3284, ip=10.142.0.93)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return func(*args, **kwargs)
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=3284, ip=10.142.0.93) ray.exceptions.RayTaskError(HfHubHTTPError): ray::<lambda>() (pid=3351, ip=10.142.0.83)
-(run_on_pod_ray pid=3284, ip=10.142.0.93) 
-(run_on_pod_ray pid=3284, ip=10.142.0.93) 
-(run_on_pod_ray pid=3284, ip=10.142.0.93) ray::<lambda>() (pid=3351, ip=10.142.0.83)
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/requests/models.py", line 1026, in raise_for_status [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     raise HTTPError(http_error_msg, response=self) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93) requests.exceptions.HTTPError: 504 Server Error: Gateway Time-out for url: https://huggingface.co/api/models/llava-hf/llava-onevision-qwen2-0.5b-ov-hf [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93) The above exception was the direct cause of the following exception: [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/main/train_vlm.py", line 525, in main [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     tokenizer = config.data.the_tokenizer [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)                 ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/functools.py", line 1001, in __get__ [repeated 6x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     val = self.func(instance) [repeated 6x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^ [repeated 13x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/data/image.py", line 2254, in the_tokenizer [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return self.the_processor.tokenizer [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/data/image.py", line 2185, in the_processor [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     proc = load_processor(self.processor) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1404, in load_processor [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return _hf_load_with_rank_sync( [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1279, in _hf_load_with_rank_sync [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, is_fsspec_path=is_fsspec_path, **kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1165, in _hf_load_with_retry [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return load_fn(*args, **kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2113, in from_pretrained [repeated 12x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return processor_class.from_pretrained( [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     args = cls._get_arguments_from_pretrained(pretrained_model_name_or_path, **kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/processing_utils.py", line 1453, in _get_arguments_from_pretrained [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     args.append(attribute_class.from_pretrained(pretrained_model_name_or_path, **kwargs)) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return tokenizer_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return cls._from_pretrained( [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2395, in _from_pretrained [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     tokenizer = cls._patch_mistral_regex( [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2442, in _patch_mistral_regex [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     _is_local or (not _is_local and is_base_mistral(pretrained_model_name_or_path)) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2432, in is_base_mistral [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     model = model_info(model_id) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)             ^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     return fn(*args, **kwargs) [repeated 5x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/hf_api.py", line 2661, in model_info [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     hf_raise_for_status(r) [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_http.py", line 475, in hf_raise_for_status [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93)     raise _format(HfHubHTTPError, str(e), response) from e [repeated 3x across cluster]
-(run_on_pod_ray pid=3284, ip=10.142.0.93) huggingface_hub.errors.HfHubHTTPError: 504 Server Error: Gateway Time-out for url: https://huggingface.co/api/models/llava-hf/llava-onevision-qwen2-0.5b-ov-hf [repeated 3x across cluster]
-(<lambda> pid=3354, ip=10.142.0.88) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-(<lambda> pid=3337, ip=10.142.0.90) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-(<lambda> pid=3336, ip=10.142.0.87) Rate limited by HuggingFace Hub, retrying in 2.5s (attempt 1/20)
-(<lambda> pid=3353, ip=10.142.0.101) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 30x across cluster]
-(<lambda> pid=3352, ip=10.142.0.83) Rate limited by HuggingFace Hub, retrying in 8.7s (attempt 3/20) [repeated 56x across cluster]
-(autoscaler +9m59s) Adding 4 node(s) of type tpu_slice_v6e_128.
-(autoscaler +9m59s) Resized to 960 CPUs, 32 TPUs.
-(<lambda> pid=3352, ip=10.142.0.83) Rate limited by HuggingFace Hub, retrying in 16.3s (attempt 4/20) [repeated 28x across cluster]
-(<lambda> pid=3353, ip=10.142.0.77) Rate limited by HuggingFace Hub, retrying in 16.6s (attempt 4/20) [repeated 25x across cluster]
-(<lambda> pid=3352, ip=10.142.0.83) Rate limited by HuggingFace Hub, retrying in 32.1s (attempt 5/20)
-(<lambda> pid=3354, ip=10.142.0.88) Rate limited by HuggingFace Hub, retrying in 32.1s (attempt 5/20)
-(<lambda> pid=3353, ip=10.142.0.101) Rate limited by HuggingFace Hub, retrying in 32.1s (attempt 5/20) [repeated 20x across cluster]
-(<lambda> pid=3353, ip=10.142.0.77) Rate limited by HuggingFace Hub, retrying in 32.8s (attempt 5/20) [repeated 3x across cluster]
-(<lambda> pid=3353, ip=10.142.0.74) Rate limited by HuggingFace Hub, retrying in 32.1s (attempt 5/20)
-(<lambda> pid=3503, ip=10.142.0.78) Rate limited by HuggingFace Hub, retrying in 32.2s (attempt 5/20)
-(<lambda> pid=3352, ip=10.142.0.83) Rate limited by HuggingFace Hub, retrying in 64.2s (attempt 6/20)
-(<lambda> pid=3354, ip=10.142.0.88) Rate limited by HuggingFace Hub, retrying in 65.0s (attempt 6/20)
-(<lambda> pid=3353, ip=10.142.0.101) Rate limited by HuggingFace Hub, retrying in 64.5s (attempt 6/20) [repeated 20x across cluster]
-(<lambda> pid=3353, ip=10.142.0.77) Rate limited by HuggingFace Hub, retrying in 64.1s (attempt 6/20)
-(<lambda> pid=3353, ip=10.142.0.74) Rate limited by HuggingFace Hub, retrying in 64.6s (attempt 6/20)
-2026-01-28 18:25:48,128 WARNING cluster.py:350 -- Job 126886023333520 failed with message: Task failed because the node it was running on is dead or unavailable. Node IP: 10.142.0.93, node ID: e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.142.0.93`.
-2026-01-28 18:25:48,129 INFO executor.py:796 -- Waiting for 126886023333520 to finish for step checkpoints/vlm-official-qwen3-1.7b-stage3_4096-0
-2026-01-28 18:25:48,129 - INFO - Starting wait for job 126886023333520
-2026-01-28 18:25:48,129 WARNING cluster.py:350 -- Job 126886023333520 failed with message: Task failed because the node it was running on is dead or unavailable. Node IP: 10.142.0.93, node ID: e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.142.0.93`.
-2026-01-28 18:25:48,129 - INFO - Job 126886023333520 completed with status failed
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/experiments/VLM/demo_vlm_train_round3_us_east1.py", line 259, in <module>
-    executor_main(steps=[vlm_training])
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
-    response = fn(cfg, *args, **kwargs)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
-  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/marin/src/marin/execution/executor.py", line 743, in run
-    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
-  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
-    runner.wait()
-  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/marin/src/marin/execution/executor.py", line 207, in wait
-    raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-RuntimeError: Job 126886023333520 failed: Task failed because the node it was running on is dead or unavailable. Node IP: 10.142.0.93, node ID: e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.142.0.93`.
-(<lambda> pid=3503, ip=10.142.0.78) Rate limited by HuggingFace Hub, retrying in 64.0s (attempt 6/20)
-(base) ruili@t1v-n-e79ac63c-w-0:~/marin_private3$ 
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:19.203139 2354801 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.12M free. The largest contiguous region of free memory is 184.11M due to fragmentation.; (0x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207472128
+(pid=) MaxInUse:                  16516045824
+(pid=) NumAllocs:                         413
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:19.203145 2354802 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.12M free. The largest contiguous region of free memory is 184.11M due to fragmentation.; (1x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207472128
+(pid=) MaxInUse:                  16516045824
+(pid=) NumAllocs:                         413
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:19.203143 2354800 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.12M free. The largest contiguous region of free memory is 184.11M due to fragmentation.; (1x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207472128
+(pid=) MaxInUse:                  16516045824
+(pid=) NumAllocs:                         413
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:19.203148 2354798 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.12M free. The largest contiguous region of free memory is 184.11M due to fragmentation.; (1x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207472128
+(pid=) MaxInUse:                  16516045824
+(pid=) NumAllocs:                         413
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) W0201 06:05:19.342881 2357456 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:05:19.388974 2357456 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:05:19.458609 2357456 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:05:19.500944 2357456 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:05:19.851240 2357456 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:05:22.931039 2361774 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 786.67M at the bottom of memory. That was not possible. There are 6.50G free, 0B reserved, and 137.64M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.50G, so compaction will enable this reservation.  The nearest obstacle is at 137.64M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:22.931090 2361775 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 786.67M at the bottom of memory. That was not possible. There are 6.50G free, 0B reserved, and 137.64M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.50G, so compaction will enable this reservation.  The nearest obstacle is at 137.64M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:22.931155 2361776 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 786.67M at the bottom of memory. That was not possible. There are 6.50G free, 0B reserved, and 137.64M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.50G, so compaction will enable this reservation.  The nearest obstacle is at 137.64M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:22.931204 2361777 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 786.67M at the bottom of memory. That was not possible. There are 6.50G free, 0B reserved, and 137.64M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.50G, so compaction will enable this reservation.  The nearest obstacle is at 137.64M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:22.931205 2361778 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 786.67M at the bottom of memory. That was not possible. There are 6.50G free, 0B reserved, and 137.64M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.50G, so compaction will enable this reservation.  The nearest obstacle is at 137.64M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:22.931254 2361779 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 786.67M at the bottom of memory. That was not possible. There are 6.50G free, 0B reserved, and 137.64M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.50G, so compaction will enable this reservation.  The nearest obstacle is at 137.64M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:22.931302 2361780 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 786.67M at the bottom of memory. That was not possible. There are 6.50G free, 0B reserved, and 137.64M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.50G, so compaction will enable this reservation.  The nearest obstacle is at 137.64M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:22.931406 2361781 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 786.67M at the bottom of memory. That was not possible. There are 6.50G free, 0B reserved, and 137.64M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.50G, so compaction will enable this reservation.  The nearest obstacle is at 137.64M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) E0201 06:05:23.400254 2354801 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 293.70M free. The largest contiguous region of free memory is 147.71M due to fragmentation.; (0x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15776481792
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         440
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    824885248
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:23.400289 2354803 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 293.70M free. The largest contiguous region of free memory is 157.84M due to fragmentation.; (0x3x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15776481792
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         440
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    824885248
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:23.400250 2354804 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 293.70M free. The largest contiguous region of free memory is 147.71M due to fragmentation.; (1x3x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15776481792
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         440
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    824885248
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:23.400248 2354798 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 293.70M free. The largest contiguous region of free memory is 157.84M due to fragmentation.; (1x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15776481792
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         440
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    824885248
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:23.400248 2354799 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 293.70M free. The largest contiguous region of free memory is 147.71M due to fragmentation.; (0x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15776481792
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         440
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    824885248
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:23.400259 2354802 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 293.70M free. The largest contiguous region of free memory is 147.71M due to fragmentation.; (1x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15776481792
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         440
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    824885248
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:23.400265 2354800 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 293.70M free. The largest contiguous region of free memory is 147.71M due to fragmentation.; (1x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15776481792
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         440
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    824885248
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:05:23.400273 2354797 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 293.70M free. The largest contiguous region of free memory is 147.71M due to fragmentation.; (0x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15776482304
+(pid=) MaxInUse:                  16516113920
+(pid=) NumAllocs:                         441
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    824885248
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) W0201 06:05:28.521564 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:05:46.662860 2362490 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.86G free, 0B reserved, and 375.33M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.86G, so compaction will enable this reservation.  The nearest obstacle is at 375.33M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:46.662874 2362491 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.86G free, 0B reserved, and 375.33M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.86G, so compaction will enable this reservation.  The nearest obstacle is at 375.33M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:46.662917 2362492 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.86G free, 0B reserved, and 375.33M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.86G, so compaction will enable this reservation.  The nearest obstacle is at 375.33M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:46.662946 2362493 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.86G free, 0B reserved, and 375.33M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.86G, so compaction will enable this reservation.  The nearest obstacle is at 375.33M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:46.663038 2362495 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.86G free, 0B reserved, and 375.33M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.86G, so compaction will enable this reservation.  The nearest obstacle is at 375.33M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:46.663066 2362494 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.86G free, 0B reserved, and 375.33M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.86G, so compaction will enable this reservation.  The nearest obstacle is at 375.33M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:46.663081 2362496 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.86G free, 0B reserved, and 375.33M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.86G, so compaction will enable this reservation.  The nearest obstacle is at 375.33M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:46.663297 2362497 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.87G free, 0B reserved, and 375.33M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.87G, so compaction will enable this reservation.  The nearest obstacle is at 375.33M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:05:52.854178 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) E0201 06:06:01.947011 2354801 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.07M free. The largest contiguous region of free memory is 184.05M due to fragmentation.; (0x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207529472
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         525
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:01.947010 2354797 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.07M free. The largest contiguous region of free memory is 184.05M due to fragmentation.; (0x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207529984
+(pid=) MaxInUse:                  16516113920
+(pid=) NumAllocs:                         526
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:01.947016 2354800 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.07M free. The largest contiguous region of free memory is 184.05M due to fragmentation.; (1x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207529472
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         525
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:01.947019 2354802 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.07M free. The largest contiguous region of free memory is 184.05M due to fragmentation.; (1x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207529472
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         525
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:01.947022 2354804 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.07M free. The largest contiguous region of free memory is 184.05M due to fragmentation.; (1x3x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207529472
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         525
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:01.947033 2354798 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.07M free. The largest contiguous region of free memory is 184.05M due to fragmentation.; (1x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207529472
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         525
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:01.947032 2354799 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.07M free. The largest contiguous region of free memory is 184.05M due to fragmentation.; (0x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207529472
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         525
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:01.947026 2354803 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 184.07M free. The largest contiguous region of free memory is 184.05M due to fragmentation.; (0x3x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12207529472
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         525
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) W0201 06:06:02.065365 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:02.114226 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:02.215879 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:02.329585 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:02.380248 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:02.483328 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:05.389249 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:05.484294 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:05.576684 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:05.645022 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:05.732150 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:05.849133 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:05.907152 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:06.166363 2357458 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:07.849463 2363265 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 785.42M at the bottom of memory. That was not possible. There are 6.66G free, 0B reserved, and 137.58M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.66G, so compaction will enable this reservation.  The nearest obstacle is at 137.58M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:07.849488 2363266 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 785.42M at the bottom of memory. That was not possible. There are 6.66G free, 0B reserved, and 137.58M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.66G, so compaction will enable this reservation.  The nearest obstacle is at 137.58M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:07.849568 2363267 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 785.42M at the bottom of memory. That was not possible. There are 6.66G free, 0B reserved, and 137.58M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.66G, so compaction will enable this reservation.  The nearest obstacle is at 137.58M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:07.849592 2363268 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 785.42M at the bottom of memory. That was not possible. There are 6.66G free, 0B reserved, and 137.58M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.66G, so compaction will enable this reservation.  The nearest obstacle is at 137.58M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:07.849657 2363269 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 785.42M at the bottom of memory. That was not possible. There are 6.66G free, 0B reserved, and 137.58M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.66G, so compaction will enable this reservation.  The nearest obstacle is at 137.58M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:07.849688 2363270 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 785.42M at the bottom of memory. That was not possible. There are 6.66G free, 0B reserved, and 137.58M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.66G, so compaction will enable this reservation.  The nearest obstacle is at 137.58M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:07.849800 2363271 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 785.42M at the bottom of memory. That was not possible. There are 6.66G free, 0B reserved, and 137.58M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.66G, so compaction will enable this reservation.  The nearest obstacle is at 137.58M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:07.849843 2363272 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 785.42M at the bottom of memory. That was not possible. There are 6.66G free, 0B reserved, and 137.58M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.66G, so compaction will enable this reservation.  The nearest obstacle is at 137.58M from the bottom with size 237.69M.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:08.031367 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.215549 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.297710 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.458614 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.508110 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.558494 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.664774 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.756508 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.821672 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.885806 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:08.988484 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:09.749841 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:09.810144 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:09.882470 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:09.998582 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:10.057524 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:10.181318 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:11.876890 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:11.943017 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:12.056020 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:12.477083 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:12.533609 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:12.643526 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:12.749719 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:12.800145 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:12.846788 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:12.983592 2357468 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) E0201 06:06:13.078795 2354801 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 308.75M free. The largest contiguous region of free memory is 132.75M due to fragmentation.; (0x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15762004992
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         538
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    823574528
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:13.078797 2354804 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 308.75M free. The largest contiguous region of free memory is 132.75M due to fragmentation.; (1x3x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15762004992
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         538
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    823574528
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:13.078800 2354802 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 308.75M free. The largest contiguous region of free memory is 132.75M due to fragmentation.; (1x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15762004992
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         538
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    823574528
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:13.078810 2354798 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 308.75M free. The largest contiguous region of free memory is 132.75M due to fragmentation.; (1x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15762004992
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         538
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    823574528
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:13.078813 2354800 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 308.75M free. The largest contiguous region of free memory is 132.75M due to fragmentation.; (1x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15762004992
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         538
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    823574528
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:13.078795 2354799 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 308.75M free. The largest contiguous region of free memory is 132.75M due to fragmentation.; (0x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15762004992
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         538
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    823574528
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:13.078846 2354803 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 308.75M free. The largest contiguous region of free memory is 132.75M due to fragmentation.; (0x3x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15762004992
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         538
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    823574528
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:13.078854 2354797 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 308.75M free. The largest contiguous region of free memory is 132.75M due to fragmentation.; (0x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Fragmentation. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     15762005504
+(pid=) MaxInUse:                  16516113920
+(pid=) NumAllocs:                         539
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                    823574528
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) W0201 06:06:18.236715 2355258 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) W0201 06:06:36.899189 2364276 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.88G free, 0B reserved, and 387.66M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.88G, so compaction will enable this reservation.  The nearest obstacle is at 387.66M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:36.899245 2364277 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.88G free, 0B reserved, and 387.66M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.88G, so compaction will enable this reservation.  The nearest obstacle is at 387.66M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:36.899338 2364279 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.88G free, 0B reserved, and 387.66M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.88G, so compaction will enable this reservation.  The nearest obstacle is at 387.66M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:36.899330 2364278 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.88G free, 0B reserved, and 387.66M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.88G, so compaction will enable this reservation.  The nearest obstacle is at 387.66M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:36.899387 2364281 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.88G free, 0B reserved, and 387.66M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.88G, so compaction will enable this reservation.  The nearest obstacle is at 387.66M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:36.899399 2364280 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.88G free, 0B reserved, and 387.66M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.88G, so compaction will enable this reservation.  The nearest obstacle is at 387.66M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:36.899449 2364276 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.88G free, 0B reserved, and 387.66M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.88G, so compaction will enable this reservation.  The nearest obstacle is at 387.66M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:36.899495 2364282 tpu_core_common_impl.cc:711] RESOURCE_EXHAUSTED: Attempting to reserve 4.20G at the bottom of memory. That was not possible. There are 6.88G free, 0B reserved, and 387.66M reservable. If fragmentation is eliminated, the maximum reservable bytes would be 6.88G, so compaction will enable this reservation.  The nearest obstacle is at 387.66M from the bottom with size 2.0K.
+(pid=) === Source Location Trace: === 
+(pid=) learning/45eac/tpu/runtime/hal/internal/best_fit_allocator.cc:743
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:534
+(pid=) learning/45eac/tpu/runtime/hal/tpu_shared_memory.cc:116
+(pid=) learning/45eac/tpu/runtime/hal/tpu_program_stack.cc:63
+(pid=) learning/45eac/tpu/runtime/hal/internal/tpu_core_common_impl.cc:691
+(pid=) W0201 06:06:42.229737 2355257 tpu_spmd_partitioner.cc:413] Collective matmul V1 is enabled. Please consider migrating to V2 since V1 will be deprecated soon. You can enable V2 by setting xla_tpu_all_gather_collective_matmul_mode=post_spmd and xla_tpu_reduce_scatter_collective_matmul_mode=post_spmd.
+(pid=) E0201 06:06:51.584796 2354802 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 196.42M free. The largest contiguous region of free memory is 196.40M due to fragmentation.; (1x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12194579968
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         623
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:51.584792 2354798 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 196.42M free. The largest contiguous region of free memory is 196.40M due to fragmentation.; (1x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12194579968
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         623
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:51.584792 2354804 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 196.42M free. The largest contiguous region of free memory is 196.40M due to fragmentation.; (1x3x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12194579968
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         623
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:51.584794 2354800 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 196.42M free. The largest contiguous region of free memory is 196.40M due to fragmentation.; (1x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12194579968
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         623
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:51.584794 2354803 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 196.42M free. The largest contiguous region of free memory is 196.40M due to fragmentation.; (0x3x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12194579968
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         623
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:51.584804 2354799 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 196.42M free. The largest contiguous region of free memory is 196.40M due to fragmentation.; (0x1x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12194579968
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         623
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:51.584802 2354801 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 196.42M free. The largest contiguous region of free memory is 196.40M due to fragmentation.; (0x2x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12194579968
+(pid=) MaxInUse:                  16516113408
+(pid=) NumAllocs:                         623
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) E0201 06:06:51.584808 2354797 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 237.69M. That was not possible. There are 196.42M free. The largest contiguous region of free memory is 196.40M due to fragmentation.; (0x0x0_HBM0)
+(pid=) === Source Location Trace: === 
+(pid=) third_party/tensorflow/compiler/xla/util.h:288
+(pid=) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
+(pid=) [OOM Summary: Reason: Not enough free memory. Allocator stats:
+(pid=) Limit:                     16909332480
+(pid=) InUse:                     12194580480
+(pid=) MaxInUse:                  16516113920
+(pid=) NumAllocs:                         624
+(pid=) MaxAllocSize:                535486464
+(pid=) Reserved:                   4508794880
+(pid=) PeakReserved:               4508794880
+(pid=) LargestFreeBlock:                    0
+(pid=) ]
+(pid=) W0201 06:06:54.056091 2354806 pjrt_client.h:543] UpdateGlobalProcessInfo is not supported.
+(pid=2999505) [2026-02-03 04:18:32,527 E 2999505 2999505] core_worker_process.cc:224: Failed to register worker to Raylet: Invalid: Invalid: Unknown worker worker_id=4f352d4d5975fe9d10bf8eaaa5d526a76563d53ba8e67b12b136914e [repeated 6x across cluster]
+(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead [repeated 7x across cluster]
+(raylet) Uninstalled 1 package in 1ms [repeated 6x across cluster]
+(raylet) Installed 1 package in 92ms [repeated 6x across cluster]
+(raylet) [2026-02-03 04:18:36,272 E 2215878 2215878] (raylet) worker_pool.cc:586: Some workers of the worker process(3062014) have not registered within the timeout. The process is still alive, probably it's hanging during start. [repeated 9x across cluster]
+(pid=3001155) [2026-02-03 04:18:37,259 E 3001155 3001155] core_worker_process.cc:224: Failed to register worker to Raylet: Invalid: Invalid: Unknown worker worker_id=630105180a18122292f7727c84f0c4fb798e3f1f2c62839e96d6786f [repeated 6x across cluster]
+(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead [repeated 8x across cluster]
+(raylet) Uninstalled 1 package in 1ms [repeated 9x across cluster]
+(raylet) Installed 1 package in 92ms [repeated 9x across cluster]
+(raylet) [2026-02-03 04:18:41,549 E 2215878 2215878] (raylet) worker_pool.cc:586: Some workers of the worker process(3063902) have not registered within the timeout. The process is still alive, probably it's hanging during start. [repeated 7x across cluster]
+(pid=3003074) [2026-02-03 04:18:42,322 E 3003074 3003074] core_worker_process.cc:224: Failed to register worker to Raylet: Invalid: Invalid: Unknown worker worker_id=6bf02f23c9c1dd243f22fc1c92a269e8a1a39fad41ec61dddee029c5 [repeated 7x across cluster]
+(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead [repeated 10x across cluster]
+(raylet) Uninstalled 1 package in 1ms [repeated 10x across cluster]
+(raylet) Installed 1 package in 98ms [repeated 10x across cluster]
+(raylet) [2026-02-03 04:18:46,798 E 2215878 2215878] (raylet) worker_pool.cc:586: Some workers of the worker process(3066094) have not registered within the timeout. The process is still alive, probably it's hanging during start. [repeated 9x across cluster]
+(pid=3004429) [2026-02-03 04:18:47,268 E 3004429 3004429] core_worker_process.cc:224: Failed to register worker to Raylet: Invalid: Invalid: Unknown worker worker_id=1fc6d8b4f33c67d90b8da97644d65c5ad06504e5c25918fe0e003687 [repeated 5x across cluster]
+(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead [repeated 7x across cluster]
+(raylet) Uninstalled 1 package in 1ms [repeated 7x across cluster]
+(raylet) Installed 1 package in 88ms [repeated 7x across cluster]
+(raylet) [2026-02-03 04:18:51,813 E 2215878 2215878] (raylet) worker_pool.cc:586: Some workers of the worker process(3068523) have not registered within the timeout. The process is still alive, probably it's hanging during start. [repeated 8x across cluster]
+(pid=3005964) [2026-02-03 04:18:52,806 E 3005964 3005964] core_worker_process.cc:224: Failed to register worker to Raylet: Invalid: Invalid: Unknown worker worker_id=a7c49ddcf66c0a3c0b23d64a5ca43b17f280eb6baea57f4d8b4ef21e [repeated 6x across cluster]
+(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead [repeated 6x across cluster]
+(raylet) Uninstalled 1 package in 1ms [repeated 5x across cluster]
+(raylet) Installed 1 package in 90ms [repeated 5x across cluster]
+(raylet) [2026-02-03 04:18:56,210 E 2215878 2215878] (raylet) worker_pool.cc:586: Some workers of the worker process(3070447) have not registered within the timeout. The process is still alive, probably it's hanging during start. [repeated 7x across cluster]
+(pid=3007339) [2026-02-03 04:18:57,782 E 3007339 3007339] core_worker_process.cc:224: Failed to register worker to Raylet: Invalid: Invalid: Unknown worker worker_id=e443aa16fd6df2f1229e886baff02ba0b2bc4f465dd0f5f0c1489c9a [repeated 5x across cluster]
+(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead [repeated 8x across cluster]
+(raylet) Uninstalled 1 package in 1ms [repeated 9x across cluster]
+(raylet) Installed 1 package in 90ms [repeated 8x across cluster]

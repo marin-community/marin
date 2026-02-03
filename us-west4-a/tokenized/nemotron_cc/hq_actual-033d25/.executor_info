@@ -1,6 +1,6 @@
 {
   "name": "tokenized/nemotron_cc/hq_actual",
-  "fn_name": "<function tokenize at 0x7feb741982c0>",
+  "fn_name": "<function tokenize at 0x7f98be5d84a0>",
   "config": {
     "train_paths": [
       "us-west4-a/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/**/*.jsonl.gz"
