@@ -189,6 +189,10 @@ def preprocess_mot_data(config: PreprocessConfig):
 
         row["instruction_seed"] = user_msg
         row["ms_id"] = ms_id
+        # Drop the original messages column to avoid PyArrow serialization issues
+        # (nested dicts are not supported by PyArrow)
+        if "messages" in row:
+            del row["messages"]
         return row
 
     # Read and transform
@@ -410,6 +414,10 @@ def prep_validation_prompts(config: PrepValidationConfig):
 
     def add_validation_prompts(row):
         """Add validation prompt columns."""
+        # Drop messages column if present (nested dicts not supported by PyArrow)
+        if "messages" in row:
+            del row["messages"]
+
         question = row.get("instruction_seed", "").strip()
         answer = row.get("generated_text", "").strip()
 
