@@ -303,6 +303,96 @@ cd /home/$RUNNER_USER
 ./svc.sh install $RUNNER_USER
 ./svc.sh start
 
+echo "=== Setting up CPU CI runners ==="
+
+echo "Pulling CPU CI Docker image..."
+docker pull {config.CPU_CI_IMAGE} || true
+
+# Maintain a bare git mirror on the host so containers can reuse git objects
+# instead of fetching everything from GitHub (~2 MiB/s rate-limited).
+echo "Setting up git mirror cache..."
+GIT_MIRROR=/var/cache/git/marin.git
+mkdir -p /var/cache/git
+if [ -d "$GIT_MIRROR" ]; then
+    cd "$GIT_MIRROR" && git fetch --prune --quiet || true
+    cd /
+else
+    git clone --mirror --depth=1 https://github.com/{config.GITHUB_REPOSITORY}.git "$GIT_MIRROR" || true
+fi
+chmod -R a+rX /var/cache/git
+echo "Git mirror cache ready"
+
+# Pre-populate the shared UV cache so the first CI job doesn't start cold.
+# Clones the repo and runs uv sync for each subpackage that CPU tests use.
+echo "Pre-populating UV cache for CPU CI..."
+CPU_TEMP=$(mktemp -d)
+git clone --depth 1 https://github.com/{config.GITHUB_REPOSITORY}.git "$CPU_TEMP" || true
+if [ -d "$CPU_TEMP/.git" ]; then
+    chown -R 1000:1000 "$CPU_TEMP"
+    for sync_cmd in \
+        "uv sync --package marin --extra cpu --group test --frozen" \
+        "uv sync --package levanter --dev --frozen" \
+        "uv sync --package haliax --dev" \
+        "uv sync --package zephyr --group test --frozen" \
+        "cd lib/iris && uv sync --group dev" \
+        "cd lib/fray && uv sync --group fray-test" \
+        "cd lib/dupekit && uv sync --frozen --group test"; do
+        echo "  Running: $sync_cmd"
+        docker run --rm \
+            -v /var/cache/uv:/opt/uv-cache:rw \
+            -v "$CPU_TEMP":/workspace:rw \
+            -w /workspace \
+            {config.CPU_CI_IMAGE} bash -c "$sync_cmd" || true
+    done
+    rm -rf "$CPU_TEMP"
+    echo "UV cache pre-populated for CPU CI"
+else
+    echo "Failed to clone repo, skipping CPU CI cache pre-population"
+fi
+
+# Create systemd services for each CPU runner container.
+# Each container runs an ephemeral GitHub Actions runner with resource limits.
+for i in $(seq 0 {config.CPU_RUNNERS_PER_VM - 1}); do
+    RUNNER_NAME="cpu-$INSTANCE_NAME-$i"
+    SERVICE_NAME="cpu-runner-$i"
+
+    cat > /etc/systemd/system/$SERVICE_NAME.service <<CPUEOF
+[Unit]
+Description=CPU CI Runner $i
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+ExecStartPre=-/usr/bin/docker rm -f $SERVICE_NAME
+ExecStart=/usr/bin/docker run --rm \\
+  --name $SERVICE_NAME \\
+  --network=host \\
+  --cpus={config.CPU_RUNNER_CPUS} \\
+  --memory={config.CPU_RUNNER_MEMORY_GB}g \\
+  -e RUNNER_NAME=$RUNNER_NAME \\
+  -e RUNNER_LABELS={",".join(config.CPU_RUNNER_LABELS)} \\
+  -v /var/cache/uv:/opt/uv-cache:rw \\
+  -v /var/cache/git:/var/cache/git:ro \\
+  -e UV_CACHE_DIR=/opt/uv-cache \\
+  -e UV_LINK_MODE=copy \\
+  -e UV_HTTP_TIMEOUT=120 \\
+  -e GIT_ALTERNATE_OBJECT_DIRECTORIES=/var/cache/git/marin.git/objects \\
+  {config.CPU_CI_IMAGE}
+ExecStop=/usr/bin/docker stop $SERVICE_NAME
+
+[Install]
+WantedBy=multi-user.target
+CPUEOF
+
+    systemctl daemon-reload
+    systemctl enable $SERVICE_NAME
+    systemctl start $SERVICE_NAME
+    echo "Started CPU runner $i as $RUNNER_NAME"
+done
+
 echo "=== TPU VM Setup Complete ==="
 """
 
@@ -857,6 +947,151 @@ def debug_setup(name: str):
         raise RuntimeError(f"Failed to execute startup script on {name}")
 
     logging.info("✓ Startup script execution complete")
+
+
+def _build_and_push_cpu_ci_image():
+    """Build CPU CI image locally and push to ghcr.io."""
+    logging.info("Building CPU CI Docker image...")
+
+    project_root = Path(__file__).parent.parent.parent
+
+    base_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{config.CPU_CI_IMAGE_NAME}"
+    latest_tag = f"{base_url}:{config.CPU_CI_IMAGE_TAG}"
+
+    run(
+        [
+            "docker",
+            "buildx",
+            "build",
+            "--platform",
+            "linux/amd64",
+            "--push",
+            "-t",
+            latest_tag,
+            "-f",
+            config.DOCKERFILE_CPU_CI_PATH,
+            ".",
+        ],
+        check=True,
+        cwd=str(project_root),
+    )
+
+    logging.info(f"✓ Pushed {latest_tag}")
+
+
+def _ssh_tpu(name: str, zone: str, command: str, **kwargs) -> subprocess.CompletedProcess:
+    """SSH into a TPU VM and run a command."""
+    return run(
+        [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "ssh",
+            name,
+            "--zone",
+            zone,
+            "--project",
+            config.GCP_PROJECT_ID,
+            "--command",
+            command,
+        ],
+        **kwargs,
+    )
+
+
+@cli.command()
+@click.argument("name", type=str)
+def test_cpu_runner(name: str):
+    """End-to-end test of CPU CI runner on a TPU VM.
+
+    1. Builds the CPU CI image locally and pushes to ghcr.io
+    2. Starts a runner container on the VM in detached mode
+    3. Verifies the runner stays alive for 10+ seconds
+    4. Dispatches a test workflow to exercise the runner
+    """
+    zone = extract_zone_from_name(name)
+    logging.info(f"Testing CPU runner on: {name} in {zone}")
+
+    # Step 1: Build and push image to ghcr.io
+    _build_and_push_cpu_ci_image()
+
+    # Step 2: Start runner in detached mode on the VM
+    start_script = f"""set -ex
+
+sudo docker pull {config.CPU_CI_IMAGE}
+
+INSTANCE_NAME=$(curl -sSf -H "Metadata-Flavor: Google" \
+  http://metadata.google.internal/computeMetadata/v1/instance/name)
+
+sudo docker rm -f cpu-runner-test 2>/dev/null || true
+
+sudo docker run -d \
+  --name cpu-runner-test \
+  --cpus={config.CPU_RUNNER_CPUS} \
+  --memory={config.CPU_RUNNER_MEMORY_GB}g \
+  -e RUNNER_NAME="cpu-test-$INSTANCE_NAME" \
+  -e RUNNER_LABELS={",".join(config.CPU_RUNNER_LABELS)} \
+  {config.CPU_CI_IMAGE}
+
+echo "Container started, waiting 10 seconds..."
+sleep 10
+
+if sudo docker ps --format '{{{{.Names}}}}' | grep -q cpu-runner-test; then
+    echo "RUNNER_ALIVE"
+    sudo docker logs cpu-runner-test 2>&1 | tail -20
+else
+    echo "RUNNER_DEAD"
+    sudo docker logs cpu-runner-test 2>&1 | tail -40
+    exit 1
+fi
+"""
+
+    logging.info("Starting runner container on VM...")
+    result = _ssh_tpu(name, zone, start_script, check=False, capture_output=True, text=True)
+    print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
+
+    if result.returncode != 0 or "RUNNER_DEAD" in result.stdout:
+        logging.error("Runner container died within 10 seconds")
+        return
+
+    logging.info("✓ Runner alive after 10 seconds")
+
+    # Step 3: Dispatch a test workflow
+    logging.info("Dispatching test workflow to cpu-ci runner...")
+    dispatch_result = run(
+        [
+            "gh",
+            "workflow",
+            "run",
+            "test-cpu-ci.yaml",
+            "--repo",
+            "marin-community/marin",
+            "--ref",
+            subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            or config.GITHUB_BRANCH,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    if dispatch_result.returncode != 0:
+        logging.error(f"Failed to dispatch workflow: {dispatch_result.stderr}")
+        logging.info("You can manually trigger: gh workflow run test-cpu-ci.yaml")
+    else:
+        logging.info("✓ Test workflow dispatched — check GitHub Actions for results")
+        logging.info("  https://github.com/marin-community/marin/actions/workflows/test-cpu-ci.yaml")
+
+    # Cleanup: stop the test runner (it's ephemeral, will exit after the job)
+    logging.info("Test runner will self-terminate after picking up the dispatched job")
 
 
 if __name__ == "__main__":

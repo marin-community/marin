@@ -10,13 +10,16 @@ on:
       - lib/fray/**
       - .github/workflows/fray-unit-tests.yaml
 
+env:
+  UV_HTTP_TIMEOUT: "120"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   cpu-test:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     timeout-minutes: 10
     strategy:
       matrix:
@@ -24,20 +27,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          fetch-depth: 1
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
+          python-version: ${{ matrix.python-version }}
           enable-cache: true
 
       - name: Test fray
+        env:
+          RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
         run: |
-          # NOTE: do not use frozen here because it makes ray sad when it sets up venvs with uv
           cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
 
   tpu-test:
@@ -48,6 +50,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
+          fetch-depth: 1
           ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
       - name: Run TPU tests in Docker

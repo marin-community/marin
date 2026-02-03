@@ -16,13 +16,16 @@ on:
       - uv.lock
       - .github/workflows/levanter-tests.yaml
 
+env:
+  UV_HTTP_TIMEOUT: "120"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   cpu-unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -33,6 +36,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -50,7 +55,7 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
 
   cpu-ray-tests:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -60,6 +65,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -76,7 +83,7 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
 
   cpu-entry-tests:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -86,6 +93,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -102,7 +111,7 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
 
   cpu-torch-tests:
-    runs-on: ubuntu-latest
+    runs-on: [cpu-ci]
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -112,6 +121,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -152,6 +163,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
           ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
       - name: Run Levanter TPU tests in Docker

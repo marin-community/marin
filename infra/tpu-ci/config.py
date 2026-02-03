@@ -42,12 +42,24 @@ GITHUB_URL = "https://github.com/marin-community/marin.git"
 
 RUNNER_LABELS = ["tpu", "self-hosted", "tpu-ci"]
 
+# CPU runner configuration: isolated Docker containers for CPU-only CI jobs.
+# Each TPU VM has ~100 CPUs and ~200GB RAM, so we run many CPU runners alongside
+# the single TPU runner to maximize utilization.
+CPU_RUNNERS_PER_VM = 16
+CPU_RUNNER_LABELS = ["self-hosted", "cpu-ci"]
+CPU_RUNNER_CPUS = 6
+CPU_RUNNER_MEMORY_GB = 8
+
 # Docker image configuration
 # Images are pushed to GitHub Container Registry
 GITHUB_REPOSITORY = "marin-community/marin"
 DOCKER_IMAGE_NAME = "tpu-ci"
 DOCKER_IMAGE_TAG = "latest"
 DOCKER_IMAGE = f"ghcr.io/{GITHUB_REPOSITORY}/{DOCKER_IMAGE_NAME}:{DOCKER_IMAGE_TAG}"
+
+CPU_CI_IMAGE_NAME = "cpu-ci"
+CPU_CI_IMAGE_TAG = "latest"
+CPU_CI_IMAGE = f"ghcr.io/{GITHUB_REPOSITORY}/{CPU_CI_IMAGE_NAME}:{CPU_CI_IMAGE_TAG}"
 
 
 def get_all_regions() -> list[str]:
@@ -62,3 +74,4 @@ def get_all_regions() -> list[str]:
 
 INFRA_DIR = "infra/tpu-ci"
 DOCKERFILE_TPU_CI_PATH = "docker/marin/Dockerfile.tpu-ci"
+DOCKERFILE_CPU_CI_PATH = "docker/marin/Dockerfile.cpu-ci"
