@@ -56,7 +56,7 @@ from experiments.self_instill.prompts import REASONING_INSTRUCTION
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 
 # TPU resource type for inference steps
-RESOURCE_TYPE = "v6e-8"
+RESOURCE_TYPE = "v4-8"
 
 # Flag to indicate this is an instruction-tuned model
 IS_INSTRUCTION_TUNED = True
@@ -259,7 +259,7 @@ generate_with_selection = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 128),
-        batch_size=8,  # Reduced to lower memory pressure
+        batch_size=64,
         tensor_parallel_size=1,
         preserve_order=False,
 
@@ -651,7 +651,7 @@ cycle_compare = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 256),
-        batch_size=128,
+        batch_size=64,
         tensor_parallel_size=1,
         preserve_order=False,
 
@@ -712,7 +712,7 @@ factual_check = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 256),
-        batch_size=128,
+        batch_size=64,
         tensor_parallel_size=1,
         preserve_order=False,
 
@@ -773,7 +773,7 @@ correctness_check = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 256),
-        batch_size=128,
+        batch_size=64,
         tensor_parallel_size=1,
         preserve_order=False,
 
