@@ -1,0 +1,29 @@
+{
+  "name": "raw/uncheatable-eval/latest",
+  "fn_name": "<function download_latest_uncheatable_eval at 0x7fe2af60b420>",
+  "config": {
+    "output_path": "us-west4-a/raw/uncheatable-eval/latest-364401",
+    "repo_owner": "ziqing-huang",
+    "repo_name": "uncheatable_eval",
+    "data_path": "data",
+    "branch": "master",
+    "max_concurrent_downloads": 8,
+    "request_timeout": 120,
+    "github_token": null,
+    "skip_existing": true,
+    "metadata_filename": "metadata.json"
+  },
+  "override_output_path": null,
+  "version": {
+    "name": "raw/uncheatable-eval/latest",
+    "config": {
+      "repo_owner": "ziqing-huang",
+      "repo_name": "uncheatable_eval",
+      "data_path": "data",
+      "branch": "master"
+    },
+    "dependencies": []
+  },
+  "dependencies": [],
+  "output_path": "us-west4-a/raw/uncheatable-eval/latest-364401"
+}

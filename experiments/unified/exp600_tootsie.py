@@ -23,7 +23,7 @@ import os
 from experiments.defaults import default_train
 from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
-from experiments.llama import llama3_tokenizer, llama_3_2_1b
+from experiments.llama import llama_3_2_1b
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
@@ -103,9 +103,10 @@ flops_per_token = compute_flops_per_token(seq_len=TRAIN_SEQ_LEN, **LLAMA_1B_CONF
 # Compute total tokens from compute budget
 total_tokens = compute_total_tokens(COMPUTE_BUDGET_FLOPS, flops_per_token)
 
-# Heuristic 1: Batch size B = T / 2^16, rounded to nearest power of 2
-# This targets 2^16 = 65536 training steps
-TARGET_STEPS = 2 ** 16  # 65536 steps
+# Heuristic 1: Batch size B = T / 2^15, rounded to nearest power of 2
+# This targets 2^15 = 32768 training steps (half of original 2^16)
+# Batch size is doubled compared to original heuristic
+TARGET_STEPS = 2 ** 15  # 32768 steps (half of 65536)
 tokens_per_batch = total_tokens // TARGET_STEPS
 TRAIN_BATCH_SIZE = nearest_power_of_two(tokens_per_batch // TRAIN_SEQ_LEN)
 
@@ -129,11 +130,19 @@ decay_ratio = 0.2
 
 
 ################################################################
+# Tokenizer Configuration
+################################################################
+
+# Use Llama 3.1 tokenizer from GCS
+LLAMA3_TOKENIZER = "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+
+
+################################################################
 # Nemotron HQ Data Configuration
 ################################################################
 
 # Get all Nemotron tokenized datasets
-nemotron_tokenized = tokenize_nemotron(tokenizer=llama3_tokenizer)
+nemotron_tokenized = tokenize_nemotron(tokenizer=LLAMA3_TOKENIZER)
 
 # Only use high-quality data (real + synthetic)
 nemotron_hq_components = {

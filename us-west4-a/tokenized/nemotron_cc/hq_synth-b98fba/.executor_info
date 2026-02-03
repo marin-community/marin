@@ -1,0 +1,39 @@
+{
+  "name": "tokenized/nemotron_cc/hq_synth",
+  "fn_name": "<function tokenize at 0x7fe2b16d42c0>",
+  "config": {
+    "train_paths": [
+      "us-west4-a/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/**/*.jsonl.gz"
+    ],
+    "validation_paths": [],
+    "cache_path": "us-west4-a/tokenized/nemotron_cc/hq_synth-b98fba",
+    "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b",
+    "tags": [],
+    "sample_count": null,
+    "format": {
+      "text_key": "text"
+    },
+    "window_size_bytes": 10000000000,
+    "allow_test_in_train": false
+  },
+  "override_output_path": null,
+  "version": {
+    "name": "tokenized/nemotron_cc/hq_synth",
+    "config": {
+      "train_paths.[0]": "DEP[0]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/**/*.jsonl.gz",
+      "validation_paths": [],
+      "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+    },
+    "dependencies": [
+      {
+        "name": "raw/nemotro-cc",
+        "config": {},
+        "dependencies": []
+      }
+    ]
+  },
+  "dependencies": [
+    "us-west4-a/raw/nemotro-cc-eeb783"
+  ],
+  "output_path": "us-west4-a/tokenized/nemotron_cc/hq_synth-b98fba"
+}

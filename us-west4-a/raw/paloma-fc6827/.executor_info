@@ -1,0 +1,24 @@
+{
+  "name": "raw/paloma",
+  "fn_name": "<function download_hf at 0x7fe2b1596fc0>",
+  "config": {
+    "hf_dataset_id": "allenai/paloma",
+    "revision": "65cd6fc",
+    "hf_urls_glob": [],
+    "gcs_output_path": "us-west4-a/raw/paloma-fc6827",
+    "append_sha_to_path": true,
+    "wait_for_completion": true,
+    "hf_repo_type_prefix": "datasets"
+  },
+  "override_output_path": "raw/paloma-fc6827",
+  "version": {
+    "name": "raw/paloma",
+    "config": {
+      "hf_dataset_id": "allenai/paloma",
+      "revision": "65cd6fc"
+    },
+    "dependencies": []
+  },
+  "dependencies": [],
+  "output_path": "us-west4-a/raw/paloma-fc6827"
+}

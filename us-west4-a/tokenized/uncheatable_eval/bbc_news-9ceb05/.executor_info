@@ -1,0 +1,43 @@
+{
+  "name": "tokenized/uncheatable_eval/bbc_news",
+  "fn_name": "<function tokenize at 0x7fe2b16d42c0>",
+  "config": {
+    "train_paths": [],
+    "validation_paths": [
+      "us-west4-a/raw/uncheatable-eval/latest-364401/bbc_news_*.jsonl.gz"
+    ],
+    "cache_path": "us-west4-a/tokenized/uncheatable_eval/bbc_news-9ceb05",
+    "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b",
+    "tags": [],
+    "sample_count": null,
+    "format": {
+      "text_key": "text"
+    },
+    "window_size_bytes": 10000000000,
+    "allow_test_in_train": false
+  },
+  "override_output_path": null,
+  "version": {
+    "name": "tokenized/uncheatable_eval/bbc_news",
+    "config": {
+      "validation_paths.[0]": "DEP[0]/bbc_news_*.jsonl.gz",
+      "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+    },
+    "dependencies": [
+      {
+        "name": "raw/uncheatable-eval/latest",
+        "config": {
+          "repo_owner": "ziqing-huang",
+          "repo_name": "uncheatable_eval",
+          "data_path": "data",
+          "branch": "master"
+        },
+        "dependencies": []
+      }
+    ]
+  },
+  "dependencies": [
+    "us-west4-a/raw/uncheatable-eval/latest-364401"
+  ],
+  "output_path": "us-west4-a/tokenized/uncheatable_eval/bbc_news-9ceb05"
+}

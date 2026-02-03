@@ -1,0 +1,763 @@
+{
+  "name": "evaluation/lm_evaluation_harness_levanter/lmeval_debug_checkpoints/unified-language-only-llama-1b-tootsie-1e19",
+  "fn_name": "<function evaluate at 0x7fe2afe222a0>",
+  "config": {
+    "evaluator": "levanter_lm_evaluation_harness",
+    "resource_config": {
+      "cpu": 1,
+      "ram": "128m",
+      "disk": "1g",
+      "device": {
+        "variant": "v6e-8",
+        "kind": "tpu",
+        "topology": null
+      },
+      "replicas": 1,
+      "preemptible": true,
+      "regions": null
+    },
+    "model_name": null,
+    "evaluation_path": "us-west4-a/evaluation/lm_evaluation_harness_levanter/lmeval_debug_checkpoints/unified-language-only-llama-1b-tootsie-1e19-3efea7",
+    "evals": [
+      {
+        "name": "mmlu",
+        "num_fewshot": 5,
+        "task_alias": "mmlu_5shot"
+      }
+    ],
+    "model_path": "us-west4-a/checkpoints/unified-language-only-llama-1b-tootsie-1e19/hf",
+    "discover_latest_checkpoint": true,
+    "launch_with_ray": true,
+    "max_eval_instances": null,
+    "engine_kwargs": null,
+    "generation_params": null,
+    "apply_chat_template": false,
+    "wandb_tags": null,
+    "processor_path": null,
+    "tokenizer_path": null
+  },
+  "override_output_path": null,
+  "version": {
+    "name": "evaluation/lm_evaluation_harness_levanter/lmeval_debug_checkpoints/unified-language-only-llama-1b-tootsie-1e19",
+    "config": {
+      "evals": [
+        {
+          "name": "mmlu",
+          "num_fewshot": 5,
+          "task_alias": "mmlu_5shot"
+        }
+      ],
+      "model_path": "DEP[0]/hf",
+      "max_eval_instances": null
+    },
+    "dependencies": [
+      {
+        "name": "checkpoints/unified-language-only-llama-1b-tootsie-1e19",
+        "config": {
+          "train_config.data.tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b",
+          "train_config.data.configs.nemotron_cc/hq_actual.cache_dir": "DEP[0]",
+          "train_config.data.configs.nemotron_cc/hq_actual.train_urls.[0]": "DEP[1]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/**/*.jsonl.gz",
+          "train_config.data.configs.nemotron_cc/hq_actual.validation_urls": [],
+          "train_config.data.configs.nemotron_cc/hq_synth.cache_dir": "DEP[2]",
+          "train_config.data.configs.nemotron_cc/hq_synth.train_urls.[0]": "DEP[3]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/**/*.jsonl.gz",
+          "train_config.data.configs.nemotron_cc/hq_synth.validation_urls": [],
+          "train_config.data.configs.paloma/4chan.cache_dir": "DEP[4]",
+          "train_config.data.configs.paloma/4chan.validation_urls.[0]": "DEP[5]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/c4_100_domains.cache_dir": "DEP[6]",
+          "train_config.data.configs.paloma/c4_100_domains.validation_urls.[0]": "DEP[7]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/c4_en.cache_dir": "DEP[8]",
+          "train_config.data.configs.paloma/c4_en.validation_urls.[0]": "DEP[9]/65cd6fc/c4_en/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/dolma-v1_5.cache_dir": "DEP[10]",
+          "train_config.data.configs.paloma/dolma-v1_5.validation_urls.[0]": "DEP[11]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/dolma_100_programing_languages.cache_dir": "DEP[12]",
+          "train_config.data.configs.paloma/dolma_100_programing_languages.validation_urls.[0]": "DEP[13]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/dolma_100_subreddits.cache_dir": "DEP[14]",
+          "train_config.data.configs.paloma/dolma_100_subreddits.validation_urls.[0]": "DEP[15]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/falcon-refinedweb.cache_dir": "DEP[16]",
+          "train_config.data.configs.paloma/falcon-refinedweb.validation_urls.[0]": "DEP[17]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/gab.cache_dir": "DEP[18]",
+          "train_config.data.configs.paloma/gab.validation_urls.[0]": "DEP[19]/65cd6fc/gab/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/m2d2_s2orc_unsplit.cache_dir": "DEP[20]",
+          "train_config.data.configs.paloma/m2d2_s2orc_unsplit.validation_urls.[0]": "DEP[21]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.cache_dir": "DEP[22]",
+          "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.validation_urls.[0]": "DEP[23]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/manosphere_meta_sep.cache_dir": "DEP[24]",
+          "train_config.data.configs.paloma/manosphere_meta_sep.validation_urls.[0]": "DEP[25]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/mc4.cache_dir": "DEP[26]",
+          "train_config.data.configs.paloma/mc4.validation_urls.[0]": "DEP[27]/65cd6fc/mc4/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/ptb.cache_dir": "DEP[28]",
+          "train_config.data.configs.paloma/ptb.validation_urls.[0]": "DEP[29]/65cd6fc/ptb/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/redpajama.cache_dir": "DEP[30]",
+          "train_config.data.configs.paloma/redpajama.validation_urls.[0]": "DEP[31]/65cd6fc/redpajama/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/twitterAAE_HELM_fixed.cache_dir": "DEP[32]",
+          "train_config.data.configs.paloma/twitterAAE_HELM_fixed.validation_urls.[0]": "DEP[33]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/wikitext_103.cache_dir": "DEP[34]",
+          "train_config.data.configs.paloma/wikitext_103.validation_urls.[0]": "DEP[35]/65cd6fc/wikitext_103/val/val*.jsonl.gz",
+          "train_config.data.configs.uncheatable_eval/wikipedia_english.cache_dir": "DEP[36]",
+          "train_config.data.configs.uncheatable_eval/wikipedia_english.validation_urls.[0]": "DEP[37]/wikipedia_english_*.jsonl.gz",
+          "train_config.data.configs.uncheatable_eval/github_python.cache_dir": "DEP[38]",
+          "train_config.data.configs.uncheatable_eval/github_python.validation_urls.[0]": "DEP[39]/github_python_*.jsonl.gz",
+          "train_config.data.configs.uncheatable_eval/github_cpp.cache_dir": "DEP[40]",
+          "train_config.data.configs.uncheatable_eval/github_cpp.validation_urls.[0]": "DEP[41]/github_cpp_*.jsonl.gz",
+          "train_config.data.configs.uncheatable_eval/bbc_news.cache_dir": "DEP[42]",
+          "train_config.data.configs.uncheatable_eval/bbc_news.validation_urls.[0]": "DEP[43]/bbc_news_*.jsonl.gz",
+          "train_config.data.configs.uncheatable_eval/arxiv_physics.cache_dir": "DEP[44]",
+          "train_config.data.configs.uncheatable_eval/arxiv_physics.validation_urls.[0]": "DEP[45]/arxiv_physics_*.jsonl.gz",
+          "train_config.data.configs.uncheatable_eval/arxiv_computer_science.cache_dir": "DEP[46]",
+          "train_config.data.configs.uncheatable_eval/arxiv_computer_science.validation_urls.[0]": "DEP[47]/arxiv_computer_science_*.jsonl.gz",
+          "train_config.data.configs.uncheatable_eval/ao3_english.cache_dir": "DEP[48]",
+          "train_config.data.configs.uncheatable_eval/ao3_english.validation_urls.[0]": "DEP[49]/ao3_english_*.jsonl.gz"
+        },
+        "dependencies": [
+          {
+            "name": "tokenized/nemotron_cc/hq_actual",
+            "config": {
+              "train_paths.[0]": "DEP[0]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/**/*.jsonl.gz",
+              "validation_paths": [],
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/nemotro-cc",
+                "config": {},
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/nemotro-cc",
+            "config": {},
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/nemotron_cc/hq_synth",
+            "config": {
+              "train_paths.[0]": "DEP[0]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/**/*.jsonl.gz",
+              "validation_paths": [],
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/nemotro-cc",
+                "config": {},
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/nemotro-cc",
+            "config": {},
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/4chan",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/c4_100_domains",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/c4_en",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/c4_en/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/dolma-v1_5",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/dolma_100_programing_languages",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/dolma_100_subreddits",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/falcon-refinedweb",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/gab",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/gab/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/m2d2_s2orc_unsplit",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/m2d2_wikipedia_unsplit",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/manosphere_meta_sep",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/mc4",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/mc4/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/ptb",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/ptb/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/redpajama",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/redpajama/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/twitterAAE_HELM_fixed",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/wikitext_103",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/wikitext_103/val/val*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/uncheatable_eval/wikipedia_english",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/wikipedia_english_*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/uncheatable-eval/latest",
+                "config": {
+                  "repo_owner": "ziqing-huang",
+                  "repo_name": "uncheatable_eval",
+                  "data_path": "data",
+                  "branch": "master"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/uncheatable-eval/latest",
+            "config": {
+              "repo_owner": "ziqing-huang",
+              "repo_name": "uncheatable_eval",
+              "data_path": "data",
+              "branch": "master"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/uncheatable_eval/github_python",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/github_python_*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/uncheatable-eval/latest",
+                "config": {
+                  "repo_owner": "ziqing-huang",
+                  "repo_name": "uncheatable_eval",
+                  "data_path": "data",
+                  "branch": "master"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/uncheatable-eval/latest",
+            "config": {
+              "repo_owner": "ziqing-huang",
+              "repo_name": "uncheatable_eval",
+              "data_path": "data",
+              "branch": "master"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/uncheatable_eval/github_cpp",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/github_cpp_*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/uncheatable-eval/latest",
+                "config": {
+                  "repo_owner": "ziqing-huang",
+                  "repo_name": "uncheatable_eval",
+                  "data_path": "data",
+                  "branch": "master"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/uncheatable-eval/latest",
+            "config": {
+              "repo_owner": "ziqing-huang",
+              "repo_name": "uncheatable_eval",
+              "data_path": "data",
+              "branch": "master"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/uncheatable_eval/bbc_news",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/bbc_news_*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/uncheatable-eval/latest",
+                "config": {
+                  "repo_owner": "ziqing-huang",
+                  "repo_name": "uncheatable_eval",
+                  "data_path": "data",
+                  "branch": "master"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/uncheatable-eval/latest",
+            "config": {
+              "repo_owner": "ziqing-huang",
+              "repo_name": "uncheatable_eval",
+              "data_path": "data",
+              "branch": "master"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/uncheatable_eval/arxiv_physics",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/arxiv_physics_*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/uncheatable-eval/latest",
+                "config": {
+                  "repo_owner": "ziqing-huang",
+                  "repo_name": "uncheatable_eval",
+                  "data_path": "data",
+                  "branch": "master"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/uncheatable-eval/latest",
+            "config": {
+              "repo_owner": "ziqing-huang",
+              "repo_name": "uncheatable_eval",
+              "data_path": "data",
+              "branch": "master"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/uncheatable_eval/arxiv_computer_science",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/arxiv_computer_science_*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/uncheatable-eval/latest",
+                "config": {
+                  "repo_owner": "ziqing-huang",
+                  "repo_name": "uncheatable_eval",
+                  "data_path": "data",
+                  "branch": "master"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/uncheatable-eval/latest",
+            "config": {
+              "repo_owner": "ziqing-huang",
+              "repo_name": "uncheatable_eval",
+              "data_path": "data",
+              "branch": "master"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/uncheatable_eval/ao3_english",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/ao3_english_*.jsonl.gz",
+              "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+            },
+            "dependencies": [
+              {
+                "name": "raw/uncheatable-eval/latest",
+                "config": {
+                  "repo_owner": "ziqing-huang",
+                  "repo_name": "uncheatable_eval",
+                  "data_path": "data",
+                  "branch": "master"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/uncheatable-eval/latest",
+            "config": {
+              "repo_owner": "ziqing-huang",
+              "repo_name": "uncheatable_eval",
+              "data_path": "data",
+              "branch": "master"
+            },
+            "dependencies": []
+          }
+        ]
+      }
+    ]
+  },
+  "dependencies": [
+    "us-west4-a/checkpoints/unified-language-only-llama-1b-tootsie-1e19"
+  ],
+  "output_path": "us-west4-a/evaluation/lm_evaluation_harness_levanter/lmeval_debug_checkpoints/unified-language-only-llama-1b-tootsie-1e19-3efea7"
+}
