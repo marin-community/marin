@@ -32,6 +32,7 @@ class JobInfo:
     num_tasks: int = 1
     attempt_id: int = 0
     worker_id: str | None = None
+    bundle_gcs_path: str | None = None
 
     controller_address: str | None = None
     """Address of the controller that started this job, if any."""
@@ -73,6 +74,7 @@ def get_job_info() -> JobInfo | None:
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
             dockerfile=os.environ.get("IRIS_DOCKERFILE"),
+            bundle_gcs_path=os.environ.get("IRIS_BUNDLE_GCS_PATH"),
             ports=_parse_ports_from_env(),
         )
         _job_info.set(info)

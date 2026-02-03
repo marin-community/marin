@@ -165,7 +165,6 @@ def worker_job_entrypoint(pool_id: str) -> None:
     worker_name = f"_workerpool_{pool_id}:worker-{task_index}"
 
     logger.info("Worker starting: pool_id=%s, task_index=%d of %d", pool_id, task_index, job_info.num_tasks)
-    logger.info("Worker name: %s, job_id=%s", worker_name, ctx.job_id)
 
     # Get the allocated port - this port is published by Docker for container access
     port = ctx.get_port("actor")
@@ -176,14 +175,11 @@ def worker_job_entrypoint(pool_id: str) -> None:
     actual_port = server.serve_background()
 
     # Register endpoint with registry
-    if ctx.registry is None:
-        raise RuntimeError("No registry available - are you running in a cluster context?")
     address = f"{job_info.advertise_host}:{actual_port}"
     ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
-    logger.info("ActorServer started and registered on port %d", actual_port)
+    logger.info("Worker registered: %s at %s", worker_name, address)
 
     # Block until the server is shut down (container kill → registry shutdown → server exit)
-    logger.info("Worker ready, waiting for tasks...")
     server.wait()
 
 
@@ -247,7 +243,13 @@ class WorkerDispatcher:
                 self._execute_task(task)
 
     def _discover_endpoint(self) -> None:
+        logger.debug(
+            "Discovering endpoint for worker %s (name=%s)",
+            self.state.worker_id,
+            self.state.worker_name,
+        )
         result = self._resolver.resolve(self.state.worker_name)
+        logger.debug("Resolve result for %s: %s", self.state.worker_name, result)
         if not result.is_empty:
             endpoint = result.first()
             self.state.endpoint_url = endpoint.url
@@ -260,6 +262,7 @@ class WorkerDispatcher:
             )
             logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:
+            logger.debug("Worker %s not found, waiting...", self.state.worker_id)
             if self._stop_event:
                 self._stop_event.wait(self._discover_backoff.next_interval())
             else:

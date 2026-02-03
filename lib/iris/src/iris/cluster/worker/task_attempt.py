@@ -29,8 +29,8 @@ from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.types import Entrypoint, is_task_finished
-from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.builder import ImageProvider
+from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -93,12 +93,15 @@ def build_iris_env(
     """
     env = {}
 
+    # N.B. This needs to mirror JobInfo.from_env()
+    # XXX: Should we move this code there instead?
     # Core task metadata
     env["IRIS_JOB_ID"] = task.job_id
     env["IRIS_TASK_ID"] = task.task_id
     env["IRIS_TASK_INDEX"] = str(task.task_index)
     env["IRIS_NUM_TASKS"] = str(task.num_tasks)
     env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
+    env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
 
     if worker_id:
         env["IRIS_WORKER_ID"] = worker_id

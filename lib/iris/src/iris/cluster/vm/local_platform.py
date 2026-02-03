@@ -51,10 +51,9 @@ from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.worker.builder import BuildResult
-from iris.cluster.worker.worker_types import TaskLogs
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
-from iris.cluster.worker.worker_types import LogLine
+from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -168,6 +167,7 @@ num_tasks={env.get("IRIS_NUM_TASKS", "1")},
 attempt_id={env.get("IRIS_ATTEMPT_ID", "0")},
 worker_id={env.get("IRIS_WORKER_ID")!r},
 controller_address={env.get("IRIS_CONTROLLER_ADDRESS")!r},
+bundle_gcs_path={env.get("IRIS_BUNDLE_GCS_PATH")!r},
 """
 
         thunk = f"""
