@@ -13,21 +13,23 @@
 # limitations under the License.
 
 """
-OLMoE vs OLMoE+stability vs dense LR sweep (DCLM baseline-only).
+OLMoE-M LR sweep on the Nemotron+DCLM+FineWeb mixture (fixed token budget).
 
-This experiment is intended to be a more stable, low-variance comparison than large multi-size sweeps:
-- Dataset: DCLM baseline-only (tokenized) with a fixed token budget (default: 10B tokens).
-- Variants:
-  1) MoE baseline (OLMoE-ish)
-  2) MoE + 5 stability measures:
+This mirrors `experiments/speedrun/olmoe_s_dclm10b_moe_vs_dense_lr_sweep.py`, but:
+- uses the composite Nemotron+DCLM+FineWeb mixture (tokenized) from `olmoe_1b7b_nemotron_40b.py`
+- runs OLMoE-M geometry (16 experts, top-2 routing)
+- compares 3 MoE variants across 4 learning-rate multipliers:
+  1) `olmoe_m` (vanilla)
+  2) `olmoe_m_bilinear` (bilinear expert MLPs; SwiGLU -> (W1 x) * (W3 x))
+  3) `olmoe_m_stab5` (five stability measures, including fp32 router compute):
      - QK-norm
      - topk-then-softmax routing
      - auxiliary-free load balancing (ALF-LB)
      - dense routing for first 2 blocks
      - fp32 router compute
-  3) Dense baseline (hackable transformer 130m preset)
-- Optimizer: AdamW (via Levanter AdamConfig defaults, betas 0.9/0.95)
-- Logging: per-layer and global load-violation maxima (see `experiments/speedrun/custom_mixtral.py`)
+
+W&B:
+- set `WANDB_PROJECT=olmoe_m` (or pass `--wandb-project olmoe_m`) to keep these runs in a separate project.
 """
 
 # nodryrun
@@ -40,13 +42,13 @@ import logging
 import os
 from datetime import timedelta
 
-from fray.cluster import ResourceConfig
-
 from experiments.defaults import default_train
-from experiments.pretraining_datasets.dclm import dclm_baseline_only_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.custom_mixtral import MixtralConfig
-from experiments.speedrun.hackable_transformer_starter.hackable_transformer_attn_sink import HackableTransformerConfig
+from experiments.speedrun.olmoe_1b7b_nemotron_40b import DATASET_OPTIONS
+from fray.cluster import ResourceConfig
+from levanter.data.text import LMMixtureDatasetConfig
+from levanter.utils.activation import ActivationFunctionEnum
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 
 logger = logging.getLogger("ray")
@@ -59,78 +61,48 @@ def _ceil_div(a: int, b: int) -> int:
 
 
 def _format_lr_tag(lr: float) -> str:
-    # Keep this short and filesystem-safe (used in run/output identifiers).
     s = f"{lr:.2e}"
     mantissa, exp = s.split("e", 1)
     mantissa = mantissa.replace(".", "p")
     exp_i = int(exp)
-    if exp_i < 0:
-        exp_tag = f"em{abs(exp_i):02d}"
-    else:
-        exp_tag = f"e{exp_i:02d}"
+    exp_tag = f"em{abs(exp_i):02d}" if exp_i < 0 else f"e{exp_i:02d}"
     return f"{mantissa}{exp_tag}"
 
 
-def _build_moe_approx_125m_config(seq_len: int) -> MixtralConfig:
-    # Approximate ~125M "active" params/token by reducing hidden/intermediate sizes while keeping
-    # the expert granularity ratio fixed (topk/n_experts = 1/8).
+def _build_olmoe_m_config(seq_len: int) -> MixtralConfig:
+    # Keep expert granularity fixed: topk/n_experts = 2/16 = 1/8.
     return MixtralConfig(
         seq_len=seq_len,
-        # Megablox/Pallas GMM kernels require certain block-shape divisibility constraints on TPU. In practice, using a
-        # hidden dim divisible by 128 avoids compilation failures.
-        hidden_dim=384,
-        intermediate_dim=768,
-        num_layers=8,
-        num_heads=6,
-        num_kv_heads=3,
-        n_routed_experts=8,
-        num_experts_per_tok=1,
+        hidden_dim=1024,
+        intermediate_dim=512,
+        num_layers=12,
+        num_heads=8,
+        num_kv_heads=4,
+        n_routed_experts=16,
+        num_experts_per_tok=2,
         layer_norm_epsilon=1e-5,
         gradient_checkpointing=True,
         scan_layers=True,
         use_gmm=True,
-        cross_entropy_block_size=32000,
+        # The TPU/Pallas fused CE kernel can hit vmem scratch limits at large vocab block sizes.
+        # We force the fused CE backend to the stable XLA streaming implementation (see `cross_entropy_implementation`)
+        # so we can keep the canonical 32k block size without `RESOURCE_EXHAUSTED` failures.
+        cross_entropy_block_size=32768,
+        cross_entropy_implementation="xla",
         flash_attention_block_size=None,
         reference_checkpoint=OLMOE_1B7B_REFERENCE_CHECKPOINT,
         tokenizer=OLMOE_1B7B_REFERENCE_CHECKPOINT,
     )
 
 
-def _build_dense_130m_config(seq_len: int) -> HackableTransformerConfig:
-    # Reuse the hackable-transformer 130m preset geometry (dense baseline).
-    return HackableTransformerConfig(
-        max_seq_len=seq_len,
-        hidden_dim=512,
-        intermediate_dim=1792,
-        num_layers=6,
-        num_heads=8,
-        num_kv_heads=8,
-        tie_word_embeddings=False,
-    )
-
-
-def _model_family(variant: str) -> str:
-    """Returns a simplified model-family label for W&B naming/tags.
-
-    For operator convenience:
-    - all MoE variants (OLMoE-based) are labeled "olmoe"
-    - all dense baselines are labeled "llama_dense"
-    """
-
-    if variant.startswith("moe"):
-        return "olmoe"
-    return "llama_dense"
-
-
 def _make_tags(
     *,
-    model_family: str,
     variant: str,
-    size_tag: str,
     lr: float,
     seq_len: int,
     global_batch_size: int,
     token_target: int,
+    permutation_type: str,
     use_qk_norm: bool,
     router_topk_then_softmax: bool,
     alf_lb_loss_scale: float,
@@ -139,16 +111,15 @@ def _make_tags(
     extra_tags: list[str],
 ) -> list[str]:
     return [
-        "exp=olmoe_vs_dense_dclm10b_lr_sweep",
-        "data=dclm_baseline_only",
-        f"model={model_family}",
+        "exp=olmoe_m_lr_sweep",
+        "data=nemotron_dclm_fineweb",
         f"token_target={token_target}",
+        f"perm={permutation_type}",
         f"seq={seq_len}",
         f"bs={global_batch_size}",
         "opt=adamw_b0.9_0.95",
         f"lr={lr:.2e}",
         f"variant={variant}",
-        f"size={size_tag}",
         f"stab_qk_norm={int(use_qk_norm)}",
         f"stab_topk_then_softmax={int(router_topk_then_softmax)}",
         f"stab_alf_lb={int(alf_lb_loss_scale > 0)}",
@@ -160,12 +131,12 @@ def _make_tags(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="OLMoE vs OLMoE+stability vs dense sweep on DCLM baseline-only (token budget)."
+        description="OLMoE-M LR sweep on Nemotron+DCLM+FineWeb (token budget; 3 variants × 4 LR multipliers)."
     )
     parser.add_argument("--tpu-type", default="v5p-16")
-    parser.add_argument("--seq-len", type=int, default=2048)
-    parser.add_argument("--global-batch-size", type=int, default=64)
-    parser.add_argument("--token-target", type=int, default=10_000_000_000)
+    parser.add_argument("--seq-len", type=int, default=4096)
+    parser.add_argument("--global-batch-size", type=int, default=512)
+    parser.add_argument("--token-target", type=int, default=40_000_000_000)
 
     parser.add_argument("--base-lr", type=float, default=1e-4)
     parser.add_argument(
@@ -179,7 +150,7 @@ def main() -> None:
     parser.add_argument(
         "--steps-per-eval",
         type=int,
-        default=1000,
+        default=5000,
         help="How often to run Levanter-native validation losses during training.",
     )
     parser.add_argument(
@@ -187,6 +158,23 @@ def main() -> None:
         action="store_true",
         help="Disable default Levanter validation losses (Paloma + uncheatable).",
     )
+
+    parser.add_argument(
+        "--permutation-type",
+        choices=("feistel", "linear"),
+        default="feistel",
+        help="Shuffle permutation type for the mixture dataset.",
+    )
+    parser.add_argument(
+        "--dataset-tokenizer",
+        type=str,
+        default="stanford-crfm/marin-tokenizer",
+        help=(
+            "Optional tokenizer name/path used for vocab size / special ids. "
+            "Must match the tokenizer used to pretokenize the dataset."
+        ),
+    )
+
     parser.add_argument(
         "--single-checkpoint",
         action="store_true",
@@ -195,45 +183,42 @@ def main() -> None:
             "This disables permanent step-based checkpoints."
         ),
     )
-    parser.add_argument(
-        "--checkpoint-save-minutes",
-        type=int,
-        default=60,
-        help="How often to save temporary checkpoints when --single-checkpoint is set.",
-    )
-    parser.add_argument(
-        "--wandb-name-suffix",
-        type=str,
-        default=None,
-        help="Optional suffix appended to the W&B display name for all runs (e.g. `t$(date +%Y%m%d_%H%M%S)`).",
-    )
-    parser.add_argument(
-        "--run-suffix",
-        type=str,
-        default=None,
-        help=(
-            "Optional suffix appended to the *output/run identifier* for all runs, to create a fresh sweep without "
-            "overwriting prior outputs (e.g. `$(git rev-parse --short HEAD)` or `t$(date +%Y%m%d_%H%M%S)`)."
-        ),
-    )
+    parser.add_argument("--checkpoint-save-minutes", type=int, default=60)
+
+    parser.add_argument("--wandb-project", type=str, default="olmoe_m")
+    parser.add_argument("--wandb-name-suffix", type=str, default=None)
+    parser.add_argument("--run-suffix", type=str, default=None)
     parser.add_argument("--extra-tag", action="append", default=[], help="Additional W&B tag (repeatable).")
 
-    # MoE stability knobs (only applied to the 'moe_stab' variant)
     parser.add_argument("--stab-alf-lb-loss-scale", type=float, default=0.01)
-
     parser.add_argument(
         "--variants",
         nargs="+",
-        choices=("moe", "moe_stab5", "dense"),
-        default=["moe", "moe_stab5", "dense"],
-        help="Which model family variants to run (default: all three).",
+        choices=("olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab5"),
+        default=["olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab5"],
+        help="Which variants to run (default: all).",
     )
 
     # Executor controls (so this script can be run under ray_run without draccus CLI conflicts).
     parser.add_argument("--prefix", default=os.getenv("MARIN_PREFIX"))
     parser.add_argument("--executor-info-base-path", default=None)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--force-run-failed", action="store_true")
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=1,
+        help=(
+            "Maximum number of training steps to run concurrently within this sweep driver. "
+            "Set to 1 to use a single TPU slice per submission (sequential LR runs)."
+        ),
+    )
+    parser.set_defaults(force_run_failed=True)
+    parser.add_argument(
+        "--no-force-run-failed",
+        dest="force_run_failed",
+        action="store_false",
+        help="If set, do not retry steps that failed previously (executor will stop on FAILED status).",
+    )
     parser.add_argument("--run-only", nargs="*", default=None)
     args = parser.parse_args()
 
@@ -255,25 +240,34 @@ def main() -> None:
         beta1=0.9,
         beta2=0.95,
         steps_per_eval=args.steps_per_eval,
-        steps_per_export=100_000_000,  # irrelevant when --single-checkpoint, but keep large to avoid step-based exports
-        steps_per_hf_export=-1,  # disable HF exports (disk-heavy and not needed for this comparison)
+        steps_per_export=100_000_000,
+        steps_per_hf_export=-1,
     )
 
-    moe_base = _build_moe_approx_125m_config(args.seq_len)
-    moe_stab = dataclasses.replace(
-        moe_base,
+    tokenized = DATASET_OPTIONS["nemotron_dclm_fineweb_10b"]
+    if not isinstance(tokenized, LMMixtureDatasetConfig):
+        raise ValueError("Expected nemotron_dclm_fineweb_10b to be a mixture dataset config")
+    tokenized = dataclasses.replace(
+        tokenized,
+        permutation_type=args.permutation_type,
+        tokenizer=args.dataset_tokenizer,
+    )
+
+    olmoe_m = _build_olmoe_m_config(args.seq_len)
+    olmoe_m_bilinear = dataclasses.replace(olmoe_m, activation_function=ActivationFunctionEnum.linear)
+    olmoe_m_stab5 = dataclasses.replace(
+        olmoe_m,
         use_qk_norm=True,
         router_topk_then_softmax=True,
         router_fp32=True,
         alf_lb_loss_scale=args.stab_alf_lb_loss_scale,
         dense_first_n_layers=2,
     )
-    dense = _build_dense_130m_config(args.seq_len)
 
-    variants: list[tuple[str, object, str]] = [
-        ("moe", moe_base, "olmoe_s125m"),
-        ("moe_stab5", moe_stab, "olmoe_s125m"),
-        ("dense", dense, "llama_dense_130m"),
+    variants: list[tuple[str, MixtralConfig]] = [
+        ("olmoe_m", olmoe_m),
+        ("olmoe_m_bilinear", olmoe_m_bilinear),
+        ("olmoe_m_stab5", olmoe_m_stab5),
     ]
     selected_variants = {v.strip() for v in args.variants}
     variants = [v for v in variants if v[0] in selected_variants]
@@ -284,18 +278,11 @@ def main() -> None:
         lr_tag = _format_lr_tag(lr)
         train_cfg = dataclasses.replace(base_train_config, learning_rate=lr)
 
-        for variant, model_cfg, size_tag in variants:
-            base_name = f"olmoe_vs_dense_dclm10b/{variant}/lr_{lr_tag}/s{args.seq_len}_b{args.global_batch_size}"
+        for variant, model_cfg in variants:
+            base_name = f"olmoe_m_40b/{variant}/lr_{lr_tag}/s{args.seq_len}_b{args.global_batch_size}"
 
             suffix = f"_{args.wandb_name_suffix}" if args.wandb_name_suffix else ""
-            model_family = _model_family(variant)
-            # Keep W&B names short and easy to scan; avoid redundant "dense_..._dense" prefixes.
-            if variant == "dense":
-                wandb_name = f"od_dclm10b_{model_family}_s{args.seq_len}_b{args.global_batch_size}_lr{lr_tag}{suffix}"
-            else:
-                wandb_name = (
-                    f"od_dclm10b_{model_family}_{variant}_s{args.seq_len}_b{args.global_batch_size}_lr{lr_tag}{suffix}"
-                )
+            wandb_name = f"olmoe_m_{variant}_s{args.seq_len}_b{args.global_batch_size}_lr{lr_tag}{suffix}"
 
             use_qk_norm = bool(getattr(model_cfg, "use_qk_norm", False))
             router_topk_then_softmax = bool(getattr(model_cfg, "router_topk_then_softmax", False))
@@ -303,36 +290,38 @@ def main() -> None:
             dense_first_n_layers = int(getattr(model_cfg, "dense_first_n_layers", 0) or 0)
             router_fp32 = bool(getattr(model_cfg, "router_fp32", False))
 
+            extra_tags = list(args.extra_tag)
+            if args.run_suffix:
+                extra_tags.append(f"run_suffix={args.run_suffix}")
+
             tags = _make_tags(
-                model_family=model_family,
                 variant=variant,
-                size_tag=size_tag,
                 lr=lr,
                 seq_len=args.seq_len,
                 global_batch_size=args.global_batch_size,
                 token_target=args.token_target,
+                permutation_type=args.permutation_type,
                 use_qk_norm=use_qk_norm,
                 router_topk_then_softmax=router_topk_then_softmax,
                 alf_lb_loss_scale=alf_lb_loss_scale,
                 dense_first_n_layers=dense_first_n_layers,
                 router_fp32=router_fp32,
-                extra_tags=(
-                    [*list(args.extra_tag), f"run_suffix={args.run_suffix}"] if args.run_suffix else list(args.extra_tag)
-                ),
+                extra_tags=extra_tags,
             )
 
             run_suffix = f"_{args.run_suffix}" if args.run_suffix else ""
             steps.append(
                 default_train(
                     name=f"{base_name}{run_suffix}",
-                    tokenized=dclm_baseline_only_mixture_config_llama3,
-                    model_config=model_cfg,  # type: ignore[arg-type]
+                    tokenized=tokenized,
+                    model_config=model_cfg,
                     train_config=train_cfg,
                     tags=tags,
                     use_default_validation=use_default_validation,
                     eval_harness_tasks=(),
                     wandb_name=wandb_name,
-                    checkpointer_save_interval=timedelta(minutes=args.checkpoint_save_minutes),
+                    wandb_project=args.wandb_project,
+                    checkpointer_save_interval=timedelta(minutes=int(args.checkpoint_save_minutes)),
                     checkpointer_keep=[] if args.single_checkpoint else None,
                 )
             )
@@ -343,8 +332,9 @@ def main() -> None:
         dry_run=args.dry_run,
         force_run_failed=args.force_run_failed,
         run_only=args.run_only,
+        max_concurrent=args.max_concurrent,
     )
-    executor_main.__wrapped__(executor_cfg, steps=steps, description="OLMoE vs dense LR sweep (DCLM baseline-only)")
+    executor_main.__wrapped__(executor_cfg, steps=steps, description="OLMoE-M LR sweep (Nemotron+DCLM+FineWeb; 40B)")
 
 
 if __name__ == "__main__":

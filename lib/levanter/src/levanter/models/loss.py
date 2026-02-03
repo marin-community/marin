@@ -33,6 +33,7 @@ def maybe_fused_next_token_loss(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: str | None = None,
 ) -> NamedArray:
     """
     Compute the next token loss with optional block-wise processing.
@@ -76,10 +77,11 @@ def maybe_fused_next_token_loss(
     # Create a mask that excludes the last token
     not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
     if loss_weight is not None:
-        dtype = loss_weight.dtype
-        loss_weight = loss_weight.astype(dtype) * not_last_mask.astype(dtype)
+        weight_dtype = dtype if dtype is not None else pred_embeddings.dtype
+        loss_weight = loss_weight.astype(weight_dtype) * not_last_mask.astype(weight_dtype)
     else:
-        loss_weight = not_last_mask.astype(jnp.float32)
+        weight_dtype = dtype if dtype is not None else pred_embeddings.dtype
+        loss_weight = not_last_mask.astype(weight_dtype)
 
     # Compute the loss with optional block-wise processing
     return fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -96,6 +98,7 @@ def maybe_fused_next_token_loss(
         dtype=dtype,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
+        implementation=implementation,
     )
 
 
@@ -133,10 +136,10 @@ def next_token_loss(
     # Create a mask that excludes the last token
     not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
     if loss_weight is not None:
-        dtype = loss_weight.dtype
-        loss_weight = loss_weight.astype(dtype) * not_last_mask.astype(dtype)
+        weight_dtype = logits.dtype
+        loss_weight = loss_weight.astype(weight_dtype) * not_last_mask.astype(weight_dtype)
     else:
-        loss_weight = not_last_mask.astype(jnp.float32)
+        loss_weight = not_last_mask.astype(logits.dtype)
 
     return cross_entropy_and_logsumexp_penalty(
         Vocab=Vocab,
@@ -184,6 +187,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: str | None = None,
 ) -> NamedArray:
     """
     Compute the cross-entropy loss and logsumexp penalty using embeddings and lm_head,
@@ -230,6 +234,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
+            implementation=implementation,
         )
 
     in_specs = (

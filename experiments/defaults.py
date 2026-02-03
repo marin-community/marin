@@ -354,10 +354,12 @@ def default_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
+                entity=os.environ.get("WANDB_ENTITY"),
                 project=wandb_project,
                 name=resolved_wandb_name,
                 tags=[*tags],
                 group=wandb_group,
+                mode=os.environ.get("WANDB_MODE"),
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,

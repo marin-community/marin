@@ -32,6 +32,7 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import partial
+from typing import TypeVar
 
 import haliax as hax
 import jax
@@ -42,14 +43,15 @@ from fray.cluster import ResourceConfig
 from haliax import Axis, NamedArray
 from haliax.partitioning import _get_mesh
 from jax.experimental.shard_map import shard_map
-from jax.sharding import PartitionSpec as P, reshard
+from jax.sharding import NamedSharding, PartitionSpec as P, reshard
 from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.sharding import Pbatch, Pvocab, unshard
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.loss import maybe_fused_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.flop_utils import lm_flops_per_token
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
@@ -58,6 +60,10 @@ from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger("ray")
+
+# Ruff/Pyflakes treats string literals in annotations as forward refs and checks that bare
+# identifiers (e.g. "D") are defined. These are jaxtyping dimension labels, not runtime symbols.
+D = TypeVar("D")
 
 
 #### Conventions
@@ -92,6 +98,7 @@ class GrugMoeModelConfig:
     initializer_std: float = 0.02
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     cross_entropy_block_size: int | None = 32768
+    cross_entropy_implementation: str | None = "xla"
 
     # MoE hyperparams (vanilla Mixtral-ish)
     n_routed_experts: int = 8  # E
@@ -173,8 +180,11 @@ def init_parameters(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> GrugMoePar
 
     blocks: list[GrugMoeBlockParams] = []
     # extract shape sizes for brevity and consistency
-    D, N, M, H, I = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, head_dim, cfg.intermediate_dim
-    E = cfg.n_routed_experts
+    hidden_dim = cfg.hidden_dim
+    num_heads = cfg.num_heads
+    num_kv_heads = cfg.num_kv_heads
+    intermediate_dim = cfg.intermediate_dim
+    num_experts = cfg.n_routed_experts
     for i in range(cfg.num_layers):
         (
             k_q,
@@ -188,23 +198,36 @@ def init_parameters(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> GrugMoePar
         ) = jax.random.split(layer_keys[i], 8)
 
         attn = GrugAttentionParams(
-            w_q=reshard(_init_weight(k_q, (D, N * H), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (D, M * H), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (D, M * H), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (N * H, D), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (hidden_dim, num_heads * head_dim), cfg.initializer_std), P("data", "model")),
+            w_k=reshard(
+                _init_weight(k_k, (hidden_dim, num_kv_heads * head_dim), cfg.initializer_std), P("data", "model")
+            ),
+            w_v=reshard(
+                _init_weight(k_v, (hidden_dim, num_kv_heads * head_dim), cfg.initializer_std), P("data", "model")
+            ),
+            w_o=reshard(_init_weight(k_o, (num_heads * head_dim, hidden_dim), cfg.initializer_std), P("model", "data")),
         )
 
         # Router maps D -> E. Keep the expert axis replicated (no expert-parallel sharding).
-        router_w = reshard(_init_weight(k_router, (D, E), cfg.initializer_std), P("data", None))
+        router_w = reshard(_init_weight(k_router, (hidden_dim, num_experts), cfg.initializer_std), P("data", None))
 
         # Expert weights are replicated over E and follow the same (data, model) sharding pattern as Grug MLP.
-        w1 = reshard(_init_weight(k_w1, (E, D, I), cfg.initializer_std), P(None, "data", "model"))
-        w3 = reshard(_init_weight(k_w3, (E, D, I), cfg.initializer_std), P(None, "data", "model"))
-        w2 = reshard(_init_weight(k_w2, (E, I, D), cfg.initializer_std), P(None, "model", "data"))
+        w1 = reshard(
+            _init_weight(k_w1, (num_experts, hidden_dim, intermediate_dim), cfg.initializer_std),
+            P(None, "data", "model"),
+        )
+        w3 = reshard(
+            _init_weight(k_w3, (num_experts, hidden_dim, intermediate_dim), cfg.initializer_std),
+            P(None, "data", "model"),
+        )
+        w2 = reshard(
+            _init_weight(k_w2, (num_experts, intermediate_dim, hidden_dim), cfg.initializer_std),
+            P(None, "model", "data"),
+        )
 
         # keep rms replicated
-        rms_attn = jnp.ones((D,), dtype=jnp.float32)
-        rms_mlp = jnp.ones((D,), dtype=jnp.float32)
+        rms_attn = jnp.ones((hidden_dim,), dtype=jnp.float32)
+        rms_mlp = jnp.ones((hidden_dim,), dtype=jnp.float32)
 
         blocks.append(
             GrugMoeBlockParams(
@@ -228,9 +251,15 @@ def init_parameters(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> GrugMoePar
 
 def rms_norm(x: Float[Array, "... D"], weight: Float[Array, "D"], eps: float) -> Float[Array, "... D"]:
     weight = unshard(weight)
-    variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-    normed = x * jax.lax.rsqrt(variance + eps)
-    return normed * weight
+    # Levanter runs with mixed precision (bf16 compute, fp32 params) + strict dtype promotion.
+    # Do RMSNorm math in fp32, then cast back to the input dtype.
+    out_dtype = x.dtype
+    x_f32 = x.astype(jnp.float32)
+    w_f32 = weight.astype(jnp.float32)
+    variance = jnp.mean(jnp.square(x_f32), axis=-1, keepdims=True)
+    inv = jax.lax.rsqrt(variance + eps)
+    y = (x_f32 * inv) * w_f32
+    return y.astype(out_dtype)
 
 
 def _ragged_moe_linear(
@@ -252,6 +281,32 @@ def _ragged_moe_linear(
         lhs_ragged_dimensions=(0,),
         rhs_group_dimensions=(0,),
     )
+    # `ragged_dot_general` doesn't yet have a built-in sharding rule. On SPMD runs we
+    # drop this op into full auto-sharding mode.
+    #
+    # This MoE is still *not* expert-parallel: expert weights are replicated and all routing
+    # / dispatch happens per-device for that device's local tokens.
+    mesh = _get_mesh()
+    if mesh is not None and not getattr(mesh, "empty", False):
+        w_sharding = getattr(w, "sharding", None)
+        w_spec = getattr(w_sharding, "spec", None)
+        out_axis = w_spec[-1] if w_spec is not None and len(w_spec) == w.ndim else None
+        out_sharding = NamedSharding(mesh, P(Pbatch[0], out_axis))
+
+        ragged = jax.sharding.auto_axes(
+            lambda lhs, rhs, gs: jax.lax.ragged_dot_general(
+                lhs=lhs,
+                rhs=rhs,
+                group_sizes=gs,
+                ragged_dot_dimension_numbers=dim_numbers,
+            )
+        )
+        try:
+            return ragged(x, w, group_sizes, out_sharding=out_sharding)
+        except TypeError:
+            # Some JAX builds spell this kwarg differently.
+            return ragged(x, w, group_sizes, out_shardings=out_sharding)  # type: ignore[call-arg]
+
     return jax.lax.ragged_dot_general(
         lhs=x,
         rhs=w,
@@ -535,6 +590,41 @@ class GrugMoeWrapper(LmHeadModel[PyTree]):
     def get_lm_head(self) -> NamedArray:
         return hax.named(self.params.output_proj, (self.Embed, self.Vocab))
 
+    def compute_next_token_loss(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: hax.ReductionFunction | None = hax.mean,
+        reduction_axis: hax.AxisSelection | None = None,
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype | None = jnp.float32,
+        logit_soft_cap: float | None = None,
+    ) -> jnp.ndarray | NamedArray:
+        activations = self.activations(example.tokens, example.attn_mask, key=key)
+
+        aux_loss = 0
+        if isinstance(activations, tuple):
+            activations, aux_loss = activations
+
+        loss = maybe_fused_next_token_loss(
+            self.Pos,
+            self.Embed,
+            self.Vocab,
+            activations,
+            self.get_lm_head(),
+            example.tokens,
+            loss_weight=example.loss_weight,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            block_size=self.grug_config.cross_entropy_block_size,
+            dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+            implementation=self.grug_config.cross_entropy_implementation,
+        )
+        return loss + aux_loss
+
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "GrugMoeWrapper":
         raise NotImplementedError("GrugMoeWrapper does not yet support resizing the vocabulary.")
 
@@ -556,7 +646,9 @@ def _mask_from_levanter(attn_mask: LevanterAttentionMask | NamedArray | None) ->
             sliding_window=attn_mask.sliding_window,
         )
     elif isinstance(attn_mask, NamedArray):
-        raise NotImplementedError("NamedArray attention masks are not supported by Grug (pass a Levanter AttentionMask).")
+        raise NotImplementedError(
+            "NamedArray attention masks are not supported by Grug (pass a Levanter AttentionMask)."
+        )
     return mask
 
 
@@ -621,6 +713,8 @@ class GrugformerMoeConfig(LmConfig[GrugMoeWrapper]):
     rzl_coef: float | None = 0.001
     router_fp32: bool = False
     router_topk_then_softmax: bool = False
+    cross_entropy_block_size: int | None = 32768
+    cross_entropy_implementation: str | None = "xla"
 
     # ---- LmConfig API ----
     @property
@@ -647,6 +741,8 @@ class GrugformerMoeConfig(LmConfig[GrugMoeWrapper]):
             rzl_coef=self.rzl_coef,
             router_fp32=self.router_fp32,
             router_topk_then_softmax=self.router_topk_then_softmax,
+            cross_entropy_block_size=self.cross_entropy_block_size,
+            cross_entropy_implementation=self.cross_entropy_implementation,
         )
         return GrugMoeWrapper.init(Vocab, cfg, key=key)
 
