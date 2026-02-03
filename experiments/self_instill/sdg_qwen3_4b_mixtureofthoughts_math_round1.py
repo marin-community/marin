@@ -418,8 +418,17 @@ def prep_validation_prompts(config: PrepValidationConfig):
         if "messages" in row:
             del row["messages"]
 
-        question = row.get("instruction_seed", "").strip()
-        answer = row.get("generated_text", "").strip()
+        question = row.get("instruction_seed")
+        answer = row.get("generated_text")
+
+        # Fail explicitly if required fields are missing
+        if not question or not isinstance(question, str):
+            raise ValueError(f"Missing or invalid instruction_seed: {question}")
+        if not answer or not isinstance(answer, str):
+            raise ValueError(f"Missing or invalid generated_text: {answer}")
+
+        question = question.strip()
+        answer = answer.strip()
 
         # Cycle consistency - step 1: generate inferred question
         row["cycle_gen_prompt"] = cycle_gen_prompt_template.format(answer=answer)
@@ -544,7 +553,10 @@ def prep_cycle_compare_prompts(config: PrepCycleCompareConfig):
 
     def add_compare_prompts(row):
         """Add cycle comparison prompt columns for each inferred question."""
-        original_question = row.get("instruction_seed", "").strip()
+        original_question = row.get("instruction_seed")
+        if not original_question or not isinstance(original_question, str):
+            raise ValueError(f"Missing or invalid instruction_seed: {original_question}")
+        original_question = original_question.strip()
 
         # inferred_questions is a list of 3 samples
         inferred_questions = row.get("inferred_questions", [])
@@ -869,8 +881,13 @@ def filter_and_format_output(config: FilterValidationConfig):
 
         # Format final output if all validations passed
         if row["all_validation_passed"]:
-            generated_text = row.get("generated_text", "")
-            instruction_seed = row.get("instruction_seed", "")
+            generated_text = row.get("generated_text")
+            instruction_seed = row.get("instruction_seed")
+
+            if not generated_text or not isinstance(generated_text, str):
+                raise ValueError(f"Missing generated_text in validated row")
+            if not instruction_seed or not isinstance(instruction_seed, str):
+                raise ValueError(f"Missing instruction_seed in validated row")
 
             if config.is_instruction_tuned:
                 # For instruction-tuned models, the output is already in the format:
@@ -882,14 +899,13 @@ def filter_and_format_output(config: FilterValidationConfig):
                 summary = row.get("summary", "")
                 output_text = f"<think>\n{generated_text}\n</think>\n\n{summary}"
 
-            # Create conversation format
+            # Store as separate columns instead of nested dict (PyArrow compatible)
             user_prompt = instruction_seed.strip() + "\n" + REASONING_INSTRUCTION + "\n"
-            row["messages"] = [
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": output_text},
-            ]
+            row["user_content"] = user_prompt
+            row["assistant_content"] = output_text
         else:
-            row["messages"] = None
+            row["user_content"] = None
+            row["assistant_content"] = None
 
         return row
 
