@@ -297,6 +297,25 @@ def default_static_check(text: str) -> bool:
     return True
 
 
+def boxed_only_static_check(text: str) -> bool:
+    """Static validation that only requires \\boxed{}.
+
+    This is more permissive than default_static_check and allows non-English
+    characters (e.g., Chinese, Greek math symbols). Useful for multilingual
+    models or math problems that use Greek letters.
+
+    Args:
+        text: The generated text to validate.
+
+    Returns:
+        True if the text contains \\boxed{}, False otherwise.
+    """
+    if not text:
+        return False
+    # Only require boxed answer
+    return bool(_BOXED_PATTERN.search(text))
+
+
 class vLLMTextGenerationWithSelection(vLLMTextGeneration):
     """vLLM text generation with multi-sample generation and selection.
 

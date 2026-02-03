@@ -22,7 +22,18 @@ import pyarrow as pa
 import ray
 from fray.cluster import ResourceConfig
 from marin.generation.chunk_utils import ChunkStrategy
-from marin.generation.pipeline import vLLMTextGeneration, vLLMTextGenerationWithSelection
+from marin.generation.pipeline import (
+    boxed_only_static_check,
+    default_static_check,
+    vLLMTextGeneration,
+    vLLMTextGenerationWithSelection,
+)
+
+# Mapping from static_check_type string to function
+STATIC_CHECK_FUNCTIONS = {
+    "default": default_static_check,
+    "boxed_only": boxed_only_static_check,
+}
 from marin.utils import fsspec_glob
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
@@ -78,6 +89,10 @@ class TextGenerationInferenceConfig:
     save_all_samples: bool = False
     # Column name for all samples if save_all_samples=True.
     all_samples_column_name: str = "all_samples"
+    # Static check type for multi-sample selection. Options:
+    #   - "default": requires \\boxed{} AND no non-English characters
+    #   - "boxed_only": requires only \\boxed{} (allows non-English characters like Chinese, Greek symbols)
+    static_check_type: str = "default"
 
     # Multi-sample as list (for validation/voting)
     # When enabled with n>1 in generation_kwargs, saves samples as a list instead of joining with space.
@@ -293,6 +308,8 @@ def run_inference(config: TextGenerationInferenceConfig):
     # Choose pipeline class based on multi-sample selection mode
     if config.enable_multi_sample_selection:
         pipeline_class = vLLMTextGenerationWithSelection
+        # Get the static check function based on config
+        static_check_fn = STATIC_CHECK_FUNCTIONS.get(config.static_check_type, default_static_check)
         fn_constructor_kwargs = {
             "model_name": config.model_name,
             "engine_kwargs": config.engine_kwargs,
@@ -306,6 +323,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "column_types": column_types,
             "save_all_samples": config.save_all_samples,
             "all_samples_column_name": config.all_samples_column_name,
+            "static_check_fn": static_check_fn,
         }
     else:
         pipeline_class = vLLMTextGeneration

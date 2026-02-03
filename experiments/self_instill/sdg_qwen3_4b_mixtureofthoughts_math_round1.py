@@ -255,8 +255,8 @@ generate_with_selection = ExecutorStep(
         max_doc_tokens=32768,
 
         # Ray Data
-        num_instances=(1, 256),
-        batch_size=16,  # Smaller batch since generating 4 samples each
+        num_instances=(1, 128),
+        batch_size=8,  # Reduced to lower memory pressure
         tensor_parallel_size=1,
         preserve_order=False,
 
@@ -277,6 +277,7 @@ generate_with_selection = ExecutorStep(
         enable_multi_sample_selection=True,
         save_all_samples=True,  # Save for debugging
         all_samples_column_name="all_samples",
+        static_check_type="boxed_only",  # Only require \boxed{}, allow non-English chars
 
         # Retry settings
         max_task_retries=10,
