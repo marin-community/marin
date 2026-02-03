@@ -57,7 +57,7 @@ DEFAULT_CONFIG = config_pb2.DefaultsConfig(
         port=22,
         connect_timeout=Duration.from_seconds(30).to_proto(),
     ),
-    autoscaler=config_pb2.AutoscalerDefaults(
+    autoscaler=config_pb2.AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(10).to_proto(),
         requesting_timeout=Duration.from_seconds(120).to_proto(),
         scale_up_delay=Duration.from_seconds(60).to_proto(),
@@ -140,7 +140,17 @@ def _validate_vm_types(config: config_pb2.IrisClusterConfig) -> None:
 
 
 def _merge_proto_fields(target, source) -> None:
-    """Merge non-empty fields from source into target.
+    """Merge explicitly-set fields from source into target.
+
+    With EXPLICIT field presence (proto edition 2023), HasField returns True
+    only for fields that were explicitly set by the user. This function trusts
+    HasField and copies all explicitly-set values, even zeros/empty strings.
+
+    Validation of invalid values (e.g., zero timeouts) should happen separately
+    via explicit validation functions, not silently during merging.
+
+    Note: Map fields (like env_vars) don't support HasField and must be handled
+    separately by the caller.
 
     Args:
         target: Proto message to merge into (modified in place)
@@ -149,33 +159,21 @@ def _merge_proto_fields(target, source) -> None:
     for field_desc in source.DESCRIPTOR.fields:
         field_name = field_desc.name
 
-        # With EXPLICIT field presence in proto edition, all fields support HasField
+        # Skip map fields - they don't support HasField
+        if field_desc.message_type and field_desc.message_type.GetOptions().map_entry:
+            continue
+
+        # With EXPLICIT field presence, HasField is sufficient - trust it
         if not source.HasField(field_name):
             continue
 
         value = getattr(source, field_name)
 
-        # For Duration, check milliseconds > 0
-        if hasattr(value, "milliseconds"):
-            if value.milliseconds == 0:
-                continue
-            # Copy Duration proto
+        # For message types (Duration, nested messages), use CopyFrom
+        if hasattr(value, "CopyFrom"):
             target_field = getattr(target, field_name)
             target_field.CopyFrom(value)
-        # For string, check non-empty
-        elif isinstance(value, str):
-            if not value:
-                continue
-            setattr(target, field_name, value)
-        # For int, check non-zero (except port which can be 0)
-        elif isinstance(value, int):
-            if value == 0 and field_name != "port":
-                continue
-            setattr(target, field_name, value)
-        # For message types, copy
-        elif hasattr(value, "CopyFrom"):
-            target_field = getattr(target, field_name)
-            target_field.CopyFrom(value)
+        # For scalar types (int, string, bool, enum), use direct assignment
         else:
             setattr(target, field_name, value)
 
@@ -194,20 +192,53 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
     if source.HasField("autoscaler"):
         _merge_proto_fields(target.autoscaler, source.autoscaler)
     if source.HasField("bootstrap"):
-        # Bootstrap is special because of env_vars map
-        if source.bootstrap.controller_address:
-            target.bootstrap.controller_address = source.bootstrap.controller_address
-        if source.bootstrap.worker_id:
-            target.bootstrap.worker_id = source.bootstrap.worker_id
-        if source.bootstrap.worker_port:
-            target.bootstrap.worker_port = source.bootstrap.worker_port
-        if source.bootstrap.docker_image:
-            target.bootstrap.docker_image = source.bootstrap.docker_image
-        if source.bootstrap.cache_dir:
-            target.bootstrap.cache_dir = source.bootstrap.cache_dir
-        # Merge env_vars map
+        # Use standard merge for bootstrap fields, trusting HasField
+        _merge_proto_fields(target.bootstrap, source.bootstrap)
+        # Merge env_vars map separately (map fields don't use HasField)
         for key, value in source.bootstrap.env_vars.items():
             target.bootstrap.env_vars[key] = value
+
+
+def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
+    """Validate that autoscaler config has valid timing values.
+
+    Assumes defaults have already been applied, so all fields must be set.
+    If fields are missing, this will raise an error (as expected).
+
+    Args:
+        config: AutoscalerConfig to validate (with defaults applied)
+        context: Description of where this config came from (for error messages)
+
+    Raises:
+        ValueError: If any timing value is invalid
+    """
+    # All fields must be set if defaults were applied
+    interval_ms = config.evaluation_interval.milliseconds
+    if interval_ms <= 0:
+        raise ValueError(
+            f"{context}: evaluation_interval must be positive, got {interval_ms}ms. "
+            f"This controls how often the autoscaler evaluates scaling decisions."
+        )
+
+    timeout_ms = config.requesting_timeout.milliseconds
+    if timeout_ms <= 0:
+        raise ValueError(
+            f"{context}: requesting_timeout must be positive, got {timeout_ms}ms. "
+            f"This controls how long to wait for VMs to provision before timing out."
+        )
+
+    # scale_up_delay and scale_down_delay can be zero (no cooldown) but not negative
+    if config.scale_up_delay.milliseconds < 0:
+        raise ValueError(
+            f"{context}: scale_up_delay must be non-negative, got {config.scale_up_delay.milliseconds}ms. "
+            f"Use 0 for no cooldown after scaling up."
+        )
+
+    if config.scale_down_delay.milliseconds < 0:
+        raise ValueError(
+            f"{context}: scale_down_delay must be non-negative, got {config.scale_down_delay.milliseconds}ms. "
+            f"Use 0 for no cooldown after scaling down."
+        )
 
 
 def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClusterConfig:
@@ -242,6 +273,10 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
     for group in merged.scale_groups.values():
         if not group.HasField("priority"):
             group.priority = 100
+
+    # Validate merged autoscaler config
+    if merged.defaults.HasField("autoscaler"):
+        _validate_autoscaler_config(merged.defaults.autoscaler, context="config.defaults.autoscaler")
 
     return merged
 
@@ -417,7 +452,7 @@ class ScaleGroupSpec:
 
 def create_autoscaler(
     platform,  # type: Platform (avoiding circular import)
-    autoscaler_config: config_pb2.AutoscalerDefaults,
+    autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     dry_run: bool = False,
 ):
@@ -431,8 +466,14 @@ def create_autoscaler(
 
     Returns:
         Configured Autoscaler instance
+
+    Raises:
+        ValueError: If autoscaler_config has invalid timing values
     """
     from iris.cluster.vm.autoscaler import Autoscaler
+
+    # Validate autoscaler config before using it
+    _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
 
     # Create shared infrastructure
     vm_registry = VmRegistry()
@@ -469,7 +510,7 @@ def create_autoscaler_from_specs(
     bootstrap_config: config_pb2.BootstrapConfig,
     timeouts: config_pb2.TimeoutConfig,
     ssh_config: SshConfig | None = None,
-    autoscaler_config: config_pb2.AutoscalerDefaults | None = None,
+    autoscaler_config: config_pb2.AutoscalerConfig | None = None,
     label_prefix: str = "iris",
     dry_run: bool = False,
 ):

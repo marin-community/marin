@@ -208,7 +208,7 @@ class Autoscaler:
         cls,
         scale_groups: dict[str, ScalingGroup],
         vm_registry: VmRegistry,
-        config: config_pb2.AutoscalerDefaults,
+        config: config_pb2.AutoscalerConfig,
         threads: ThreadContainer | None = None,
     ) -> Autoscaler:
         """Create autoscaler from proto config.

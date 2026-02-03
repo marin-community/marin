@@ -169,7 +169,7 @@ message ControllerVmConfig {
 // DEFAULTS CONFIGURATION
 // ============================================================================
 
-message AutoscalerDefaults {
+message AutoscalerConfig {
   iris.time.Duration evaluation_interval = 1;  // Default: 10s
   iris.time.Duration requesting_timeout = 2;   // Default: 120s
   iris.time.Duration scale_up_delay = 3;       // Default: 60s
@@ -179,7 +179,7 @@ message AutoscalerDefaults {
 message DefaultsConfig {
   TimeoutConfig timeouts = 1;
   SshConfig ssh = 2;
-  AutoscalerDefaults autoscaler = 3;
+  AutoscalerConfig autoscaler = 3;
   BootstrapConfig bootstrap = 4;
 }
 

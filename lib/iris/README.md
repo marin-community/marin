@@ -346,11 +346,10 @@ defaults:
     key_file: ~/.ssh/cluster_key
     port: 22
     connect_timeout: { milliseconds: 30000 }
-
-bootstrap:
-  docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
-  worker_port: 10001
-  controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
+  bootstrap:
+    docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
+    worker_port: 10001
+    controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
 
 controller:
   image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest

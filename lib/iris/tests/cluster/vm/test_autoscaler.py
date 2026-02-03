@@ -167,7 +167,7 @@ def autoscaler_with_ready_slices(scale_group_config):
 def make_autoscaler(
     scale_groups: dict[str, ScalingGroup],
     vm_registry: VmRegistry | None = None,
-    config: config_pb2.AutoscalerDefaults | None = None,
+    config: config_pb2.AutoscalerConfig | None = None,
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     from iris.time_utils import Duration
@@ -1114,7 +1114,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerDefaults()
+        config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
@@ -1185,7 +1185,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerDefaults()
+        config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
@@ -1258,7 +1258,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerDefaults()
+        config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
@@ -1359,7 +1359,7 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # Use short evaluation interval to allow rapid re-evaluation
 
-        config = config_pb2.AutoscalerDefaults()
+        config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
@@ -1442,7 +1442,7 @@ class TestAutoscalerQuotaHandling:
             scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0), quota_timeout=Duration.from_ms(60_000)
         )
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerDefaults()
+        config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
@@ -1485,7 +1485,7 @@ class TestAutoscalerQuotaHandling:
         )
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerDefaults()
+        config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback}, config=config)
 
@@ -1531,7 +1531,7 @@ class TestAutoscalerQuotaHandling:
         backoff = Duration.from_seconds(5.0)
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0), backoff_initial=backoff)
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerDefaults()
+        config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 

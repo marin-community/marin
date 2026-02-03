@@ -66,11 +66,11 @@ Example YAML (illustrative):
 
 ```yaml
 platform:
+  label_prefix: iris
   gcp:
     project_id: hai-gcp-models
     region: europe-west4
     default_zones: [europe-west4-b]
-    label_prefix: iris
 
 defaults:
   autoscaler:
@@ -86,6 +86,9 @@ defaults:
     user: root
     port: 22
     connect_timeout: { seconds: 30 }
+  bootstrap:
+    docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+    worker_port: 10001
 
 controller:
   image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
@@ -96,7 +99,7 @@ controller:
 
 scale_groups:
   tpu_v5e_16:
-    type: tpu_vm
+    vm_type: tpu_vm
     topology: 4x4
     accelerator_variant: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
@@ -106,10 +109,11 @@ scale_groups:
     preemptible: true
     priority: 100
   manual_hosts:
-    type: manual_vm
-    hosts: [10.0.0.1, 10.0.0.2]
-    ssh_user: ubuntu
-    ssh_key_file: ~/.ssh/manual_key
+    vm_type: manual_vm
+    manual:
+      hosts: [10.0.0.1, 10.0.0.2]
+      ssh_user: ubuntu
+      ssh_key_file: ~/.ssh/manual_key
 ```
 
 Notes:
