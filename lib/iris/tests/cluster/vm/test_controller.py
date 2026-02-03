@@ -19,8 +19,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from click.testing import CliRunner
-from iris.cli import iris
 from iris.cluster.vm.config import config_to_dict, load_config
 from iris.cluster.vm.controller import (
     GcpController,
@@ -384,46 +382,6 @@ class TestControllerLifecycle:
 
 
 @pytest.fixture
-def cli_runner() -> CliRunner:
-    """Create a Click CLI test runner."""
-    return CliRunner()
-
-
-@pytest.fixture
-def gcp_config_file(tmp_path: Path) -> Path:
-    """Create a GCP controller config file."""
-    config_path = tmp_path / "gcp_config.yaml"
-    config_content = """
-provider_type: gcp
-project_id: test-project
-region: us-central1
-zone: us-central1-a
-
-bootstrap:
-  docker_image: test-image:latest
-  worker_port: 10001
-
-controller_vm:
-  image: gcr.io/test-project/iris-controller:latest
-  gcp:
-    machine_type: n2-standard-4
-    boot_disk_size_gb: 50
-    port: 10000
-
-scale_groups:
-  test_group:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-4
-    runtime_version: v2-alpha-tpuv5-lite
-    min_slices: 0
-    max_slices: 10
-    zones: [us-central1-a]
-"""
-    config_path.write_text(config_content)
-    return config_path
-
-
-@pytest.fixture
 def manual_config_file(tmp_path: Path) -> Path:
     """Create a manual controller config file with SSH bootstrap."""
     config_path = tmp_path / "manual_config.yaml"
@@ -471,42 +429,6 @@ class TestControllerFactory:
         config = request.getfixturevalue(config_fixture)
         controller = create_controller(config)
         assert isinstance(controller, expected_type)
-
-
-class TestCliControllerCommands:
-    """Tests for CLI controller start/stop/reload commands."""
-
-    @pytest.mark.parametrize(
-        "command,mock_target,error_msg,expected_output",
-        [
-            (
-                "stop",
-                "iris.cluster.vm.controller.GcpController.stop",
-                "VM not found",
-                "Failed to stop controller: VM not found",
-            ),
-        ],
-    )
-    def test_cli_controller_failure_shows_error(
-        self,
-        cli_runner: CliRunner,
-        gcp_config_file: Path,
-        command: str,
-        mock_target: str,
-        error_msg: str,
-        expected_output: str,
-    ):
-        """CLI shows appropriate error message when controller operation fails."""
-        with patch(mock_target) as mock_op:
-            mock_op.side_effect = RuntimeError(error_msg)
-
-            result = cli_runner.invoke(
-                iris,
-                ["cluster", "--config", str(gcp_config_file), "controller", command],
-            )
-
-        assert result.exit_code == 1
-        assert expected_output in result.output
 
 
 # ============================================================================

@@ -10,6 +10,9 @@ Distributed job orchestration replacing Ray with simpler primitives.
 # Start controller VM (runs autoscaler internally)
 uv run iris cluster --config=examples/eu-west4.yaml start
 
+# Start a local cluster for testing (mimics the config without GCP)
+uv run iris cluster --config=examples/eu-west4.yaml start --local
+
 # Check cluster status
 uv run iris cluster --config=examples/eu-west4.yaml status
 
@@ -18,16 +21,6 @@ uv run iris cluster --config=examples/eu-west4.yaml debug validate
 
 # Stop cluster (controller + all worker slices)
 uv run iris cluster --config=examples/eu-west4.yaml stop
-```
-
-### Development: Local Controller
-
-```bash
-# Run controller locally with integrated autoscaler
-uv run iris cluster --config=cluster.yaml controller run-local
-
-# Or use the controller daemon directly
-uv run python -m iris.cluster.controller.main serve --config=cluster.yaml
 ```
 
 ### Submit a Job
@@ -222,11 +215,6 @@ controller_vm:
 
 The controller will **fail at startup** if `bundle_prefix` is not configured.
 
-For local development:
-```bash
-uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/bundles
-```
-
 ## CLI Reference
 
 ### Cluster Commands
@@ -234,38 +222,27 @@ uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/
 ```bash
 # Start/stop/restart controller VM (--config on cluster group)
 iris cluster --config=cluster.yaml start
+iris cluster --config=cluster.yaml start --local   # Local cluster for testing
 iris cluster --config=cluster.yaml stop
 iris cluster --config=cluster.yaml restart
-iris cluster --config=cluster.yaml reload       # Rebuild images + redeploy on existing VMs
+iris cluster --config=cluster.yaml reload           # Rebuild images + redeploy on existing VMs
 iris cluster --config=cluster.yaml status
-
-# Controller subcommands (for GCE-managed controller)
-iris cluster --config=... controller start
-iris cluster --config=... controller stop
-iris cluster --config=... controller restart
-iris cluster --config=... controller status
-iris cluster --config=... controller run-local  # Development mode
 ```
 
-### Slice Management
+### Controller Subcommands
 
 ```bash
-# Create/list/terminate slices
-iris cluster --config=... slice create --scale-group tpu_v5e_4
-iris cluster --config=... slice list
-iris cluster --config=... slice get SLICE_ID
-iris cluster --config=... slice terminate SLICE_ID
-iris cluster --config=... slice terminate --all
+# Controller-specific operations
+iris cluster --config=... controller start          # Boot controller GCE VM
+iris cluster --config=... controller status          # Controller status
 ```
 
-### VM Operations
+### VM Operations (via controller RPC)
 
 ```bash
-# VM status and logs (via config or controller URL)
-iris cluster --config=... vm status
+# VM status and logs (always via controller)
 iris cluster vm --controller-url=http://localhost:10000 status
-iris cluster --config=... vm logs VM_ID
-iris cluster --config=... vm get VM_ID
+iris cluster vm --controller-url=http://localhost:10000 logs VM_ID
 ```
 
 ### Image Builds
@@ -300,13 +277,10 @@ iris cluster --config=... debug cleanup --no-dry-run
 ### Job Submission
 
 ```bash
-# Submit a command to the cluster (replaces iris-run)
+# Submit a command to the cluster
 iris run --config cluster.yaml -- python train.py
 iris run --config cluster.yaml --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris run --config cluster.yaml --no-wait -- python long_job.py
-
-# Submit a Python script with a main() function
-iris submit script.py --config cluster.yaml
 ```
 
 ## Smoke Test
@@ -423,14 +397,9 @@ src/iris/
 ├── rpc/                      # Protocol definitions + generated code
 └── cli/                      # CLI package
     ├── main.py               # Top-level iris group
-    ├── cluster.py            # Cluster lifecycle + dashboard
-    ├── controller.py         # Controller VM management
-    ├── autoscaler.py         # Autoscaler status
-    ├── slice.py              # Slice CRUD
-    ├── vm.py                 # VM status/logs
+    ├── cluster.py            # Cluster lifecycle, controller, VM ops, dashboard
     ├── build.py              # Image build commands
-    ├── submit.py             # Python callable submission
-    ├── run.py                # Command passthrough submission
+    ├── run.py                # Job submission (command passthrough)
     ├── rpc.py                # Dynamic RPC CLI
     └── debug.py              # Debugging & validation
 ```
