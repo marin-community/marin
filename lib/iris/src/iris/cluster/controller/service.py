@@ -195,7 +195,6 @@ class ControllerServiceImpl:
             proto_task_status = cluster_pb2.TaskStatus(
                 task_id=task.task_id.to_wire(),
                 job_id=task.job_id.to_wire(),
-                task_index=task.task_index,
                 state=task.state,
                 worker_id=str(task.worker_id) if task.worker_id else "",
                 worker_address=worker_address,
@@ -350,7 +349,6 @@ class ControllerServiceImpl:
         proto_task_status = cluster_pb2.TaskStatus(
             task_id=task.task_id.to_wire(),
             job_id=task.job_id.to_wire(),
-            task_index=task.task_index,
             state=task.state,
             worker_id=str(task.worker_id) if task.worker_id else "",
             worker_address=worker_address,
@@ -407,7 +405,6 @@ class ControllerServiceImpl:
             proto_task_status = cluster_pb2.TaskStatus(
                 task_id=task.task_id.to_wire(),
                 job_id=task.job_id.to_wire(),
-                task_index=task.task_index,
                 state=task.state,
                 worker_id=str(task.worker_id) if task.worker_id else "",
                 worker_address=worker_address,
@@ -632,11 +629,11 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
         """Get task logs by proxying the request to the worker that owns the task."""
-        job_id = JobName.from_wire(request.job_id)
-        tasks = self._state.get_job_tasks(job_id)
-        task = next((t for t in tasks if t.task_index == request.task_index), None)
+        task_id = JobName.from_wire(request.task_id)
+        task_id.require_task()
+        task = self._state.get_task(task_id)
         if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {job_id.task(request.task_index)} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
 
         if not task.worker_id:
             raise ConnectError(Code.FAILED_PRECONDITION, "Task has no assigned worker")

@@ -101,7 +101,7 @@ class JobFailedError(Exception):
 class _TaskLogState:
     """Per-task log polling state for multi-task log streaming."""
 
-    task_index: int
+    task_id: JobName
     last_timestamp: Timestamp | None = None
 
 
@@ -120,25 +120,24 @@ class Task:
                 print(entry.data)
     """
 
-    def __init__(self, client: "IrisClient", job_id: JobName, task_index: int):
+    def __init__(self, client: "IrisClient", task_name: JobName):
         self._client = client
-        self._job_id = job_id
-        self._task_index = task_index
+        self._task_name = task_name
 
     @property
     def task_index(self) -> int:
         """0-indexed task number within the job."""
-        return self._task_index
+        return self._task_name.task_index or 0
 
     @property
     def task_id(self) -> JobName:
         """Full task identifier (/job/.../index)."""
-        return self._job_id.task(self._task_index)
+        return self._task_name
 
     @property
     def job_id(self) -> JobName:
         """Parent job identifier."""
-        return self._job_id
+        return self._task_name.parent or self._task_name
 
     def status(self) -> cluster_pb2.TaskStatus:
         """Get current task status.
@@ -220,7 +219,7 @@ class Job:
             List of Task handles, one per task in the job
         """
         task_statuses = self._client._cluster_client.list_tasks(str(self._job_id))
-        return [Task(self._client, self._job_id, ts.task_index) for ts in task_statuses]
+        return [Task(self._client, JobName.from_wire(ts.task_id)) for ts in task_statuses]
 
     def wait(
         self,
@@ -266,7 +265,7 @@ class Job:
         parameter sets the base rate; we don't use exponential backoff here since
         we want logs to appear in near real-time during active job execution.
         """
-        log_states: list[_TaskLogState] = []
+        log_states: dict[JobName, _TaskLogState] = {}
         # Use a fixed low interval for responsive streaming (capped at poll_interval)
         stream_interval = min(0.2, poll_interval)
         start = time.monotonic()
@@ -275,34 +274,34 @@ class Job:
             status = self._client._cluster_client.get_job_status(self._job_id)
 
             # Initialize log pollers when we learn num_tasks
-            if not log_states and len(status.tasks) > 0:
-                log_states = [_TaskLogState(i) for i in range(len(status.tasks))]
+            if status.tasks:
+                for task_status in status.tasks:
+                    task_id = JobName.from_wire(task_status.task_id)
+                    log_states.setdefault(task_id, _TaskLogState(task_id))
 
             # Poll logs from all tasks
-            for state in log_states:
+            for state in log_states.values():
                 try:
-                    task_name = self._job_id.task(state.task_index)
-                    entries = self._client._cluster_client.fetch_task_logs(task_name, state.last_timestamp, 0)
+                    entries = self._client._cluster_client.fetch_task_logs(state.task_id, state.last_timestamp, 0)
                     for proto in entries:
                         entry = LogEntry.from_proto(proto)
                         if state.last_timestamp is None or entry.timestamp > state.last_timestamp:
                             state.last_timestamp = entry.timestamp
-                        logger.info("Task %d log: %s", state.task_index, entry.data)
+                        logger.info("Task %s log: %s", state.task_id, entry.data)
                 except Exception as e:
-                    logger.debug("Task %d not yet scheduled for job %s: %s", state.task_index, self._job_id, e)
+                    logger.debug("Task %s not yet scheduled for job %s: %s", state.task_id, self._job_id, e)
 
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
-                for state in log_states:
+                for state in log_states.values():
                     try:
-                        task_name = self._job_id.task(state.task_index)
-                        entries = self._client._cluster_client.fetch_task_logs(task_name, state.last_timestamp, 0)
+                        entries = self._client._cluster_client.fetch_task_logs(state.task_id, state.last_timestamp, 0)
                         for proto in entries:
                             entry = LogEntry.from_proto(proto)
-                            logger.info("Task %d log: %s", state.task_index, entry.data)
+                            logger.info("Task %s log: %s", state.task_id, entry.data)
                     except Exception:
                         logger.debug(
-                            "Task %d logs unavailable during final drain for job %s", state.task_index, self._job_id
+                            "Task %s logs unavailable during final drain for job %s", state.task_id, self._job_id
                         )
                 return status
 
@@ -728,8 +727,7 @@ class IrisClient:
 
     def fetch_task_logs(
         self,
-        job_id: JobName,
-        task_index: int,
+        task_name: JobName,
         *,
         start: Timestamp | None = None,
         max_lines: int = 0,
@@ -737,15 +735,13 @@ class IrisClient:
         """Fetch logs for a specific task.
 
         Args:
-            job_id: Job identifier
-            task_index: 0-indexed task number
+            task_name: Full task identifier (/job/.../index)
             start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
 
         Returns:
             List of LogEntry objects from the task
         """
-        task_name = job_id.task(task_index)
         entries = self._cluster_client.fetch_task_logs(task_name, start, max_lines)
         return [LogEntry.from_proto(e) for e in entries]
 

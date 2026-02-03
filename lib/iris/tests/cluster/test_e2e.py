@@ -276,7 +276,6 @@ class E2ECluster:
         return {
             "taskId": response.task.task_id,
             "jobId": response.task.job_id,
-            "taskIndex": response.task.task_index,
             "state": cluster_pb2.TaskState.Name(response.task.state),
             "workerId": response.task.worker_id,
             "workerAddress": response.task.worker_address,

@@ -362,7 +362,7 @@ class Worker:
         if should_kill_existing:
             self.kill_task(task_id)
 
-        job_name, task_index = JobName.from_wire(task_id).require_task()
+        job_name, _ = JobName.from_wire(task_id).require_task()
         job_id = job_name.to_wire()
         num_tasks = request.num_tasks
         attempt_id = request.attempt_id
@@ -382,7 +382,6 @@ class Worker:
         config = TaskAttemptConfig(
             task_id=task_id,
             job_id=job_id,
-            task_index=task_index,
             num_tasks=num_tasks,
             attempt_id=attempt_id,
             request=request,
@@ -487,12 +486,11 @@ class Worker:
 
                 if task is None:
                     # Task not found - report as WORKER_FAILED
-                    job_name, task_index = JobName.from_wire(task_id).require_task()
+                    job_name, _ = JobName.from_wire(task_id).require_task()
                     completed_tasks.append(
                         cluster_pb2.Controller.CompletedTaskEntry(
                             task_id=task_id,
                             job_id=job_name.to_wire(),
-                            task_index=task_index,
                             state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                             exit_code=0,
                             error="Task not found on worker",
@@ -507,7 +505,6 @@ class Worker:
                         cluster_pb2.Controller.CompletedTaskEntry(
                             task_id=task_proto.task_id,
                             job_id=task_proto.job_id,
-                            task_index=task_proto.task_index,
                             state=task_proto.state,
                             exit_code=task_proto.exit_code,
                             error=task_proto.error,

@@ -278,7 +278,6 @@ class ControllerTask:
 
     task_id: JobName
     job_id: JobName
-    task_index: int
 
     # Task owns its state directly
     state: int = cluster_pb2.TASK_STATE_PENDING
@@ -312,6 +311,11 @@ class ControllerTask:
     def current_attempt_id(self) -> int:
         """ID of current attempt (0-indexed), or -1 if no attempts."""
         return len(self.attempts) - 1 if self.attempts else -1
+
+    @property
+    def task_index(self) -> int:
+        """0-indexed task number within the job."""
+        return self.task_id.require_task()[1]
 
     @property
     def worker_id(self) -> WorkerId | None:
@@ -794,7 +798,6 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
         task = ControllerTask(
             task_id=task_id,
             job_id=job.job_id,
-            task_index=i,
             max_retries_failure=job.max_retries_failure,
             max_retries_preemption=job.max_retries_preemption,
             submitted_at=job.submitted_at,

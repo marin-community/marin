@@ -516,7 +516,7 @@ def test_get_task_logs_not_found_for_missing_job(client):
     """GetTaskLogs returns NOT_FOUND when the job doesn't exist."""
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"jobId": JobName.root("nonexistent").to_wire(), "taskIndex": 0},
+        json={"taskId": JobName.root("nonexistent").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code != 200
@@ -529,7 +529,7 @@ def test_get_task_logs_failed_precondition_for_unassigned_task(client, state, jo
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"jobId": JobName.root("pending-job").to_wire(), "taskIndex": 0},
+        json={"taskId": JobName.root("pending-job").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code != 200

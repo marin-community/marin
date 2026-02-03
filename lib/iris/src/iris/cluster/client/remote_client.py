@@ -257,12 +257,8 @@ class RemoteClusterClient:
         Returns:
             List of LogEntry protos from the worker
         """
-        job_name, task_index = task_name.require_task()
-        job_id = job_name.to_wire()
-
         request = cluster_pb2.Controller.GetTaskLogsRequest(
-            job_id=job_id,
-            task_index=task_index,
+            task_id=task_name.to_wire(),
             start_ms=start.epoch_ms() if start else 0,
             limit=max_lines,
             start_line=0,

@@ -49,7 +49,6 @@ class TaskAttemptConfig:
 
     task_id: str
     job_id: str
-    task_index: int
     num_tasks: int
     attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
@@ -190,7 +189,6 @@ class TaskAttempt:
         # Task identity (from config)
         self.task_id: str = config.task_id
         self.job_id: str = config.job_id
-        self.task_index: int = config.task_index
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
         self.request: cluster_pb2.Worker.RunTaskRequest = config.request
@@ -261,7 +259,6 @@ class TaskAttempt:
         proto = cluster_pb2.TaskStatus(
             task_id=self.task_id,
             job_id=self.job_id,
-            task_index=self.task_index,
             state=self.status,
             exit_code=self.exit_code or 0,
             error=self.error or "",

@@ -227,6 +227,10 @@ assert job.is_task == False
 assert job.task_index is None
 ```
 
+Task identifiers are always carried on the wire as `task_id` (a full `JobName`).
+`task_index` is only derived locally from the `JobName` when needed for display
+or ordering.
+
 ## Namespace Control Flow
 
 Namespaces provide actor isolation - actors in one namespace cannot discover actors in another.
