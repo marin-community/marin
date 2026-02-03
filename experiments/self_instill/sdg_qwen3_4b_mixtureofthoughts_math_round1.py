@@ -895,7 +895,8 @@ def filter_and_format_output(config: FilterValidationConfig):
     ds_valid = ds.filter(lambda x: x.get("all_validation_passed", False))
     valid_count = ds_valid.count()
 
-    print(f"Validation results: {valid_count}/{total} rows passed all validation ({100*valid_count/total:.1f}%)")
+    pct = 100 * valid_count / total if total > 0 else 0.0
+    print(f"Validation results: {valid_count}/{total} rows passed all validation ({pct:.1f}%)")
 
     ds_valid.write_parquet(config.output_path)
 
