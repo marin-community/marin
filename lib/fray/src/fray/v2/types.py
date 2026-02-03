@@ -318,10 +318,6 @@ class ResourceConfig:
     JobRequest.replicas takes precedence. This field exists here so that
     convenience builders like `with_tpu(..., slice_count=4)` can carry the
     replica count alongside the resource spec.
-
-    `max_concurrency` controls how many method calls can run in parallel on
-    the actor (Ray's max_concurrency). Use >1 for actors that need to handle
-    concurrent calls, e.g. coordinators that block while workers call back.
     """
 
     cpu: int = 1
@@ -331,7 +327,6 @@ class ResourceConfig:
     preemptible: bool = True
     regions: Sequence[str] | None = None
     replicas: int = 1
-    max_concurrency: int = 1
 
     def chip_count(self) -> int:
         return self.device.chip_count()

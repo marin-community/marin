@@ -148,16 +148,12 @@ class LocalClient:
 
 
 class LocalActorHandle:
-    """In-process actor handle.
-
-    Actors are responsible for their own thread safety. This matches Iris/Ray
-    behavior where actor methods can be called concurrently and the actor
-    implementation must handle synchronization internally.
-    """
+    """In-process actor handle. Thread-safe via a lock around all method calls."""
 
     def __init__(self, instance: Any):
         self._instance = instance
-        self._executor = ThreadPoolExecutor(max_workers=16)
+        self._lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1)
 
     def __getattr__(self, method_name: str) -> LocalActorMethod:
         if method_name.startswith("_"):
@@ -165,20 +161,27 @@ class LocalActorHandle:
         method = getattr(self._instance, method_name)
         if not callable(method):
             raise AttributeError(f"{method_name} is not callable on {type(self._instance).__name__}")
-        return LocalActorMethod(method, self._executor)
+        return LocalActorMethod(method, self._lock, self._executor)
 
 
 class LocalActorMethod:
-    """Wraps a method on a local actor."""
+    """Wraps a method on a local actor with lock-based thread safety."""
 
-    def __init__(self, method: Any, executor: ThreadPoolExecutor):
+    def __init__(self, method: Any, lock: threading.Lock, executor: ThreadPoolExecutor):
         self._method = method
+        self._lock = lock
         self._executor = executor
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         """Submit method call to thread pool, returning a future."""
-        return FutureActorFuture(self._executor.submit(self._method, *args, **kwargs))
+
+        def _call():
+            with self._lock:
+                return self._method(*args, **kwargs)
+
+        return FutureActorFuture(self._executor.submit(_call))
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Call method synchronously."""
-        return self._method(*args, **kwargs)
+        """Call method synchronously with lock."""
+        with self._lock:
+            return self._method(*args, **kwargs)

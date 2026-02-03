@@ -97,7 +97,7 @@ def test_fused_execution_with_batch():
     Note: Batching happens per-shard. Since each input item becomes its own shard,
     and filtering may reduce items per shard, batches may not span across shards.
     """
-    from zephyr.execution import get_default_zephyr_context
+    from zephyr import Backend
 
     # Use a flat_map to create multiple items in a single shard
     ds = (
@@ -108,7 +108,7 @@ def test_fused_execution_with_batch():
         .window(2)  # [[6, 8], [10, 12]]
     )
 
-    result = list(get_default_zephyr_context().execute(ds))
+    result = list(Backend.execute(ds))
     assert result == [[6, 8], [10, 12]]
 
 
