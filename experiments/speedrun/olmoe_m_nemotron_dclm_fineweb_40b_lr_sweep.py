@@ -84,10 +84,9 @@ def _build_olmoe_m_config(seq_len: int) -> MixtralConfig:
         gradient_checkpointing=True,
         scan_layers=True,
         use_gmm=True,
-        # The TPU/Pallas fused CE kernel can hit vmem scratch limits at large vocab block sizes.
-        # We force the fused CE backend to the stable XLA streaming implementation (see `cross_entropy_implementation`)
-        # so we can keep the canonical 32k block size without `RESOURCE_EXHAUSTED` failures.
-        cross_entropy_block_size=32768,
+        # Keep the CE vocab block size modest: very large (e.g. 32k) blocks can trigger XLA allocation-size
+        # overflows for (tokens x vocab_block) intermediates at long seq / large batch settings.
+        cross_entropy_block_size=4096,
         cross_entropy_implementation="xla",
         flash_attention_block_size=None,
         reference_checkpoint=OLMOE_1B7B_REFERENCE_CHECKPOINT,
