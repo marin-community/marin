@@ -23,7 +23,9 @@ References:
 import dataclasses
 import json
 import logging
+import random
 import tempfile
+import time
 import typing
 from dataclasses import dataclass
 from functools import cached_property
@@ -896,6 +898,56 @@ class LevanterHarnessLM(TemplateLM):
         return kwargs
 
 
+def _load_task_with_retry(
+    load_fn,
+    *args,
+    max_retries: int = 20,
+    base_delay: float = 2.0,
+    max_delay: float = 128.0,
+    **kwargs,
+):
+    """
+    Load a task with retry logic for HuggingFace rate limit errors.
+
+    This is similar to hf_load_with_retry in hf_checkpoints.py, but specifically
+    for lm_eval task loading which can hit HF Hub rate limits when downloading
+    datasets in distributed environments.
+
+    Args:
+        load_fn: The loading function to call
+        *args: Positional arguments to pass to load_fn
+        max_retries: Maximum number of retries for rate limit errors
+        base_delay: Base delay in seconds for exponential backoff
+        max_delay: Maximum delay in seconds (caps exponential backoff)
+        **kwargs: Keyword arguments to pass to load_fn
+
+    Returns:
+        The result of load_fn(*args, **kwargs)
+
+    Raises:
+        The original exception if max_retries is exceeded or if the error is not a rate limit error
+    """
+    for attempt in range(max_retries):
+        try:
+            return load_fn(*args, **kwargs)
+        except Exception as e:
+            error_str = str(e)
+            is_rate_limit = "429" in error_str or "Too Many Requests" in error_str
+
+            if is_rate_limit:
+                if attempt < max_retries - 1:
+                    delay = min(base_delay * (2**attempt) + random.uniform(0, 1), max_delay)
+                    logger.warning(
+                        f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
+            else:
+                raise
+
+
 @dataclass(frozen=True)
 class TaskConfig:
     """
@@ -1017,7 +1069,7 @@ class LmEvalHarnessConfig:
         for task in tqdm(self.to_task_spec()):
             try:
                 if isinstance(task, str):
-                    this_tasks.update(tasks.get_task_dict(task, manager))
+                    this_tasks.update(_load_task_with_retry(tasks.get_task_dict, task, manager))
                 else:
                     our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
                     assert isinstance(our_name, str)
@@ -1044,7 +1096,7 @@ class LmEvalHarnessConfig:
 
         task_name = task if isinstance(task, str) else task["task"]
 
-        task_dict = tasks.get_task_dict([task], manager)
+        task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
         assert len(task_dict) == 1, f"Expected 1 task, got {len(task_dict)}"
         try:
             this_task = self._rename_tasks_for_eval_harness(task_dict, task_name, our_name)
