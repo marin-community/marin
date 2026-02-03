@@ -37,6 +37,7 @@ from iris.cluster.vm.manual_platform import ManualVmManager
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmManagerProtocol
 from iris.rpc import config_pb2
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +101,12 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
       controller_address: "10.0.0.1:10000"
 
     timeouts:
-      boot_timeout_seconds: 300
-      init_timeout_seconds: 600
-      ssh_poll_interval_seconds: 5
+      boot_timeout:
+        milliseconds: 300000
+      init_timeout:
+        milliseconds: 600000
+      ssh_poll_interval:
+        milliseconds: 5000
 
     controller_vm:
       gcp:
@@ -203,7 +207,7 @@ def get_ssh_config(
     If cluster_config.ssh is not set, uses defaults:
     - user: "root"
     - port: 22
-    - connect_timeout: 30
+    - connect_timeout: 30s
     - key_file: None (passwordless/agent auth)
 
     For manual providers, per-group overrides from provider.manual take precedence.
@@ -216,11 +220,17 @@ def get_ssh_config(
     Returns:
         SshConfig with all settings populated (using defaults where not specified).
     """
+    from iris.time_utils import Duration
+
     ssh = cluster_config.ssh
     user = ssh.user or "root"
     key_file = ssh.key_file or None
     port = ssh.port or 22
-    connect_timeout = ssh.connect_timeout or 30
+    connect_timeout = (
+        Duration.from_proto(ssh.connect_timeout)
+        if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
+        else Duration.from_seconds(30)
+    )
 
     # Apply per-group overrides if group_name provided
     if group_name and group_name in cluster_config.scale_groups:
@@ -247,14 +257,31 @@ def get_ssh_config(
 def with_timeout_defaults(timeouts: config_pb2.TimeoutConfig) -> config_pb2.TimeoutConfig:
     """Apply default values to unset timeout fields.
 
-    Protobuf uses 0 as the default for int32 fields, which can cause issues
-    when 0 is passed to code expecting positive values. This function ensures
-    all timeout fields have sensible defaults.
+    Protobuf Duration messages with 0 milliseconds are treated as unset.
+    This function ensures all timeout fields have sensible defaults.
     """
+    from iris.time_utils import Duration
+
+    boot_timeout = (
+        Duration.from_proto(timeouts.boot_timeout)
+        if timeouts.HasField("boot_timeout") and timeouts.boot_timeout.milliseconds > 0
+        else Duration.from_seconds(300)
+    )
+    init_timeout = (
+        Duration.from_proto(timeouts.init_timeout)
+        if timeouts.HasField("init_timeout") and timeouts.init_timeout.milliseconds > 0
+        else Duration.from_seconds(600)
+    )
+    ssh_poll_interval = (
+        Duration.from_proto(timeouts.ssh_poll_interval)
+        if timeouts.HasField("ssh_poll_interval") and timeouts.ssh_poll_interval.milliseconds > 0
+        else Duration.from_seconds(5)
+    )
+
     return config_pb2.TimeoutConfig(
-        boot_timeout_seconds=timeouts.boot_timeout_seconds or 300,
-        init_timeout_seconds=timeouts.init_timeout_seconds or 600,
-        ssh_poll_interval_seconds=timeouts.ssh_poll_interval_seconds or 5,
+        boot_timeout=boot_timeout.to_proto(),
+        init_timeout=init_timeout.to_proto(),
+        ssh_poll_interval=ssh_poll_interval.to_proto(),
     )
 
 
@@ -469,11 +496,10 @@ def create_manual_autoscaler(
         zones=["local"],
     )
 
-    timeouts = config_pb2.TimeoutConfig(
-        boot_timeout_seconds=300,
-        init_timeout_seconds=600,
-        ssh_poll_interval_seconds=5,
-    )
+    timeouts = config_pb2.TimeoutConfig()
+    timeouts.boot_timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    timeouts.init_timeout.CopyFrom(Duration.from_seconds(600).to_proto())
+    timeouts.ssh_poll_interval.CopyFrom(Duration.from_seconds(5).to_proto())
 
     spec = ScaleGroupSpec(
         config=sg_config,

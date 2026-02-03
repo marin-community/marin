@@ -17,9 +17,11 @@
 Tests worker crashes, delayed registration, stale state, and task-level retries.
 All chaos is injected inline in worker.py.
 """
+
 import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
+from iris.time_utils import Duration
 from .conftest import submit, wait, _quick, _slow
 
 
@@ -65,7 +67,7 @@ def test_all_workers_fail(cluster):
     """
     _url, client = cluster
     enable_chaos("worker.register", failure_rate=1.0, error=RuntimeError("chaos: registration failed"))
-    job = submit(client, _slow, "all-workers-fail", scheduling_timeout_seconds=15)
+    job = submit(client, _slow, "all-workers-fail", scheduling_timeout=Duration.from_seconds(15))
     status = wait(client, job, timeout=30)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 

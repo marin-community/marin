@@ -14,12 +14,22 @@
 
 # Test configuration for iris
 
+import logging
+import os
 import subprocess
 import sys
+import threading
+import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
+from iris.managed_thread import ThreadRegistry, set_thread_registry
+from iris.test_util import SentinelFile
+
+# httpx logs every HTTP request at INFO level, which floods test output
+# during polling loops (status checks, log fetching).
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def pytest_addoption(parser):
@@ -97,9 +107,39 @@ def docker_cleanup_session(use_docker):
         yield
 
 
+@pytest.fixture
+def sentinel(tmp_path) -> SentinelFile:
+    """Per-test sentinel file for blocking/unblocking job threads."""
+    return SentinelFile(str(tmp_path / "sentinel"))
+
+
+@pytest.fixture(autouse=True)
+def _thread_registry():
+    """Per-test ThreadRegistry: every test gets a clean registry, all threads
+    are shut down (blocking) before the next test starts."""
+    registry = ThreadRegistry()
+    old = set_thread_registry(registry)
+    yield registry
+    registry.shutdown(timeout=5.0)
+    set_thread_registry(old)
+
+
 def pytest_sessionfinish(session, exitstatus):
-    """Hook to debug pytest exit status - helps diagnose silent failures."""
-    if exitstatus == 0:
-        print("\nPytest thinks everything is fine...", file=sys.stderr)
-    else:
-        print(f"\nPytest is exiting with status {exitstatus}", file=sys.stderr)
+    """Hook to debug pytest exit status - dump any non-daemon threads still alive."""
+    alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
+    if alive:
+        # Write directly to fd 2 (stderr) to bypass pytest's capture entirely.
+        tty = os.fdopen(os.dup(2), "w")
+        tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
+        frames = sys._current_frames()
+        for t in alive:
+            tty.write(f"\n  Thread: {t.name} (daemon={t.daemon}, ident={t.ident})\n")
+            frame = frames.get(t.ident)
+            if frame:
+                for line in traceback.format_stack(frame):
+                    tty.write(f"    {line.rstrip()}\n")
+        if exitstatus != 0:
+            tty.write(f"\nPytest exiting with status {exitstatus}\n")
+        tty.flush()
+        tty.close()
+        os._exit(1)

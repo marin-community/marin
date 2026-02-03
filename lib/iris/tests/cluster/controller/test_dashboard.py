@@ -30,7 +30,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 
 def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
@@ -59,7 +59,7 @@ def register_worker(
             worker_id=wid,
             address=address,
             metadata=metadata,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     worker = state.get_worker(wid)
@@ -79,7 +79,7 @@ def submit_job(
         JobSubmittedEvent(
             job_id=jid,
             request=request,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     return jid
@@ -319,10 +319,12 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     Jobs no longer track individual attempts - tasks do. The RPC returns
     aggregate retry information for the job.
     """
+    from iris.time_utils import Timestamp
+
     job_id = submit_job(state, "test-job", job_request)
     job = state.get_job(job_id)
     job.state = cluster_pb2.JOB_STATE_RUNNING
-    job.started_at_ms = 3000
+    job.started_at = Timestamp.from_ms(3000)
 
     # Set retry counts on tasks (the RPC aggregates from tasks)
     tasks = state.get_job_tasks(job_id)
@@ -337,7 +339,7 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     assert job_status["failureCount"] == 1
     assert job_status["preemptionCount"] == 1
     assert job_status["state"] == "JOB_STATE_RUNNING"
-    assert int(job_status["startedAtMs"]) == 3000
+    assert int(job_status["startedAt"]["epochMs"]) == 3000
 
 
 def test_get_job_status_returns_error_for_missing_job(client):
@@ -369,6 +371,7 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
     from iris.rpc import config_pb2, vm_pb2
+    from iris.time_utils import Timestamp
 
     autoscaler = Mock()
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
@@ -403,10 +406,10 @@ def mock_autoscaler():
             ),
         ],
         current_demand={"test-group": 3},
-        last_evaluation_ms=1000,
+        last_evaluation=Timestamp.from_ms(1000).to_proto(),
         recent_actions=[
             vm_pb2.AutoscalerAction(
-                timestamp_ms=1000,
+                timestamp=Timestamp.from_ms(1000).to_proto(),
                 action_type="scale_up",
                 scale_group="test-group",
                 slice_id="slice-1",
@@ -437,8 +440,8 @@ def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscale
 
     # Verify demand tracking
     assert data["currentDemand"] == {"test-group": 3}
-    # Int64 fields are serialized as strings in JSON (protobuf convention)
-    assert int(data["lastEvaluationMs"]) == 1000
+    # Timestamp fields are nested messages
+    assert int(data["lastEvaluation"]["epochMs"]) == 1000
 
     # Verify recent actions
     assert len(data["recentActions"]) == 1

@@ -36,7 +36,6 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
@@ -59,6 +58,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import cluster_pb2
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -68,19 +68,19 @@ class LogEntry:
     """A single log line from a job.
 
     Attributes:
-        timestamp_ms: Unix timestamp in milliseconds
+        timestamp: When the log line was produced
         source: Log source - "stdout", "stderr", or "build"
         data: Log line content
     """
 
-    timestamp_ms: int
+    timestamp: Timestamp
     source: str
     data: str
 
     @classmethod
     def from_proto(cls, proto: cluster_pb2.Worker.LogEntry) -> "LogEntry":
         return cls(
-            timestamp_ms=proto.timestamp_ms,
+            timestamp=Timestamp.from_proto(proto.timestamp),
             source=proto.source,
             data=proto.data,
         )
@@ -104,7 +104,7 @@ class _TaskLogState:
     """Per-task log polling state for multi-task log streaming."""
 
     task_index: int
-    last_timestamp_ms: int = 0
+    last_timestamp: Timestamp | None = None
 
 
 class Task:
@@ -155,17 +155,17 @@ class Task:
         """Get current task state (shortcut for status().state)."""
         return self.status().state
 
-    def logs(self, *, start_ms: int = 0, max_lines: int = 0) -> list[LogEntry]:
+    def logs(self, *, start: Timestamp | None = None, max_lines: int = 0) -> list[LogEntry]:
         """Fetch logs for this task.
 
         Args:
-            start_ms: Only return logs after this timestamp (milliseconds since epoch)
+            start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
 
         Returns:
             List of LogEntry objects from the task
         """
-        entries = self._client._cluster.fetch_task_logs(self.task_id, start_ms, max_lines)
+        entries = self._client._cluster.fetch_task_logs(self.task_id, start, max_lines)
         return [LogEntry.from_proto(e) for e in entries]
 
 
@@ -284,24 +284,25 @@ class Job:
             for state in log_states:
                 try:
                     task_id = f"{self._job_id}/task-{state.task_index}"
-                    entries = self._client._cluster.fetch_task_logs(task_id, state.last_timestamp_ms, 0)
+                    entries = self._client._cluster.fetch_task_logs(task_id, state.last_timestamp, 0)
                     for proto in entries:
                         entry = LogEntry.from_proto(proto)
-                        state.last_timestamp_ms = max(state.last_timestamp_ms, entry.timestamp_ms)
+                        if state.last_timestamp is None or entry.timestamp > state.last_timestamp:
+                            state.last_timestamp = entry.timestamp
                         _print_log_entry(self._job_id, entry, task_index=state.task_index)
-                except ValueError:
-                    logger.debug("Task %d not yet scheduled for job %s", state.task_index, self._job_id)
+                except Exception as e:
+                    logger.debug("Task %d not yet scheduled for job %s: %s", state.task_index, self._job_id, e)
 
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
                 for state in log_states:
                     try:
                         task_id = f"{self._job_id}/task-{state.task_index}"
-                        entries = self._client._cluster.fetch_task_logs(task_id, state.last_timestamp_ms, 0)
+                        entries = self._client._cluster.fetch_task_logs(task_id, state.last_timestamp, 0)
                         for proto in entries:
                             entry = LogEntry.from_proto(proto)
                             _print_log_entry(self._job_id, entry, task_index=state.task_index)
-                    except ValueError:
+                    except Exception:
                         logger.debug(
                             "Task %d logs unavailable during final drain for job %s", state.task_index, self._job_id
                         )
@@ -443,28 +444,41 @@ _iris_context: ContextVar[IrisContext | None] = ContextVar(
 
 
 def iris_ctx() -> IrisContext:
-    """Get or create IrisContext from environment.
+    """Get the current IrisContext, raising if not in a job.
 
     Returns:
         Current IrisContext
+
+    Raises:
+        RuntimeError: If not running inside an Iris job
     """
-    ctx = _iris_context.get()
+    ctx = get_iris_ctx()
     if ctx is None:
-        ctx = create_context_from_env()
-        _iris_context.set(ctx)
+        raise RuntimeError("iris_ctx() called outside an Iris job (no job info available)")
     return ctx
 
 
 def get_iris_ctx() -> IrisContext | None:
     """Get the current IrisContext, or None if not in a job.
 
-    Unlike iris_ctx(), this function does not auto-create context
-    from environment if called outside a job context.
+    Checks the ContextVar first. If unset, checks whether we're inside an
+    Iris job (via get_job_info) and auto-creates the context if so.
 
     Returns:
         Current IrisContext or None
     """
-    return _iris_context.get()
+    ctx = _iris_context.get()
+    if ctx is not None:
+        return ctx
+
+    # If job_info is available (ContextVar or IRIS_JOB_ID env), we're in a job.
+    job_info = get_job_info()
+    if job_info is not None:
+        ctx = create_context_from_env()
+        _iris_context.set(ctx)
+        return ctx
+
+    return None
 
 
 @contextmanager
@@ -746,13 +760,13 @@ class IrisClient:
         resources: ResourceSpec,
         environment: EnvironmentSpec | None = None,
         ports: list[str] | None = None,
-        scheduling_timeout_seconds: int = 0,
+        scheduling_timeout: Duration | None = None,
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
-        timeout_seconds: int = 0,
+        timeout: Duration | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -762,13 +776,13 @@ class IrisClient:
             resources: Resource requirements
             environment: Environment configuration
             ports: Port names to allocate (e.g., ["actor", "metrics"])
-            scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
+            scheduling_timeout: Maximum time to wait for scheduling (None = no timeout)
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
             replicas: Number of tasks to create for gang scheduling (default: 1)
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
-            timeout_seconds: Per-task timeout in seconds (0 = no timeout)
+            timeout: Per-task timeout (None = no timeout)
 
         Returns:
             Job handle for the submitted job
@@ -803,13 +817,13 @@ class IrisClient:
             resources=resources_proto,
             environment=environment_proto,
             ports=ports,
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
+            scheduling_timeout=scheduling_timeout,
             constraints=constraints_proto,
             coscheduling=coscheduling_proto,
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
-            timeout_seconds=timeout_seconds,
+            timeout=timeout,
         )
 
         return Job(self, job_id)
@@ -917,7 +931,7 @@ class IrisClient:
         job_id: JobId,
         task_index: int,
         *,
-        start_ms: int = 0,
+        start: Timestamp | None = None,
         max_lines: int = 0,
     ) -> list[LogEntry]:
         """Fetch logs for a specific task.
@@ -925,14 +939,14 @@ class IrisClient:
         Args:
             job_id: Job identifier
             task_index: 0-indexed task number
-            start_ms: Only return logs after this timestamp (milliseconds since epoch)
+            start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
 
         Returns:
             List of LogEntry objects from the task
         """
         task_id = f"{job_id}/task-{task_index}"
-        entries = self._cluster.fetch_task_logs(task_id, start_ms, max_lines)
+        entries = self._cluster.fetch_task_logs(task_id, start, max_lines)
         return [LogEntry.from_proto(e) for e in entries]
 
     def shutdown(self, wait: bool = True) -> None:
@@ -951,8 +965,7 @@ def _print_log_entry(job_id: JobId, entry: LogEntry, task_index: int | None = No
     by redirect_stdout in local in-process containers.
     """
     assert sys.__stdout__ is not None, "sys.__stdout__ is None"
-    ts = datetime.fromtimestamp(entry.timestamp_ms / 1000, tz=timezone.utc)
-    ts_str = ts.strftime("%H:%M:%S")
+    ts_str = entry.timestamp.as_short_time()
     if task_index is not None:
         sys.__stdout__.write(f"[{job_id}/task-{task_index}][{ts_str}] {entry.data}\n")
     else:

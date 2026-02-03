@@ -23,6 +23,7 @@ import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.logging import configure_logging
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ def serve(
         port=port,
         bundle_prefix=bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
-        worker_timeout_seconds=worker_timeout,
+        worker_timeout=Duration.from_seconds(worker_timeout),
     )
 
     try:

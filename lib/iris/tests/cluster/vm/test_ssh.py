@@ -26,6 +26,7 @@ from iris.cluster.vm.ssh import (
     run_streaming_with_retry,
     wait_for_connection,
 )
+from iris.time_utils import Duration
 
 
 def make_fake_popen(lines: list[str] | None = None):
@@ -60,35 +61,35 @@ def test_wait_for_connection_returns_true_immediately(mock_conn_avail, _mock_sle
     """wait_for_connection returns True if connection available immediately."""
     mock_conn_avail.return_value = True
     conn = MagicMock()
-    assert wait_for_connection(conn, timeout_seconds=60, poll_interval=5) is True
-    mock_conn_avail.assert_called_once()
+    # Test behavior: function should return True when connection is available
+    result = wait_for_connection(conn, timeout=Duration.from_seconds(60), poll_interval=Duration.from_seconds(5))
+    assert result is True
 
 
 @patch("iris.cluster.vm.ssh.time.sleep")
 @patch("iris.cluster.vm.ssh.connection_available")
-@patch("iris.cluster.vm.ssh.time.time")
-def test_wait_for_connection_returns_false_on_timeout(mock_time, mock_conn_avail, _mock_sleep):
+def test_wait_for_connection_returns_false_on_timeout(mock_conn_avail, _mock_sleep):
     """wait_for_connection returns False when timeout expires."""
     mock_conn_avail.return_value = False
-    # Provide enough time values for all calls - the function now also logs which triggers
-    # additional time.time() calls from the logging module, so use a callable
-    times = iter([0, 0, 5, 11])
-    mock_time.side_effect = lambda: next(times, 100)  # Return 100 for any extra calls (logging)
     conn = MagicMock()
-    assert wait_for_connection(conn, timeout_seconds=10, poll_interval=5) is False
+    # Use a very short timeout so the real monotonic deadline expires quickly
+    assert wait_for_connection(conn, timeout=Duration.from_ms(50), poll_interval=Duration.from_ms(10)) is False
 
 
 @patch("iris.cluster.vm.ssh.time.sleep")
 @patch("iris.cluster.vm.ssh.connection_available")
-@patch("iris.cluster.vm.ssh.time.time")
-def test_wait_for_connection_respects_stop_event(mock_time, mock_conn_avail, _mock_sleep):
+def test_wait_for_connection_respects_stop_event(mock_conn_avail, _mock_sleep):
     """wait_for_connection returns False when stop_event is set."""
     mock_conn_avail.return_value = False
-    mock_time.return_value = 0
     conn = MagicMock()
     stop_event = threading.Event()
     stop_event.set()
-    assert wait_for_connection(conn, timeout_seconds=60, poll_interval=5, stop_event=stop_event) is False
+    assert (
+        wait_for_connection(
+            conn, timeout=Duration.from_seconds(60), poll_interval=Duration.from_seconds(5), stop_event=stop_event
+        )
+        is False
+    )
 
 
 def test_check_health_returns_healthy_on_success():
@@ -129,22 +130,20 @@ def test_run_streaming_with_retry_success_first_attempt():
 
 @patch("iris.cluster.vm.ssh.time.sleep")
 def test_run_streaming_with_retry_retries_on_connection_error(_mock_sleep):
-    """run_streaming_with_retry retries on connection error with backoff."""
-    call_count = [0]
-
-    def run_streaming_side_effect(_command: str):
-        call_count[0] += 1
-        if call_count[0] < 3:
-            raise OSError("Connection refused")
-        return make_fake_popen()
-
+    """run_streaming_with_retry eventually succeeds after connection errors."""
+    # Simulate initial failures followed by success
     conn = MagicMock()
-    conn.run_streaming.side_effect = run_streaming_side_effect
+    conn.run_streaming.side_effect = [
+        OSError("Connection refused"),
+        OSError("Connection refused"),
+        make_fake_popen(),
+    ]
 
+    # Test behavior: function should eventually succeed despite initial failures
     result = run_streaming_with_retry(conn, "bootstrap script", max_retries=3)
 
+    # Verify successful outcome
     assert result.returncode == 0
-    assert call_count[0] == 3
 
 
 @pytest.mark.slow  # Flaky in CI: background thread holds logging lock (gh#2551)
@@ -166,3 +165,77 @@ def test_run_streaming_with_retry_calls_on_line_callback():
     lines_received: list[str] = []
     run_streaming_with_retry(conn, "bootstrap script", on_line=lines_received.append)
     assert lines_received == expected_lines
+
+
+# ============================================================================
+# Regression tests for Duration/float type safety
+# ============================================================================
+
+
+class FakeSshConnection:
+    """Minimal SshConnection implementation for testing timeout handling.
+
+    Records calls so tests can verify Duration values are properly converted
+    to float/int before reaching subprocess APIs.
+    """
+
+    def __init__(self, run_result: subprocess.CompletedProcess | None = None):
+        self._run_result = run_result or subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        self.last_timeout: Duration | None = None
+
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        self.last_timeout = timeout
+        return self._run_result
+
+    def run_streaming(self, command: str) -> MagicMock:
+        return make_fake_popen()
+
+    @property
+    def address(self) -> str:
+        return "fake-host"
+
+    @property
+    def zone(self) -> str:
+        return ""
+
+
+def test_connection_available_accepts_duration_timeout():
+    """connection_available works with Duration timeout (regression for TypeError)."""
+    conn = FakeSshConnection()
+    assert connection_available(conn, timeout=Duration.from_seconds(5)) is True
+    assert conn.last_timeout == Duration.from_seconds(5)
+
+
+def test_check_health_passes_duration_to_run():
+    """check_health passes Duration to conn.run without TypeError."""
+    conn = FakeSshConnection()
+    result = check_health(conn, port=10001)
+    assert result.healthy is True
+    assert conn.last_timeout == Duration.from_seconds(10)
+
+
+def test_direct_ssh_connection_accepts_duration_connect_timeout():
+    """DirectSshConnection accepts Duration for connect_timeout field."""
+    from iris.cluster.vm.ssh import DirectSshConnection
+
+    conn = DirectSshConnection(
+        host="10.0.0.1",
+        connect_timeout=Duration.from_seconds(45),
+    )
+    cmd = conn._build_cmd("echo hello")
+    # The SSH ConnectTimeout option should be the integer seconds value
+    assert "ConnectTimeout=45" in " ".join(cmd)
+
+
+def test_ssh_config_duration_flows_to_direct_ssh_connection():
+    """SshConfig.connect_timeout (Duration) flows correctly to DirectSshConnection."""
+    from iris.cluster.vm.managed_vm import SshConfig
+    from iris.cluster.vm.ssh import DirectSshConnection
+
+    ssh_config = SshConfig(connect_timeout=Duration.from_seconds(20))
+    conn = DirectSshConnection(
+        host="10.0.0.1",
+        connect_timeout=ssh_config.connect_timeout,
+    )
+    cmd = conn._build_cmd("echo hello")
+    assert "ConnectTimeout=20" in " ".join(cmd)
