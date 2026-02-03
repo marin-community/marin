@@ -1,729 +1,366 @@
-(<lambda> pid=3505, ip=10.130.0.39) 2026-02-03T03:28:07 - 2 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: hellaswag] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
-(autoscaler +52m33s) Adding 9 node(s) of type tpu_slice_v4_64.
-(autoscaler +52m33s) Resized to 4560 CPUs, 152 TPUs.
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-Generating test split: 100%|██████████| 165/165 [00:00<00:00, 37277.68 examples/s]
-(<lambda> pid=3505, ip=10.130.0.57)   | 0/165 [00:00<?, ? examples/s]
-(<lambda> pid=3505, ip=10.130.0.57) 
-Generating validation split: 100%|██████████| 18/18 [00:00<00:00, 9681.65 examples/s]
-(<lambda> pid=3505, ip=10.130.0.57)         | 0/18 [00:00<?, ? examples/s]
-(<lambda> pid=3505, ip=10.130.0.57) 
-Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 2842.05 examples/s]
-(<lambda> pid=3505, ip=10.130.0.39) 2026-02-03T03:28:16 - 2 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: piqa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57)  | 0/5 [00:00<?, ? examples/s]
-Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3261.00 examples/s]
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39)         | 0/19 [00:00<?, ? examples/s]
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-Generating validation split: 100%|██████████| 19/19 [00:00<00:00, 11724.55 examples/s]
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-Generating test split: 100%|██████████| 121/121 [00:00<00:00, 50144.33 examples/s] [repeated 30x across cluster]
-Generating validation split: 100%|██████████| 13/13 [00:00<00:00, 7840.95 examples/s] [repeated 29x across cluster]
-Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3173.66 examples/s] [repeated 29x across cluster]
-(<lambda> pid=3505, ip=10.130.0.57)  | 0/5 [00:00<?, ? examples/s]
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-Generating validation split: 100%|██████████| 100/100 [00:00<00:00, 57996.46 examples/s]
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39)  | 0/5 [00:00<?, ? examples/s]
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3319.33 examples/s]
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65)   | 0/895 [00:00<?, ? examples/s]
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56)         | 0/26 [00:00<?, ? examples/s]
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-Generating test split: 100%|██████████| 895/895 [00:00<00:00, 248388.94 examples/s]
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-Generating validation split: 100%|██████████| 26/26 [00:00<00:00, 13995.37 examples/s]
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37)  | 0/5 [00:00<?, ? examples/s]
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3277.82 examples/s]
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50)         | 0/34 [00:00<?, ? examples/s]
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-Generating validation split: 100%|██████████| 34/34 [00:00<00:00, 19707.90 examples/s]
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-Generating test split: 100%|██████████| 1534/1534 [00:00<00:00, 143428.57 examples/s] [repeated 28x across cluster]
-Generating validation split: 100%|██████████| 170/170 [00:00<00:00, 66193.06 examples/s] [repeated 26x across cluster]
-Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 2943.78 examples/s] [repeated 26x across cluster]
-(<lambda> pid=3505, ip=10.130.0.39)  | 0/5 [00:00<?, ? examples/s]
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64)  | 0/5 [00:00<?, ? examples/s]
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53)  | 0/5 [00:00<?, ? examples/s]
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57)                                   [repeated 2x across cluster]
-(<lambda> pid=3505, ip=10.130.0.50) 
-Generating test split: 100%|██████████| 324/324 [00:00<00:00, 122197.15 examples/s] [repeated 2x across cluster]
-(<lambda> pid=3504, ip=10.130.0.56) 
-Generating validation split: 100%|██████████| 170/170 [00:00<00:00, 67643.65 examples/s]
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3504, ip=10.130.0.56) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3506, ip=10.130.0.65) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3505, ip=10.130.0.39) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3503, ip=10.130.0.64) 
-(<lambda> pid=3573, ip=10.130.0.37) 
-Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3045.97 examples/s] [repeated 2x across cluster]
-(<lambda> pid=3573, ip=10.130.0.37) 2026-02-03T03:28:36 - 5 - levanter.eval_harness - eval_harness.py:940 - WARNING :: Rate limited by HuggingFace Hub, retrying in 2.4s (attempt 1/20)
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.57) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.53) 
-(<lambda> pid=3505, ip=10.130.0.50) 2026-02-03T03:28:39 - 6 - levanter.eval_harness - eval_harness.py:1083 - ERROR :: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-(<lambda> pid=3505, ip=10.130.0.50) Traceback (most recent call last):
-(<lambda> pid=3505, ip=10.130.0.50)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1077, in to_task_dict
-(<lambda> pid=3505, ip=10.130.0.50)     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
-(<lambda> pid=3505, ip=10.130.0.50)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=3505, ip=10.130.0.50)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1099, in _get_task_and_rename
-(<lambda> pid=3505, ip=10.130.0.50)     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
-(<lambda> pid=3505, ip=10.130.0.50)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=3505, ip=10.130.0.50)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
-(<lambda> pid=3505, ip=10.130.0.50)     return load_fn(*args, **kwargs)
-(<lambda> pid=3505, ip=10.130.0.50)            ^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
-(<lambda> pid=3505, ip=10.130.0.50)     **task_manager.load_config(config=task_element),
-(<lambda> pid=3505, ip=10.130.0.50)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
-(<lambda> pid=3505, ip=10.130.0.50)     return self._load_individual_task_or_group(config)
-(<lambda> pid=3505, ip=10.130.0.50)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 402, in _load_individual_task_or_group
-(<lambda> pid=3505, ip=10.130.0.50)     group_name, subtask_list = _get_group_and_subtask_from_config(
-(<lambda> pid=3505, ip=10.130.0.50)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 297, in _get_group_and_subtask_from_config
-(<lambda> pid=3505, ip=10.130.0.50)     for task in group_name.config["task"]:
-(<lambda> pid=3505, ip=10.130.0.50) TypeError: 'NoneType' object is not iterable
-(<lambda> pid=3505, ip=10.130.0.50) 2026-02-03T03:28:39 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on: 13.0it/15.0it rate:1.9s/it remaining:00:03 elapsed:00:43 postfix:-
-(<lambda> pid=3505, ip=10.130.0.50) 2026-02-03T03:28:39 - 6 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
-(<lambda> pid=3505, ip=10.130.0.50) wandb: 
-(<lambda> pid=3505, ip=10.130.0.50) wandb: Run summary:
-(<lambda> pid=3505, ip=10.130.0.50) wandb:                                 backend tpu
-(<lambda> pid=3505, ip=10.130.0.50) wandb:                             num_devices 32
-(<lambda> pid=3505, ip=10.130.0.50) wandb:                               num_hosts 8
-(<lambda> pid=3505, ip=10.130.0.50) wandb:                         parameter_count 1235814400
-(<lambda> pid=3505, ip=10.130.0.50) wandb:                  throughput/device_kind TPU v4
-(<lambda> pid=3505, ip=10.130.0.50) wandb:            throughput/flops_per_example 37044092928000.0
-(<lambda> pid=3505, ip=10.130.0.50) wandb:            throughput/theoretical_flops 8800000000000000.0
-(<lambda> pid=3505, ip=10.130.0.50) wandb: throughput/theoretical_flops_per_device 275000000000000.0
-(<lambda> pid=3505, ip=10.130.0.50) wandb: 
-(<lambda> pid=3505, ip=10.130.0.50) wandb: You can sync this run to the cloud by running:
-(<lambda> pid=3505, ip=10.130.0.50) wandb: wandb sync /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/wandb/offline-run-20260203_032731-unified-language-only-llama-1b-tootsie-1e20-2
-(<lambda> pid=3505, ip=10.130.0.50) wandb: Find logs at: ./wandb/offline-run-20260203_032731-unified-language-only-llama-1b-tootsie-1e20-2/logs
-(<lambda> pid=3505, ip=10.130.0.50) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f183c0eaf20>
-(<lambda> pid=3505, ip=10.130.0.50) Traceback (most recent call last):
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=3505, ip=10.130.0.50)     conn.teardown(hooks.exit_code)
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=3505, ip=10.130.0.50)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
-(<lambda> pid=3505, ip=10.130.0.50)     return future.result()
-(<lambda> pid=3505, ip=10.130.0.50)  
-Generating test split: 100%|██████████| 198/198 [00:00<00:00, 83809.89 examples/s] [repeated 19x across cluster]
-Generating validation split: 100%|██████████| 22/22 [00:00<00:00, 14163.42 examples/s] [repeated 20x across cluster]
-Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3387.97 examples/s] [repeated 20x across cluster]
-(<lambda> pid=3505, ip=10.130.0.50)           ^^^^^^^^^^^^^^^es/s]
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=3505, ip=10.130.0.50)     return self.__get_result()
-(<lambda> pid=3505, ip=10.130.0.50)            ^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=3505, ip=10.130.0.50)     raise self._exception
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=3505, ip=10.130.0.50)     return await fn()
-(<lambda> pid=3505, ip=10.130.0.50)            ^^^^^^^^^^
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=3505, ip=10.130.0.50)     await self._client.close()
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=3505, ip=10.130.0.50)     await self._writer.wait_closed()
-(<lambda> pid=3505, ip=10.130.0.50)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=3505, ip=10.130.0.50)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=3505, ip=10.130.0.50) BrokenPipeError: [Errno 32] Broken pipe
-(SliceActor pid=3433, ip=10.130.0.37) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(SliceActor pid=3433, ip=10.130.0.37) 
-(SliceActor pid=3433, ip=10.130.0.37) The above exception was the direct cause of the following exception:
-(SliceActor pid=3433, ip=10.130.0.37) 
-(SliceActor pid=3433, ip=10.130.0.37) ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(SliceActor pid=3433, ip=10.130.0.37)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=3433, ip=10.130.0.37)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=3433, ip=10.130.0.37)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3433, ip=10.130.0.37)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
-(SliceActor pid=3433, ip=10.130.0.37)     levanter.eval_harness.lm_eval_harness(
-(SliceActor pid=3433, ip=10.130.0.37)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1531, in lm_eval_harness
-(SliceActor pid=3433, ip=10.130.0.37)     tasks_to_run = config.to_task_dict()
-(SliceActor pid=3433, ip=10.130.0.37)                    ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3433, ip=10.130.0.37)     raise ValueError(f"Failed to load task {task}") from e
-(SliceActor pid=3433, ip=10.130.0.37) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-(run_on_pod_ray pid=11271, ip=10.130.0.47) Task error ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(run_on_pod_ray pid=11271, ip=10.130.0.47) 
-(run_on_pod_ray pid=11271, ip=10.130.0.47) 
-(run_on_pod_ray pid=11271, ip=10.130.0.47) ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     return func(*args, **kwargs)
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=11271, ip=10.130.0.47) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(run_on_pod_ray pid=11271, ip=10.130.0.47) 
-(run_on_pod_ray pid=11271, ip=10.130.0.47) 
-(run_on_pod_ray pid=11271, ip=10.130.0.47) ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(<lambda> pid=3505, ip=10.130.0.50) E0203 03:28:40.801733    5661 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=3505, ip=10.130.0.50) F0203 03:28:40.801855    3505 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to disconnect from coordination service with status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=3505, ip=10.130.0.50) 
-(<lambda> pid=3505, ip=10.130.0.50) RPC: /tensorflow.CoordinationService/ShutdownTask [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(run_on_pod_ray pid=11271, ip=10.130.0.47) Failed 2 times. Continuing to retry.
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     return func(*args, **kwargs)
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=11271, ip=10.130.0.47) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(run_on_pod_ray pid=11271, ip=10.130.0.47) 
-(run_on_pod_ray pid=11271, ip=10.130.0.47) 
-(run_on_pod_ray pid=11271, ip=10.130.0.47) ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(run_on_pod_ray pid=11271, ip=10.130.0.47) Failed too many times
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     return func(*args, **kwargs)
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=11271, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=11271, ip=10.130.0.47)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=11271, ip=10.130.0.47) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(run_on_pod_ray pid=11271, ip=10.130.0.47) 
-(run_on_pod_ray pid=11271, ip=10.130.0.47) 
-(run_on_pod_ray pid=11271, ip=10.130.0.47) ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(run_levanter_train_lm pid=11186, ip=10.130.0.47) Job 140052568708208 failed with message: ray::run_on_pod_ray() (pid=11271, ip=10.130.0.47)
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     raise problem or RuntimeError("TPU job failed too many times")
-(run_levanter_train_lm pid=11186, ip=10.130.0.47) 
-(run_levanter_train_lm pid=11186, ip=10.130.0.47) 
-(run_levanter_train_lm pid=11186, ip=10.130.0.47) ray::<lambda>() (pid=3505, ip=10.130.0.50)
-(<lambda> pid=3505, ip=10.130.0.53) 2026-02-03T03:28:37 - 7 - levanter.eval_harness - eval_harness.py:940 - WARNING :: Rate limited by HuggingFace Hub, retrying in 2.6s (attempt 1/20) [repeated 7x across cluster]
-(run_on_pod_ray pid=11271, ip=10.130.0.47) Traceback (most recent call last): [repeated 3x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1084, in to_task_dict [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1099, in _get_task_and_rename [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager) [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     return load_fn(*args, **kwargs) [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)            ^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     **task_manager.load_config(config=task_element), [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     return self._load_individual_task_or_group(config) [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 402, in _load_individual_task_or_group [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     group_name, subtask_list = _get_group_and_subtask_from_config( [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 297, in _get_group_and_subtask_from_config [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     for task in group_name.config["task"]: [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47) TypeError: 'NoneType' object is not iterable [repeated 6x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 8x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)                                                  ^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47) The above exception was the direct cause of the following exception: [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/main/train_lm.py", line 245, in main [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     levanter.eval_harness.lm_eval_harness( [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1531, in lm_eval_harness [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     tasks_to_run = config.to_task_dict() [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)                    ^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     raise ValueError(f"Failed to load task {task}") from e [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0} [repeated 5x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray [repeated 2x across cluster]
-(run_levanter_train_lm pid=11186, ip=10.130.0.47)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_levanter_train_lm pid=11186, ip=10.130.0.47) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.50)
-2026-02-03 03:28:51,481 WARNING cluster.py:350 -- Job 137924821074448 failed with message: ray::run_levanter_train_lm() (pid=11186, ip=10.130.0.47)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
+d on the Hugging Face Hub
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since allenai/ai2_arc couldn't be found on the Hugging Face Hub
+(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'ARC-Easy' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:26 2026).
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'ARC-Easy' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:26 2026).
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_easy] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_easy] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:03 - 0 - levanter.eval_harness - eval_harness.py:1086 - INFO :: Loading tasks... [repeated 7x across cluster]
+(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'ARC-Challenge' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:28 2026).
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'ARC-Challenge' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:28 2026).
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_challenge] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_challenge] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:847 - WARNING :: [Task: boolq] metric acc is defined, but aggregation is not. using default aggregation=mean
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:859 - WARNING :: [Task: boolq] metric acc is defined, but higher_is_better is not. using default higher_is_better=True
+(<lambda> pid=14883, ip=10.130.0.103) Using the latest cached version of the dataset since super_glue couldn't be found on the Hugging Face Hub
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since super_glue couldn't be found on the Hugging Face Hub
+(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'boolq' at /home/ray/.cache/huggingface/datasets/super_glue/boolq/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:30 2026).
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'boolq' at /home/ray/.cache/huggingface/datasets/super_glue/boolq/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:30 2026).
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: boolq] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: boolq] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=14883, ip=10.130.0.103) Using the latest cached version of the dataset since tau/commonsense_qa couldn't be found on the Hugging Face Hub
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:09 - 6 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since tau/commonsense_qa couldn't be found on the Hugging Face Hub
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:09 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: commonsense_qa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:09 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: commonsense_qa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:10 - 1 - lm_eval.api.task - task.py:847 - WARNING :: [Task: copa] metric acc is defined, but aggregation is not. using default aggregation=mean
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:10 - 1 - lm_eval.api.task - task.py:859 - WARNING :: [Task: copa] metric acc is defined, but higher_is_better is not. using default higher_is_better=True
+(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'copa' at /home/ray/.cache/huggingface/datasets/super_glue/copa/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:35 2026).
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:10 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'copa' at /home/ray/.cache/huggingface/datasets/super_glue/copa/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:35 2026).
+(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:10 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:08 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on: -/15 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since hails/agieval-lsat-ar couldn't be found on the Hugging Face Hub [repeated 7x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:08 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since hails/agieval-lsat-ar couldn't be found on the Hugging Face Hub [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/Rowan___hellaswag/default/0.0.0/218ec52e09a7e7462a5400043bb9a69a41d06b76 (last modified on Tue Feb  3 13:04:06 2026). [repeated 23x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:13 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/Rowan___hellaswag/default/0.0.0/218ec52e09a7e7462a5400043bb9a69a41d06b76 (last modified on Tue Feb  3 13:04:06 2026). [repeated 23x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:08 - 0 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: agieval_lsat_ar] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since allenai/ai2_arc couldn't be found on the Hugging Face Hub [repeated 15x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:08 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since allenai/ai2_arc couldn't be found on the Hugging Face Hub [repeated 15x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'ARC-Easy' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:26 2026). [repeated 7x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:09 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'ARC-Easy' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:26 2026). [repeated 7x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:09 - 0 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_easy] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:15 - 1 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: hellaswag] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:15 - 1 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: hellaswag] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'ARC-Challenge' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:28 2026). [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:10 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'ARC-Challenge' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:28 2026). [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:10 - 7 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_challenge] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:10 - 7 - lm_eval.api.task - task.py:847 - WARNING :: [Task: boolq] metric acc is defined, but aggregation is not. using default aggregation=mean [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:10 - 7 - lm_eval.api.task - task.py:859 - WARNING :: [Task: boolq] metric acc is defined, but higher_is_better is not. using default higher_is_better=True [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since super_glue couldn't be found on the Hugging Face Hub [repeated 15x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:12 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since super_glue couldn't be found on the Hugging Face Hub [repeated 15x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'boolq' at /home/ray/.cache/huggingface/datasets/super_glue/boolq/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:31 2026). [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:11 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'boolq' at /home/ray/.cache/huggingface/datasets/super_glue/boolq/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:31 2026). [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:11 - 7 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: boolq] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since tau/commonsense_qa couldn't be found on the Hugging Face Hub [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:11 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since tau/commonsense_qa couldn't be found on the Hugging Face Hub [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:11 - 7 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: commonsense_qa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:12 - 7 - lm_eval.api.task - task.py:847 - WARNING :: [Task: copa] metric acc is defined, but aggregation is not. using default aggregation=mean [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:12 - 7 - lm_eval.api.task - task.py:859 - WARNING :: [Task: copa] metric acc is defined, but higher_is_better is not. using default higher_is_better=True [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'copa' at /home/ray/.cache/huggingface/datasets/super_glue/copa/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:35 2026). [repeated 7x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:12 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'copa' at /home/ray/.cache/huggingface/datasets/super_glue/copa/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:35 2026). [repeated 7x across cluster]
+(<lambda> pid=14883, ip=10.130.0.103) Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub [repeated 9x across cluster]
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:15 - 6 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub [repeated 9x across cluster]
+(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:19 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4 (last modified on Tue Feb  3 13:03:57 2026). [repeated 9x across cluster]
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:19 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4 (last modified on Tue Feb  3 13:03:57 2026). [repeated 9x across cluster]
+(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since openbookqa couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:19 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since openbookqa couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'main' at /home/ray/.cache/huggingface/datasets/openbookqa/main/0.0.0/388097ea7776314e93a529163e0fea805b8a6454 (last modified on Tue Feb  3 13:04:00 2026).
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:19 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'main' at /home/ray/.cache/huggingface/datasets/openbookqa/main/0.0.0/388097ea7776314e93a529163e0fea805b8a6454 (last modified on Tue Feb  3 13:04:00 2026).
+(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since baber/piqa couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:20 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since baber/piqa couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:20 - 1 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: piqa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:20 - 1 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: piqa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:19 - 7 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: hellaswag] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:17 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the module from /home/ray/.cache/huggingface/modules/datasets_modules/datasets/winograd_wsc/0651311f3b6dda14889d9a063030a02458395ee50ab9f41cca4cd5a89c0c3dce (last modified on Tue Feb  3 13:04:04 2026) since it couldn't be found locally at winograd_wsc, or remotely on the Hugging Face Hub.
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:21 - 1 - datasets.load - load.py:1340 - WARNING :: Using the latest cached version of the module from /home/ray/.cache/huggingface/modules/datasets_modules/datasets/winograd_wsc/0651311f3b6dda14889d9a063030a02458395ee50ab9f41cca4cd5a89c0c3dce (last modified on Tue Feb  3 13:04:04 2026) since it couldn't be found locally at winograd_wsc, or remotely on the Hugging Face Hub.
+(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since winogrande couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:21 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since winogrande couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'winogrande_xl' at /home/ray/.cache/huggingface/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5 (last modified on Tue Feb  3 13:04:08 2026).
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:21 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'winogrande_xl' at /home/ray/.cache/huggingface/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5 (last modified on Tue Feb  3 13:04:08 2026).
+(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'logical_fallacies' at /home/ray/.cache/huggingface/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:11 2026).
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'logical_fallacies' at /home/ray/.cache/huggingface/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:11 2026).
+(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub
+(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'moral_disputes' at /home/ray/.cache/huggingface/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:13 2026).
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'moral_disputes' at /home/ray/.cache/huggingface/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:13 2026).
+(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'formal_logic' at /home/ray/.cache/huggingface/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:14 2026).
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'formal_logic' at /home/ray/.cache/huggingface/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:14 2026).
+(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'high_school_european_history' at /home/ray/.cache/huggingface/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:16 2026).
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:24 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'high_school_european_history' at /home/ray/.cache/huggingface/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:16 2026).
+(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:20 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/baber___piqa/default/0.0.0/142f6d7367fd9877f0fb3b5734ea6a545f54cdd1 (last modified on Tue Feb  3 13:04:02 2026). [repeated 13x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/baber___piqa/default/0.0.0/142f6d7367fd9877f0fb3b5734ea6a545f54cdd1 (last modified on Tue Feb  3 13:04:02 2026). [repeated 13x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since openbookqa couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since openbookqa couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'main' at /home/ray/.cache/huggingface/datasets/openbookqa/main/0.0.0/388097ea7776314e93a529163e0fea805b8a6454 (last modified on Tue Feb  3 13:03:59 2026). [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'main' at /home/ray/.cache/huggingface/datasets/openbookqa/main/0.0.0/388097ea7776314e93a529163e0fea805b8a6454 (last modified on Tue Feb  3 13:03:59 2026). [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since baber/piqa couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since baber/piqa couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: piqa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 12x across cluster]
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:25 - 1 - levanter.eval_harness - eval_harness.py:1116 - ERROR :: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
+(<lambda> pid=15019, ip=10.130.0.110) Traceback (most recent call last):
+(<lambda> pid=15019, ip=10.130.0.110)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1110, in to_task_dict
+(<lambda> pid=15019, ip=10.130.0.110)     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
+(<lambda> pid=15019, ip=10.130.0.110)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
+(<lambda> pid=15019, ip=10.130.0.110)     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
+(<lambda> pid=15019, ip=10.130.0.110)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
+(<lambda> pid=15019, ip=10.130.0.110)     return load_fn(*args, **kwargs)
+(<lambda> pid=15019, ip=10.130.0.110)            ^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
+(<lambda> pid=15019, ip=10.130.0.110)     **task_manager.load_config(config=task_element),
+(<lambda> pid=15019, ip=10.130.0.110)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
+(<lambda> pid=15019, ip=10.130.0.110)     return self._load_individual_task_or_group(config)
+(<lambda> pid=15019, ip=10.130.0.110)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+(<lambda> pid=15019, ip=10.130.0.110)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+(<lambda> pid=15019, ip=10.130.0.110)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+(<lambda> pid=15019, ip=10.130.0.110)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+(<lambda> pid=15019, ip=10.130.0.110)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
+(<lambda> pid=15019, ip=10.130.0.110)     return _load_task(task_config, task=name)
+(<lambda> pid=15019, ip=10.130.0.110)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
+(<lambda> pid=15019, ip=10.130.0.110)     task_object = ConfigurableTask(config=config)
+(<lambda> pid=15019, ip=10.130.0.110)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
+(<lambda> pid=15019, ip=10.130.0.110)     self.download(self.config.dataset_kwargs)
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
+(<lambda> pid=15019, ip=10.130.0.110)     self.dataset = datasets.load_dataset(
+(<lambda> pid=15019, ip=10.130.0.110)                    ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
+(<lambda> pid=15019, ip=10.130.0.110)     builder_instance = load_dataset_builder(
+(<lambda> pid=15019, ip=10.130.0.110)                        ^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
+(<lambda> pid=15019, ip=10.130.0.110)     builder_instance: DatasetBuilder = builder_cls(
+(<lambda> pid=15019, ip=10.130.0.110)                                        ^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__
+(<lambda> pid=15019, ip=10.130.0.110)     config_name, version, hash = _find_hash_in_cache(
+(<lambda> pid=15019, ip=10.130.0.110)                                  ^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
+(<lambda> pid=15019, ip=10.130.0.110)     raise ValueError(
+(<lambda> pid=15019, ip=10.130.0.110) ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
+(<lambda> pid=15019, ip=10.130.0.110) Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:25 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on: 13.0it/15.0it rate:1.2s/it remaining:00:02 elapsed:00:18 postfix:-
+(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:25 - 1 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
+(<lambda> pid=15019, ip=10.130.0.110) wandb: 
+(<lambda> pid=15019, ip=10.130.0.110) wandb: Run summary:
+(<lambda> pid=15019, ip=10.130.0.110) wandb:                                 backend tpu
+(<lambda> pid=15019, ip=10.130.0.110) wandb:                             num_devices 32
+(<lambda> pid=15019, ip=10.130.0.110) wandb:                               num_hosts 8
+(<lambda> pid=15019, ip=10.130.0.110) wandb:                         parameter_count 1235814400
+(<lambda> pid=15019, ip=10.130.0.110) wandb:                  throughput/device_kind TPU v4
+(<lambda> pid=15019, ip=10.130.0.110) wandb:            throughput/flops_per_example 37044092928000.0
+(<lambda> pid=15019, ip=10.130.0.110) wandb:            throughput/theoretical_flops 8800000000000000.0
+(<lambda> pid=15019, ip=10.130.0.110) wandb: throughput/theoretical_flops_per_device 275000000000000.0
+(<lambda> pid=15019, ip=10.130.0.110) wandb: 
+(<lambda> pid=15019, ip=10.130.0.110) wandb: You can sync this run to the cloud by running:
+(<lambda> pid=15019, ip=10.130.0.110) wandb: wandb sync /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/wandb/offline-run-20260203_130436-unified-language-only-llama-1b-tootsie-1e20-2
+(<lambda> pid=15019, ip=10.130.0.110) wandb: Find logs at: ./wandb/offline-run-20260203_130436-unified-language-only-llama-1b-tootsie-1e20-2/logs
+(SliceActor pid=15273, ip=10.130.0.73) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(SliceActor pid=15273, ip=10.130.0.73) 
+(SliceActor pid=15273, ip=10.130.0.73) The above exception was the direct cause of the following exception:
+(SliceActor pid=15273, ip=10.130.0.73) 
+(SliceActor pid=15273, ip=10.130.0.73) ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(SliceActor pid=15273, ip=10.130.0.73)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=15273, ip=10.130.0.73)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=15273, ip=10.130.0.73)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=15273, ip=10.130.0.73)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
+(SliceActor pid=15273, ip=10.130.0.73)     levanter.eval_harness.lm_eval_harness(
+(SliceActor pid=15273, ip=10.130.0.73)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
+(SliceActor pid=15273, ip=10.130.0.73)     tasks_to_run = config.to_task_dict()
+(SliceActor pid=15273, ip=10.130.0.73)     raise ValueError(f"Failed to load task {task}") from e
+(SliceActor pid=15273, ip=10.130.0.73) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
+(run_on_pod_ray pid=99553, ip=10.130.0.136) Task error ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(run_on_pod_ray pid=99553, ip=10.130.0.136) 
+(run_on_pod_ray pid=99553, ip=10.130.0.136) 
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=99553, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return func(*args, **kwargs)
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(run_on_pod_ray pid=99553, ip=10.130.0.136) 
+(run_on_pod_ray pid=99553, ip=10.130.0.136) 
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(<lambda> pid=15019, ip=10.130.0.110) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f26b824f060>
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=15019, ip=10.130.0.110)     conn.teardown(hooks.exit_code)
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=15019, ip=10.130.0.110)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=15019, ip=10.130.0.110)     return future.result()
+(<lambda> pid=15019, ip=10.130.0.110)            ^^^^^^^^^^^^^^^
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=15019, ip=10.130.0.110)     return self.__get_result()
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=15019, ip=10.130.0.110)     raise self._exception
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=15019, ip=10.130.0.110)     return await fn()
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=15019, ip=10.130.0.110)     await self._client.close()
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=15019, ip=10.130.0.110)     await self._writer.wait_closed()
+(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=15019, ip=10.130.0.110)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=15019, ip=10.130.0.110) BrokenPipeError: [Errno 32] Broken pipe
+(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the module from /home/ray/.cache/huggingface/modules/datasets_modules/datasets/winograd_wsc/0651311f3b6dda14889d9a063030a02458395ee50ab9f41cca4cd5a89c0c3dce (last modified on Tue Feb  3 13:04:03 2026) since it couldn't be found locally at winograd_wsc, or remotely on the Hugging Face Hub. [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:22 - 0 - datasets.load - load.py:1340 - WARNING :: Using the latest cached version of the module from /home/ray/.cache/huggingface/modules/datasets_modules/datasets/winograd_wsc/0651311f3b6dda14889d9a063030a02458395ee50ab9f41cca4cd5a89c0c3dce (last modified on Tue Feb  3 13:04:03 2026) since it couldn't be found locally at winograd_wsc, or remotely on the Hugging Face Hub. [repeated 6x across cluster]
+(<lambda> pid=15019, ip=10.130.0.110) E0203 13:05:27.661509   17211 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=15019, ip=10.130.0.110) F0203 13:05:27.661552   17211 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=15019, ip=10.130.0.110) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=15019, ip=10.130.0.110) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
+(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since winogrande couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:22 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since winogrande couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'winogrande_xl' at /home/ray/.cache/huggingface/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5 (last modified on Tue Feb  3 13:04:08 2026). [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:22 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'winogrande_xl' at /home/ray/.cache/huggingface/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5 (last modified on Tue Feb  3 13:04:08 2026). [repeated 6x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136) Failed 2 times. Continuing to retry.
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return func(*args, **kwargs)
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(run_on_pod_ray pid=99553, ip=10.130.0.136) 
+(run_on_pod_ray pid=99553, ip=10.130.0.136) 
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(<lambda> pid=15441, ip=10.130.0.73) Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub [repeated 20x across cluster]
+(<lambda> pid=15441, ip=10.130.0.73) 2026-02-03T13:05:25 - 5 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub [repeated 20x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'logical_fallacies' at /home/ray/.cache/huggingface/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:11 2026). [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:24 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'logical_fallacies' at /home/ray/.cache/huggingface/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:11 2026). [repeated 6x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136) Failed too many times
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return func(*args, **kwargs)
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(run_on_pod_ray pid=99553, ip=10.130.0.136) 
+(run_on_pod_ray pid=99553, ip=10.130.0.136) 
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(raylet, ip=10.130.0.61) [2026-02-03 13:05:32,886 E 5488 5488] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'moral_disputes' at /home/ray/.cache/huggingface/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:12 2026). [repeated 6x across cluster]
+(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:24 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'moral_disputes' at /home/ray/.cache/huggingface/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:12 2026). [repeated 6x across cluster]
+(<lambda> pid=15441, ip=10.130.0.73) Found the latest cached dataset configuration 'formal_logic' at /home/ray/.cache/huggingface/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:13 2026). [repeated 4x across cluster]
+(<lambda> pid=15441, ip=10.130.0.73) 2026-02-03T13:05:25 - 5 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'formal_logic' at /home/ray/.cache/huggingface/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:13 2026). [repeated 4x across cluster]
+(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'high_school_european_history' at /home/ray/.cache/huggingface/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:14 2026).
+(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:24 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'high_school_european_history' at /home/ray/.cache/huggingface/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:14 2026).
+(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:25 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub
+(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4 (last modified on Tue Feb  3 13:04:13 2026).
+(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:26 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4 (last modified on Tue Feb  3 13:04:13 2026).
+(run_on_pod_ray pid=99553, ip=10.130.0.136) Traceback (most recent call last): [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager) [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return load_fn(*args, **kwargs) [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     **task_manager.load_config(config=task_element), [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return self._load_individual_task_or_group(config) [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group [repeated 15x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list)))) [repeated 10x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 10x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     return _load_task(task_config, task=name) [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     task_object = ConfigurableTask(config=config) [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__ [repeated 10x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     self.download(self.config.dataset_kwargs) [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     self.dataset = datasets.load_dataset( [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                    ^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     builder_instance = load_dataset_builder( [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                    ^^^^^^^^^^^^^^^^^^^^^ [repeated 13x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     builder_instance: DatasetBuilder = builder_cls( [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                                        ^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     config_name, version, hash = _find_hash_in_cache( [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                                  ^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise ValueError( [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ValueError: Couldn't find cache for cais/mmlu for config 'world_religions' [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136) Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes'] [repeated 5x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136) The above exception was the direct cause of the following exception: [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     levanter.eval_harness.lm_eval_harness( [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     tasks_to_run = config.to_task_dict() [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise ValueError(f"Failed to load task {task}") from e [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0} [repeated 4x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                                                  ^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=99553, ip=10.130.0.136)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) Job 140254845632112 failed with message: ray::run_on_pod_ray() (pid=99553, ip=10.130.0.136)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     raise problem or RuntimeError("TPU job failed too many times")
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) 
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) 
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
+2026-02-03 13:05:36,058 WARNING cluster.py:350 -- Job 124635539964240 failed with message: ray::run_levanter_train_lm() (pid=99420, ip=10.130.0.136)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
     cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/base.py", line 631, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 631, in wait
     return self._wait_single(job_id, raise_on_failure)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
     raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140052568708208 failed with status failed and error: ray::run_on_pod_ray() (pid=11271, ip=10.130.0.47)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+RuntimeError: Job 140254845632112 failed with status failed and error: ray::run_on_pod_ray() (pid=99553, ip=10.130.0.136)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
     raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
                                                  ^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.50)
+ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1099, in _get_task_and_rename
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
     return load_fn(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
@@ -732,52 +369,76 @@ ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.
   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
     return self._load_individual_task_or_group(config)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 402, in _load_individual_task_or_group
-    group_name, subtask_list = _get_group_and_subtask_from_config(
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 297, in _get_group_and_subtask_from_config
-    for task in group_name.config["task"]:
-TypeError: 'NoneType' object is not iterable
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
+    return _load_task(task_config, task=name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
+    task_object = ConfigurableTask(config=config)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
+    self.download(self.config.dataset_kwargs)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
+    self.dataset = datasets.load_dataset(
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
+    builder_instance = load_dataset_builder(
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
+    builder_instance: DatasetBuilder = builder_cls(
+                                       ^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__
+    config_name, version, hash = _find_hash_in_cache(
+                                 ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
+    raise ValueError(
+ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
+Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
 
 The above exception was the direct cause of the following exception:
 
-ray::<lambda>() (pid=3505, ip=10.130.0.50)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+ray::<lambda>() (pid=15019, ip=10.130.0.110)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
     levanter.eval_harness.lm_eval_harness(
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1531, in lm_eval_harness
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
     tasks_to_run = config.to_task_dict()
                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1084, in to_task_dict
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict
     raise ValueError(f"Failed to load task {task}") from e
 ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-2026-02-03 03:28:51,482 INFO executor.py:796 -- Waiting for 137924821074448 to finish for step checkpoints/unified-language-only-llama-1b-tootsie-1e20-2
-2026-02-03 03:28:51,482 - INFO - Starting wait for job 137924821074448
-2026-02-03 03:28:51,482 WARNING cluster.py:350 -- Job 137924821074448 failed with message: ray::run_levanter_train_lm() (pid=11186, ip=10.130.0.47)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
+2026-02-03 13:05:36,058 INFO executor.py:796 -- Waiting for 124635539964240 to finish for step checkpoints/unified-language-only-llama-1b-tootsie-1e20-2
+2026-02-03 13:05:36,058 - INFO - Starting wait for job 124635539964240
+2026-02-03 13:05:36,058 WARNING cluster.py:350 -- Job 124635539964240 failed with message: ray::run_levanter_train_lm() (pid=99420, ip=10.130.0.136)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
     cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/base.py", line 631, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 631, in wait
     return self._wait_single(job_id, raise_on_failure)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
     raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140052568708208 failed with status failed and error: ray::run_on_pod_ray() (pid=11271, ip=10.130.0.47)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+RuntimeError: Job 140254845632112 failed with status failed and error: ray::run_on_pod_ray() (pid=99553, ip=10.130.0.136)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
     raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
                                                  ^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.50)
+ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1099, in _get_task_and_rename
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
     return load_fn(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
@@ -786,65 +447,89 @@ ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.
   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
     return self._load_individual_task_or_group(config)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 402, in _load_individual_task_or_group
-    group_name, subtask_list = _get_group_and_subtask_from_config(
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 297, in _get_group_and_subtask_from_config
-    for task in group_name.config["task"]:
-TypeError: 'NoneType' object is not iterable
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
+    return _load_task(task_config, task=name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
+    task_object = ConfigurableTask(config=config)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
+    self.download(self.config.dataset_kwargs)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
+    self.dataset = datasets.load_dataset(
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
+    builder_instance = load_dataset_builder(
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
+    builder_instance: DatasetBuilder = builder_cls(
+                                       ^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__
+    config_name, version, hash = _find_hash_in_cache(
+                                 ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
+    raise ValueError(
+ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
+Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
 
 The above exception was the direct cause of the following exception:
 
-ray::<lambda>() (pid=3505, ip=10.130.0.50)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+ray::<lambda>() (pid=15019, ip=10.130.0.110)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
     levanter.eval_harness.lm_eval_harness(
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1531, in lm_eval_harness
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
     tasks_to_run = config.to_task_dict()
                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1084, in to_task_dict
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict
     raise ValueError(f"Failed to load task {task}") from e
 ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-2026-02-03 03:28:51,482 - INFO - Job 137924821074448 completed with status failed
+2026-02-03 13:05:36,058 - INFO - Job 124635539964240 completed with status failed
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/experiments/unified/exp600_tootsie.py", line 226, in <module>
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/experiments/unified/exp600_tootsie.py", line 226, in <module>
     executor_main(
   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
     response = fn(cfg, *args, **kwargs)
                ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/marin/src/marin/execution/executor.py", line 743, in run
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/execution/executor.py", line 743, in run
     self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
     runner.wait()
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/marin/src/marin/execution/executor.py", line 207, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/execution/executor.py", line 207, in wait
     raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-RuntimeError: Job 137924821074448 failed: ray::run_levanter_train_lm() (pid=11186, ip=10.130.0.47)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
+RuntimeError: Job 124635539964240 failed: ray::run_levanter_train_lm() (pid=99420, ip=10.130.0.136)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
     cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/base.py", line 631, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 631, in wait
     return self._wait_single(job_id, raise_on_failure)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
     raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140052568708208 failed with status failed and error: ray::run_on_pod_ray() (pid=11271, ip=10.130.0.47)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+RuntimeError: Job 140254845632112 failed with status failed and error: ray::run_on_pod_ray() (pid=99553, ip=10.130.0.136)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
     raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
                                                  ^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.50)
+ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1099, in _get_task_and_rename
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
     return load_fn(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
@@ -853,25 +538,100 @@ ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=3505, ip=10.130.0.
   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
     return self._load_individual_task_or_group(config)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 402, in _load_individual_task_or_group
-    group_name, subtask_list = _get_group_and_subtask_from_config(
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 297, in _get_group_and_subtask_from_config
-    for task in group_name.config["task"]:
-TypeError: 'NoneType' object is not iterable
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
+    return _load_task(task_config, task=name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
+    task_object = ConfigurableTask(config=config)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
+    self.download(self.config.dataset_kwargs)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
+    self.dataset = datasets.load_dataset(
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
+    builder_instance = load_dataset_builder(
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
+    builder_instance: DatasetBuilder = builder_cls(
+                                       ^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__
+    config_name, version, hash = _find_hash_in_cache(
+                                 ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
+    raise ValueError(
+ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
+Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
 
 The above exception was the direct cause of the following exception:
 
-ray::<lambda>() (pid=3505, ip=10.130.0.50)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+ray::<lambda>() (pid=15019, ip=10.130.0.110)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
     levanter.eval_harness.lm_eval_harness(
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1531, in lm_eval_harness
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
     tasks_to_run = config.to_task_dict()
                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ac3928a20ffc5eb4/lib/levanter/src/levanter/eval_harness.py", line 1084, in to_task_dict
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict
     raise ValueError(f"Failed to load task {task}") from e
 ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     return load_fn(*args, **kwargs)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     **task_manager.load_config(config=task_element),
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     return self._load_individual_task_or_group(config)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group [repeated 3x across cluster]
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list)))) [repeated 2x across cluster]
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     return _load_task(task_config, task=name)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     task_object = ConfigurableTask(config=config)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__ [repeated 2x across cluster]
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     self.download(self.config.dataset_kwargs)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     self.dataset = datasets.load_dataset(
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                    ^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     builder_instance = load_dataset_builder(
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                    ^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     builder_instance: DatasetBuilder = builder_cls(
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                        ^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     config_name, version, hash = _find_hash_in_cache(
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                  ^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     raise ValueError(
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) The above exception was the direct cause of the following exception:
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     levanter.eval_harness.lm_eval_harness(
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     tasks_to_run = config.to_task_dict()
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)     raise ValueError(f"Failed to load task {task}") from e
+(run_levanter_train_lm pid=99420, ip=10.130.0.136) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                                  ^^^^^^^^^^
+(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
 (base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 

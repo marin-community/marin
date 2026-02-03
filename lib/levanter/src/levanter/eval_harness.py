@@ -933,15 +933,34 @@ def _load_task_with_retry(
         except Exception as e:
             error_str = str(e)
             is_rate_limit = "429" in error_str or "Too Many Requests" in error_str
+            # Also retry on cache miss errors - these often indicate that a network request
+            # failed silently and the datasets library fell back to an incomplete cache
+            is_cache_miss = "Couldn't find cache" in error_str or "couldn't be found on the Hugging Face Hub" in error_str
 
-            if is_rate_limit:
+            if is_rate_limit or is_cache_miss:
                 if attempt < max_retries - 1:
                     delay = min(base_delay * (2**attempt) + random.uniform(0, 1), max_delay)
-                    logger.warning(
-                        f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
+                    if is_rate_limit:
+                        logger.warning(
+                            f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+                    else:
+                        logger.warning(
+                            f"Dataset cache miss (likely due to failed network request), retrying in {delay:.1f}s "
+                            f"(attempt {attempt + 1}/{max_retries}): {error_str[:200]}"
+                        )
                     time.sleep(delay)
+                    # Force datasets library to re-check network by clearing its internal state
+                    try:
+                        import datasets
+                        datasets.config.HF_DATASETS_OFFLINE = False
+                        # Also try to reset the hub's cached file info
+                        from huggingface_hub import constants
+                        if hasattr(constants, 'HF_HUB_OFFLINE'):
+                            constants.HF_HUB_OFFLINE = False
+                    except Exception:
+                        pass  # Best effort - continue with retry even if this fails
                 else:
                     raise
             else:

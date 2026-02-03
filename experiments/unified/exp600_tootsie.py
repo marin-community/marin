@@ -23,7 +23,23 @@ import os
 from experiments.defaults import default_train
 from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
-from experiments.llama import llama_3_2_1b
+from experiments.llama import (
+    llama_30m,
+    llama_50m,
+    llama_75m,
+    llama_150m,
+    llama_300m,
+    llama_600m,
+    llama_1_4b,
+    llama_1_9b,
+    llama_3_2_1b,
+    llama_3_5b,
+    llama_8b,
+    llama_13b,
+    llama_24b,
+    llama_70b,
+    llama3_tokenizer_vocab_size,
+)
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
