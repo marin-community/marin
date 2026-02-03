@@ -243,7 +243,7 @@ def test_get_task_success(client, worker):
     data = response.json()
 
     assert data["taskId"] == task_id
-    assert data["jobId"] == JobName.root("job-details").to_wire()
+    assert JobName.from_wire(data["taskId"]).require_task()[0].to_wire() == JobName.root("job-details").to_wire()
     assert data["state"] == "TASK_STATE_SUCCEEDED"
     assert data["exitCode"] == 0
     assert "http" in data["ports"]
@@ -443,7 +443,7 @@ def test_get_task_status_completed_task(service, worker, request_context):
     status = service.get_task_status(status_request, request_context)
 
     assert status.task_id == task_id
-    assert status.job_id == JobName.root("job-completed").to_wire()
+    assert JobName.from_wire(status.task_id).require_task()[0].to_wire() == JobName.root("job-completed").to_wire()
     assert status.state == cluster_pb2.TASK_STATE_SUCCEEDED
     assert status.exit_code == 0
     assert status.started_at.epoch_ms > 0

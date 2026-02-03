@@ -194,7 +194,6 @@ class ControllerServiceImpl:
 
             proto_task_status = cluster_pb2.TaskStatus(
                 task_id=task.task_id.to_wire(),
-                job_id=task.job_id.to_wire(),
                 state=task.state,
                 worker_id=str(task.worker_id) if task.worker_id else "",
                 worker_address=worker_address,
@@ -348,7 +347,6 @@ class ControllerServiceImpl:
 
         proto_task_status = cluster_pb2.TaskStatus(
             task_id=task.task_id.to_wire(),
-            job_id=task.job_id.to_wire(),
             state=task.state,
             worker_id=str(task.worker_id) if task.worker_id else "",
             worker_address=worker_address,
@@ -404,7 +402,6 @@ class ControllerServiceImpl:
 
             proto_task_status = cluster_pb2.TaskStatus(
                 task_id=task.task_id.to_wire(),
-                job_id=task.job_id.to_wire(),
                 state=task.state,
                 worker_id=str(task.worker_id) if task.worker_id else "",
                 worker_address=worker_address,

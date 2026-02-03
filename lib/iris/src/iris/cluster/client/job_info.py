@@ -52,7 +52,7 @@ class JobInfo:
 
     @property
     def task_index(self) -> int:
-        return self.task_id.task_index or 0
+        return self.task_id.require_task()[1]
 
 
 # Module-level ContextVar for job metadata

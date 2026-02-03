@@ -176,7 +176,7 @@ class JobName:
         return self.task_index is not None
 
     def __str__(self) -> str:
-        """Canonical string representation: '/root/child/grandchild'."""
+        """Canonical wire format: '/root/child/grandchild'."""
         return "/" + "/".join(self._parts)
 
     def __repr__(self) -> str:

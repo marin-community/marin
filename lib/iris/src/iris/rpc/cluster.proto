@@ -60,8 +60,7 @@ enum TaskState {
 
 // Status of a single task within a job
 message TaskStatus {
-  string task_id = 1;                 // "/job/.../index"
-  string job_id = 2;
+  string task_id = 1;                 // "/job/full/path/with/task/0"
   TaskState state = 4;
 
   string worker_id = 5;
@@ -133,8 +132,6 @@ message JobStatus {
 
   bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
 
-  reserved 14;  // parent_job_id (derived from job_id)
-
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
 
@@ -203,7 +200,6 @@ message ResourceSpecProto {
   DeviceConfig device = 5;
 
   // Scheduling preferences
-  reserved 7;                 // was: preemptible (now handled via constraints)
   repeated string regions = 8; // Preferred cloud regions
 }
 
@@ -350,8 +346,6 @@ message Controller {
     // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
     repeated string ports = 9;
 
-    reserved 10;  // parent_job_id (derived from name)
-
     // Job-level failure tolerance
     // A job fails when this many tasks have exhausted their retries (default 0 = fail on first task failure)
     // Preemptions do not count toward this limit
@@ -441,7 +435,6 @@ message Controller {
   // Workers report completions for expected_tasks that have reached a terminal state.
   message CompletedTaskEntry {
     string task_id = 1;
-    string job_id = 2;
     TaskState state = 4;
     int32 exit_code = 5;
     string error = 6;
@@ -587,7 +580,7 @@ message Controller {
 
 message Worker {
   message RunTaskRequest {
-    string task_id = 1;             // Full task ID: "/job/.../index"
+    string task_id = 1;             // Full task ID: "/job/full/path/with/task/0"
     int32 num_tasks = 2;            // Total tasks in job (for IRIS_NUM_TASKS)
 
     Entrypoint entrypoint = 3;      // Job entrypoint (callable or command)

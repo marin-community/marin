@@ -73,7 +73,10 @@ class JobName:
             raise ValueError("Job name cannot be empty")
         if not s.startswith("/"):
             raise ValueError(f"Job name must start with '/': {s}")
-        return cls(tuple(s[1:].split("/")))
+        parts = tuple(s[1:].split("/"))
+        if any(not part or not part.strip() for part in parts):
+            raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
+        return cls(parts)
 
     @classmethod
     def root(cls, name: str) -> "JobName":
@@ -129,9 +132,13 @@ class JobName:
         """True if this is a task (last component is numeric)."""
         return self.task_index is not None
 
-    def is_prefix_of(self, other: "JobName") -> bool:
-        """True if this job name is a wire-prefix of another job name."""
-        return other.to_wire().startswith(self.to_wire())
+    def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
+        """True if this job name is an ancestor of another job name."""
+        if include_self and self == other:
+            return True
+        if len(self._parts) >= len(other._parts):
+            return False
+        return other._parts[: len(self._parts)] == self._parts
 
     def to_safe_token(self) -> str:
         """Return a filesystem/tag-safe token derived from this name."""
@@ -151,7 +158,7 @@ class JobName:
         return (self.parent, task_index)
 
     def __str__(self) -> str:
-        """Canonical string representation: '/root/child/grandchild'."""
+        """Canonical wire format: '/root/child/grandchild'."""
         return "/" + "/".join(self._parts)
 
     def __repr__(self) -> str:

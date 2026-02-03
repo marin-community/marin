@@ -127,7 +127,7 @@ class Task:
     @property
     def task_index(self) -> int:
         """0-indexed task number within the job."""
-        return self._task_name.task_index or 0
+        return self._task_name.require_task()[1]
 
     @property
     def task_id(self) -> JobName:
@@ -666,7 +666,7 @@ class IrisClient:
             if states is not None and job.state not in states:
                 continue
             job_name = JobName.from_wire(job.job_id)
-            if prefix is not None and not prefix.is_prefix_of(job_name):
+            if prefix is not None and not job_name.to_wire().startswith(prefix.to_wire()):
                 continue
             result.append(job)
         return result

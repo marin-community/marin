@@ -66,6 +66,8 @@ def test_job_name_roundtrip_and_hierarchy():
     assert parsed.namespace == "root"
     assert parsed.is_task
     assert parsed.task_index == 0
+    assert JobName.root("root").is_ancestor_of(parsed)
+    assert not parsed.is_ancestor_of(JobName.root("root"), include_self=False)
 
 
 @pytest.mark.parametrize(
@@ -75,3 +77,14 @@ def test_job_name_roundtrip_and_hierarchy():
 def test_job_name_rejects_invalid_inputs(value: str):
     with pytest.raises(ValueError):
         JobName.from_string(value)
+
+
+def test_job_name_require_task_errors_on_non_task():
+    with pytest.raises(ValueError):
+        JobName.from_string("/root/child").require_task()
+
+
+def test_job_name_to_safe_token_and_deep_nesting():
+    job = JobName.from_string("/a/b/c/d/e/0")
+    assert job.to_safe_token() == "job__a__b__c__d__e__0"
+    assert job.require_task()[1] == 0

@@ -275,7 +275,6 @@ class E2ECluster:
         response = self._controller_client.get_task_status(request)
         return {
             "taskId": response.task.task_id,
-            "jobId": response.task.job_id,
             "state": cluster_pb2.TaskState.Name(response.task.state),
             "workerId": response.task.worker_id,
             "workerAddress": response.task.worker_address,
