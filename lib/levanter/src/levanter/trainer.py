@@ -371,6 +371,13 @@ class Trainer:
 
     def __exit__(self, *args):
         problems = []
+
+        # Finish tracker to properly close wandb/other trackers before process exit
+        try:
+            self.tracker.finish()
+        except Exception as e:
+            problems.append(e)
+
         for cmanager in reversed(self._cmanagers):
             try:
                 cmanager.__exit__(*args)
