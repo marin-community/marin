@@ -554,19 +554,27 @@ class SmokeTestRunner:
 
             # Apply prefix to cluster config for unique controller VM name
             if self.config.prefix:
-                cluster_config.label_prefix = self.config.prefix
+                cluster_config.platform.label_prefix = self.config.prefix
 
             manager = ClusterManager(cluster_config)
             self._manager = manager
 
-            zone = cluster_config.zone
-            project = cluster_config.project_id
+            platform_kind = cluster_config.platform.WhichOneof("platform")
+            if platform_kind == "gcp":
+                platform = cluster_config.platform.gcp
+                zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+                project = platform.project_id
+            else:
+                zone = ""
+                project = ""
             # Store for use in cleanup
             self._zone = zone
             self._project = project
 
             # GCP-only setup phases
             if not manager.is_local:
+                if platform_kind != "gcp":
+                    raise RuntimeError("Smoke test requires a gcp platform when not running locally")
                 # Extract region/project for image building
                 self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
                 self._image_project = project

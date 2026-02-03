@@ -15,7 +15,7 @@
 """Tests for config loading, serialization, and deserialization.
 
 These tests focus on stable behavior of config round-tripping through
-YAML, ensuring that proto oneofs (like provider type) are preserved correctly.
+YAML, ensuring that vm_type and platform configuration are preserved correctly.
 """
 
 from pathlib import Path
@@ -37,11 +37,12 @@ class TestConfigRoundTrip:
     """Tests for config serialization/deserialization round-trips."""
 
     def test_tpu_provider_survives_round_trip(self, tmp_path: Path):
-        """TPU provider config survives proto→dict→yaml→dict→proto round-trip."""
+        """TPU vm_type survives proto→dict→yaml→dict→proto round-trip."""
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -50,9 +51,7 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
-    provider:
-      tpu:
-        project_id: my-project
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
@@ -66,11 +65,8 @@ scale_groups:
         # Load config from YAML
         original_config = load_config(config_path)
 
-        # Verify provider is TPU before round-trip
-        assert original_config.scale_groups["tpu_v5e_8"].HasField("provider")
-        provider = original_config.scale_groups["tpu_v5e_8"].provider
-        assert provider.WhichOneof("provider") == "tpu"
-        assert provider.tpu.project_id == "my-project"
+        # Verify vm_type before round-trip
+        assert original_config.scale_groups["tpu_v5e_8"].vm_type == config_pb2.VM_TYPE_TPU_VM
 
         # Round-trip: proto → dict → yaml → dict → proto
         config_dict = config_to_dict(original_config)
@@ -80,18 +76,14 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        # Verify provider is still TPU after round-trip
-        assert loaded_config.scale_groups["tpu_v5e_8"].HasField("provider")
-        provider_after = loaded_config.scale_groups["tpu_v5e_8"].provider
-        assert (
-            provider_after.WhichOneof("provider") == "tpu"
-        ), f"Expected provider to be 'tpu' after round-trip, got '{provider_after.WhichOneof('provider')}'"
-        assert provider_after.tpu.project_id == "my-project"
+        # Verify vm_type is still TPU after round-trip
+        assert loaded_config.scale_groups["tpu_v5e_8"].vm_type == config_pb2.VM_TYPE_TPU_VM
 
     def test_manual_provider_survives_round_trip(self, tmp_path: Path):
-        """Manual provider config survives proto→dict→yaml→dict→proto round-trip."""
+        """Manual vm_type survives proto→dict→yaml→dict→proto round-trip."""
         config_content = """\
-provider_type: manual
+platform:
+  manual: {}
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -104,11 +96,11 @@ ssh:
 
 scale_groups:
   manual_hosts:
-    provider:
-      manual:
-        hosts: [10.0.0.1, 10.0.0.2]
-        ssh_user: ubuntu
+    vm_type: manual_vm
     accelerator_type: cpu
+    manual:
+      hosts: [10.0.0.1, 10.0.0.2]
+      ssh_user: ubuntu
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -116,11 +108,9 @@ scale_groups:
         # Load config from YAML
         original_config = load_config(config_path)
 
-        # Verify provider is manual before round-trip
-        assert original_config.scale_groups["manual_hosts"].HasField("provider")
-        provider = original_config.scale_groups["manual_hosts"].provider
-        assert provider.WhichOneof("provider") == "manual"
-        assert list(provider.manual.hosts) == ["10.0.0.1", "10.0.0.2"]
+        # Verify vm_type is manual before round-trip
+        assert original_config.scale_groups["manual_hosts"].vm_type == config_pb2.VM_TYPE_MANUAL_VM
+        assert list(original_config.scale_groups["manual_hosts"].manual.hosts) == ["10.0.0.1", "10.0.0.2"]
 
         # Round-trip: proto → dict → yaml → dict → proto
         config_dict = config_to_dict(original_config)
@@ -130,47 +120,40 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        # Verify provider is still manual after round-trip
-        assert loaded_config.scale_groups["manual_hosts"].HasField("provider")
-        provider_after = loaded_config.scale_groups["manual_hosts"].provider
-        assert (
-            provider_after.WhichOneof("provider") == "manual"
-        ), f"Expected provider to be 'manual' after round-trip, got '{provider_after.WhichOneof('provider')}'"
-        assert list(provider_after.manual.hosts) == ["10.0.0.1", "10.0.0.2"]
+        # Verify vm_type is still manual after round-trip
+        assert loaded_config.scale_groups["manual_hosts"].vm_type == config_pb2.VM_TYPE_MANUAL_VM
+        assert list(loaded_config.scale_groups["manual_hosts"].manual.hosts) == ["10.0.0.1", "10.0.0.2"]
 
-    def test_multiple_scale_groups_preserve_provider_types(self, tmp_path: Path):
-        """Config with mixed TPU and manual providers preserves both types."""
+    def test_multiple_scale_groups_preserve_vm_types(self, tmp_path: Path):
+        """Config with multiple TPU scale groups preserves vm_type values."""
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
   worker_port: 10001
   controller_address: "http://10.0.0.1:10000"
 
-ssh:
-  user: ubuntu
-  key_file: ~/.ssh/id_rsa
-
 scale_groups:
-  tpu_group:
-    provider:
-      tpu:
-        project_id: my-project
+  tpu_group_a:
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
-  manual_group:
-    provider:
-      manual:
-        hosts: [10.0.0.1]
-        ssh_user: ubuntu
-    accelerator_type: cpu
+  tpu_group_b:
+    vm_type: tpu_vm
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-16
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 0
+    max_slices: 4
+    zones: [us-central1-a]
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -184,15 +167,8 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        # Verify TPU group
-        tpu_provider = loaded_config.scale_groups["tpu_group"].provider
-        assert tpu_provider.WhichOneof("provider") == "tpu"
-        assert tpu_provider.tpu.project_id == "my-project"
-
-        # Verify manual group
-        manual_provider = loaded_config.scale_groups["manual_group"].provider
-        assert manual_provider.WhichOneof("provider") == "manual"
-        assert list(manual_provider.manual.hosts) == ["10.0.0.1"]
+        assert loaded_config.scale_groups["tpu_group_a"].vm_type == config_pb2.VM_TYPE_TPU_VM
+        assert loaded_config.scale_groups["tpu_group_b"].vm_type == config_pb2.VM_TYPE_TPU_VM
 
     def test_example_eu_west4_config_round_trips(self):
         """Real example config from examples/eu-west4.yaml round-trips correctly."""
@@ -203,20 +179,16 @@ scale_groups:
 
         original_config = load_config(config_path)
 
-        # Verify it has TPU provider before round-trip
+        # Verify it has TPU vm_type before round-trip
         assert "tpu_v5e_16" in original_config.scale_groups
-        provider = original_config.scale_groups["tpu_v5e_16"].provider
-        assert provider.WhichOneof("provider") == "tpu"
+        assert original_config.scale_groups["tpu_v5e_16"].vm_type == config_pb2.VM_TYPE_TPU_VM
 
         # Round-trip via dict and ParseDict
         config_dict = config_to_dict(original_config)
         loaded_config = ParseDict(config_dict, config_pb2.IrisClusterConfig())
 
-        # Verify provider is still TPU
-        provider_after = loaded_config.scale_groups["tpu_v5e_16"].provider
-        assert (
-            provider_after.WhichOneof("provider") == "tpu"
-        ), f"Expected provider to be 'tpu' after round-trip, got '{provider_after.WhichOneof('provider')}'"
+        # Verify vm_type is still TPU
+        assert loaded_config.scale_groups["tpu_v5e_16"].vm_type == config_pb2.VM_TYPE_TPU_VM
 
     @pytest.mark.parametrize(
         "accelerator_type,expected_enum",
@@ -229,9 +201,8 @@ scale_groups:
     def test_lowercase_accelerator_types_work(self, tmp_path: Path, accelerator_type: str, expected_enum):
         """Config accepts lowercase accelerator types and converts them to enum values."""
         config_content = f"""\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  manual: {{}}
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -240,10 +211,10 @@ bootstrap:
 
 scale_groups:
   test_group:
-    provider:
-      manual:
-        hosts: [10.0.0.1]
+    vm_type: manual_vm
     accelerator_type: {accelerator_type}
+    manual:
+      hosts: [10.0.0.1]
     zones: [local]
 """
         config_path = tmp_path / "config.yaml"
@@ -256,9 +227,10 @@ scale_groups:
     def test_uppercase_accelerator_types_still_work(self, tmp_path: Path):
         """Config still accepts uppercase accelerator types for backwards compatibility."""
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -267,9 +239,7 @@ bootstrap:
 
 scale_groups:
   tpu_group:
-    provider:
-      tpu:
-        project_id: my-project
+    vm_type: tpu_vm
     accelerator_type: TPU
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
@@ -289,11 +259,12 @@ class TestCreateAutoscalerFromConfig:
     """Tests for create_autoscaler_from_config factory function."""
 
     def test_creates_autoscaler_with_tpu_provider(self, tmp_path: Path):
-        """create_autoscaler_from_config works with TPU provider config."""
+        """create_autoscaler_from_config works with TPU vm_type config."""
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -302,9 +273,7 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
-    provider:
-      tpu:
-        project_id: my-project
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
@@ -322,9 +291,10 @@ scale_groups:
         assert "tpu_v5e_8" in autoscaler.groups
 
     def test_creates_autoscaler_with_manual_provider(self, tmp_path: Path):
-        """create_autoscaler_from_config works with manual provider config."""
+        """create_autoscaler_from_config works with manual vm_type config."""
         config_content = """\
-provider_type: manual
+platform:
+  manual: {}
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -337,10 +307,10 @@ ssh:
 
 scale_groups:
   manual_hosts:
-    provider:
-      manual:
-        hosts: [10.0.0.1, 10.0.0.2]
+    vm_type: manual_vm
     accelerator_type: cpu
+    manual:
+      hosts: [10.0.0.1, 10.0.0.2]
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -354,9 +324,10 @@ scale_groups:
     def test_creates_autoscaler_after_round_trip(self, tmp_path: Path):
         """create_autoscaler_from_config works after config round-trip."""
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -365,9 +336,7 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
-    provider:
-      tpu:
-        project_id: my-project
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
@@ -420,7 +389,7 @@ class TestSshConfigMerging:
         assert ssh_config.connect_timeout == Duration.from_seconds(60)
 
     def test_applies_per_group_ssh_overrides(self):
-        """get_ssh_config applies per-group SSH overrides for manual provider."""
+        """get_ssh_config applies per-group SSH overrides for manual vm_type."""
         config = config_pb2.IrisClusterConfig(
             ssh=config_pb2.SshConfig(
                 user="ubuntu",
@@ -430,13 +399,12 @@ class TestSshConfigMerging:
             scale_groups={
                 "manual_group": config_pb2.ScaleGroupConfig(
                     name="manual_group",
-                    provider=config_pb2.ProviderConfig(
-                        manual=config_pb2.ManualProvider(
-                            hosts=["10.0.0.1"],
-                            ssh_user="admin",
-                            ssh_key_file="~/.ssh/group_key",
-                            ssh_port=2222,
-                        )
+                    vm_type=config_pb2.VM_TYPE_MANUAL_VM,
+                    manual=config_pb2.ManualProvider(
+                        hosts=["10.0.0.1"],
+                        ssh_user="admin",
+                        ssh_key_file="~/.ssh/group_key",
+                        ssh_port=2222,
                     ),
                 )
             },
@@ -464,11 +432,10 @@ class TestSshConfigMerging:
             scale_groups={
                 "manual_group": config_pb2.ScaleGroupConfig(
                     name="manual_group",
-                    provider=config_pb2.ProviderConfig(
-                        manual=config_pb2.ManualProvider(
-                            hosts=["10.0.0.1"],
-                            ssh_user="admin",  # Override user only
-                        )
+                    vm_type=config_pb2.VM_TYPE_MANUAL_VM,
+                    manual=config_pb2.ManualProvider(
+                        hosts=["10.0.0.1"],
+                        ssh_user="admin",  # Override user only
                     ),
                 )
             },

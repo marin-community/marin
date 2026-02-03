@@ -105,6 +105,13 @@ from iris.cluster.vm.config import (
     load_config,
 )
 
+# Platform abstraction
+from iris.cluster.vm.platform import (
+    Platform,
+    PlatformOps,
+    create_platform,
+)
+
 # Debug utilities
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
@@ -129,6 +136,8 @@ __all__ = [
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
+    "Platform",
+    "PlatformOps",
     "PoolExhaustedError",
     "QuotaExceededError",
     "RoutingResult",
@@ -154,6 +163,7 @@ __all__ = [
     "create_autoscaler_from_config",
     "create_autoscaler_from_specs",
     "create_manual_autoscaler",
+    "create_platform",
     "discover_controller_vm",
     "get_ssh_config",
     "list_docker_containers",

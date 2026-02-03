@@ -64,12 +64,13 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     elif config_file:
         # Establish tunnel from config
         config = ctx.obj["config"]
-        if config.zone and config.project_id:
+        if config.HasField("platform") and config.platform.WhichOneof("platform") == "gcp":
             from iris.cluster.vm.debug import controller_tunnel
 
-            zone = config.zone
-            project = config.project_id
-            label_prefix = config.label_prefix or "iris"
+            platform = config.platform.gcp
+            zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+            project = platform.project_id
+            label_prefix = config.platform.label_prefix or "iris"
 
             # Establish tunnel with 5-second timeout and keep it alive for command duration
             try:

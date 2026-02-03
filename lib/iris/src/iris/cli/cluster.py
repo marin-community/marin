@@ -30,9 +30,7 @@ from connectrpc.errors import ConnectError
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
-from iris.cluster.vm.config import (
-    create_autoscaler_from_config,
-)
+from iris.cluster.vm.platform import create_platform
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.debug import controller_tunnel, discover_controller_vm
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
@@ -154,7 +152,7 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
 
 
 def _build_cluster_images(config) -> None:
-    for tag, typ in [(config.bootstrap.docker_image, "worker"), (config.controller_vm.image, "controller")]:
+    for tag, typ in [(config.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
             params = _extract_image_params(tag, typ)
             if params:
@@ -216,6 +214,26 @@ def cluster_stop(ctx):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster stop")
+    platform = create_platform(config)
+    ops = platform.vm_ops()
+    slice_ids_by_group: dict[str, list[str]] = {}
+
+    controller_url = ctx.obj.get("controller_url")
+    if controller_url:
+        try:
+            as_status = _get_autoscaler_status(controller_url)
+            for group in as_status.groups:
+                slice_ids_by_group[group.name] = [s.slice_id for s in group.slices]
+        except Exception as e:
+            click.echo(f"Warning: Failed to fetch autoscaler status via RPC: {e}", err=True)
+
+    if not slice_ids_by_group:
+        click.echo("Discovering existing slices via platform ops...")
+        for name, group_config in config.scale_groups.items():
+            slice_ids = ops.list_slices(group_config)
+            if slice_ids:
+                slice_ids_by_group[name] = slice_ids
+
     ctrl = create_controller(config)
     click.echo("Stopping controller...")
     try:
@@ -223,22 +241,21 @@ def cluster_stop(ctx):
         click.echo("Controller stopped")
     except Exception as e:
         click.echo(f"Warning: Failed to stop controller: {e}", err=True)
-    click.echo("Discovering existing slices...")
-    autoscaler_obj = create_autoscaler_from_config(config)
-    autoscaler_obj.reconcile()
-    slice_ids = [vg.slice_id for g in autoscaler_obj.groups.values() for vg in g.vm_groups()]
-    if not slice_ids:
+
+    if not slice_ids_by_group:
         click.echo("No slices to terminate")
         return
-    click.echo(f"Terminating {len(slice_ids)} slice(s)...")
-    for g in autoscaler_obj.groups.values():
-        for vg in g.vm_groups():
-            if vg.slice_id in slice_ids:
-                try:
-                    g.scale_down(vg.slice_id)
-                    click.echo(f"Terminated: {vg.slice_id}")
-                except Exception as e:
-                    click.echo(f"Failed to terminate {vg.slice_id}: {e}", err=True)
+
+    total = sum(len(ids) for ids in slice_ids_by_group.values())
+    click.echo(f"Terminating {total} slice(s)...")
+    for name, slice_ids in slice_ids_by_group.items():
+        group_config = config.scale_groups[name]
+        for slice_id in slice_ids:
+            try:
+                ops.delete_slice(group_config, slice_id)
+                click.echo(f"Terminated: {slice_id}")
+            except Exception as e:
+                click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
     click.echo("Cluster stopped")
 
 
@@ -330,11 +347,12 @@ def cluster_dashboard(ctx, port: int):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster dashboard")
-    zone = config.zone
-    project = config.project_id
-    label_prefix = config.label_prefix or "iris"
+    platform = config.platform.gcp
+    zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+    project = platform.project_id
+    label_prefix = config.platform.label_prefix or "iris"
     if not zone or not project:
-        click.echo("Error: Config must specify zone and project_id", err=True)
+        click.echo("Error: Config must specify platform.gcp.project_id and zone", err=True)
         raise SystemExit(1)
     click.echo(f"Discovering controller in {zone}...")
     vm_name = discover_controller_vm(zone, project, label_prefix)
@@ -455,9 +473,10 @@ cluster.add_command(debug)
 
 
 def _validate_cluster_health(config) -> None:
-    zone = config.zone
-    project = config.project_id
-    label_prefix = config.label_prefix or "iris"
+    platform = config.platform.gcp
+    zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+    project = platform.project_id
+    label_prefix = config.platform.label_prefix or "iris"
     with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
         click.echo(f"  Connected to controller at {tunnel_url}")
         client = IrisClient.remote(tunnel_url, workspace=Path.cwd())

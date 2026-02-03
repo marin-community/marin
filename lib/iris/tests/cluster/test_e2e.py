@@ -57,29 +57,32 @@ def unique_name(prefix: str) -> str:
 def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
 
-    Sets up controller_vm.local, bundle_prefix, scale groups with local provider,
+    Sets up controller.local, bundle_prefix, scale groups with local vm_type,
     and fast autoscaler evaluation for tests.
     """
     config = config_pb2.IrisClusterConfig()
 
     # Configure local controller
-    config.controller_vm.local.port = 0  # auto-assign
-    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
+    config.controller.local.port = 0  # auto-assign
+    config.controller.bundle_prefix = ""  # LocalController will set temp path
+    config.platform.local.SetInParent()
 
     # Configure scale group with local provider
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
+        vm_type=config_pb2.VM_TYPE_LOCAL_VM,
         min_slices=num_workers,
         max_slices=num_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
     )
-    sg.provider.local.SetInParent()
     config.scale_groups["local-cpu"].CopyFrom(sg)
 
     # Fast autoscaler evaluation for tests
     from iris.time_utils import Duration
 
     config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
+    config.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
+    config.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
 
     return config
 

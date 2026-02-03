@@ -57,15 +57,19 @@ def load_cluster_config(config_path: Path) -> dict:
     if not data:
         raise ValueError(f"Empty or invalid YAML in {config_path}")
 
-    zone = data.get("zone")
-    project_id = data.get("project_id", "")
-    controller_address = data.get("controller_address")
+    platform = data.get("platform", {}) or {}
+    gcp = platform.get("gcp", {}) or {}
+    zone = gcp.get("zone") or (gcp.get("default_zones") or [None])[0]
+    project_id = gcp.get("project_id", "")
+    bootstrap = data.get("bootstrap", {}) or {}
+    defaults_bootstrap = (data.get("defaults", {}) or {}).get("bootstrap", {}) or {}
+    controller_address = bootstrap.get("controller_address") or defaults_bootstrap.get("controller_address")
 
     if not zone:
-        raise ValueError(f"Missing 'zone' in {config_path}")
+        raise ValueError(f"Missing 'platform.gcp.zone' in {config_path}")
 
     if not controller_address and not project_id:
-        raise ValueError(f"Missing 'project_id' in {config_path} (required for remote clusters)")
+        raise ValueError(f"Missing 'platform.gcp.project_id' in {config_path} (required for remote clusters)")
 
     return {"zone": zone, "project_id": project_id, "controller_address": controller_address}
 

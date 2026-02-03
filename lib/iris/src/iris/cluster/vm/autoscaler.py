@@ -188,6 +188,10 @@ class Autoscaler:
             config.evaluation_interval.CopyFrom(Duration.from_seconds(10).to_proto())
         if not config.HasField("requesting_timeout"):
             config.requesting_timeout.CopyFrom(Duration.from_seconds(120).to_proto())
+        if not config.HasField("scale_up_delay"):
+            config.scale_up_delay.CopyFrom(Duration.from_seconds(60).to_proto())
+        if not config.HasField("scale_down_delay"):
+            config.scale_down_delay.CopyFrom(Duration.from_seconds(300).to_proto())
         self._config = config
 
         # Track slice creation times for short-lived slice detection

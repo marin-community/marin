@@ -39,21 +39,26 @@ def make_local_config(
 ) -> config_pb2.IrisClusterConfig:
     """Override a GCP/manual config to run locally.
 
-    Replaces the controller oneof with LocalControllerConfig and every
-    scale group's provider oneof with LocalProvider. Everything else
+    Replaces the controller oneof with LocalControllerConfig and sets every
+    scale group's vm_type to local. Everything else
     (accelerator_type, accelerator_variant, min/max_slices) is preserved.
     """
     config = config_pb2.IrisClusterConfig()
     config.CopyFrom(base_config)
-    config.controller_vm.ClearField("controller")
-    config.controller_vm.local.port = 0  # auto-assign
-    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
+    config.controller.ClearField("controller")
+    config.controller.local.port = 0  # auto-assign
+    config.controller.bundle_prefix = ""  # LocalController will set temp path
+    config.platform.ClearField("platform")
+    config.platform.local.SetInParent()
     for sg in config.scale_groups.values():
-        sg.provider.ClearField("provider")
-        sg.provider.local.SetInParent()
+        sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
     # Local mode needs fast autoscaler evaluation for tests
     if not config.autoscaler.HasField("evaluation_interval"):
         config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
+    if not config.autoscaler.HasField("scale_up_delay"):
+        config.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
+    if not config.autoscaler.HasField("scale_down_delay"):
+        config.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
     return config
 
 
@@ -87,7 +92,7 @@ class ClusterManager:
 
     @property
     def is_local(self) -> bool:
-        return self._config.controller_vm.WhichOneof("controller") == "local"
+        return self._config.controller.WhichOneof("controller") == "local"
 
     def start(self) -> str:
         """Start the controller. Returns the controller address.
@@ -148,12 +153,16 @@ class ClusterManager:
         try:
             if self.is_local:
                 yield address
-            else:
-                zone = self._config.zone
-                project = self._config.project_id
-                label_prefix = self._config.label_prefix or "iris"
+                return
+            if self._config.platform.WhichOneof("platform") == "gcp":
+                platform = self._config.platform.gcp
+                zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+                project = platform.project_id
+                label_prefix = self._config.platform.label_prefix or "iris"
                 with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
                     yield tunnel_url
+                return
+            yield address
         finally:
             self.stop()
 

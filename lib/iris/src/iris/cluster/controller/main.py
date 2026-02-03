@@ -77,8 +77,8 @@ def serve(
             raise click.ClickException(f"Failed to load cluster config: {e}") from e
 
         # Extract bundle_prefix from config if not provided via CLI
-        if bundle_prefix is None and cluster_config.controller_vm.bundle_prefix:
-            bundle_prefix = cluster_config.controller_vm.bundle_prefix
+        if bundle_prefix is None and cluster_config.controller.bundle_prefix:
+            bundle_prefix = cluster_config.controller.bundle_prefix
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
 
         try:

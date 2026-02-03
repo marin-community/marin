@@ -423,10 +423,17 @@ class GcpController:
 
     def __init__(self, config: config_pb2.IrisClusterConfig):
         self.config = config
-        self.project_id = config.project_id or ""
-        self.zone = config.zone or "us-central1-a"
-        self._gcp_config = config.controller_vm.gcp
-        self._vm_name = f"iris-controller-{config.label_prefix or 'iris'}"
+        platform = config.platform.gcp
+        self.project_id = platform.project_id
+        if platform.zone:
+            self.zone = platform.zone
+        elif platform.default_zones:
+            self.zone = platform.default_zones[0]
+        else:
+            raise RuntimeError("platform.gcp.zone or platform.gcp.default_zones is required for controller")
+        self._gcp_config = config.controller.gcp
+        self._label_prefix = config.platform.label_prefix or "iris"
+        self._vm_name = f"iris-controller-{self._label_prefix}"
 
     def _serialize_config(self) -> str:
         """Serialize cluster config to YAML for the controller VM."""
@@ -481,7 +488,7 @@ class GcpController:
         )
 
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", self._vm_name, line)
@@ -517,7 +524,7 @@ class GcpController:
         to pull the latest image and restart the container. Faster than restart()
         since it doesn't delete/recreate the VM.
         """
-        vm_name = self._find_controller_vm_name()
+        vm_name = self._find_controller_name()
         if not vm_name:
             raise RuntimeError("Controller VM not found. Use 'start' to create a new one.")
 
@@ -532,7 +539,7 @@ class GcpController:
         )
 
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", vm_name, line)
@@ -559,9 +566,8 @@ class GcpController:
         Looks for a running VM with the controller metadata tag and returns
         its controller address from metadata. Uses prefix-scoped metadata keys.
         """
-        label_prefix = self.config.label_prefix or "iris"
-        meta_key = controller_metadata_key(label_prefix)
-        addr_key = controller_address_metadata_key(label_prefix)
+        meta_key = controller_metadata_key(self._label_prefix)
+        addr_key = controller_address_metadata_key(self._label_prefix)
         cmd = [
             "gcloud",
             "compute",
@@ -587,7 +593,7 @@ class GcpController:
         if not address:
             return ControllerStatus(running=False, address=None, healthy=False, vm_name=None)
 
-        vm_name = self._find_controller_vm_name()
+        vm_name = self._find_controller_name()
         healthy = _check_health_rpc(address)
 
         return ControllerStatus(
@@ -597,10 +603,9 @@ class GcpController:
             vm_name=vm_name,
         )
 
-    def _find_controller_vm_name(self) -> str | None:
+    def _find_controller_name(self) -> str | None:
         """Find the name of the running controller VM."""
-        label_prefix = self.config.label_prefix or "iris"
-        meta_key = controller_metadata_key(label_prefix)
+        meta_key = controller_metadata_key(self._label_prefix)
         cmd = [
             "gcloud",
             "compute",
@@ -624,8 +629,7 @@ class GcpController:
         machine_type = self._gcp_config.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = self._gcp_config.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
         port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
-        label_prefix = self.config.label_prefix or "iris"
-        meta_key = controller_metadata_key(label_prefix)
+        meta_key = controller_metadata_key(self._label_prefix)
 
         cmd = [
             "gcloud",
@@ -723,8 +727,7 @@ class GcpController:
 
     def _tag_metadata(self, address: str) -> None:
         """Tag VM with controller address metadata for worker discovery."""
-        label_prefix = self.config.label_prefix or "iris"
-        addr_key = controller_address_metadata_key(label_prefix)
+        addr_key = controller_address_metadata_key(self._label_prefix)
         cmd = [
             "gcloud",
             "compute",
@@ -749,7 +752,7 @@ class GcpController:
         Args:
             tail_lines: Number of lines to return from the end of the log
         """
-        vm_name = self._find_controller_vm_name()
+        vm_name = self._find_controller_name()
         if not vm_name:
             logger.warning("Cannot fetch logs: controller VM not found")
             return None
@@ -798,16 +801,16 @@ class ManualController:
     """Controller on a manually-managed host via SSH bootstrap.
 
     SSHs into the configured host to start/stop the controller container.
-    Requires controller_vm.manual.host to be configured.
+    Requires controller.manual.host to be configured.
     """
 
     def __init__(self, config: config_pb2.IrisClusterConfig):
         self.config = config
-        self._manual_config = config.controller_vm.manual
+        self._manual_config = config.controller.manual
         self._bootstrapped = False
 
         if not self._manual_config.host:
-            raise RuntimeError("controller_vm.manual.host is required for ManualController")
+            raise RuntimeError("controller.manual.host is required for ManualController")
 
         port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
         self.address = f"http://{self._manual_config.host}:{port}"
@@ -820,8 +823,8 @@ class ManualController:
 
     def start(self) -> str:
         """Start controller via SSH bootstrap."""
-        if not self.config.controller_vm.image:
-            raise RuntimeError("controller_vm.image required for SSH bootstrap")
+        if not self.config.controller.image:
+            raise RuntimeError("controller.image required for SSH bootstrap")
 
         host = self._manual_config.host
         port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
@@ -830,7 +833,7 @@ class ManualController:
 
         conn = self._create_ssh_connection(host)
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", host, line)
@@ -997,7 +1000,7 @@ class LocalController:
         fake_bundle.mkdir()
         (fake_bundle / "pyproject.toml").write_text("[project]\nname='local'\n")
 
-        port = self._config.controller_vm.local.port or find_free_port()
+        port = self._config.controller.local.port or find_free_port()
         address = f"http://127.0.0.1:{port}"
 
         controller_threads = self._threads.create_child("controller") if self._threads else None
@@ -1014,7 +1017,7 @@ class LocalController:
             config=_InnerControllerConfig(
                 host="127.0.0.1",
                 port=port,
-                bundle_prefix=self._config.controller_vm.bundle_prefix or f"file://{bundle_dir}",
+                bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=autoscaler,
@@ -1060,7 +1063,7 @@ def create_controller(
 ) -> ControllerProtocol:
     """Factory function to create appropriate controller type.
 
-    Dispatches based on the controller_vm.controller oneof field:
+    Dispatches based on the controller.controller oneof field:
     - gcp: Creates GcpController for GCP-managed VMs
     - manual: Creates ManualController for SSH bootstrap to pre-existing hosts
     - local: Creates LocalController for in-process testing
@@ -1070,12 +1073,12 @@ def create_controller(
         threads: Optional parent ThreadContainer. Only used by LocalController
             to integrate in-process threads into the caller's hierarchy.
     """
-    controller_vm = config.controller_vm
-    which = controller_vm.WhichOneof("controller")
+    controller = config.controller
+    which = controller.WhichOneof("controller")
     if which == "gcp":
         return GcpController(config)
     if which == "manual":
         return ManualController(config)
     if which == "local":
         return LocalController(config, threads=threads)
-    raise ValueError("No controller config specified in controller_vm")
+    raise ValueError("No controller config specified in controller")

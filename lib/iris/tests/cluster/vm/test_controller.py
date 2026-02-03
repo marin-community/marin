@@ -45,8 +45,10 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
     ssh_config.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
 
     return config_pb2.IrisClusterConfig(
-        provider_type="manual",
-        controller_vm=config_pb2.ControllerVmConfig(
+        platform=config_pb2.PlatformConfig(
+            manual=config_pb2.ManualPlatformConfig(),
+        ),
+        controller=config_pb2.ControllerVmConfig(
             image="gcr.io/project/iris-controller:latest",
             manual=config_pb2.ManualControllerConfig(
                 host="10.0.0.100",
@@ -61,10 +63,13 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
 def gcp_config() -> config_pb2.IrisClusterConfig:
     """Config for GCP controller VM."""
     return config_pb2.IrisClusterConfig(
-        provider_type="gcp",
-        project_id="my-project",
-        zone="us-central1-a",
-        controller_vm=config_pb2.ControllerVmConfig(
+        platform=config_pb2.PlatformConfig(
+            gcp=config_pb2.GcpPlatformConfig(
+                project_id="my-project",
+                zone="us-central1-a",
+            ),
+        ),
+        controller=config_pb2.ControllerVmConfig(
             image="gcr.io/project/iris-controller:latest",
             gcp=config_pb2.GcpControllerConfig(
                 port=10000,
@@ -77,7 +82,7 @@ def test_manual_controller_start_requires_image(ssh_bootstrap_config: config_pb2
     """start() requires image to be configured."""
     config = config_pb2.IrisClusterConfig()
     config.CopyFrom(ssh_bootstrap_config)
-    config.controller_vm.image = ""
+    config.controller.image = ""
 
     controller = ManualController(config)
     with pytest.raises(RuntimeError, match="image required"):
@@ -109,7 +114,7 @@ def test_create_controller_raises_on_missing_config(gcp_config: config_pb2.IrisC
     """create_controller raises ValueError when no oneof is set."""
     config = config_pb2.IrisClusterConfig()
     config.CopyFrom(gcp_config)
-    config.controller_vm.ClearField("gcp")
+    config.controller.ClearField("gcp")
 
     with pytest.raises(ValueError, match="No controller config specified"):
         create_controller(config)
@@ -119,15 +124,16 @@ class TestConfigParsing:
     """Tests for config parsing with controller VM settings."""
 
     def test_load_config_with_manual_controller(self, tmp_path: Path):
-        """Config with controller_vm.manual can be loaded and used to create a controller."""
+        """Config with controller.manual can be loaded and used to create a controller."""
         config_content = """\
-provider_type: manual
+platform:
+  manual: {}
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
   worker_port: 10001
 
-controller_vm:
+controller:
   image: gcr.io/project/iris-controller:latest
   manual:
     host: 10.0.0.100
@@ -139,10 +145,10 @@ ssh:
 
 scale_groups:
   manual_hosts:
-    provider:
-      manual:
-        hosts: [10.0.0.1]
+    vm_type: manual_vm
     accelerator_type: cpu
+    manual:
+      hosts: [10.0.0.1]
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -159,9 +165,10 @@ class TestConfigSerialization:
     def test_config_to_dict_includes_scale_groups(self, tmp_path: Path):
         """config_to_dict() properly serializes scale groups."""
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -170,6 +177,7 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
@@ -184,8 +192,7 @@ scale_groups:
         config = load_config(config_path)
         d = config_to_dict(config)
 
-        assert d["provider_type"] == "tpu"
-        assert d["project_id"] == "my-project"
+        assert d["platform"]["gcp"]["project_id"] == "my-project"
         assert d["bootstrap"]["docker_image"] == "gcr.io/project/iris-worker:latest"
         assert "tpu_v5e_8" in d["scale_groups"]
         sg = d["scale_groups"]["tpu_v5e_8"]
@@ -199,9 +206,10 @@ scale_groups:
         import yaml
 
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
 bootstrap:
   docker_image: gcr.io/project/iris-worker:latest
@@ -210,6 +218,7 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
@@ -229,8 +238,7 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        assert loaded_config.provider_type == original_config.provider_type
-        assert loaded_config.project_id == original_config.project_id
+        assert loaded_config.platform == original_config.platform
         assert loaded_config.bootstrap.docker_image == original_config.bootstrap.docker_image
         assert len(loaded_config.scale_groups) == len(original_config.scale_groups)
         assert "tpu_v5e_8" in loaded_config.scale_groups
@@ -244,7 +252,7 @@ class TestBootstrapScriptConfig:
         """Bootstrap script writes config file when provided."""
         from iris.cluster.vm.controller import _build_controller_bootstrap_script
 
-        config_yaml = "provider_type: tpu\n"
+        config_yaml = "platform:\\n  gcp:\\n    project_id: my-project\\n"
         script = _build_controller_bootstrap_script(
             docker_image="gcr.io/project/iris:latest",
             port=10000,
@@ -369,7 +377,7 @@ class TestControllerLifecycle:
 
         controller = GcpController(gcp_config)
 
-        with patch.object(controller, "_find_controller_vm_name", return_value="iris-controller-test"):
+        with patch.object(controller, "_find_controller_name", return_value="iris-controller-test"):
             with patch.object(controller, "_get_vm_address", return_value="http://10.0.0.50:10000"):
                 result = controller.reload()
 
@@ -386,13 +394,14 @@ def manual_config_file(tmp_path: Path) -> Path:
     """Create a manual controller config file with SSH bootstrap."""
     config_path = tmp_path / "manual_config.yaml"
     config_content = """
-provider_type: manual
+platform:
+  manual: {}
 
 bootstrap:
   docker_image: gcr.io/test-project/iris-worker:latest
   worker_port: 10001
 
-controller_vm:
+controller:
   image: gcr.io/test-project/iris-controller:latest
   manual:
     host: 10.0.0.100
@@ -401,14 +410,14 @@ controller_vm:
 ssh:
   user: ubuntu
   key_file: ~/.ssh/id_rsa
-  connect_timeout: 30
+  connect_timeout: { seconds: 30 }
 
 scale_groups:
   manual_hosts:
-    provider:
-      manual:
-        hosts: [10.0.0.1]
+    vm_type: manual_vm
     accelerator_type: cpu
+    manual:
+      hosts: [10.0.0.1]
 """
     config_path.write_text(config_content)
     return config_path

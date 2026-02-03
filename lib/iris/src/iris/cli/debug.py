@@ -106,10 +106,14 @@ def _get_zone_project(ctx: click.Context) -> tuple[str, str]:
     if not config:
         click.echo("Error: --config is required on the cluster group", err=True)
         raise SystemExit(1)
-    zone = config.zone
-    project = config.project_id
+    if config.platform.WhichOneof("platform") != "gcp":
+        click.echo("Error: Debug commands require a GCP platform config", err=True)
+        raise SystemExit(1)
+    platform = config.platform.gcp
+    zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+    project = platform.project_id
     if not zone or not project:
-        click.echo("Error: Config must specify zone and project_id", err=True)
+        click.echo("Error: Config must specify platform.gcp.project_id and zone", err=True)
         raise SystemExit(1)
     return zone, project
 
