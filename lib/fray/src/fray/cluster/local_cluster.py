@@ -122,12 +122,19 @@ class LocalCluster(Cluster):
 
             # Wrap callable to apply environment variables
             env_vars = dict(request.environment.env_vars) if request.environment.env_vars else {}
+            env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
 
-            def run_with_env():
-                with temporary_env_vars(env_vars):
-                    return callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            for replica_id in range(replica_count):
+                replica_env = {
+                    **env_vars,
+                    "FRAY_REPLICA_ID": str(replica_id),
+                    "FRAY_REPLICA_COUNT": str(replica_count),
+                }
 
-            for _ in range(replica_count):
+                def run_with_env(_env=replica_env):
+                    with temporary_env_vars(_env):
+                        return callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+
                 logger.info(
                     f"Running callable in parent process with args={callable_ep.args}, kwargs={callable_ep.kwargs}"
                 )

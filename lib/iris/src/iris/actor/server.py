@@ -20,10 +20,10 @@ Example:
     port = server.serve_background()
 """
 
+import asyncio
 import inspect
 import logging
 import socket
-import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -31,12 +31,12 @@ from typing import Any, NewType
 
 import cloudpickle
 import uvicorn
-
 from connectrpc.request import RequestContext
 
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
-from iris.time_utils import ExponentialBackoff, now_ms
+from iris.time_utils import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -50,24 +50,35 @@ class RegisteredActor:
     actor_id: ActorId
     instance: Any
     methods: dict[str, Callable]
-    registered_at_ms: int = field(default_factory=now_ms)
+    registered_at: Timestamp = field(default_factory=Timestamp.now)
 
 
 class ActorServer:
     """Server for hosting actor instances and handling RPC calls."""
 
-    def __init__(self, host: str = "0.0.0.0", port: int | None = None):
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int | None = None,
+        threads: ThreadContainer | None = None,
+    ):
         """Initialize the actor server.
 
         Args:
             host: Host address to bind to
             port: Port to bind to. If None or 0, auto-assigns a free port.
+            threads: ThreadContainer for managing server threads. If None, uses the default registry.
         """
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
         self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
+        self._threads = threads if threads is not None else get_thread_container()
+        self._server: uvicorn.Server | None = None
+        # Create dedicated executor for running actor methods
+        # This avoids relying on asyncio's default executor which can be shut down prematurely
+        self._executor = self._threads.spawn_executor(max_workers=32, prefix="actor-method")
 
     @property
     def address(self) -> str:
@@ -117,7 +128,12 @@ class ActorServer:
             args = cloudpickle.loads(request.serialized_args) if request.serialized_args else ()
             kwargs = cloudpickle.loads(request.serialized_kwargs) if request.serialized_kwargs else {}
 
-            result = method(*args, **kwargs)
+            # Run the method in our dedicated thread pool to avoid blocking the event loop.
+            # This allows actors to make outgoing RPC calls without deadlocking.
+            # We use our own executor instead of asyncio.to_thread() to avoid issues
+            # when asyncio's default executor is shut down during process cleanup.
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(self._executor, method, *args, **kwargs)
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
@@ -176,7 +192,7 @@ class ActorServer:
                 actor_pb2.ActorInfo(
                     name=actor.name,
                     actor_id=actor.actor_id,
-                    registered_at_ms=actor.registered_at_ms,
+                    registered_at_ms=actor.registered_at.epoch_ms(),
                     metadata={},
                 )
             )
@@ -219,17 +235,21 @@ class ActorServer:
             port=self._actual_port,
             log_level="error",
         )
-        server = uvicorn.Server(config)
+        self._server = uvicorn.Server(config)
 
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
+        self._threads.spawn_server(self._server, name=f"actor-server-{self._actual_port}")
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: server.started,
-            timeout=5.0,
+            lambda: self._server.started,
+            timeout=Duration.from_seconds(5.0),
         )
 
         return self._actual_port
 
-    def shutdown(self) -> None:
-        pass
+    def wait(self) -> None:
+        """Block until the server exits."""
+        self._threads.wait()
+
+    def stop(self) -> None:
+        """Stop the actor server and wait for threads to exit."""
+        self._threads.stop()

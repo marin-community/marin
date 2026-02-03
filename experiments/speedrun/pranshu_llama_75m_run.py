@@ -14,7 +14,6 @@
 
 # nodryrun
 
-import dataclasses
 import logging
 
 from experiments.llama import llama_75m
@@ -25,9 +24,6 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
-# Create a copy of llama_75m with cross_entropy_block_size=32000 for TPU v4-8
-llama_75m_tpu_v4_8 = dataclasses.replace(llama_75m, cross_entropy_block_size=32000)
-
 speedrun_config = SpeedrunConfig(
     author=Author(
         name="Pranshu Chaturvedi",
@@ -35,7 +31,7 @@ speedrun_config = SpeedrunConfig(
         url="https://stanford.edu/~pranshu",
     ),
     description="Training Llama 75M on a TPU v4-8 for the speedrun.",
-    model_config=llama_75m_tpu_v4_8,
+    model_config=llama_75m,
     train_config=SimpleTrainConfig(
         ResourceConfig.with_tpu("v4-8", slice_count=1),
         train_batch_size=512,

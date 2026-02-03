@@ -33,7 +33,6 @@ import humanfriendly
 from jax.random import PRNGKey
 from levanter.data.text import (
     HfDatasetSourceConfig,
-    LMDatasetSourceConfig,
     LmDatasetSourceConfigBase,
     UrlDatasetSourceConfig,
 )
@@ -59,7 +58,7 @@ class SliceCacheConfig(TokenizeConfigBase):
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         humanfriendly_tokens = humanfriendly.format_size(self.num_tokens)[0:-1].replace(" ", "").replace("byte", "")
         out = _patch_source_config(
             self.input_config, self.cache_path, extra_tags=["subsampled", f"subsampled-{humanfriendly_tokens}"]

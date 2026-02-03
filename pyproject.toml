@@ -9,12 +9,15 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
+    # workspaces
     "iris",
     "fray",
     "haliax",
     "levanter",
     "marin",
     "zephyr",
+    # top level deps. try to keep these small.
+    "watchdog",
 ]
 
 [tool.uv]
@@ -22,6 +25,8 @@ fork-strategy = "fewest"
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
+    "python-multipart>=0.0.22",
+    "wheel>=0.46.2",
 ]
 
 [tool.uv.workspace]

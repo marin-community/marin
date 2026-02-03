@@ -35,13 +35,11 @@ Usage:
 
 import json
 import signal
-import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import TypeVar
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,8 +48,10 @@ from google.protobuf import json_format
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
+from iris.cluster.vm.debug import controller_tunnel, wait_for_port
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.proto_utils import format_accelerator_display
 
 IRIS_ROOT = Path(__file__).parent.parent
 CONTROLLER_CONTAINER_NAME = "iris-controller"
@@ -123,77 +123,6 @@ def get_vm_status(vm_name: str, zone: str, project: str) -> dict | None:
     return json.loads(result.stdout)
 
 
-def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
-    """Wait for a port to become available.
-
-    Returns True if port is ready, False if timeout.
-    """
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1.0):
-                return True
-        except (ConnectionRefusedError, OSError, TimeoutError):
-            time.sleep(0.5)
-    return False
-
-
-@contextmanager
-def controller_tunnel(zone: str, project: str, local_port: int = DEFAULT_CONTROLLER_PORT) -> Iterator[str]:
-    """Establish SSH tunnel to controller and yield the local URL.
-
-    Usage:
-        with controller_tunnel("europe-west4-b", "hai-gcp-models") as url:
-            client = ControllerServiceClientSync(url)
-            client.list_jobs(cluster_pb2.Controller.ListJobsRequest())
-    """
-    vm_name = discover_controller_vm(zone, project)
-    if not vm_name:
-        raise click.ClickException(f"No controller VM found in {zone}")
-
-    click.echo(f"Establishing SSH tunnel to {vm_name}...")
-
-    proc = subprocess.Popen(
-        [
-            "gcloud",
-            "compute",
-            "ssh",
-            vm_name,
-            f"--project={project}",
-            f"--zone={zone}",
-            "--",
-            "-L",
-            f"{local_port}:localhost:{DEFAULT_CONTROLLER_PORT}",
-            "-N",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
-    try:
-        if not wait_for_port(local_port, timeout=30):
-            stderr = proc.stderr.read().decode() if proc.stderr else ""
-            proc.terminate()
-            proc.wait()
-            raise click.ClickException(f"Tunnel failed to establish: {stderr}")
-
-        click.echo(f"Tunnel established: localhost:{local_port} -> {vm_name}:{DEFAULT_CONTROLLER_PORT}")
-        yield f"http://localhost:{local_port}"
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-
-
 # -----------------------------------------------------------------------------
 # Validation helpers
 # -----------------------------------------------------------------------------
@@ -228,7 +157,7 @@ def _submit_simple_job(client: IrisClient, tpu_type: str) -> cluster_pb2.JobStat
         entrypoint=Entrypoint.from_callable(hello),
         name="validate-hello",
         resources=ResourceSpec(device=tpu_device(tpu_type)),
-        environment=EnvironmentSpec(workspace="/app"),
+        environment=EnvironmentSpec(),
     )
     return job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
 
@@ -245,7 +174,7 @@ def _submit_compute_job(client: IrisClient, tpu_type: str) -> cluster_pb2.JobSta
         entrypoint=Entrypoint.from_callable(compute, 10, 32),
         name="validate-compute",
         resources=ResourceSpec(device=tpu_device(tpu_type)),
-        environment=EnvironmentSpec(workspace="/app"),
+        environment=EnvironmentSpec(),
     )
     return job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
 
@@ -266,7 +195,7 @@ def _submit_scheduler_jobs(client: IrisClient, tpu_type: str) -> list[tuple[str,
             entrypoint=Entrypoint.from_callable(quick_task, i),
             name=f"validate-scheduler-{i}",
             resources=ResourceSpec(device=tpu_device(tpu_type)),
-            environment=EnvironmentSpec(workspace="/app"),
+            environment=EnvironmentSpec(),
         )
         jobs.append(job)
 
@@ -603,7 +532,9 @@ def autoscaler_status(ctx: click.Context, local_port: int, json_output: bool) ->
             for group in status.groups:
                 cfg = group.config
                 click.echo(f"  {group.name}:")
-                click.echo(f"    Accelerator: {cfg.accelerator_type}")
+                click.echo(
+                    f"    Accelerator: {format_accelerator_display(cfg.accelerator_type, cfg.accelerator_variant)}"
+                )
                 click.echo(f"    Min/Max slices: {cfg.min_slices}/{cfg.max_slices}")
                 click.echo(f"    Current demand: {group.current_demand}")
                 click.echo(f"    Peak demand: {group.peak_demand}")
@@ -793,6 +724,82 @@ def list_jobs(ctx: click.Context, local_port: int, json_output: bool) -> None:
                 click.echo(f"  Task states: {counts}")
             if job.error:
                 click.echo(f"  Error: {job.error}")
+
+
+@cli.command("show-task-logs")
+@click.argument("job_id")
+@click.option("--local-port", default=DEFAULT_CONTROLLER_PORT, help="Local port for tunnel")
+@click.option("--category", help="Filter logs by category (e.g., 'build')")
+@click.option("--max-entries", default=5000, help="Maximum log entries to fetch")
+@click.pass_context
+def show_task_logs(ctx: click.Context, job_id: str, local_port: int, category: str | None, max_entries: int) -> None:
+    """Show detailed task logs for a job (auto-establishes tunnel).
+
+    Fetches task status and logs for all tasks in the specified job.
+    Useful for debugging build failures and task execution issues.
+
+    Examples:
+        # Show all logs for a job
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models show-task-logs JOB_ID
+
+        # Show only build logs
+        uv run python scripts/cluster-tools.py --zone europe-west4-b \\
+            --project hai-gcp-models show-task-logs JOB_ID --category build
+    """
+    zone = ctx.obj["zone"]
+    project = ctx.obj["project"]
+
+    with controller_tunnel(zone, project, local_port) as url:
+        client = ControllerServiceClientSync(url)
+
+        # Get job status to find task IDs
+        try:
+            job_resp = client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id))
+        except Exception as e:
+            click.echo(f"Failed to get job status: {e}", err=True)
+            raise SystemExit(1) from e
+
+        job = job_resp.job
+        click.echo(f"Job: {job.job_id}")
+        click.echo(f"State: {cluster_pb2.JobState.Name(job.state)}")
+        click.echo(f"Tasks: {len(job.tasks)}")
+        if job.error:
+            click.echo(f"Error: {job.error}")
+        click.echo()
+
+        # Get details for each task
+        for task in job.tasks:
+            click.echo(f"=== Task: {task.task_id} (index {task.task_index}) ===")
+            click.echo(f"State: {cluster_pb2.TaskState.Name(task.state)}")
+            if task.worker_id:
+                click.echo(f"Worker: {task.worker_id}")
+            if task.error:
+                click.echo(f"Error: {task.error}")
+            click.echo()
+
+            # Fetch logs for this task using GetTaskLogsRequest
+            try:
+                logs_resp = client.get_task_logs(
+                    cluster_pb2.Controller.GetTaskLogsRequest(
+                        job_id=job.job_id, task_index=task.task_index, start_ms=0, limit=max_entries
+                    )
+                )
+            except Exception as e:
+                click.echo(f"Failed to fetch logs for task {task.task_index}: {e}", err=True)
+                continue
+
+            # Filter and display logs
+            logs = logs_resp.logs
+            if category:
+                logs = [log for log in logs if category.lower() in log.source.lower()]
+
+            if not logs:
+                click.echo(f"No logs found{f' for category {category}' if category else ''}.")
+            else:
+                click.echo(f"Logs ({len(logs)} entries):")
+                for log in logs:
+                    click.echo(f"[{log.source}] {log.data}")
+            click.echo()
 
 
 @cli.command()

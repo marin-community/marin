@@ -28,19 +28,18 @@ from __future__ import annotations
 import logging
 import shlex
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from iris.cluster.vm.ssh import (
     SshConnection,
-    check_health,
     run_streaming_with_retry,
-    shutdown_worker,
     wait_for_connection,
 )
+from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2, vm_pb2
 from iris.rpc.proto_utils import vm_state_name
-from iris.time_utils import now_ms
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +74,53 @@ BOOTSTRAP_SCRIPT = """
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
+
+# Fetch TPU metadata from GCE and export as environment variables.
+# GCP TPU VMs expose TPU info via instance metadata, not environment variables.
+echo "[iris-init] Probing TPU metadata..."
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+METADATA_HEADER="Metadata-Flavor: Google"
+
+# Derive TPU slice name from instance name by stripping worker suffix.
+# Handles both -wN (original) and -w-N (GCP multi-host) formats.
+# Example: "iris-v5litepod_16-abc123-w0" -> "iris-v5litepod_16-abc123"
+# Example: "t1v-n-598bede5-w-0" -> "t1v-n-598bede5"
+INSTANCE_NAME=$(curl -sf -H "$METADATA_HEADER" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/name" 2>/dev/null || echo "")
+if [ -n "$INSTANCE_NAME" ]; then
+    export TPU_NAME=$(echo "$INSTANCE_NAME" | sed 's/-w-*[0-9]*$//')
+fi
+
+# Fetch accelerator-type as TPU_TYPE (e.g., v5litepod-16)
+export TPU_TYPE=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/accelerator-type" 2>/dev/null || echo "")
+
+# Fetch agent-worker-number as TPU_WORKER_ID
+export TPU_WORKER_ID=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/agent-worker-number" 2>/dev/null || echo "")
+
+# Fetch worker hostnames for multi-host slices (JSON array of network endpoints)
+TPU_HOSTNAMES_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/worker-network-endpoints" 2>/dev/null || echo "")
+if [ -n "$TPU_HOSTNAMES_RAW" ]; then
+    # Format is "unknown:unknown:ip1,unknown:unknown:ip2,..." — extract IPs (fields with dots)
+    export TPU_WORKER_HOSTNAMES=$(echo "$TPU_HOSTNAMES_RAW" | \
+        tr ',' '\\n' | while read -r entry; do echo "$entry" | tr ':' '\\n' | grep '[.]'; done | \\
+        paste -sd ',' - 2>/dev/null || echo "")
+fi
+
+# Fetch chips per host bounds from tpu-env metadata (YAML-like key: value format)
+TPU_ENV_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/tpu-env" 2>/dev/null || echo "")
+if [ -n "$TPU_ENV_RAW" ]; then
+    TOPO_RAW=$(echo "$TPU_ENV_RAW" | grep "^CHIPS_PER_HOST_BOUNDS:" | sed "s/.*: *'\\(.*\\)'/\\1/" | tr -d "'")
+    if [ -n "$TOPO_RAW" ]; then
+        export TPU_CHIPS_PER_HOST_BOUNDS="$TOPO_RAW"
+    fi
+fi
+
+if [ -n "$TPU_NAME" ]; then
+    echo "[iris-init] TPU detected: name=$TPU_NAME type=$TPU_TYPE worker_id=$TPU_WORKER_ID"
+else
+    echo "[iris-init] No TPU metadata found (this may be a non-TPU VM)"
+fi
+
 echo "[iris-init] Phase: prerequisites"
 
 # Install Docker if missing
@@ -105,9 +151,8 @@ sudo docker pull {docker_image}
 
 echo "[iris-init] Phase: worker_start"
 
-# Stop existing worker if running (idempotent)
-sudo docker stop iris-worker 2>/dev/null || true
-sudo docker rm iris-worker 2>/dev/null || true
+# Force-remove existing worker (handles restart policy race)
+sudo docker rm -f iris-worker 2>/dev/null || true
 
 # Clean up ALL iris-managed task containers by label
 echo "[iris-init] Cleaning up iris task containers"
@@ -168,6 +213,11 @@ def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str
 
     Note: IRIS_CONTROLLER_ADDRESS is set from the shell variable $CONTROLLER_ADDRESS
     which is populated by the discovery preamble.
+
+    TPU environment variables (TPU_NAME, TPU_WORKER_ID, etc.) are passed through
+    from the host if they exist. These are set by GCP on TPU VMs and are required
+    for the worker to register with tpu-name and tpu-worker-id attributes needed
+    for coscheduled job scheduling.
     """
     flags = []
     for k, v in config.env_vars.items():
@@ -177,6 +227,22 @@ def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
         flags.append(f"-e IRIS_VM_ADDRESS={shlex.quote(vm_address)}")
+
+    # Pass through TPU environment variables from host if they exist.
+    # These are fetched from GCE metadata by the bootstrap script preamble.
+    # TPU_NAME = instance name with -w{{N}} suffix stripped (TPU slice name) for coscheduling group_by
+    # TPU_TYPE = accelerator-type (e.g., v5litepod-16) for topology lookup
+    tpu_env_vars = [
+        "TPU_NAME",
+        "TPU_TYPE",
+        "TPU_WORKER_ID",
+        "TPU_WORKER_HOSTNAMES",
+        "TPU_CHIPS_PER_HOST_BOUNDS",
+    ]
+    for var in tpu_env_vars:
+        # Use shell syntax to pass through only if set on host
+        flags.append(f'-e {var}="${{{var}:-}}"')
+
     return " ".join(flags)
 
 
@@ -218,7 +284,7 @@ class SshConfig:
     user: str = "root"
     key_file: str | None = None
     port: int = 22
-    connect_timeout: int = 30
+    connect_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(30))
 
 
 # ============================================================================
@@ -257,7 +323,7 @@ class ManagedVm:
         address: str | None = None,
         discovery_preamble: str = "",
     ):
-        now = now_ms()
+        now = Timestamp.now()
         self.info = vm_pb2.VmInfo(
             vm_id=vm_id,
             slice_id=slice_id,
@@ -265,8 +331,8 @@ class ManagedVm:
             state=vm_pb2.VM_STATE_BOOTING,
             address=address or "",
             zone=zone,
-            created_at_ms=now,
-            state_changed_at_ms=now,
+            created_at=now.to_proto(),
+            state_changed_at=now.to_proto(),
             labels=labels or {},
         )
         self._conn = conn
@@ -277,46 +343,39 @@ class ManagedVm:
         # Inlined bootstrap state
         self._log_lines: list[str] = []
         self._phase: str = ""
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"vm-{vm_id}")
-        self._stop = threading.Event()
+        self._threads = ThreadContainer(f"vm-{vm_id}")
+        self._managed_thread = self._threads.spawn(target=self._run, name=f"vm-{vm_id}")
 
-    def start(self) -> None:
-        """Start the lifecycle thread."""
-        self._thread.start()
+    @property
+    def _stop(self) -> threading.Event:
+        return self._managed_thread.stop_event
 
-    def stop(self) -> None:
-        """Signal thread to stop (best-effort)."""
-        self._stop.set()
+    def stop(self, timeout: Duration = Duration.from_seconds(10.0)) -> None:
+        """Signal VM thread to stop and wait for it to exit."""
+        self._threads.stop(timeout=timeout)
 
-    def _run(self) -> None:
+    def _run(self, stop_event: threading.Event) -> None:
         """Main lifecycle: BOOTING -> INITIALIZING -> READY.
 
         Inlines bootstrap logic directly - no nested state machine.
         Worker ID is not set by ManagedVm - the worker generates its own ID
         from IRIS_VM_ADDRESS or host:port at startup.
         """
-        boot_timeout = self._timeouts.boot_timeout_seconds or 300
-        poll_interval = self._timeouts.ssh_poll_interval_seconds or 5
+        boot_timeout = Duration.from_proto(self._timeouts.boot_timeout)
+        poll_interval = Duration.from_proto(self._timeouts.ssh_poll_interval)
         vm_id = self.info.vm_id
         vm_address = self.info.address
 
         logger.info("VM %s: Starting lifecycle (state=BOOTING)", vm_id)
 
         try:
-            # If address is already known, check if worker is healthy before bootstrapping.
-            # This handles controller restart recovery - skip bootstrap if worker is running.
-            if vm_address:
-                logger.info("VM %s: Address known, checking if worker already healthy", vm_id)
-                if self._check_worker_healthy():
-                    logger.info("VM %s: Worker already healthy, skipping bootstrap", vm_id)
-                    self._transition(vm_pb2.VM_STATE_READY)
-                    return
-
+            # Always bootstrap VMs when controller adopts them to ensure latest image.
+            # The controller re-bootstraps all VMs on startup to pull the latest worker image.
             # Wait for connection
-            logger.info("VM %s: Waiting for connection (timeout=%ds)", vm_id, boot_timeout)
+            logger.info("VM %s: Waiting for connection (timeout=%.1fs)", vm_id, boot_timeout.to_seconds())
             if not wait_for_connection(self._conn, boot_timeout, poll_interval, self._stop):
-                self.info.init_error = f"Boot timeout after {boot_timeout}s"
-                logger.error("VM %s: Boot timeout after %ds", vm_id, boot_timeout)
+                self.info.init_error = f"Boot timeout after {boot_timeout.to_seconds():.1f}s"
+                logger.error("VM %s: Boot timeout after %.1fs", vm_id, boot_timeout.to_seconds())
                 self._transition(vm_pb2.VM_STATE_FAILED)
                 return
 
@@ -400,13 +459,17 @@ class ManagedVm:
     def _check_worker_healthy(self) -> bool:
         """Check if worker container is already running and healthy."""
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(self._conn, port)
+        try:
+            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def _transition(self, new_state: vm_pb2.VmState) -> None:
         """Update state with timestamp and log the transition."""
         old_state = self.info.state
         self.info.state = new_state
-        self.info.state_changed_at_ms = now_ms()
+        self.info.state_changed_at.CopyFrom(Timestamp.now().to_proto())
         if self._phase:
             self.info.init_phase = self._phase
         logger.info("VM %s: %s -> %s", self.info.vm_id, vm_state_name(old_state), vm_state_name(new_state))
@@ -419,11 +482,67 @@ class ManagedVm:
     def check_health(self) -> bool:
         """Check if worker is healthy via health endpoint."""
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(self._conn, port)
+        try:
+            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def shutdown(self, graceful: bool = True) -> bool:
         """Shutdown worker container."""
-        return shutdown_worker(self._conn, graceful)
+        cmd = "docker stop iris-worker" if graceful else "docker kill iris-worker"
+        try:
+            self._conn.run(cmd, timeout=Duration.from_seconds(30))
+            return True
+        except Exception:
+            return False
+
+    def reload(self) -> None:
+        """Re-run bootstrap script to pull new image and restart container.
+
+        This is faster than recreating the VM - it SSHs into the existing VM
+        and re-runs the bootstrap sequence (pull image, stop old container,
+        start new one, health check).
+
+        Raises:
+            RuntimeError: If bootstrap fails or health check times out
+        """
+        logger.info("VM %s: Reloading (re-running bootstrap)", self.info.vm_id)
+
+        # Clear previous log and reset state
+        self._log_lines = []
+        self._phase = ""
+        self._transition(vm_pb2.VM_STATE_INITIALIZING)
+
+        # Build and run bootstrap script
+        script = _build_bootstrap_script(
+            self._bootstrap_config,
+            self.info.address,
+            self._discovery_preamble,
+        )
+
+        try:
+            result = run_streaming_with_retry(
+                self._conn,
+                script,
+                max_retries=3,
+                overall_timeout=600,
+                on_line=self._log,
+            )
+
+            if result.returncode != 0:
+                error_msg = f"Exit code {result.returncode}"
+                self._log(f"[iris-init] Reload failed: {error_msg}")
+                raise RuntimeError(f"Reload failed: {error_msg}")
+
+            logger.info("VM %s: Reload complete", self.info.vm_id)
+            self._transition(vm_pb2.VM_STATE_READY)
+
+        except Exception as e:
+            self.info.init_error = str(e)
+            self._dump_log_on_failure()
+            self._transition(vm_pb2.VM_STATE_FAILED)
+            raise RuntimeError(f"VM {self.info.vm_id} reload failed: {e}") from e
 
     @property
     def is_terminal(self) -> bool:
@@ -578,7 +697,6 @@ class TrackedVmFactory:
             discovery_preamble=discovery_preamble,
         )
         self._registry.register(vm)
-        vm.start()
         return vm
 
     @property

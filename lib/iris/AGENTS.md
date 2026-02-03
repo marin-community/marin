@@ -1,7 +1,7 @@
 # Agent Tips
 
 * Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate-protos.py to regenerate files after changing the `.proto` files.
+* Use scripts/generate_protos.py to regenerate files after changing the `.proto` files.
 * Prefer _shallow_, _functional_ code which returns control quickly to the user, vs callbacks or inheritance.
 
 ```
@@ -46,7 +46,7 @@ IF they disagree with the code, ALWAYS add a task to update them.
 
 Documentation should be kept up-to-date as code changes. When implementing new features or making significant changes, update the relevant documentation files:
 
-- [README.md](README.md) - Main overview, CLI reference, and quick start
+@README.md - Main overview, CLI reference, and quick start
 
 ## Protocols and Testing
 
@@ -111,6 +111,7 @@ When adding new modules or significant features:
 |------|------|-------------|
 | Architecture | README.md | High-level architecture, CLI reference, quick start |
 | Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
+| Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
 
 ## Key Modules

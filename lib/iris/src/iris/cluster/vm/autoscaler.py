@@ -37,16 +37,17 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.types import VmWorkerStatusMap
+from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.rpc import vm_pb2
-from iris.time_utils import now_ms
+from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.rpc import config_pb2, vm_pb2
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
 # Slices that die within this time of creation trigger backoff (preemption detection)
-SHORT_LIVED_SLICE_THRESHOLD_MS = 5 * 60 * 1000  # 5 minutes
+SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
 
 class ScalingAction(Enum):
@@ -76,8 +77,12 @@ class ScalingDecision:
 class DemandEntry:
     """A demand entry specifying resource requirements and count."""
 
-    accelerator_type: str | None = None  # None = any accelerator
+    device_type: DeviceType = DeviceType.CPU
+    device_variant: str | None = None  # None = any variant of this type
     count: int = 0
+    total_cpu: int = 0
+    total_memory_bytes: int = 0
+    preemptible: bool | None = None  # None = no preference
 
 
 @dataclass
@@ -88,33 +93,28 @@ class RoutingResult:
     unmet_demand: int
 
 
-@dataclass
-class AutoscalerConfig:
-    """Configuration for the autoscaler."""
-
-    evaluation_interval_seconds: float = 10.0
-
-
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
-    timestamp_ms: int | None = None,
+    timestamp: Timestamp | None = None,
 ) -> RoutingResult:
     """Route demand to groups based on requirements and priority.
 
     For each demand entry:
-    1. Find groups that match the accelerator_type requirement
+    1. Find groups that match the device type/variant requirement
     2. Sort matching groups by priority (lower = higher priority)
     3. Route demand through available groups until satisfied or all exhausted
 
     Groups are skipped if not available (backoff, quota exceeded, at capacity).
     """
-    ts = timestamp_ms or now_ms()
+    ts = timestamp or Timestamp.now()
     allocations: dict[str, int] = {g.name: 0 for g in groups}
     total_unmet = 0
 
     for entry in demand_entries:
-        matching = [g for g in groups if g.matches_requirements(entry.accelerator_type)]
+        matching = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+        if entry.preemptible is not None:
+            matching = [g for g in matching if g.config.preemptible == entry.preemptible]
         # Sort by priority (lower = higher priority). Default to 100 if not set (proto3 defaults to 0).
         matching.sort(key=lambda g: g.config.priority or 100)
 
@@ -141,17 +141,18 @@ def route_demand(
 
         if remaining > 0:
             logger.warning(
-                "Demand overflow: %d/%d slices for accelerator_type=%s unmet (tried %d groups)",
+                "Demand overflow: %d/%d slices for device_type=%s, device_variant=%s unmet (tried %d groups)",
                 remaining,
                 entry.count,
-                entry.accelerator_type,
+                entry.device_type.value,
+                entry.device_variant,
                 len(matching),
             )
             total_unmet += remaining
 
     routed_groups = [(name, count) for name, count in allocations.items() if count > 0]
     if routed_groups:
-        logger.info("Demand routed: %s", ", ".join(f"{name}={count}" for name, count in routed_groups))
+        logger.debug("Demand routed: %s", ", ".join(f"{name}={count}" for name, count in routed_groups))
 
     return RoutingResult(allocations=allocations, unmet_demand=total_unmet)
 
@@ -175,18 +176,68 @@ class Autoscaler:
         self,
         scale_groups: dict[str, ScalingGroup],
         vm_registry: VmRegistry,
-        config: AutoscalerConfig | None = None,
+        config: config_pb2.AutoscalerConfig | None = None,
+        threads: ThreadContainer | None = None,
     ):
         self._groups = scale_groups
         self._vm_registry = vm_registry
-        self._config = config or AutoscalerConfig()
-        self._last_evaluation_ms: int = 0
+
+        if config is None:
+            config = config_pb2.AutoscalerConfig()
+        if not config.HasField("evaluation_interval"):
+            config.evaluation_interval.CopyFrom(Duration.from_seconds(10).to_proto())
+        if not config.HasField("requesting_timeout"):
+            config.requesting_timeout.CopyFrom(Duration.from_seconds(120).to_proto())
+        self._config = config
 
         # Track slice creation times for short-lived slice detection
         self._slice_created_at: dict[str, int] = {}
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
+
+        # Thread management
+        self._threads = threads if threads is not None else get_thread_container()
+
+    def _wait_for_inflight(self) -> None:
+        """Wait for in-flight scale-ups to complete without terminating anything.
+
+        Test-only: Waits for all scale-up threads to complete.
+        """
+        # Wait for all threads in the container to finish
+        self._threads.wait()
+
+    def shutdown(self) -> None:
+        """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups.
+
+        Shutdown ordering:
+        1. Wait for in-flight scale-up threads to complete
+        2. Stop all VM bootstrap threads (call vm.stop() on each VM)
+        3. Terminate VMs and cleanup (group.terminate_all())
+        4. Stop VM managers (cleanup local platform threads if present)
+        """
+        # Step 1: Wait for in-flight scale-up threads
+        self._threads.wait()
+
+        # Step 2: Stop all VM bootstrap threads
+        for group in self._groups.values():
+            for vm_group in group.vm_groups():
+                for vm in vm_group.vms():
+                    vm.stop()
+
+        # Step 3: Terminate VMs and cleanup
+        for group in self._groups.values():
+            group.terminate_all()
+
+        # Step 4: Stop VM managers (cleanup local platform threads if present)
+        for group in self._groups.values():
+            group._vm_manager.stop()
+
+    def __enter__(self) -> Autoscaler:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.shutdown()
 
     def reconcile(self) -> None:
         """Reconcile all groups (discover existing slices from cloud).
@@ -222,8 +273,9 @@ class Autoscaler:
             status after execution (e.g., from "pending" to "completed").
             This works because the deque holds references to the proto objects.
         """
+
         action = vm_pb2.AutoscalerAction(
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now().to_proto(),
             action_type=action_type,
             scale_group=scale_group,
             slice_id=slice_id,
@@ -236,7 +288,7 @@ class Autoscaler:
     def evaluate(
         self,
         demand_entries: list[DemandEntry],
-        timestamp_ms: int | None = None,
+        timestamp: Timestamp | None = None,
     ) -> list[ScalingDecision]:
         """Compute scaling decisions based on demand.
 
@@ -246,12 +298,12 @@ class Autoscaler:
 
         Args:
             demand_entries: List of demand entries with requirements and counts.
-            timestamp_ms: Optional timestamp for testing. If None, uses now_ms().
+            timestamp: Optional timestamp for testing. If None, uses Timestamp.now().
 
         Returns:
             List of scaling decisions to execute.
         """
-        ts = timestamp_ms or now_ms()
+        ts = timestamp or Timestamp.now()
 
         result = route_demand(list(self._groups.values()), demand_entries, ts)
 
@@ -275,7 +327,7 @@ class Autoscaler:
         self,
         group: ScalingGroup,
         demand: int,
-        ts: int,
+        ts: Timestamp,
     ) -> ScalingDecision | None:
         """Evaluate scaling decision for a single group."""
         counts = group.slice_state_counts()
@@ -335,16 +387,14 @@ class Autoscaler:
     def execute(
         self,
         decisions: list[ScalingDecision],
-        timestamp_ms: int,
+        timestamp: Timestamp,
     ) -> None:
         """Execute scale-up decisions.
 
         Args:
             decisions: List of scaling decisions to execute.
-            timestamp_ms: Current timestamp.
+            timestamp: Current timestamp.
         """
-        self._last_evaluation_ms = timestamp_ms
-
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -352,10 +402,32 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
-                self._execute_scale_up(group, timestamp_ms, reason=decision.reason)
+                self._execute_scale_up(group, timestamp, reason=decision.reason)
 
-    def _execute_scale_up(self, group: ScalingGroup, ts: int, reason: str = "") -> bool:
-        """Create a new slice for a scale group.
+    def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
+        """Initiate async scale-up for a scale group.
+
+        Marks the group as REQUESTING and spawns a background thread for the
+        actual scale-up work. Returns immediately without blocking.
+        """
+        # Mark group as requesting before spawning thread
+        timeout = Duration.from_proto(self._config.requesting_timeout)
+        group.mark_requesting(ts, timeout)
+
+        # Spawn background thread for scale-up
+        def _scale_up_wrapper(stop_event):
+            self._do_scale_up(group, ts, reason)
+
+        self._threads.spawn(
+            target=_scale_up_wrapper,
+            name=f"scale-up-{group.name}",
+        )
+
+    def _do_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> bool:
+        """Execute the actual blocking scale-up work.
+
+        This runs in a background thread and should not be called directly.
+        Use _execute_scale_up instead.
 
         Returns:
             True if scale-up succeeded, False otherwise.
@@ -365,9 +437,9 @@ class Autoscaler:
         # Log action as pending BEFORE execution
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
-        logger.info("Scaling up %s: %s", group.name, reason)
         try:
-            slice_obj = group.scale_up(ts=ts)
+            logger.info("Scaling up %s: %s", group.name, reason)
+            slice_obj = group.scale_up(timestamp=ts)
             self._slice_created_at[slice_obj.slice_id] = slice_obj.created_at_ms
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             # Update action with result
@@ -387,28 +459,31 @@ class Autoscaler:
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
+        finally:
+            # Always clear requesting state when done
+            group.clear_requesting()
 
     def run_once(
         self,
         demand_entries: list[DemandEntry],
         vm_status_map: VmWorkerStatusMap,
-        timestamp_ms: int | None = None,
+        timestamp: Timestamp | None = None,
     ) -> list[ScalingDecision]:
         """Run one evaluation cycle: cleanup -> evaluate -> execute -> idle scale-down.
 
         Args:
             demand_entries: List of demand entries with requirements and counts.
             vm_status_map: Map of VM address to worker status (required for scale-down).
-            timestamp_ms: Optional timestamp for testing.
+            timestamp: Optional timestamp for testing.
 
         Returns the decisions that were made (for testing/logging).
         """
-        timestamp_ms = timestamp_ms or now_ms()
+        timestamp = timestamp or Timestamp.now()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
 
         # Step 1: Clean up failed slices FIRST
         for group in self._groups.values():
-            cleaned = group.cleanup_failed_slices(timestamp_ms)
+            cleaned = group.cleanup_failed_slices(timestamp)
             for slice_obj in cleaned:
                 self._slice_created_at.pop(slice_obj.slice_id, None)
                 self._log_action(
@@ -419,17 +494,17 @@ class Autoscaler:
                 )
 
         # Step 2: Evaluate (scale-up only)
-        decisions = self.evaluate(demand_entries, timestamp_ms)
+        decisions = self.evaluate(demand_entries, timestamp)
         if decisions:
             logger.info("Autoscaler decisions: %s", [(d.scale_group, d.action.value, d.reason) for d in decisions])
 
         # Step 3: Execute scale-up
-        self.execute(decisions, timestamp_ms)
+        self.execute(decisions, timestamp)
 
         # Step 4: Idle scale-down
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
-            scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp_ms)
+            scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
             if scaled_down:
                 self._slice_created_at.pop(scaled_down.slice_id, None)
                 self._log_action(
@@ -454,10 +529,12 @@ class Autoscaler:
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
+        from iris.rpc import time_pb2
+
         return vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation_ms=self._last_evaluation_ms,
+            last_evaluation=time_pb2.Timestamp(epoch_ms=0),  # Controlled by controller now
             recent_actions=list(self._action_log),
         )
 
@@ -474,6 +551,11 @@ class Autoscaler:
     def groups(self) -> dict[str, ScalingGroup]:
         """All scale groups."""
         return self._groups
+
+    @property
+    def evaluation_interval_seconds(self) -> float:
+        """Configured evaluation interval in seconds."""
+        return Duration.from_proto(self._config.evaluation_interval).to_seconds()
 
     def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.
@@ -521,15 +603,16 @@ class Autoscaler:
     def _record_slice_failure(self, slice_id: str, group: ScalingGroup) -> None:
         """Record slice failure and apply backoff if it was short-lived.
 
-        Short-lived slices (died within SHORT_LIVED_SLICE_THRESHOLD_MS of creation)
+        Short-lived slices (died within SHORT_LIVED_SLICE_THRESHOLD of creation)
         indicate bad zone/quota issues or preemption. Apply backoff to prevent thrashing.
         """
         created_at = self._slice_created_at.get(slice_id)
         if created_at is None:
             return
 
-        age_ms = now_ms() - created_at
-        if age_ms < SHORT_LIVED_SLICE_THRESHOLD_MS:
+        age_ms = Timestamp.now().epoch_ms() - created_at
+        age = Duration.from_ms(age_ms)
+        if age < SHORT_LIVED_SLICE_THRESHOLD:
             logger.warning(
                 "Short-lived slice %s (age=%dms) in %s, applying backoff",
                 slice_id,

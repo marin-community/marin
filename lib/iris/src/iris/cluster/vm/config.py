@@ -37,11 +37,49 @@ from iris.cluster.vm.manual_platform import ManualVmManager
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmManagerProtocol
 from iris.rpc import config_pb2
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
 # Re-export IrisClusterConfig from proto for public API
 IrisClusterConfig = config_pb2.IrisClusterConfig
+
+# Mapping from lowercase accelerator types to proto enum names
+_ACCELERATOR_TYPE_MAP = {
+    "cpu": "ACCELERATOR_TYPE_CPU",
+    "gpu": "ACCELERATOR_TYPE_GPU",
+    "tpu": "ACCELERATOR_TYPE_TPU",
+}
+
+
+def _normalize_accelerator_types(data: dict) -> None:
+    """Convert lowercase accelerator_type values to proto enum format.
+
+    Modifies data in-place, converting values like "tpu" to "ACCELERATOR_TYPE_TPU".
+    This allows YAML configs to use the simpler lowercase format while maintaining
+    compatibility with protobuf's enum parsing.
+    """
+    if "scale_groups" not in data:
+        return
+
+    for sg_data in data["scale_groups"].values():
+        if sg_data is None:
+            continue
+        if "accelerator_type" not in sg_data:
+            continue
+
+        accel_type = sg_data["accelerator_type"]
+        if isinstance(accel_type, str):
+            lower_type = accel_type.lower()
+            if lower_type in _ACCELERATOR_TYPE_MAP:
+                sg_data["accelerator_type"] = _ACCELERATOR_TYPE_MAP[lower_type]
+
+
+def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate that scale groups have explicit accelerator types."""
+    for name, sg_config in config.scale_groups.items():
+        if sg_config.accelerator_type == config_pb2.ACCELERATOR_TYPE_UNSPECIFIED:
+            raise ValueError(f"Scale group '{name}' must set accelerator_type to cpu, gpu, or tpu.")
 
 
 def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
@@ -63,9 +101,12 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
       controller_address: "10.0.0.1:10000"
 
     timeouts:
-      boot_timeout_seconds: 300
-      init_timeout_seconds: 600
-      ssh_poll_interval_seconds: 5
+      boot_timeout:
+        milliseconds: 300000
+      init_timeout:
+        milliseconds: 600000
+      ssh_poll_interval:
+        milliseconds: 5000
 
     controller_vm:
       gcp:
@@ -78,7 +119,8 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
         provider:
           tpu:
             project_id: my-project
-        accelerator_type: v5p-8
+        accelerator_type: tpu
+        accelerator_variant: v5p-8
         runtime_version: v2-alpha-tpuv5
         zones: [us-central1-a]
         min_slices: 0
@@ -136,7 +178,11 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
             elif "name" not in sg_data:
                 sg_data["name"] = name
 
+    # Convert lowercase accelerator types to enum format
+    _normalize_accelerator_types(data)
+
     config = ParseDict(data, config_pb2.IrisClusterConfig())
+    _validate_accelerator_types(config)
 
     logger.info(
         "Config loaded: provider=%s, scale_groups=%s",
@@ -161,7 +207,7 @@ def get_ssh_config(
     If cluster_config.ssh is not set, uses defaults:
     - user: "root"
     - port: 22
-    - connect_timeout: 30
+    - connect_timeout: 30s
     - key_file: None (passwordless/agent auth)
 
     For manual providers, per-group overrides from provider.manual take precedence.
@@ -174,11 +220,17 @@ def get_ssh_config(
     Returns:
         SshConfig with all settings populated (using defaults where not specified).
     """
+    from iris.time_utils import Duration
+
     ssh = cluster_config.ssh
     user = ssh.user or "root"
     key_file = ssh.key_file or None
     port = ssh.port or 22
-    connect_timeout = ssh.connect_timeout or 30
+    connect_timeout = (
+        Duration.from_proto(ssh.connect_timeout)
+        if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
+        else Duration.from_seconds(30)
+    )
 
     # Apply per-group overrides if group_name provided
     if group_name and group_name in cluster_config.scale_groups:
@@ -205,14 +257,31 @@ def get_ssh_config(
 def with_timeout_defaults(timeouts: config_pb2.TimeoutConfig) -> config_pb2.TimeoutConfig:
     """Apply default values to unset timeout fields.
 
-    Protobuf uses 0 as the default for int32 fields, which can cause issues
-    when 0 is passed to code expecting positive values. This function ensures
-    all timeout fields have sensible defaults.
+    Protobuf Duration messages with 0 milliseconds are treated as unset.
+    This function ensures all timeout fields have sensible defaults.
     """
+    from iris.time_utils import Duration
+
+    boot_timeout = (
+        Duration.from_proto(timeouts.boot_timeout)
+        if timeouts.HasField("boot_timeout") and timeouts.boot_timeout.milliseconds > 0
+        else Duration.from_seconds(300)
+    )
+    init_timeout = (
+        Duration.from_proto(timeouts.init_timeout)
+        if timeouts.HasField("init_timeout") and timeouts.init_timeout.milliseconds > 0
+        else Duration.from_seconds(600)
+    )
+    ssh_poll_interval = (
+        Duration.from_proto(timeouts.ssh_poll_interval)
+        if timeouts.HasField("ssh_poll_interval") and timeouts.ssh_poll_interval.milliseconds > 0
+        else Duration.from_seconds(5)
+    )
+
     return config_pb2.TimeoutConfig(
-        boot_timeout_seconds=timeouts.boot_timeout_seconds or 300,
-        init_timeout_seconds=timeouts.init_timeout_seconds or 600,
-        ssh_poll_interval_seconds=timeouts.ssh_poll_interval_seconds or 5,
+        boot_timeout=boot_timeout.to_proto(),
+        init_timeout=init_timeout.to_proto(),
+        ssh_poll_interval=ssh_poll_interval.to_proto(),
     )
 
 
@@ -255,13 +324,15 @@ def _get_provider_info(
         if not manual.hosts:
             raise ValueError(f"Manual provider in {group_config.name} missing hosts")
         return ("manual", None, list(manual.hosts))
+    if which == "local":
+        return ("local", None, None)
 
     raise ValueError(f"Unknown provider type in scale group {group_config.name}")
 
 
 def create_autoscaler_from_config(
     config: config_pb2.IrisClusterConfig,
-    autoscaler_config=None,  # AutoscalerConfig | None - type is from autoscaler module
+    autoscaler_config: config_pb2.AutoscalerConfig | None = None,
     dry_run: bool = False,
 ):
     """Create autoscaler with per-group managers from configuration.
@@ -280,7 +351,7 @@ def create_autoscaler_from_config(
 
     Args:
         config: Cluster configuration proto with scale groups
-        autoscaler_config: Optional autoscaler configuration
+        autoscaler_config: Optional autoscaler configuration proto (overrides config.autoscaler if provided)
         dry_run: If True, don't actually create VMs
 
     Returns:
@@ -289,7 +360,7 @@ def create_autoscaler_from_config(
     Raises:
         ValueError: If a scale group is missing provider config or has unknown provider type
     """
-    from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+    from iris.cluster.vm.autoscaler import Autoscaler
 
     logger.info("Creating Autoscaler")
 
@@ -313,10 +384,14 @@ def create_autoscaler_from_config(
 
         logger.info("Created scale group %s", name)
 
+    # Use provided autoscaler_config, or load from cluster config, or use defaults (None creates default proto)
+    if autoscaler_config is None and config.HasField("autoscaler"):
+        autoscaler_config = config.autoscaler
+
     return Autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
-        config=autoscaler_config or AutoscalerConfig(),
+        config=autoscaler_config,
     )
 
 
@@ -326,7 +401,7 @@ def create_autoscaler_from_specs(
     bootstrap_config: config_pb2.BootstrapConfig,
     timeouts: config_pb2.TimeoutConfig,
     ssh_config: SshConfig | None = None,
-    autoscaler_config=None,
+    autoscaler_config: config_pb2.AutoscalerConfig | None = None,
     label_prefix: str = "iris",
     dry_run: bool = False,
 ):
@@ -341,7 +416,7 @@ def create_autoscaler_from_specs(
         bootstrap_config: Bootstrap configuration for all VMs
         timeouts: Timeout configuration for all VMs
         ssh_config: SSH configuration for manual groups
-        autoscaler_config: Optional autoscaler configuration
+        autoscaler_config: Optional autoscaler configuration proto
         label_prefix: Prefix for GCP labels
 
     Returns:
@@ -350,7 +425,7 @@ def create_autoscaler_from_specs(
     Raises:
         ValueError: If a scale group has an unknown provider type
     """
-    from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+    from iris.cluster.vm.autoscaler import Autoscaler
 
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
@@ -385,7 +460,7 @@ def create_autoscaler_from_specs(
     return Autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
-        config=autoscaler_config or AutoscalerConfig(),
+        config=autoscaler_config,
     )
 
 
@@ -417,15 +492,14 @@ def create_manual_autoscaler(
         name="manual",
         min_slices=0,
         max_slices=len(hosts),
-        accelerator_type="cpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         zones=["local"],
     )
 
-    timeouts = config_pb2.TimeoutConfig(
-        boot_timeout_seconds=300,
-        init_timeout_seconds=600,
-        ssh_poll_interval_seconds=5,
-    )
+    timeouts = config_pb2.TimeoutConfig()
+    timeouts.boot_timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    timeouts.init_timeout.CopyFrom(Duration.from_seconds(600).to_proto())
+    timeouts.ssh_poll_interval.CopyFrom(Duration.from_seconds(5).to_proto())
 
     spec = ScaleGroupSpec(
         config=sg_config,

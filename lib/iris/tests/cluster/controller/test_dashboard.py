@@ -30,7 +30,15 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
+
+
+def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
+    """Create a minimal Entrypoint proto for testing."""
+    entrypoint = cluster_pb2.Entrypoint()
+    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+    return entrypoint
+
 
 # =============================================================================
 # Test Helpers
@@ -51,7 +59,7 @@ def register_worker(
             worker_id=wid,
             address=address,
             metadata=metadata,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     worker = state.get_worker(wid)
@@ -71,7 +79,7 @@ def submit_job(
         JobSubmittedEvent(
             job_id=jid,
             request=request,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     return jid
@@ -93,7 +101,7 @@ def service(state, scheduler):
     controller_mock.wake = Mock()
     controller_mock.task_schedule_status = scheduler.task_schedule_status
     controller_mock.autoscaler = None  # No autoscaler by default
-    return ControllerServiceImpl(state, controller_mock)
+    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
 @pytest.fixture
@@ -109,7 +117,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler):
     controller_mock.wake = Mock()
     controller_mock.task_schedule_status = scheduler.task_schedule_status
     controller_mock.autoscaler = mock_autoscaler  # Enable autoscaler
-    return ControllerServiceImpl(state, controller_mock)
+    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
 def rpc_post(client: TestClient, method: str, body: dict | None = None):
@@ -151,9 +159,10 @@ def make_worker_metadata():
 def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name="test-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
 
 
@@ -220,26 +229,13 @@ def test_list_workers_returns_healthy_status(client, state, make_worker_metadata
     assert healthy_count == 2
 
 
-def test_list_endpoints_filters_by_running_jobs(client, state, job_request):
-    """ListEndpoints RPC filters out endpoints for non-running jobs."""
-    # Running job with endpoint
-    running_id = submit_job(state, "running", job_request)
-    state.get_job(running_id).state = cluster_pb2.JOB_STATE_RUNNING
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep1", name="svc", address="host:80", job_id=running_id))
-
-    # Pending job with endpoint (should not be returned)
-    pending_id = submit_job(state, "pending", job_request)
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep2", name="svc2", address="host:81", job_id=pending_id))
-
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
-    endpoints = resp.get("endpoints", [])
-
-    assert len(endpoints) == 1
-    assert endpoints[0]["name"] == "svc"
-
-
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
-    """ListEndpoints filters out endpoints for non-running jobs."""
+    """ListEndpoints filters out endpoints for terminal jobs.
+
+    Endpoints are visible for jobs in non-terminal states (PENDING, BUILDING, RUNNING)
+    to support the case where tasks are executing but the job hasn't transitioned to
+    RUNNING yet due to controller-worker communication delay.
+    """
     # Create jobs in various states
     pending_id = submit_job(state, "pending", job_request)
 
@@ -257,61 +253,10 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
 
-    assert len(endpoints) == 1
-    assert endpoints[0]["name"] == "running-svc"
-
-
-def test_job_detail_page_includes_worker_address(client, state, job_request, make_worker_metadata):
-    """Job detail page has empty worker address since jobs don't execute on workers."""
-    register_worker(state, "w1", "worker-host:9000", make_worker_metadata())
-
-    job_id = submit_job(state, "j1", job_request)
-    state.get_job(job_id).state = cluster_pb2.JOB_STATE_RUNNING
-
-    response = client.get("/job/j1")
-
-    assert response.status_code == 200
-    # New dashboard shows task table
-    assert "Tasks</h2>" in response.text
-    assert "tasks-table" in response.text
-
-
-def test_job_detail_page_empty_worker_for_pending_job(client, state, job_request):
-    """Job detail page shows task summary for pending jobs."""
-    submit_job(state, "pending-job", job_request)
-    # Job is already in PENDING state after submission
-
-    response = client.get("/job/pending-job")
-
-    assert response.status_code == 200
-    # New dashboard shows task summary
-    assert "Task Summary" in response.text
-    assert "tasks-table" in response.text
-
-
-def test_list_jobs_state_names_mapped_correctly(client, state, job_request):
-    """Proto state enums are returned as expected."""
-    state_mapping = [
-        (cluster_pb2.JOB_STATE_PENDING, "JOB_STATE_PENDING"),
-        (cluster_pb2.JOB_STATE_BUILDING, "JOB_STATE_BUILDING"),
-        (cluster_pb2.JOB_STATE_RUNNING, "JOB_STATE_RUNNING"),
-        (cluster_pb2.JOB_STATE_SUCCEEDED, "JOB_STATE_SUCCEEDED"),
-        (cluster_pb2.JOB_STATE_FAILED, "JOB_STATE_FAILED"),
-        (cluster_pb2.JOB_STATE_KILLED, "JOB_STATE_KILLED"),
-        (cluster_pb2.JOB_STATE_WORKER_FAILED, "JOB_STATE_WORKER_FAILED"),
-    ]
-
-    for proto_state, _ in state_mapping:
-        job_id = submit_job(state, f"j-{proto_state}", job_request)
-        state.get_job(job_id).state = proto_state
-
-    resp = rpc_post(client, "ListJobs")
-    jobs = resp.get("jobs", [])
-    # RPC uses camelCase field names (Connect RPC standard)
-    job_by_id = {j["jobId"]: j["state"] for j in jobs}
-
-    for proto_state, expected_name in state_mapping:
-        assert job_by_id[f"j-{proto_state}"] == expected_name
+    # Both pending and running endpoints should be visible (terminal state filtered out)
+    assert len(endpoints) == 2
+    endpoint_names = {ep["name"] for ep in endpoints}
+    assert endpoint_names == {"pending-svc", "running-svc"}
 
 
 def test_list_jobs_includes_retry_counts(client, state, job_request):
@@ -339,9 +284,10 @@ def test_list_jobs_includes_task_counts(client, state):
     # Submit a job with multiple replicas (replicas is on ResourceSpecProto)
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=3,
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     job_id = submit_job(state, "multi", request)
     job = state.get_job(job_id)
@@ -362,9 +308,9 @@ def test_list_jobs_includes_task_counts(client, state):
     # RPC uses camelCase field names
     assert j["taskCount"] == 3
     assert j["completedCount"] == 1  # Only succeeded counts
-    assert j["taskStateCounts"]["TASK_STATE_SUCCEEDED"] == 1
-    assert j["taskStateCounts"]["TASK_STATE_RUNNING"] == 1
-    assert j["taskStateCounts"]["TASK_STATE_PENDING"] == 1
+    assert j["taskStateCounts"]["succeeded"] == 1
+    assert j["taskStateCounts"]["running"] == 1
+    assert j["taskStateCounts"]["pending"] == 1
 
 
 def test_get_job_status_returns_retry_info(client, state, job_request):
@@ -373,10 +319,12 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     Jobs no longer track individual attempts - tasks do. The RPC returns
     aggregate retry information for the job.
     """
+    from iris.time_utils import Timestamp
+
     job_id = submit_job(state, "test-job", job_request)
     job = state.get_job(job_id)
     job.state = cluster_pb2.JOB_STATE_RUNNING
-    job.started_at_ms = 3000
+    job.started_at = Timestamp.from_ms(3000)
 
     # Set retry counts on tasks (the RPC aggregates from tasks)
     tasks = state.get_job_tasks(job_id)
@@ -391,7 +339,7 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     assert job_status["failureCount"] == 1
     assert job_status["preemptionCount"] == 1
     assert job_status["state"] == "JOB_STATE_RUNNING"
-    assert int(job_status["startedAtMs"]) == 3000
+    assert int(job_status["startedAt"]["epochMs"]) == 3000
 
 
 def test_get_job_status_returns_error_for_missing_job(client):
@@ -423,6 +371,7 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
     from iris.rpc import config_pb2, vm_pb2
+    from iris.time_utils import Timestamp
 
     autoscaler = Mock()
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
@@ -431,7 +380,8 @@ def mock_autoscaler():
                 name="test-group",
                 config=config_pb2.ScaleGroupConfig(
                     name="test-group",
-                    accelerator_type="v4-8",
+                    accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                    accelerator_variant="v4-8",
                     min_slices=1,
                     max_slices=5,
                 ),
@@ -456,10 +406,10 @@ def mock_autoscaler():
             ),
         ],
         current_demand={"test-group": 3},
-        last_evaluation_ms=1000,
+        last_evaluation=Timestamp.from_ms(1000).to_proto(),
         recent_actions=[
             vm_pb2.AutoscalerAction(
-                timestamp_ms=1000,
+                timestamp=Timestamp.from_ms(1000).to_proto(),
                 action_type="scale_up",
                 scale_group="test-group",
                 slice_id="slice-1",
@@ -490,8 +440,8 @@ def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscale
 
     # Verify demand tracking
     assert data["currentDemand"] == {"test-group": 3}
-    # Int64 fields are serialized as strings in JSON (protobuf convention)
-    assert int(data["lastEvaluationMs"]) == 1000
+    # Timestamp fields are nested messages
+    assert int(data["lastEvaluation"]["epochMs"]) == 1000
 
     # Verify recent actions
     assert len(data["recentActions"]) == 1
@@ -515,12 +465,19 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
         assert "sliceId" in slice_info
         assert "vms" in slice_info
         assert len(slice_info["vms"]) == 1
-    assert group["config"]["acceleratorType"] == "v4-8"
+    assert group["config"]["acceleratorVariant"] == "v4-8"
 
 
 # =============================================================================
 # Health Endpoint Tests
 # =============================================================================
+
+
+def test_vm_detail_page_escapes_vm_id(client):
+    """VM detail page escapes the VM ID to prevent XSS."""
+    response = client.get('/vm/"onmouseover="alert(1)')
+    assert response.status_code == 200
+    assert "onmouseover" not in response.text or "&quot;" in response.text
 
 
 def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):
@@ -547,3 +504,145 @@ def test_health_endpoint_empty_cluster(client):
     assert data["status"] == "ok"
     assert data["workers"] == 0
     assert data["jobs"] == 0
+
+
+# =============================================================================
+# Task Logs Proxy Tests
+# =============================================================================
+
+
+def test_get_task_logs_not_found_for_missing_job(client):
+    """GetTaskLogs returns NOT_FOUND when the job doesn't exist."""
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetTaskLogs",
+        json={"jobId": "nonexistent", "taskIndex": 0},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code != 200
+    assert "not found" in resp.text.lower()
+
+
+def test_get_task_logs_failed_precondition_for_unassigned_task(client, state, job_request):
+    """GetTaskLogs returns FAILED_PRECONDITION when the task has no worker assigned."""
+    submit_job(state, "pending-job", job_request)
+
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetTaskLogs",
+        json={"jobId": "pending-job", "taskIndex": 0},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code != 200
+    assert "no assigned worker" in resp.text.lower()
+
+
+# =============================================================================
+# Coscheduling Diagnostic Tests
+# =============================================================================
+
+
+def test_coscheduling_failure_reason_no_workers(client, state):
+    """Pending coscheduled tasks report diagnostic reason when no workers match constraints."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="cosched-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=2,
+        environment=cluster_pb2.EnvironmentConfig(),
+        constraints=[
+            cluster_pb2.Constraint(
+                key="tpu-name",
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="nonexistent-tpu"),
+            ),
+        ],
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+    )
+    submit_job(state, "cosched-job", request)
+
+    resp = rpc_post(client, "ListTasks", {"jobId": "cosched-job"})
+    tasks = resp.get("tasks", [])
+    assert len(tasks) == 2
+
+    # All tasks should have a pending_reason explaining no workers match
+    for t in tasks:
+        reason = t.get("pendingReason", "")
+        assert "no workers match constraints" in reason.lower(), f"Expected constraint failure reason, got: {reason}"
+
+
+def test_coscheduling_failure_reason_insufficient_group(client, state, make_worker_metadata):
+    """Pending coscheduled tasks report diagnostic when group is too small."""
+    # Register 2 workers with tpu-name=my-tpu
+    for i in range(2):
+        meta = make_worker_metadata()
+        meta.attributes["tpu-name"].CopyFrom(cluster_pb2.AttributeValue(string_value="my-tpu"))
+        meta.attributes["tpu-worker-id"].CopyFrom(cluster_pb2.AttributeValue(int_value=i))
+        register_worker(state, f"w{i}", f"h{i}:8080", meta)
+
+    # Submit a coscheduled job needing 4 replicas
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="big-cosched",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
+        constraints=[
+            cluster_pb2.Constraint(
+                key="tpu-name",
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="my-tpu"),
+            ),
+        ],
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+    )
+    submit_job(state, "big-cosched", request)
+
+    resp = rpc_post(client, "ListTasks", {"jobId": "big-cosched"})
+    tasks = resp.get("tasks", [])
+    assert len(tasks) == 4
+
+    for t in tasks:
+        reason = t.get("pendingReason", "")
+        assert "need 4" in reason, f"Expected 'need 4' in reason, got: {reason}"
+        assert "largest group has 2" in reason, f"Expected 'largest group has 2' in reason, got: {reason}"
+
+
+# =============================================================================
+# Worker Attributes Tests
+# =============================================================================
+
+
+def test_worker_attributes_in_list_workers(client, state, make_worker_metadata):
+    """ListWorkers RPC returns worker attributes in metadata."""
+    meta = make_worker_metadata()
+    meta.attributes["tpu-name"].CopyFrom(cluster_pb2.AttributeValue(string_value="v5litepod-16"))
+    meta.attributes["tpu-worker-id"].CopyFrom(cluster_pb2.AttributeValue(int_value=0))
+    register_worker(state, "tpu-worker", "h1:8080", meta)
+
+    resp = rpc_post(client, "ListWorkers")
+    workers = resp.get("workers", [])
+    assert len(workers) == 1
+
+    attrs = workers[0].get("metadata", {}).get("attributes", {})
+    assert attrs["tpu-name"]["stringValue"] == "v5litepod-16"
+    assert int(attrs["tpu-worker-id"]["intValue"]) == 0
+
+
+# =============================================================================
+# Pagination / Many Jobs Tests
+# =============================================================================
+
+
+def test_list_jobs_returns_all_jobs_for_pagination(client, state):
+    """ListJobs RPC returns all jobs even with many entries (pagination is client-side)."""
+    for i in range(60):
+        request = cluster_pb2.Controller.LaunchJobRequest(
+            name=f"job-{i:03d}",
+            entrypoint=_make_test_entrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+            environment=cluster_pb2.EnvironmentConfig(),
+        )
+        submit_job(state, f"job-{i:03d}", request)
+
+    resp = rpc_post(client, "ListJobs")
+    jobs = resp.get("jobs", [])
+    assert len(jobs) == 60

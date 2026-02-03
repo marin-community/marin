@@ -19,12 +19,12 @@ This module provides:
 - GcloudSshConnection for TPU VM SSH via gcloud
 - GceSshConnection for standard GCE VMs via gcloud compute ssh
 - DirectSshConnection for raw SSH connections
-- InMemorySshConnection for dry-run and testing
-- Utility functions for connection testing, health checks, and streaming commands
+- Utility functions for connection testing and streaming commands
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import subprocess
 import threading
@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class SshConnection(Protocol):
     run_streaming() for commands with streaming output.
     """
 
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
         """Run command synchronously and wait for completion."""
         ...
 
@@ -111,12 +111,13 @@ class GcloudSshConnection:
             f"--zone={self._zone}",
             f"--project={self.project_id}",
             f"--worker={self.worker_index}",
+            "--quiet",
             "--command",
             command,
         ]
 
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout)
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
 
     def run_streaming(self, command: str) -> subprocess.Popen:
         return subprocess.Popen(
@@ -152,12 +153,13 @@ class GceSshConnection:
             self.vm_name,
             f"--zone={self.zone}",
             f"--project={self.project_id}",
+            "--quiet",
             "--command",
             command,
         ]
 
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout)
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
 
     def run_streaming(self, command: str) -> subprocess.Popen:
         return subprocess.Popen(
@@ -180,7 +182,7 @@ class DirectSshConnection:
     user: str = "root"
     port: int = 22
     key_file: str | None = None
-    connect_timeout: int = 30
+    connect_timeout: Duration = dataclasses.field(default_factory=lambda: Duration.from_seconds(30))
 
     @property
     def address(self) -> str:
@@ -201,7 +203,7 @@ class DirectSshConnection:
                 "-o",
                 "UserKnownHostsFile=/dev/null",
                 "-o",
-                f"ConnectTimeout={self.connect_timeout}",
+                f"ConnectTimeout={int(self.connect_timeout.to_seconds())}",
                 "-o",
                 "BatchMode=yes",
                 "-p",
@@ -212,8 +214,8 @@ class DirectSshConnection:
         )
         return cmd
 
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout + 5)
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds() + 5)
 
     def run_streaming(self, command: str) -> subprocess.Popen:
         return subprocess.Popen(
@@ -229,64 +231,78 @@ class DirectSshConnection:
 # ============================================================================
 
 
-def connection_available(conn: SshConnection, timeout: int = 30) -> bool:
-    """Check if remote connection works by running a simple echo command."""
+def connection_available(conn: SshConnection, timeout: Duration = Duration.from_seconds(30)) -> bool:
+    """Check if remote connection works by running a simple echo command.
+
+    Returns True if connection succeeds, False otherwise. Logs errors prominently
+    to help diagnose SSH issues like platform incompatibility or network problems.
+    """
     try:
         result = conn.run("echo ok", timeout=timeout)
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
+        if result.returncode == 0:
+            return True
+        # Capture stderr for error diagnosis - this is the most useful info
+        error_msg = result.stderr.strip() if result.stderr else f"exit code {result.returncode}"
+        logger.warning("SSH connection check failed to %s: %s", conn.address, error_msg)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning("SSH connection check timed out to %s after %s", conn.address, timeout)
+        return False
+    except OSError as e:
+        logger.warning("SSH connection check failed to %s: %s", conn.address, e)
         return False
 
 
 def wait_for_connection(
     conn: SshConnection,
-    timeout_seconds: int,
-    poll_interval: int = 5,
+    timeout: Duration,
+    poll_interval: Duration,
     stop_event: threading.Event | None = None,
 ) -> bool:
     """Wait for remote connection to become available.
 
     Polls the connection at the specified interval until it succeeds
-    or the timeout expires.
+    or the timeout expires. Logs prominently on first failure and
+    periodically during the wait to help diagnose connection issues.
     """
+    timeout_seconds = timeout.to_seconds()
     deadline = time.time() + timeout_seconds
+    start_time = deadline - timeout_seconds
+    attempt = 0
+    first_failure_logged = False
+
     while time.time() < deadline:
         if stop_event and stop_event.is_set():
             return False
+        attempt += 1
+
         if connection_available(conn):
+            if first_failure_logged:
+                elapsed = int(time.time() - start_time)
+                logger.info("SSH: Connection established to %s after %ds (%d attempts)", conn.address, elapsed, attempt)
             return True
-        time.sleep(poll_interval)
+
+        # Log first failure prominently (connection_available already logged the error details)
+        if not first_failure_logged:
+            logger.warning(
+                "SSH: First connection attempt failed to %s (will retry for %ds)", conn.address, timeout_seconds
+            )
+            first_failure_logged = True
+        elif attempt % 6 == 0:  # Every 30 seconds at 5-second intervals
+            elapsed = int(time.time() - start_time)
+            remaining = timeout_seconds - elapsed
+            logger.info("SSH: Still waiting for %s (%ds elapsed, %ds remaining)", conn.address, elapsed, remaining)
+
+        time.sleep(poll_interval.to_seconds())
+
+    logger.error("SSH: Connection timeout after %ds to %s (%d attempts)", timeout_seconds, conn.address, attempt)
     return False
 
 
-def check_health(conn: SshConnection, port: int = 10001) -> bool:
-    """Check if worker is healthy via health endpoint.
-
-    Returns False on any failure - this is a safe helper that never raises.
-    """
-    try:
-        result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
-        return result.returncode == 0
-    except Exception as e:
-        logger.debug("Health check failed for %s: %s", conn.address, e)
-        return False
-
-
-def shutdown_worker(conn: SshConnection, graceful: bool = True) -> bool:
-    """Shutdown worker container via docker stop/kill.
-
-    Returns False on any failure - this is a safe helper that never raises.
-    """
-    cmd = "docker stop iris-worker" if graceful else "docker kill iris-worker"
-    try:
-        conn.run(cmd, timeout=30)
-        return True
-    except Exception as e:
-        logger.debug("Shutdown worker failed for %s: %s", conn.address, e)
-        return False
-
-
 SSH_MAX_RETRIES = 3
+
+
+SSH_RETRYABLE_EXIT_CODES = {255}  # SSH connection failures
 
 
 def run_streaming_with_retry(
@@ -299,10 +315,11 @@ def run_streaming_with_retry(
     """Run command with streaming output and exponential backoff retry on failures.
 
     Retries on connection errors with exponential backoff. Lines of output
-    are passed to the on_line callback as they arrive.
+    are passed to the on_line callback as they arrive. Also retries on
+    SSH-specific exit codes (255 = connection refused/failed).
     """
     backoff = ExponentialBackoff(initial=5.0, maximum=30.0, factor=2.0)
-    last_error: Exception | None = None
+    last_error: Exception | str | None = None
 
     for attempt in range(max_retries):
         proc: Any = None
@@ -310,14 +327,23 @@ def run_streaming_with_retry(
             logger.info("SSH: Running command (attempt %d/%d)", attempt + 1, max_retries)
             proc = conn.run_streaming(command)
 
+            output_lines: list[str] = []
             if proc.stdout is not None:
                 for line in proc.stdout:
                     line = line.rstrip()
+                    output_lines.append(line)
                     if on_line:
                         on_line(line)
 
             proc.wait(timeout=overall_timeout)
-            return subprocess.CompletedProcess(proc.args, proc.returncode or 0, "", "")
+            returncode = proc.returncode or 0
+
+            # Retry on SSH connection failures (exit code 255)
+            if returncode in SSH_RETRYABLE_EXIT_CODES:
+                last_error = f"SSH exit code {returncode}"
+                logger.warning("SSH: Connection failed on attempt %d (exit code %d)", attempt + 1, returncode)
+            else:
+                return subprocess.CompletedProcess(proc.args, returncode, "\n".join(output_lines), "")
 
         except subprocess.TimeoutExpired as e:
             last_error = e

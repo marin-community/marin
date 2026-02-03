@@ -51,11 +51,6 @@ except ImportError:
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-# Init vLLM model with random weights to speed up bootstrap time, because
-# model weights are synced from trainer later on
-os.environ["JAX_RANDOM_WEIGHTS"] = "True"
-# Skip jax precompile to speed up bootstrap time
-os.environ["SKIP_JAX_PRECOMPILE"] = "1"
 
 
 class InferenceMode(StrEnum):
@@ -73,6 +68,8 @@ class vLLMInferenceContextConfig:
     gpu_memory_utilization: float
     sampling_params: SamplingParams
     mode: InferenceMode = InferenceMode.SYNC
+    load_format: str = "auto"
+    enforce_eager: bool = True
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -128,7 +125,24 @@ class vLLMInferenceContext(BaseInferenceContext):
         return self.renderer.build_generation_prompt(messages)
 
     @staticmethod
+    def _patch_tpu_inference_registry():
+        """Register Qwen2ForCausalLM in tpu_inference if not present."""
+        try:
+            from tpu_inference.models.common import model_loader
+
+            if "Qwen2ForCausalLM" not in model_loader._MODEL_REGISTRY:
+                logger.info("Patching tpu_inference to support Qwen2ForCausalLM")
+                from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
+
+                model_loader.register_model("Qwen2ForCausalLM", Qwen2ForCausalLM)
+        except ImportError:
+            logger.exception("Failed to patch tpu_inference registry")
+            raise
+
+    @staticmethod
     def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
+        vLLMInferenceContext._patch_tpu_inference_registry()
+
         if inference_config.mode == InferenceMode.SYNC:
             if LLM is None:
                 raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
@@ -143,6 +157,8 @@ class vLLMInferenceContext(BaseInferenceContext):
             max_model_len=inference_config.max_model_len,
             tensor_parallel_size=inference_config.tensor_parallel_size,
             gpu_memory_utilization=inference_config.gpu_memory_utilization,
+            load_format=inference_config.load_format,
+            enforce_eager=inference_config.enforce_eager,
         )
 
     def _convert_vllm_state_dict_to_trainer_keys(

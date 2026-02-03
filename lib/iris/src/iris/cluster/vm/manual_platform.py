@@ -43,9 +43,9 @@ from iris.cluster.vm.vm_platform import (
     VmGroupStatus,
     VmSnapshot,
 )
-from iris.cluster.vm.ssh import DirectSshConnection, check_health
+from iris.cluster.vm.ssh import DirectSshConnection
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +68,14 @@ class ManualVmGroup:
         scale_group: str,
         vms: list[ManagedVm],
         vm_registry: VmRegistry,
-        created_at_ms: int | None = None,
+        created_at: Timestamp | None = None,
         on_terminate: Callable[[list[str]], None] | None = None,
     ):
         self._group_id = group_id
         self._scale_group = scale_group
         self._vms = vms
         self._vm_registry = vm_registry
-        self._created_at_ms = created_at_ms if created_at_ms is not None else now_ms()
+        self._created_at = created_at if created_at is not None else Timestamp.now()
         self._on_terminate = on_terminate
 
     @property
@@ -92,7 +92,8 @@ class ManualVmGroup:
 
     @property
     def created_at_ms(self) -> int:
-        return self._created_at_ms
+        """Timestamp when this VM group was created (milliseconds since epoch)."""
+        return self._created_at.epoch_ms()
 
     def status(self) -> VmGroupStatus:
         """Compute status from current VM states."""
@@ -135,10 +136,11 @@ class ManualVmGroup:
 
     def to_proto(self) -> vm_pb2.SliceInfo:
         """Convert to proto for RPC APIs."""
+
         return vm_pb2.SliceInfo(
             slice_id=self._group_id,
             scale_group=self._scale_group,
-            created_at_ms=self._created_at_ms,
+            created_at=self._created_at.to_proto(),
             vms=[vm.info for vm in self._vms],
         )
 
@@ -203,7 +205,7 @@ echo "[iris-init] Using static controller at $CONTROLLER_ADDRESS"
             raise PoolExhaustedError(f"No hosts available in pool (total: {len(self._hosts)}, all currently in use)")
 
         host = self._available_hosts.pop()
-        group_id = f"{self._label_prefix}-{self._config.name}-{now_ms()}"
+        group_id = f"{self._label_prefix}-{self._config.name}-{Timestamp.now().epoch_ms()}"
 
         if self._dry_run:
             logger.info("[DRY-RUN] Would create manual VM group %s (host=%s)", group_id, host)
@@ -291,13 +293,17 @@ echo "[iris-init] Using static controller at $CONTROLLER_ADDRESS"
         """Check if a worker is healthy on the given host."""
         conn = self._create_ssh_connection(host)
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(conn, port)
+        try:
+            result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def _adopt_running_host(self, host: str) -> ManualVmGroup:
         """Create a ManualVmGroup for a host that already has a running worker."""
         self._available_hosts.discard(host)
 
-        group_id = f"{self._label_prefix}-{self._config.name}-recovered-{now_ms()}"
+        group_id = f"{self._label_prefix}-{self._config.name}-recovered-{Timestamp.now().epoch_ms()}"
         vm_id = f"{group_id}-{host.replace('.', '-').replace(':', '-')}"
 
         labels = {
@@ -367,3 +373,7 @@ echo "[iris-init] Using static controller at $CONTROLLER_ADDRESS"
     def total_host_count(self) -> int:
         """Total number of hosts in the pool."""
         return len(self._hosts)
+
+    def stop(self) -> None:
+        """No-op: ManualVmManager has no background threads to stop."""
+        pass
