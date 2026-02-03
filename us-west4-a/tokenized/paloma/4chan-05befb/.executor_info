@@ -1,6 +1,6 @@
 {
   "name": "tokenized/paloma/4chan",
-  "fn_name": "<function tokenize at 0x7fe2b16d42c0>",
+  "fn_name": "<function tokenize at 0x7feb741982c0>",
   "config": {
     "train_paths": [],
     "validation_paths": [

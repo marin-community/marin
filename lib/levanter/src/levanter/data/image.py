@@ -1250,9 +1250,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # Cache padding mode for __call__
         self._padding_mode = "max_length" if self.padding else False
 
-        # Token IDs will be lazily computed on first access (see _get_cached_token_ids)
-        # This avoids tokenizer access during __init__ which fails after cross-process unpickling
-        self._cached_token_ids: Optional[Dict[str, Any]] = None
+        # Pre-compute token IDs (safe to pickle since they're just int/np.array values)
+        self._cached_token_ids = self._compute_token_ids()
 
     @property
     def processor(self) -> ProcessorMixin:
@@ -1319,8 +1318,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # Remove unpicklable processor/tokenizer objects - they will be recreated lazily
         state['_processor'] = None
         state['_custom_tokenizer'] = None
-        # Clear cached token IDs - they will be recomputed after processor recreation
-        state['_cached_token_ids'] = None
+        # Note: _cached_token_ids is kept since it's just int/np.array values (safe to pickle)
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
@@ -1328,23 +1326,25 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         self.__dict__.update(state)
         # _processor is None, will be lazily recreated on first access via self.processor
 
-    def _get_cached_token_ids(self) -> Dict[str, Any]:
-        """Lazily compute and cache token IDs for loss mask creation.
+    def _compute_token_ids(self) -> Dict[str, Any]:
+        """Compute token IDs for loss mask creation.
 
-        This is called on first access rather than in __init__ to avoid
-        tokenizer access during initialization, which fails after unpickling.
+        Returns dict with im_start_id, im_end_id, num_assistant_tokens, and assistant_token_ids_array.
+        These are safe to pickle since they're just int/np.array values.
         """
-        if self._cached_token_ids is None:
-            final_tokenizer = self.processor.tokenizer
-            im_start_id = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
-            im_end_id = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
-            assistant_ids = final_tokenizer.encode("assistant", add_special_tokens=False)
-            self._cached_token_ids = {
-                "im_start_id": im_start_id,
-                "im_end_id": im_end_id,
-                "num_assistant_tokens": len(assistant_ids),
-                "assistant_token_ids_array": np.array(assistant_ids, dtype=np.int32),
-            }
+        final_tokenizer = self.processor.tokenizer
+        im_start_id = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
+        im_end_id = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
+        assistant_ids = final_tokenizer.encode("assistant", add_special_tokens=False)
+        return {
+            "im_start_id": im_start_id,
+            "im_end_id": im_end_id,
+            "num_assistant_tokens": len(assistant_ids),
+            "assistant_token_ids_array": np.array(assistant_ids, dtype=np.int32),
+        }
+
+    def _get_cached_token_ids(self) -> Dict[str, Any]:
+        """Get pre-computed token IDs for loss mask creation."""
         return self._cached_token_ids
 
     def get_token_ids(self) -> Dict[str, Optional[int]]:

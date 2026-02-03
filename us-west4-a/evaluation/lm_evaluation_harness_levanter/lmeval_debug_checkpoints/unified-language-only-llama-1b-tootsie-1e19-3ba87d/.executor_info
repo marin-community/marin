@@ -1,6 +1,6 @@
 {
   "name": "evaluation/lm_evaluation_harness_levanter/lmeval_debug_checkpoints/unified-language-only-llama-1b-tootsie-1e19",
-  "fn_name": "<function evaluate at 0x7fe2afe222a0>",
+  "fn_name": "<function evaluate at 0x7feb728be2a0>",
   "config": {
     "evaluator": "levanter_lm_evaluation_harness",
     "resource_config": {

@@ -1,6 +1,6 @@
 {
   "name": "raw/nemotro-cc",
-  "fn_name": "<function download_nemotron_cc at 0x7fe2af6084a0>",
+  "fn_name": "<function download_nemotron_cc at 0x7feb720a44a0>",
   "config": {
     "output_path": "us-west4-a/raw/nemotro-cc-eeb783",
     "chunk_size": 1048576

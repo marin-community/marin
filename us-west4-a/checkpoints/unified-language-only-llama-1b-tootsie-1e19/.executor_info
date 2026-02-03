@@ -1,6 +1,6 @@
 {
   "name": "checkpoints/unified-language-only-llama-1b-tootsie-1e19",
-  "fn_name": "<function run_levanter_train_lm at 0x7fe2afe21440>",
+  "fn_name": "<function run_levanter_train_lm at 0x7feb728bd440>",
   "config": {
     "train_config": {
       "data": {
