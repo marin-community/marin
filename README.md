@@ -32,7 +32,11 @@ The documentation for Marin is available on [ReadTheDocs](https://marin.readthed
 
 To get started with Marin:
 
+> [!WARNING]
+> **Windows Users**: Marin currently relies on libraries (e.g., `vortex-data`) that may not support native Windows. We strongly recommend using [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) or Docker to run Marin.
+
 - [Install](docs/tutorials/installation.md) Marin.
+
 - Train a [tiny language model](docs/tutorials/first-experiment.md) using Marin.
 - See how to run a much larger [DCLM 1B/1x](docs/tutorials/train-an-lm.md) experiment using Marin.
 - See a [summary of the experiments](docs/reports/index.md) we've run.
