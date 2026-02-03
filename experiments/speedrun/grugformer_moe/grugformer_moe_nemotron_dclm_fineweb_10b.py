@@ -174,6 +174,10 @@ def main() -> None:
         head_dim=None,
         n_routed_experts=64,
         num_experts_per_tok=8,
+        # Avoid XLA allocation-size overflow on large (tokens x vocab) logits tiles.
+        # 32k blocks are fine for smaller local token counts, but can exceed XLA's 32-bit
+        # allocation checks at large global batch/seq settings.
+        cross_entropy_block_size=4096,
     )
 
     tokenized = DATASET_OPTIONS[args.dataset]
