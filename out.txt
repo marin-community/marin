@@ -1,739 +1,845 @@
-d true
-Uninstalled 1 package in 1ms
-Installed 1 package in 88ms
-2026-02-03 07:01:08,955 INFO worker.py:1998 -- Started a local Ray instance. View the dashboard at http://127.0.0.1:8269 
-2026-02-03 07:01:08,966 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-02-03 07:01:09,066 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-02-03 07:01:09,073 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-02-03 07:01:09,244 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-02-03 07:01:09,340 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-02-03 07:01:09,347 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-02-03 07:01:09,373 INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_private3'.
-2026-02-03 07:01:09,374 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-02-03 07:01:09,513 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-02-03 07:01:09,521 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-02-03 07:01:09,757 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-02-03 07:01:09,920 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-02-03 07:01:09,931 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-02-03 07:01:10,004 INFO packaging.py:463 -- Pushing file package 'gcs://_ray_pkg_a08a1a57e398cf12.zip' (44.11MiB) to Ray cluster...
-2026-02-03 07:01:10,079 INFO packaging.py:476 -- Successfully pushed file package 'gcs://_ray_pkg_a08a1a57e398cf12.zip'.
-/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/worker.py:2046: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
-  warnings.warn(
-2026-02-03 07:01:11,615 - INFO - Auto-detected Ray cluster
-2026-02-03 07:01:11,615 INFO cluster.py:103 -- Created new namespace: fray_8dd8ce87
-2026-02-03 07:01:11,616 INFO cluster.py:114 -- Set default job context to RayContext
-2026-02-03 07:01:11,616 INFO executor.py:719 -- ### Inspecting the 6 provided steps ###
-2026-02-03 07:01:11,617 WARNING executor.py:1009 -- Output path gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-033d25 doesn't match given override tokenized/nemotron_cc/hq_actual-5af4cc, using the latter.
-2026-02-03 07:01:11,617 WARNING executor.py:1009 -- Output path gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-b98fba doesn't match given override tokenized/nemotron_cc/hq_synth-3525e2, using the latter.
-2026-02-03 07:01:11,619 WARNING executor.py:1009 -- Output path gs://marin-us-central2/checkpoints/unified-language-only-llama-1b-tootsie-1e19-989ad1 doesn't match given override checkpoints/unified-language-only-llama-1b-tootsie-1e19, using the latter.
-2026-02-03 07:01:11,620 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='leaderboard_bbh', num_fewshot=3, task_alias='bbh_3shot')
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='leaderboard_gpqa', num_fewshot=0, task_alias='gpqa_0shot')
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='agieval_lsat_ar', num_fewshot=3, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='arc_easy', num_fewshot=10, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='arc_challenge', num_fewshot=10, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='boolq', num_fewshot=10, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='commonsense_qa', num_fewshot=10, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='copa', num_fewshot=0, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='hellaswag', num_fewshot=0, task_alias='hellaswag_0shot')
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='hellaswag', num_fewshot=10, task_alias='hellaswag_10shot')
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='lambada_openai', num_fewshot=0, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='openbookqa', num_fewshot=0, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='piqa', num_fewshot=10, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='wsc273', num_fewshot=0, task_alias=None)
-2026-02-03 07:01:11,621 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='winogrande', num_fewshot=0, task_alias=None)
-2026-02-03 07:01:11,622 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='mmlu', num_fewshot=0, task_alias='mmlu_0shot')
-2026-02-03 07:01:11,622 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='mmlu', num_fewshot=5, task_alias='mmlu_5shot')
-2026-02-03 07:01:11,622 WARNING json_encoder.py:37 -- Could not serialize object of type <class 'marin.evaluation.evaluation_config.EvalTaskConfig'>: EvalTaskConfig(name='leaderboard_mmlu_pro', num_fewshot=5, task_alias='mmlu_5shot')
-2026-02-03 07:01:11,645 INFO executor.py:727 -- ### Reading 34 statuses ###
-2026-02-03 07:01:11,645 INFO executor.py:737 -- ### Writing metadata ###
-2026-02-03 07:01:11,657 INFO executor.py:1104 -- Writing executor info to gs://marin-us-central2/experiments/exp600_tootsie-063006.json
-2026-02-03 07:01:11,657 INFO executor.py:1107 -- To view the experiment page, go to:
-2026-02-03 07:01:11,657 INFO executor.py:1108 -- 
-2026-02-03 07:01:11,657 INFO executor.py:1109 -- https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central2/experiments/exp600_tootsie-063006.json
-2026-02-03 07:01:11,657 INFO executor.py:1110 -- 
-2026-02-03 07:01:18,813 INFO executor.py:740 -- ### Launching 34 steps ###
-2026-02-03 07:01:18,814 INFO executor.py:810 -- raw/uncheatable-eval/latest: <function download_latest_uncheatable_eval at 0x7f22b74d3600>
-2026-02-03 07:01:18,814 INFO executor.py:811 --   output_path = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:18,815 INFO executor.py:812 --   config = {"repo_owner": "ziqing-huang", "repo_name": "uncheatable_eval", "data_path": "data", "branch": "master"}
-2026-02-03 07:01:19,286 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status raw/uncheatable-eval/latest: <function download_latest_uncheatable_eval at 0x7f22b74d3600>: SUCCESS
-2026-02-03 07:01:19,286 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step raw/uncheatable-eval/latest: <function download_latest_uncheatable_eval at 0x7f22b74d3600> has already succeeded.
-2026-02-03 07:01:19,286 INFO executor.py:810 -- raw/paloma: <function download_hf at 0x7f22b94971a0>
-2026-02-03 07:01:19,286 INFO executor.py:811 --   output_path = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:19,287 INFO executor.py:812 --   config = {"hf_dataset_id": "allenai/paloma", "revision": "65cd6fc"}
-2026-02-03 07:01:19,607 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status raw/paloma: <function download_hf at 0x7f22b94971a0>: SUCCESS
-2026-02-03 07:01:19,607 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step raw/paloma: <function download_hf at 0x7f22b94971a0> has already succeeded.
-2026-02-03 07:01:19,608 INFO executor.py:810 -- raw/nemotro-cc: <function download_nemotron_cc at 0x7f22b74d0680>
-2026-02-03 07:01:19,608 INFO executor.py:811 --   output_path = gs://marin-us-central2/raw/nemotro-cc-eeb783
-2026-02-03 07:01:19,608 INFO executor.py:812 --   config = {}
-2026-02-03 07:01:20,003 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status raw/nemotro-cc: <function download_nemotron_cc at 0x7f22b74d0680>: SUCCESS
-2026-02-03 07:01:20,003 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step raw/nemotro-cc: <function download_nemotron_cc at 0x7f22b74d0680> has already succeeded.
-2026-02-03 07:01:20,003 INFO executor.py:810 -- tokenized/nemotron_cc/hq_synth: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:20,003 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2
-2026-02-03 07:01:20,003 INFO executor.py:812 --   config = {"train_paths.[0]": "DEP[0]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/**/*.jsonl.gz", "validation_paths": [], "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:20,003 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/nemotro-cc-eeb783
-2026-02-03 07:01:20,367 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/nemotron_cc/hq_synth: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:20,367 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/nemotron_cc/hq_synth: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:20,367 INFO executor.py:810 -- tokenized/nemotron_cc/hq_actual: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:20,367 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc
-2026-02-03 07:01:20,367 INFO executor.py:812 --   config = {"train_paths.[0]": "DEP[0]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/**/*.jsonl.gz", "validation_paths": [], "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:20,367 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/nemotro-cc-eeb783
-2026-02-03 07:01:20,819 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/nemotron_cc/hq_actual: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:20,819 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/nemotron_cc/hq_actual: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:20,819 INFO executor.py:810 -- tokenized/paloma/wikitext_103: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:20,819 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/wikitext_103-bccb22
-2026-02-03 07:01:20,819 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/wikitext_103/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:20,819 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:21,005 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/wikitext_103: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:21,005 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/wikitext_103: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:21,005 INFO executor.py:810 -- tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:21,005 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-9b6323
-2026-02-03 07:01:21,005 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:21,005 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:21,215 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:21,216 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:21,216 INFO executor.py:810 -- tokenized/paloma/redpajama: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:21,216 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/redpajama-e70a4d
-2026-02-03 07:01:21,216 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/redpajama/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:21,216 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:21,427 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/redpajama: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:21,428 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/redpajama: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:21,428 INFO executor.py:810 -- tokenized/paloma/ptb: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:21,428 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/ptb-b98291
-2026-02-03 07:01:21,428 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/ptb/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:21,428 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:21,728 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/ptb: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:21,728 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/ptb: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:21,728 INFO executor.py:810 -- tokenized/paloma/mc4: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:21,728 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/mc4-afc7be
-2026-02-03 07:01:21,728 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/mc4/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:21,728 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:21,942 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/mc4: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:21,942 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/mc4: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:21,942 INFO executor.py:810 -- tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:21,942 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-5cca7a
-2026-02-03 07:01:21,942 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:21,942 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:22,142 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:22,142 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:22,142 INFO executor.py:810 -- tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:22,142 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-e96504
-2026-02-03 07:01:22,142 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:22,142 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:22,335 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:22,335 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:22,335 INFO executor.py:810 -- tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:22,335 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-765284
-2026-02-03 07:01:22,335 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:22,335 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:22,547 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:22,547 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:22,547 INFO executor.py:810 -- tokenized/paloma/gab: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:22,547 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/gab-f42865
-2026-02-03 07:01:22,547 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/gab/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:22,547 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:22,736 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/gab: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:22,736 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/gab: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:22,736 INFO executor.py:810 -- tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:22,736 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-10afdd
-2026-02-03 07:01:22,736 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:22,736 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:22,924 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:22,924 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:22,924 INFO executor.py:810 -- tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:22,924 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-6845ff
-2026-02-03 07:01:22,924 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:22,924 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:23,125 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:23,125 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:23,125 INFO executor.py:810 -- tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:23,125 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-60d59e
-2026-02-03 07:01:23,125 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:23,125 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:23,299 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:23,299 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:23,299 INFO executor.py:810 -- tokenized/paloma/dolma-v1_5: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:23,299 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/dolma-v1_5-231182
-2026-02-03 07:01:23,299 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:23,299 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:23,493 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/dolma-v1_5: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:23,494 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/dolma-v1_5: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:23,494 INFO executor.py:810 -- tokenized/paloma/c4_en: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:23,494 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/c4_en-83cbf1
-2026-02-03 07:01:23,494 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/c4_en/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:23,494 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:23,653 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/c4_en: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:23,653 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/c4_en: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:23,653 INFO executor.py:810 -- tokenized/paloma/c4_100_domains: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:23,653 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/c4_100_domains-f7b6f5
-2026-02-03 07:01:23,653 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/c4_100_domains/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:23,653 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:23,822 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/c4_100_domains: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:23,822 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/c4_100_domains: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:23,822 INFO executor.py:810 -- tokenized/paloma/4chan: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:23,822 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/paloma/4chan-05befb
-2026-02-03 07:01:23,822 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:23,822 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:24,002 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/paloma/4chan: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:24,002 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/paloma/4chan: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:24,002 INFO executor.py:810 -- tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:24,002 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-614010
-2026-02-03 07:01:24,002 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/ao3_english_*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:24,002 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:24,208 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:24,208 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:24,208 INFO executor.py:810 -- tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:24,208 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_computer_science-203be5
-2026-02-03 07:01:24,208 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/arxiv_computer_science_*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:24,209 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:24,371 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:24,372 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:24,372 INFO executor.py:810 -- tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:24,372 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_physics-d7213f
-2026-02-03 07:01:24,372 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/arxiv_physics_*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:24,372 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:24,555 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:24,555 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:24,555 INFO executor.py:810 -- tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:24,555 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/bbc_news-9ceb05
-2026-02-03 07:01:24,555 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/bbc_news_*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:24,555 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:24,744 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:24,744 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:24,744 INFO executor.py:810 -- tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:24,744 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-54e05e
-2026-02-03 07:01:24,744 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/github_cpp_*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:24,744 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:24,947 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:24,948 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:24,948 INFO executor.py:810 -- tokenized/uncheatable_eval/github_python: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:24,948 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/github_python-220eac
-2026-02-03 07:01:24,948 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/github_python_*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:24,948 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,099 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/uncheatable_eval/github_python: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:25,099 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/uncheatable_eval/github_python: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:25,099 INFO executor.py:810 -- tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7f22b95c44a0>
-2026-02-03 07:01:25,099 INFO executor.py:811 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/wikipedia_english-b46f53
-2026-02-03 07:01:25,099 INFO executor.py:812 --   config = {"validation_paths.[0]": "DEP[0]/wikipedia_english_*.jsonl.gz", "tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b"}
-2026-02-03 07:01:25,099 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,277 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7f22b95c44a0>: SUCCESS
-2026-02-03 07:01:25,277 INFO executor.py:1146 -- [t1v-n-f57f207c-w-0-139799463745536] Step tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7f22b95c44a0> has already succeeded.
-2026-02-03 07:01:25,277 INFO executor.py:810 -- checkpoints/unified-language-only-llama-1b-tootsie-1e19: <function run_levanter_train_lm at 0x7f22b7ce5620>
-2026-02-03 07:01:25,277 INFO executor.py:811 --   output_path = gs://marin-us-central2/checkpoints/unified-language-only-llama-1b-tootsie-1e19
-2026-02-03 07:01:25,277 INFO executor.py:812 --   config = {"train_config.data.tokenizer": "gs://marin-us-central2/tokenizers/llama-3.1-8b", "train_config.data.configs.nemotron_cc/hq_actual.cache_dir": "DEP[0]", "train_config.data.configs.nemotron_cc/hq_actual.train_urls.[0]": "DEP[1]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/**/*.jsonl.gz", "train_config.data.configs.nemotron_cc/hq_actual.validation_urls": [], "train_config.data.configs.nemotron_cc/hq_synth.cache_dir": "DEP[2]", "train_config.data.configs.nemotron_cc/hq_synth.train_urls.[0]": "DEP[3]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/**/*.jsonl.gz", "train_config.data.configs.nemotron_cc/hq_synth.validation_urls": [], "train_config.data.configs.paloma/4chan.cache_dir": "DEP[4]", "train_config.data.configs.paloma/4chan.validation_urls.[0]": "DEP[5]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz", "train_config.data.configs.paloma/c4_100_domains.cache_dir": "DEP[6]", "train_config.data.configs.paloma/c4_100_domains.validation_urls.[0]": "DEP[7]/65cd6fc/c4_100_domains/val/val*.jsonl.gz", "train_config.data.configs.paloma/c4_en.cache_dir": "DEP[8]", "train_config.data.configs.paloma/c4_en.validation_urls.[0]": "DEP[9]/65cd6fc/c4_en/val/val*.jsonl.gz", "train_config.data.configs.paloma/dolma-v1_5.cache_dir": "DEP[10]", "train_config.data.configs.paloma/dolma-v1_5.validation_urls.[0]": "DEP[11]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz", "train_config.data.configs.paloma/dolma_100_programing_languages.cache_dir": "DEP[12]", "train_config.data.configs.paloma/dolma_100_programing_languages.validation_urls.[0]": "DEP[13]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz", "train_config.data.configs.paloma/dolma_100_subreddits.cache_dir": "DEP[14]", "train_config.data.configs.paloma/dolma_100_subreddits.validation_urls.[0]": "DEP[15]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz", "train_config.data.configs.paloma/falcon-refinedweb.cache_dir": "DEP[16]", "train_config.data.configs.paloma/falcon-refinedweb.validation_urls.[0]": "DEP[17]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz", "train_config.data.configs.paloma/gab.cache_dir": "DEP[18]", "train_config.data.configs.paloma/gab.validation_urls.[0]": "DEP[19]/65cd6fc/gab/val/val*.jsonl.gz", "train_config.data.configs.paloma/m2d2_s2orc_unsplit.cache_dir": "DEP[20]", "train_config.data.configs.paloma/m2d2_s2orc_unsplit.validation_urls.[0]": "DEP[21]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz", "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.cache_dir": "DEP[22]", "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.validation_urls.[0]": "DEP[23]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz", "train_config.data.configs.paloma/manosphere_meta_sep.cache_dir": "DEP[24]", "train_config.data.configs.paloma/manosphere_meta_sep.validation_urls.[0]": "DEP[25]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz", "train_config.data.configs.paloma/mc4.cache_dir": "DEP[26]", "train_config.data.configs.paloma/mc4.validation_urls.[0]": "DEP[27]/65cd6fc/mc4/val/val*.jsonl.gz", "train_config.data.configs.paloma/ptb.cache_dir": "DEP[28]", "train_config.data.configs.paloma/ptb.validation_urls.[0]": "DEP[29]/65cd6fc/ptb/val/val*.jsonl.gz", "train_config.data.configs.paloma/redpajama.cache_dir": "DEP[30]", "train_config.data.configs.paloma/redpajama.validation_urls.[0]": "DEP[31]/65cd6fc/redpajama/val/val*.jsonl.gz", "train_config.data.configs.paloma/twitterAAE_HELM_fixed.cache_dir": "DEP[32]", "train_config.data.configs.paloma/twitterAAE_HELM_fixed.validation_urls.[0]": "DEP[33]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz", "train_config.data.configs.paloma/wikitext_103.cache_dir": "DEP[34]", "train_config.data.configs.paloma/wikitext_103.validation_urls.[0]": "DEP[35]/65cd6fc/wikitext_103/val/val*.jsonl.gz", "train_config.data.configs.uncheatable_eval/wikipedia_english.cache_dir": "DEP[36]", "train_config.data.configs.uncheatable_eval/wikipedia_english.validation_urls.[0]": "DEP[37]/wikipedia_english_*.jsonl.gz", "train_config.data.configs.uncheatable_eval/github_python.cache_dir": "DEP[38]", "train_config.data.configs.uncheatable_eval/github_python.validation_urls.[0]": "DEP[39]/github_python_*.jsonl.gz", "train_config.data.configs.uncheatable_eval/github_cpp.cache_dir": "DEP[40]", "train_config.data.configs.uncheatable_eval/github_cpp.validation_urls.[0]": "DEP[41]/github_cpp_*.jsonl.gz", "train_config.data.configs.uncheatable_eval/bbc_news.cache_dir": "DEP[42]", "train_config.data.configs.uncheatable_eval/bbc_news.validation_urls.[0]": "DEP[43]/bbc_news_*.jsonl.gz", "train_config.data.configs.uncheatable_eval/arxiv_physics.cache_dir": "DEP[44]", "train_config.data.configs.uncheatable_eval/arxiv_physics.validation_urls.[0]": "DEP[45]/arxiv_physics_*.jsonl.gz", "train_config.data.configs.uncheatable_eval/arxiv_computer_science.cache_dir": "DEP[46]", "train_config.data.configs.uncheatable_eval/arxiv_computer_science.validation_urls.[0]": "DEP[47]/arxiv_computer_science_*.jsonl.gz", "train_config.data.configs.uncheatable_eval/ao3_english.cache_dir": "DEP[48]", "train_config.data.configs.uncheatable_eval/ao3_english.validation_urls.[0]": "DEP[49]/ao3_english_*.jsonl.gz"}
-2026-02-03 07:01:25,277 INFO executor.py:814 --   DEP[0] = gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc
-2026-02-03 07:01:25,277 INFO executor.py:814 --   DEP[1] = gs://marin-us-central2/raw/nemotro-cc-eeb783
-2026-02-03 07:01:25,277 INFO executor.py:814 --   DEP[2] = gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2
-2026-02-03 07:01:25,277 INFO executor.py:814 --   DEP[3] = gs://marin-us-central2/raw/nemotro-cc-eeb783
-2026-02-03 07:01:25,277 INFO executor.py:814 --   DEP[4] = gs://marin-us-central2/tokenized/paloma/4chan-05befb
-2026-02-03 07:01:25,277 INFO executor.py:814 --   DEP[5] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[6] = gs://marin-us-central2/tokenized/paloma/c4_100_domains-f7b6f5
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[7] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[8] = gs://marin-us-central2/tokenized/paloma/c4_en-83cbf1
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[9] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[10] = gs://marin-us-central2/tokenized/paloma/dolma-v1_5-231182
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[11] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[12] = gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-60d59e
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[13] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[14] = gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-6845ff
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[15] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[16] = gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-10afdd
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[17] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[18] = gs://marin-us-central2/tokenized/paloma/gab-f42865
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[19] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[20] = gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-765284
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[21] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[22] = gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-e96504
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[23] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[24] = gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-5cca7a
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[25] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[26] = gs://marin-us-central2/tokenized/paloma/mc4-afc7be
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[27] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[28] = gs://marin-us-central2/tokenized/paloma/ptb-b98291
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[29] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[30] = gs://marin-us-central2/tokenized/paloma/redpajama-e70a4d
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[31] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,278 INFO executor.py:814 --   DEP[32] = gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-9b6323
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[33] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[34] = gs://marin-us-central2/tokenized/paloma/wikitext_103-bccb22
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[35] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[36] = gs://marin-us-central2/tokenized/uncheatable_eval/wikipedia_english-b46f53
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[37] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[38] = gs://marin-us-central2/tokenized/uncheatable_eval/github_python-220eac
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[39] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[40] = gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-54e05e
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[41] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[42] = gs://marin-us-central2/tokenized/uncheatable_eval/bbc_news-9ceb05
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[43] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[44] = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_physics-d7213f
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[45] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[46] = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_computer_science-203be5
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[47] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[48] = gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-614010
-2026-02-03 07:01:25,279 INFO executor.py:814 --   DEP[49] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-03 07:01:25,630 INFO executor.py:1142 -- [t1v-n-f57f207c-w-0-139799463745536] Status checkpoints/unified-language-only-llama-1b-tootsie-1e19: <function run_levanter_train_lm at 0x7f22b7ce5620>: RUNNING
-2026-02-03 07:01:25,999 INFO executor.py:1161 -- [t1v-n-f57f207c-w-0-139799463745536] Step checkpoints/unified-language-only-llama-1b-tootsie-1e19: <function run_levanter_train_lm at 0x7f22b7ce5620> has no active lock, taking over.
-2026-02-03 07:01:25,999 INFO executor.py:1163 -- [t1v-n-f57f207c-w-0-139799463745536] Attempting to acquire lock for checkpoints/unified-language-only-llama-1b-tootsie-1e19: <function run_levanter_train_lm at 0x7f22b7ce5620>
-2026-02-03 07:01:26,326 INFO executor_step_status.py:236 -- [t1v-n-f57f207c-w-0-139799463745536] Found stale lock from t1v-n-f57f207c-w-0-140005762766848, attempting takeover
-2026-02-03 07:01:26,900 INFO executor.py:1166 -- [t1v-n-f57f207c-w-0-139799463745536] Acquired lock for checkpoints/unified-language-only-llama-1b-tootsie-1e19: <function run_levanter_train_lm at 0x7f22b7ce5620>
-2026-02-03 07:01:27,178 INFO cluster.py:149 -- Launching job: run_levanter_train_lm:checkpoints/unified-language-only-llama-1b-tootsie-1e19
-2026-02-03 07:01:27,178 INFO cluster.py:278 -- Building environment for device: cpu/cpu
-2026-02-03 07:01:27,178 INFO cluster.py:283 -- Building environment with [], extras [] for job: run_levanter_train_lm:checkpoints/unified-language-only-llama-1b-tootsie-1e19
-2026-02-03 07:01:27,178 INFO cluster.py:298 -- Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'HF_TOKEN': 'YOUR_HF_TOKEN_HERE', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'JAX_PLATFORMS': 'cpu', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_8dd8ce87'}}
-(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
-(raylet) Using CPython 3.11.13 interpreter at: /usr/bin/python3.11
-(raylet) Creating virtual environment at: .venv
-(raylet)    Building marin-root @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12
-(raylet)    Building haliax @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/haliax
-(raylet)    Building fray @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray
-(raylet)    Building levanter @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/levanter
-(raylet)    Building zephyr @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/zephyr
-(raylet)    Building marin @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/marin
-(raylet)    Building dupekit @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/dupekit
-(raylet)       Built levanter @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/levanter
-(raylet)       Built haliax @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/haliax
-(raylet)       Built zephyr @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/zephyr
-(raylet)       Built fray @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray
-(raylet)       Built marin @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/marin
-(raylet)       Built marin-root @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12
-(raylet)       Built dupekit @ file:///tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/dupekit
-(raylet) Installed 278 packages in 4.87s
-(run_levanter_train_lm pid=4073432) fatal: not a git repository (or any of the parent directories): .git
-(run_levanter_train_lm pid=4073432) Failed to find or infer git commit for logging.
-(run_levanter_train_lm pid=4073432) Using provided namespace: fray_8dd8ce87
-(run_levanter_train_lm pid=4073432) Set default job context to RayContext
-(run_levanter_train_lm pid=4073432) Launching job: train_lm
-(run_levanter_train_lm pid=4073432) Building environment for device: tpu/v5litepod-8
-(run_levanter_train_lm pid=4073432) Building environment with [], extras ['tpu'] for job: train_lm
-(run_levanter_train_lm pid=4073432) Resolved 393 packages in 22ms
-(run_levanter_train_lm pid=4073432) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'HF_TOKEN': 'YOUR_HF_TOKEN_HERE', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-us-central2/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_8dd8ce87', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
-(run_levanter_train_lm pid=4073432) Launching TPU job train_lm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'HF_TOKEN': 'YOUR_HF_TOKEN_HERE', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-us-central2/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_8dd8ce87', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
-(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
-(raylet) Uninstalled 1 package in 1ms
-(raylet) Installed 1 package in 89ms
-(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
-(raylet) Uninstalled 1 package in 1ms
-(raylet) Installed 1 package in 94ms
-(raylet) warning: `VIRTUAL_ENV=/home/ruili/marin_private3/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
-(raylet) Uninstalled 1 package in 1ms
-(run_on_pod_ray pid=4075057) Unknown error
-(run_on_pod_ray pid=4075057) Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=4075057)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=4075057)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=4075057)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=4075057)     return func(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=4075057)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=4075057)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=4075057)     raise value
-(run_on_pod_ray pid=4075057) ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-(run_on_pod_ray pid=4075057) [Node 10.182.0.51] Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 396, in _create_runtime_env_with_retry
-(run_on_pod_ray pid=4075057)     runtime_env_context = await asyncio.wait_for(
-(run_on_pod_ray pid=4075057)                           ^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-(run_on_pod_ray pid=4075057)     return fut.result()
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 354, in _setup_runtime_env
-(run_on_pod_ray pid=4075057)     await create_for_plugin_if_needed(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/plugin.py", line 255, in create_for_plugin_if_needed
-(run_on_pod_ray pid=4075057)     size_bytes = await plugin.create(uri, runtime_env, context, logger=logger)
-(run_on_pod_ray pid=4075057)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 315, in create
-(run_on_pod_ray pid=4075057)     pip_dir_bytes = await task
-(run_on_pod_ray pid=4075057)                     ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 295, in _create_for_hash
-(run_on_pod_ray pid=4075057)     await PipProcessor(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 197, in _run
-(run_on_pod_ray pid=4075057)     await self._install_pip_packages(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 173, in _install_pip_packages
-(run_on_pod_ray pid=4075057)     await check_output_cmd(pip_install_cmd, logger=logger, cwd=cwd, env=pip_env)
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/utils.py", line 105, in check_output_cmd
-(run_on_pod_ray pid=4075057)     raise SubprocessCalledProcessError(
-(run_on_pod_ray pid=4075057) ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-(run_on_pod_ray pid=4075057) Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-(run_on_pod_ray pid=4075057) Last 50 lines of stdout:
-(run_on_pod_ray pid=4075057)     /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-(run_on_pod_ray pid=4075057) 
-(run_on_pod_ray pid=4075057) Failed 1 times. Continuing to retry.
-(run_on_pod_ray pid=4075057) Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=4075057)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=4075057)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=4075057)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=4075057)     return func(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=4075057)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=4075057)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=4075057)     raise value
-(run_on_pod_ray pid=4075057) ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-(run_on_pod_ray pid=4075057) [Node 10.182.0.51] Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 396, in _create_runtime_env_with_retry
-(run_on_pod_ray pid=4075057)     runtime_env_context = await asyncio.wait_for(
-(run_on_pod_ray pid=4075057)                           ^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-(run_on_pod_ray pid=4075057)     return fut.result()
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 354, in _setup_runtime_env
-(run_on_pod_ray pid=4075057)     await create_for_plugin_if_needed(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/plugin.py", line 255, in create_for_plugin_if_needed
-(run_on_pod_ray pid=4075057)     size_bytes = await plugin.create(uri, runtime_env, context, logger=logger)
-(run_on_pod_ray pid=4075057)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 315, in create
-(run_on_pod_ray pid=4075057)     pip_dir_bytes = await task
-(run_on_pod_ray pid=4075057)                     ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 295, in _create_for_hash
-(run_on_pod_ray pid=4075057)     await PipProcessor(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 197, in _run
-(run_on_pod_ray pid=4075057)     await self._install_pip_packages(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 173, in _install_pip_packages
-(run_on_pod_ray pid=4075057)     await check_output_cmd(pip_install_cmd, logger=logger, cwd=cwd, env=pip_env)
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/utils.py", line 105, in check_output_cmd
-(run_on_pod_ray pid=4075057)     raise SubprocessCalledProcessError(
-(run_on_pod_ray pid=4075057) ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-(run_on_pod_ray pid=4075057) Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-(run_on_pod_ray pid=4075057) Last 50 lines of stdout:
-(run_on_pod_ray pid=4075057)     /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-(run_on_pod_ray pid=4075057) 
-(run_on_pod_ray pid=4075057) Unknown error
-(run_on_pod_ray pid=4075057) Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=4075057)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=4075057)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=4075057)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=4075057)     return func(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=4075057)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=4075057)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=4075057)     raise value
-(run_on_pod_ray pid=4075057) ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-(run_on_pod_ray pid=4075057) [Node 10.182.0.51] Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 396, in _create_runtime_env_with_retry
-(run_on_pod_ray pid=4075057)     runtime_env_context = await asyncio.wait_for(
-(run_on_pod_ray pid=4075057)                           ^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-(run_on_pod_ray pid=4075057)     return fut.result()
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 354, in _setup_runtime_env
-(run_on_pod_ray pid=4075057)     await create_for_plugin_if_needed(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/plugin.py", line 255, in create_for_plugin_if_needed
-(run_on_pod_ray pid=4075057)     size_bytes = await plugin.create(uri, runtime_env, context, logger=logger)
-(run_on_pod_ray pid=4075057)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 315, in create
-(run_on_pod_ray pid=4075057)     pip_dir_bytes = await task
-(run_on_pod_ray pid=4075057)                     ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 295, in _create_for_hash
-(run_on_pod_ray pid=4075057)     await PipProcessor(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 197, in _run
-(run_on_pod_ray pid=4075057)     await self._install_pip_packages(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 173, in _install_pip_packages
-(run_on_pod_ray pid=4075057)     await check_output_cmd(pip_install_cmd, logger=logger, cwd=cwd, env=pip_env)
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/utils.py", line 105, in check_output_cmd
-(run_on_pod_ray pid=4075057)     raise SubprocessCalledProcessError(
-(run_on_pod_ray pid=4075057) ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-(run_on_pod_ray pid=4075057) Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-(run_on_pod_ray pid=4075057) Last 50 lines of stdout:
-(run_on_pod_ray pid=4075057)     /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-(run_on_pod_ray pid=4075057) 
-(run_on_pod_ray pid=4075057) Failed 2 times. Continuing to retry.
-(run_on_pod_ray pid=4075057) Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=4075057)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=4075057)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=4075057)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=4075057)     return func(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=4075057)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=4075057)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=4075057)     raise value
-(run_on_pod_ray pid=4075057) ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-(run_on_pod_ray pid=4075057) [Node 10.182.0.51] Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 396, in _create_runtime_env_with_retry
-(run_on_pod_ray pid=4075057)     runtime_env_context = await asyncio.wait_for(
-(run_on_pod_ray pid=4075057)                           ^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-(run_on_pod_ray pid=4075057)     return fut.result()
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 354, in _setup_runtime_env
-(run_on_pod_ray pid=4075057)     await create_for_plugin_if_needed(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/plugin.py", line 255, in create_for_plugin_if_needed
-(run_on_pod_ray pid=4075057)     size_bytes = await plugin.create(uri, runtime_env, context, logger=logger)
-(run_on_pod_ray pid=4075057)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 315, in create
-(run_on_pod_ray pid=4075057)     pip_dir_bytes = await task
-(run_on_pod_ray pid=4075057)                     ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 295, in _create_for_hash
-(run_on_pod_ray pid=4075057)     await PipProcessor(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 197, in _run
-(run_on_pod_ray pid=4075057)     await self._install_pip_packages(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 173, in _install_pip_packages
-(run_on_pod_ray pid=4075057)     await check_output_cmd(pip_install_cmd, logger=logger, cwd=cwd, env=pip_env)
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/utils.py", line 105, in check_output_cmd
-(run_on_pod_ray pid=4075057)     raise SubprocessCalledProcessError(
-(run_on_pod_ray pid=4075057) ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-(run_on_pod_ray pid=4075057) Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-(run_on_pod_ray pid=4075057) Last 50 lines of stdout:
-(run_on_pod_ray pid=4075057)     /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-(run_on_pod_ray pid=4075057) 
-(raylet) Installed 1 package in 89ms
-(run_on_pod_ray pid=4075057) Failed too many times
-(run_on_pod_ray pid=4075057) Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=4075057)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=4075057)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=4075057)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=4075057)     return func(*args, **kwargs)
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=4075057)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=4075057)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/.venv/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=4075057)     raise value
-(run_on_pod_ray pid=4075057) ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-(run_on_pod_ray pid=4075057) [Node 10.182.0.51] Traceback (most recent call last):
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 396, in _create_runtime_env_with_retry
-(run_on_pod_ray pid=4075057)     runtime_env_context = await asyncio.wait_for(
-(run_on_pod_ray pid=4075057)                           ^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-(run_on_pod_ray pid=4075057)     return fut.result()
-(run_on_pod_ray pid=4075057)            ^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 354, in _setup_runtime_env
-(run_on_pod_ray pid=4075057)     await create_for_plugin_if_needed(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/plugin.py", line 255, in create_for_plugin_if_needed
-(run_on_pod_ray pid=4075057)     size_bytes = await plugin.create(uri, runtime_env, context, logger=logger)
-(run_on_pod_ray pid=4075057)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 315, in create
-(run_on_pod_ray pid=4075057)     pip_dir_bytes = await task
-(run_on_pod_ray pid=4075057)                     ^^^^^^^^^^
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 295, in _create_for_hash
-(run_on_pod_ray pid=4075057)     await PipProcessor(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 197, in _run
-(run_on_pod_ray pid=4075057)     await self._install_pip_packages(
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/pip.py", line 173, in _install_pip_packages
-(run_on_pod_ray pid=4075057)     await check_output_cmd(pip_install_cmd, logger=logger, cwd=cwd, env=pip_env)
-(run_on_pod_ray pid=4075057)   File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/utils.py", line 105, in check_output_cmd
-(run_on_pod_ray pid=4075057)     raise SubprocessCalledProcessError(
-(run_on_pod_ray pid=4075057) ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-(run_on_pod_ray pid=4075057) Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-(run_on_pod_ray pid=4075057) Last 50 lines of stdout:
-(run_on_pod_ray pid=4075057)     /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-(run_on_pod_ray pid=4075057) 
-(run_levanter_train_lm pid=4073432) Job 140075891954992 failed with message: ray::run_on_pod_ray() (pid=4075057, ip=10.182.0.51)
-(run_levanter_train_lm pid=4073432)     raise problem or RuntimeError("TPU job failed too many times")
-2026-02-03 07:04:30,245 WARNING cluster.py:350 -- Job 139796596499216 failed with message: ray::run_levanter_train_lm() (pid=4073432, ip=10.182.0.51)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140075891954992 failed with status failed and error: ray::run_on_pod_ray() (pid=4075057, ip=10.182.0.51)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-[Node 10.182.0.51] Traceback (most recent call last):
-                          ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-    return fut.result()
-           ^^^^^^^^^^^^
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    ^^^^^^^^^^
-ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-Last 50 lines of stdout:
-    /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-2026-02-03 07:04:30,245 INFO executor.py:796 -- Waiting for 139796596499216 to finish for step checkpoints/unified-language-only-llama-1b-tootsie-1e19
-2026-02-03 07:04:30,245 - INFO - Starting wait for job 139796596499216
-2026-02-03 07:04:30,245 WARNING cluster.py:350 -- Job 139796596499216 failed with message: ray::run_levanter_train_lm() (pid=4073432, ip=10.182.0.51)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140075891954992 failed with status failed and error: ray::run_on_pod_ray() (pid=4075057, ip=10.182.0.51)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-[Node 10.182.0.51] Traceback (most recent call last):
-                          ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-    return fut.result()
-           ^^^^^^^^^^^^
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    ^^^^^^^^^^
-ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-Last 50 lines of stdout:
-    /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-2026-02-03 07:04:30,253 - INFO - Job 139796596499216 completed with status failed
-Exception in thread Thread-1 (heartbeat_loop):
-Traceback (most recent call last):
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/blob.py", line 2835, in _prep_and_do_upload
-    created_json = self._do_upload(
-                   ^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/blob.py", line 2630, in _do_upload
-    response = self._do_multipart_upload(
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/blob.py", line 2061, in _do_multipart_upload
-    response = upload.transmit(
-               ^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/_media/requests/upload.py", line 162, in transmit
-    return _request_helpers.wait_and_retry(retriable_request, self._retry_strategy)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/_media/requests/_request_helpers.py", line 107, in wait_and_retry
-    return func()
-           ^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/api_core/retry/retry_unary.py", line 294, in retry_wrapped_func
-    return retry_target(
-           ^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/api_core/retry/retry_unary.py", line 156, in retry_target
-    next_sleep = _retry_error_helper(
-                 ^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/api_core/retry/retry_base.py", line 214, in _retry_error_helper
-    raise final_exc from source_exc
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/api_core/retry/retry_unary.py", line 147, in retry_target
-    result = target()
-             ^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/_media/requests/upload.py", line 158, in retriable_request
-    self._process_response(result)
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/_media/_upload.py", line 135, in _process_response
-    _helpers.require_status_code(response, (http.client.OK,), self._get_status_code)
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/_media/_helpers.py", line 105, in require_status_code
-    raise InvalidResponse(
-google.cloud.storage.exceptions.InvalidResponse: ('Request failed with status code', 412, 'Expected one of', <HTTPStatus.OK: 200>)
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/usr/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-    self.run()
-  File "/usr/lib/python3.11/threading.py", line 982, in run
-    self._target(*self._args, **self._kwargs)
-  File "/home/ruili/marin_private3/lib/marin/src/marin/execution/executor.py", line 228, in heartbeat_loop
-    self._status_file.refresh_lock()
-  File "/home/ruili/marin_private3/lib/marin/src/marin/execution/executor_step_status.py", line 214, in refresh_lock
-    self._write_lock(Lease(self.worker_id, time.time()), generation)
-  File "/home/ruili/marin_private3/lib/marin/src/marin/execution/executor_step_status.py", line 189, in _write_lock
-    blob.upload_from_string(data, if_generation_match=if_generation_match)
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/blob.py", line 3349, in upload_from_string
-    self.upload_from_file(
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/blob.py", line 3015, in upload_from_file
-    self._prep_and_do_upload(
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/blob.py", line 2853, in _prep_and_do_upload
-    _raise_from_invalid_response(exc)
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/google/cloud/storage/blob.py", line 5145, in _raise_from_invalid_response
-    raise exceptions.from_http_status(response.status_code, message, response=response)
-google.api_core.exceptions.PreconditionFailed: 412 POST https://storage.googleapis.com/upload/storage/v1/b/marin-us-central2/o?uploadType=multipart&ifGenerationMatch=1770102240929388: {
-  "error": {
-    "code": 412,
-    "message": "At least one of the pre-conditions you specified did not hold.",
-    "errors": [
-      {
-        "message": "At least one of the pre-conditions you specified did not hold.",
-        "domain": "global",
-        "reason": "conditionNotMet",
-        "locationType": "header",
-        "location": "If-Match"
-      }
-    ]
-  }
-}
-: ('Request failed with status code', 412, 'Expected one of', <HTTPStatus.OK: 200>)
-Traceback (most recent call last):
-  File "/home/ruili/marin_private3/experiments/unified/exp600_tootsie.py", line 226, in <module>
-    executor_main(
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
-    response = fn(cfg, *args, **kwargs)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
-  File "/home/ruili/marin_private3/lib/marin/src/marin/execution/executor.py", line 743, in run
-    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
-  File "/home/ruili/marin_private3/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
-    runner.wait()
-  File "/home/ruili/marin_private3/lib/marin/src/marin/execution/executor.py", line 207, in wait
-    raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-RuntimeError: Job 139796596499216 failed: ray::run_levanter_train_lm() (pid=4073432, ip=10.182.0.51)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140075891954992 failed with status failed and error: ray::run_on_pod_ray() (pid=4075057, ip=10.182.0.51)
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-[Node 10.182.0.51] Traceback (most recent call last):
-                          ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-    return fut.result()
-           ^^^^^^^^^^^^
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    ^^^^^^^^^^
-ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-Last 50 lines of stdout:
-    /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-(run_levanter_train_lm pid=4073432)   File "/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/working_dir_files/_ray_pkg_a08a1a57e398cf12/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray [repeated 2x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
-(run_levanter_train_lm pid=4073432)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_levanter_train_lm pid=4073432)                     ^^^^^^^^^^ [repeated 2x across cluster]
-(run_levanter_train_lm pid=4073432)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_levanter_train_lm pid=4073432)            ^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=4073432) ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-(run_levanter_train_lm pid=4073432) [Node 10.182.0.51] Traceback (most recent call last):
-(run_levanter_train_lm pid=4073432)                           ^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=4073432)   File "/usr/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-(run_levanter_train_lm pid=4073432)     return fut.result()
-(run_levanter_train_lm pid=4073432)            ^^^^^^^^^^^^
-(run_levanter_train_lm pid=4073432)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=4073432) ray._private.runtime_env.utils.SubprocessCalledProcessError: Run cmd[9] failed with the following details.
-(run_levanter_train_lm pid=4073432) Command '['/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python', '-m', 'pip', 'install', '-r', '/tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/ray_runtime_env_internal_pip_requirements.txt', '--disable-pip-version-check', '--no-cache-dir']' returned non-zero exit status 1.
-(run_levanter_train_lm pid=4073432) Last 50 lines of stdout:
-(run_levanter_train_lm pid=4073432)     /tmp/ray/session_2026-02-03_07-01-04_232035_4049491/runtime_resources/pip/fb6d97f976e0aa053810205495bec4994700f895/virtualenv/bin/python: No module named pip
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3168.86 examples/s]
+Generating test split: 100%|██████████| 163/163 [00:00<00:00, 64272.97 examples/s] [repeated 12x across cluster]
+(<lambda> pid=7812, ip=10.130.0.89) 2026-02-03T00:04:50 - 0 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: piqa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 6x across cluster] [repeated 2x across cluster]
+(<lambda> pid=7941, ip=10.130.0.57) 
+Downloading data: 100%|██████████| 113k/113k [00:00<00:00, 1.79MB/s] [repeated 2x across cluster]
+Map: 100%|██████████| 273/273 [00:00<00:00, 9783.03 examples/s] [repeated 3x across cluster]
+(<lambda> pid=7812, ip=10.130.0.89) , ? examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+Generating train split: 100%|██████████| 40398/40398 [00:00<00:00, 1657891.58 examples/s] [repeated 3x across cluster]
+Generating validation split: 100%|██████████| 14/14 [00:00<00:00, 8687.71 examples/s] [repeated 12x across cluster]
+(<lambda> pid=7786, ip=10.130.0.63)         | 0/14 [00:00<?, ? examples/s]
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 2985.69 examples/s] [repeated 16x across cluster]
+Generating test split: 100%|██████████| 171/171 [00:00<00:00, 64060.91 examples/s] [repeated 16x across cluster]
+(<lambda> pid=7778, ip=10.130.0.59)   | 0/171 [00:00<?, ? examples/s]
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+Generating validation split: 100%|██████████| 13/13 [00:00<00:00, 7680.79 examples/s] [repeated 16x across cluster]
+(<lambda> pid=7786, ip=10.130.0.63)         | 0/13 [00:00<?, ? examples/s]
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+Generating test split: 100%|██████████| 121/121 [00:00<00:00, 47453.09 examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3412.22 examples/s] [repeated 14x across cluster]
+Generating test split: 100%|██████████| 895/895 [00:00<00:00, 242296.66 examples/s] [repeated 14x across cluster]
+(<lambda> pid=7812, ip=10.130.0.89)   | 0/895 [00:00<?, ? examples/s]
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3072.75 examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+Generating validation split: 100%|██████████| 26/26 [00:00<00:00, 10781.21 examples/s]
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+Generating validation split: 100%|██████████| 170/170 [00:00<00:00, 67727.17 examples/s] [repeated 14x across cluster]
+(<lambda> pid=7778, ip=10.130.0.59)         | 0/170 [00:00<?, ? examples/s]
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+Generating test split: 100%|██████████| 324/324 [00:00<00:00, 113293.41 examples/s]
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3291.72 examples/s] [repeated 15x across cluster]
+Generating test split: 100%|██████████| 324/324 [00:00<00:00, 116478.49 examples/s] [repeated 15x across cluster]
+(<lambda> pid=7941, ip=10.130.0.57)   | 0/324 [00:00<?, ? examples/s]
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3275.78 examples/s]
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+Generating test split: 100%|██████████| 108/108 [00:00<00:00, 35606.42 examples/s]
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+Generating validation split: 100%|██████████| 22/22 [00:00<00:00, 14295.07 examples/s] [repeated 15x across cluster]
+(<lambda> pid=7812, ip=10.130.0.89)         | 0/22 [00:00<?, ? examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+Generating test split: 100%|██████████| 100/100 [00:00<00:00, 42698.81 examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+Generating validation split: 100%|██████████| 11/11 [00:00<00:00, 6833.14 examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3205.67 examples/s] [repeated 15x across cluster]
+Generating test split: 100%|██████████| 390/390 [00:00<00:00, 136599.46 examples/s] [repeated 13x across cluster]
+(<lambda> pid=7786, ip=10.130.0.63)   | 0/390 [00:00<?, ? examples/s]
+(<lambda> pid=7786, ip=10.130.0.63)   | 0/100 [00:00<?, ? examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89)   | 0/390 [00:00<?, ? examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+Generating validation split: 100%|██████████| 12/12 [00:00<00:00, 7369.20 examples/s] [repeated 11x across cluster]
+(<lambda> pid=7812, ip=10.130.0.89)         | 0/12 [00:00<?, ? examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+Generating test split: 100%|██████████| 390/390 [00:00<00:00, 129823.70 examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3253.92 examples/s] [repeated 16x across cluster]
+Generating test split: 100%|██████████| 545/545 [00:00<00:00, 175083.92 examples/s] [repeated 15x across cluster]
+(<lambda> pid=7812, ip=10.130.0.89)   | 0/545 [00:00<?, ? examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+Generating validation split: 100%|██████████| 21/21 [00:00<00:00, 12695.36 examples/s] [repeated 16x across cluster]
+(<lambda> pid=7941, ip=10.130.0.57)         | 0/21 [00:00<?, ? examples/s]
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(autoscaler +1h15m37s) Adding 1 node(s) of type tpu_slice_v4_64.
+(autoscaler +1h15m37s) Resized to 3240 CPUs, 108 TPUs.
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+Generating dev split: 100%|██████████| 5/5 [00:00<00:00, 3059.30 examples/s] [repeated 13x across cluster]
+Generating test split: 100%|██████████| 201/201 [00:00<00:00, 66450.31 examples/s] [repeated 13x across cluster]
+(<lambda> pid=7786, ip=10.130.0.63)   | 0/201 [00:00<?, ? examples/s]
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+Generating validation split: 100%|██████████| 27/27 [00:00<00:00, 14690.13 examples/s] [repeated 14x across cluster]
+(<lambda> pid=7812, ip=10.130.0.89)         | 0/27 [00:00<?, ? examples/s]
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7941, ip=10.130.0.57) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7778, ip=10.130.0.59) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7786, ip=10.130.0.63) 
+(<lambda> pid=7812, ip=10.130.0.89) 2026-02-03T00:05:35 - 0 - levanter.eval_harness - eval_harness.py:1031 - ERROR :: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
+(<lambda> pid=7812, ip=10.130.0.89) Traceback (most recent call last):
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_http.py", line 402, in hf_raise_for_status
+(<lambda> pid=7812, ip=10.130.0.89)     response.raise_for_status()
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/requests/models.py", line 1026, in raise_for_status
+(<lambda> pid=7812, ip=10.130.0.89)     raise HTTPError(http_error_msg, response=self)
+(<lambda> pid=7812, ip=10.130.0.89) requests.exceptions.HTTPError: 429 Client Error: Too Many Requests for url: https://huggingface.co/api/datasets/cais/mmlu/xet-read-token/c30699e8356da336a370243923dbaf21066bb9fe
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) The above exception was the direct cause of the following exception:
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) Traceback (most recent call last):
+(<lambda> pid=7812, ip=10.130.0.89)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_07847da459d65042/lib/levanter/src/levanter/eval_harness.py", line 1025, in to_task_dict
+(<lambda> pid=7812, ip=10.130.0.89)     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
+(<lambda> pid=7812, ip=10.130.0.89)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_07847da459d65042/lib/levanter/src/levanter/eval_harness.py", line 1047, in _get_task_and_rename
+(<lambda> pid=7812, ip=10.130.0.89)     task_dict = tasks.get_task_dict([task], manager)
+(<lambda> pid=7812, ip=10.130.0.89)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
+(<lambda> pid=7812, ip=10.130.0.89)     **task_manager.load_config(config=task_element),
+(<lambda> pid=7812, ip=10.130.0.89)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
+(<lambda> pid=7812, ip=10.130.0.89)     return self._load_individual_task_or_group(config)
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+(<lambda> pid=7812, ip=10.130.0.89)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+(<lambda> pid=7812, ip=10.130.0.89)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
+(<lambda> pid=7812, ip=10.130.0.89)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
+(<lambda> pid=7812, ip=10.130.0.89)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
+(<lambda> pid=7812, ip=10.130.0.89)     return _load_task(task_config, task=name)
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
+(<lambda> pid=7812, ip=10.130.0.89)     task_object = ConfigurableTask(config=config)
+(<lambda> pid=7812, ip=10.130.0.89)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
+(<lambda> pid=7812, ip=10.130.0.89)     self.download(self.config.dataset_kwargs)
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
+(<lambda> pid=7812, ip=10.130.0.89)     self.dataset = datasets.load_dataset(
+(<lambda> pid=7812, ip=10.130.0.89)                    ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2084, in load_dataset
+(<lambda> pid=7812, ip=10.130.0.89)     builder_instance.download_and_prepare(
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/builder.py", line 925, in download_and_prepare
+(<lambda> pid=7812, ip=10.130.0.89)     self._download_and_prepare(
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/builder.py", line 979, in _download_and_prepare
+(<lambda> pid=7812, ip=10.130.0.89)     split_generators = self._split_generators(dl_manager, **split_generators_kwargs)
+(<lambda> pid=7812, ip=10.130.0.89)                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/parquet/parquet.py", line 49, in _split_generators
+(<lambda> pid=7812, ip=10.130.0.89)     data_files = dl_manager.download_and_extract(self.config.data_files)
+(<lambda> pid=7812, ip=10.130.0.89)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/download/download_manager.py", line 326, in download_and_extract
+(<lambda> pid=7812, ip=10.130.0.89)     return self.extract(self.download(url_or_urls))
+(<lambda> pid=7812, ip=10.130.0.89)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/download/download_manager.py", line 159, in download
+(<lambda> pid=7812, ip=10.130.0.89)     downloaded_path_or_paths = map_nested(
+(<lambda> pid=7812, ip=10.130.0.89)                                ^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/utils/py_utils.py", line 521, in map_nested
+(<lambda> pid=7812, ip=10.130.0.89)     mapped = [
+(<lambda> pid=7812, ip=10.130.0.89)              ^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/utils/py_utils.py", line 522, in <listcomp>
+(<lambda> pid=7812, ip=10.130.0.89)     _single_map_nested((function, obj, batched, batch_size, types, None, True, None))
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/utils/py_utils.py", line 409, in _single_map_nested
+(<lambda> pid=7812, ip=10.130.0.89)     mapped = [_single_map_nested((function, v, batched, batch_size, types, None, True, None)) for v in pbar]
+(<lambda> pid=7812, ip=10.130.0.89)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/utils/py_utils.py", line 409, in <listcomp>
+(<lambda> pid=7812, ip=10.130.0.89)     mapped = [_single_map_nested((function, v, batched, batch_size, types, None, True, None)) for v in pbar]
+(<lambda> pid=7812, ip=10.130.0.89)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/utils/py_utils.py", line 390, in _single_map_nested
+(<lambda> pid=7812, ip=10.130.0.89)     return [mapped_item for batch in iter_batched(data_struct, batch_size) for mapped_item in function(batch)]
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/utils/py_utils.py", line 390, in <listcomp>
+(<lambda> pid=7812, ip=10.130.0.89)     return [mapped_item for batch in iter_batched(data_struct, batch_size) for mapped_item in function(batch)]
+(<lambda> pid=7812, ip=10.130.0.89)                                                                                               ^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/download/download_manager.py", line 219, in _download_batched
+(<lambda> pid=7812, ip=10.130.0.89)     return [
+(<lambda> pid=7812, ip=10.130.0.89)            ^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/download/download_manager.py", line 220, in <listcomp>
+(<lambda> pid=7812, ip=10.130.0.89)     self._download_single(url_or_filename, download_config=download_config)
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/download/download_manager.py", line 229, in _download_single
+(<lambda> pid=7812, ip=10.130.0.89)     out = cached_path(url_or_filename, download_config=download_config)
+(<lambda> pid=7812, ip=10.130.0.89)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/utils/file_utils.py", line 197, in cached_path
+(<lambda> pid=7812, ip=10.130.0.89)     ).hf_hub_download(
+(<lambda> pid=7812, ip=10.130.0.89)       ^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+(<lambda> pid=7812, ip=10.130.0.89)     return fn(*args, **kwargs)
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/hf_api.py", line 5467, in hf_hub_download
+(<lambda> pid=7812, ip=10.130.0.89)     return hf_hub_download(
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+(<lambda> pid=7812, ip=10.130.0.89)     return fn(*args, **kwargs)
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/file_download.py", line 1007, in hf_hub_download
+(<lambda> pid=7812, ip=10.130.0.89)     return _hf_hub_download_to_cache_dir(
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/file_download.py", line 1168, in _hf_hub_download_to_cache_dir
+(<lambda> pid=7812, ip=10.130.0.89)     _download_to_tmp_and_move(
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/file_download.py", line 1720, in _download_to_tmp_and_move
+(<lambda> pid=7812, ip=10.130.0.89)     xet_get(
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/file_download.py", line 591, in xet_get
+(<lambda> pid=7812, ip=10.130.0.89)     connection_info = refresh_xet_connection_info(file_data=xet_file_data, headers=headers)
+(<lambda> pid=7812, ip=10.130.0.89)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+(<lambda> pid=7812, ip=10.130.0.89)     return fn(*args, **kwargs)
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_xet.py", line 116, in refresh_xet_connection_info
+(<lambda> pid=7812, ip=10.130.0.89)     return _fetch_xet_connection_info_with_url(file_data.refresh_route, headers)
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+(<lambda> pid=7812, ip=10.130.0.89)     return fn(*args, **kwargs)
+(<lambda> pid=7812, ip=10.130.0.89)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_xet.py", line 187, in _fetch_xet_connection_info_with_url
+(<lambda> pid=7812, ip=10.130.0.89)     hf_raise_for_status(resp)
+(<lambda> pid=7812, ip=10.130.0.89)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_http.py", line 475, in hf_raise_for_status
+(<lambda> pid=7812, ip=10.130.0.89)     raise _format(HfHubHTTPError, str(e), response) from e
+(<lambda> pid=7812, ip=10.130.0.89) huggingface_hub.errors.HfHubHTTPError: 429 Client Error: Too Many Requests for url: https://huggingface.co/api/datasets/cais/mmlu/xet-read-token/c30699e8356da336a370243923dbaf21066bb9fe (Request ID: Root=1-6981ac4f-4a9ad1e7016ac0af22a4b96e;88626b1d-6a5d-4a60-82f1-bd0779fa897b)
+(<lambda> pid=7812, ip=10.130.0.89) 
+(<lambda> pid=7812, ip=10.130.0.89) We had to rate limit you, you hit the quota of 1000 api requests per 5 minutes period. Upgrade to a PRO user or Team/Enterprise organization account (https://hf.co/pricing) to get higher limits. See https://huggingface.co/docs/hub/rate-limits
+(<lambda> pid=7812, ip=10.130.0.89) 2026-02-03T00:05:35 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on: 13.0it/15.0it rate:3.0s/it remaining:00:05 elapsed:01:14 postfix:-
+(SliceActor pid=7802, ip=10.130.0.57) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(SliceActor pid=7802, ip=10.130.0.57) 
+(SliceActor pid=7802, ip=10.130.0.57) 
+(SliceActor pid=7802, ip=10.130.0.57) ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(SliceActor pid=7802, ip=10.130.0.57) 
+(SliceActor pid=7802, ip=10.130.0.57) 
+(SliceActor pid=7802, ip=10.130.0.57) 
+(SliceActor pid=7802, ip=10.130.0.57) ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(SliceActor pid=7802, ip=10.130.0.57)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_07847da459d65042/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=7802, ip=10.130.0.57)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=7802, ip=10.130.0.57)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_07847da459d65042/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
+(SliceActor pid=7802, ip=10.130.0.57)     levanter.eval_harness.lm_eval_harness(
+(SliceActor pid=7802, ip=10.130.0.57)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_07847da459d65042/lib/levanter/src/levanter/eval_harness.py", line 1479, in lm_eval_harness
+(SliceActor pid=7802, ip=10.130.0.57)     tasks_to_run = config.to_task_dict()
+(SliceActor pid=7802, ip=10.130.0.57)                    ^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=7802, ip=10.130.0.57)     raise ValueError(f"Failed to load task {task}") from e
+(SliceActor pid=7802, ip=10.130.0.57) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
+(run_on_pod_ray pid=161570, ip=10.130.0.156) Task error ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(run_on_pod_ray pid=161570, ip=10.130.0.156)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_07847da459d65042/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=161570, ip=10.130.0.156)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=161570, ip=10.130.0.156)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=161570, ip=10.130.0.156)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=161570, ip=10.130.0.156)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=161570, ip=10.130.0.156)     return func(*args, **kwargs)
+(run_on_pod_ray pid=161570, ip=10.130.0.156)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=161570, ip=10.130.0.156)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=161570, ip=10.130.0.156)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=161570, ip=10.130.0.156)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=161570, ip=10.130.0.156) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) 
+(run_on_pod_ray pid=161570, ip=10.130.0.156) ray::<lambda>() (pid=7812, ip=10.130.0.89)
+(<lambda> pid=7812, ip=10.130.0.89) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f243c0db560>
