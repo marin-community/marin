@@ -13,23 +13,17 @@
 # limitations under the License.
 
 """
-Evaluate a model on MATH-500 using vLLM via Docker sidecar.
-
-Uses the VllmEnvironment to start a vLLM server and communicates via the
-OpenAI-compatible HTTP API, avoiding protobuf/dependency conflicts.
+Evaluate a model on MATH-500 using vLLM.
 """
 
 import json
-import logging
 import os
 from dataclasses import dataclass
 from typing import Callable
 
 import fsspec
-import openai
 
 from fray.cluster import ResourceConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -37,14 +31,12 @@ from marin.execution.executor import (
     output_path_of,
     this_output_path,
 )
-from marin.inference.vllm_server import DEFAULT_VLLM_TPU_DOCKER_IMAGE, VllmEnvironment
+
 
 from zephyr import Backend, Dataset, load_jsonl
 from datasets import load_dataset
 
-from experiments.models import olmo_2_base_32b
-
-logger = logging.getLogger(__name__)
+from experiments.models import qwen2_5_7b, olmo_2_base_32b
 
 
 @dataclass(frozen=True)
@@ -54,15 +46,15 @@ class DownloadMath500Config:
 
 def download_math500(config: DownloadMath500Config):
     dataset = load_dataset("HuggingFaceH4/MATH-500", split="test")
-
+    
     rows = [dict(row) for row in dataset]
-
+    
     pipeline = (
         Dataset.from_list(rows)
         .reshard(1)
         .write_jsonl(f"{config.output_path}/math500-{{shard:05d}}.jsonl.gz")
     )
-
+    
     Backend.execute(pipeline)
 
 
@@ -104,7 +96,7 @@ def format_standard_fewshot(problem: str) -> str:
     fewshot_prefix = fewshot[0]["content"] + "\n\n" + fewshot[1]["content"] + "\n\n"
 
     return fewshot_prefix + problem + MathEnv.question_suffix()
-
+    
 
 @dataclass(frozen=True)
 class Math500EvalConfig:
@@ -121,6 +113,7 @@ class Math500EvalConfig:
 
 
 def run_math500_eval(config: Math500EvalConfig):
+    from vllm import LLM, SamplingParams
     from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
 
     dataset = Dataset.from_files(os.path.join(config.math500_path, "*.jsonl.gz")).flat_map(load_jsonl)
@@ -132,63 +125,54 @@ def run_math500_eval(config: Math500EvalConfig):
     prompt_formatter = PROMPT_FORMAT_REGISTRY[config.prompt_format]
     prompts = [prompt_formatter(problem) for problem in problems]
 
-    model_config = ModelConfig(
-        name=config.model_path,
-        path=config.model_path,
-        engine_kwargs={"load_format": "runai_streamer"},
+    llm = LLM(model=config.model_path, trust_remote_code=True, load_format="runai_streamer")
+
+    sampling_params = SamplingParams(
+        max_tokens=config.max_tokens,
+        temperature=config.temperature,
+        n=config.n_samples,
     )
 
-    with VllmEnvironment(model_config, docker_image=DEFAULT_VLLM_TPU_DOCKER_IMAGE) as env:
-        client = openai.OpenAI(base_url=env.server_url, api_key="unused")
+    outputs = llm.generate(prompts, sampling_params)
 
-        results = []
-        pass_at_1, pass_at_k = 0, 0
+    results = []
+    pass_at_1, pass_at_k = 0, 0
+    for i, output in enumerate(outputs):
+        ground_truth = answers[i]
 
-        for i, prompt in enumerate(prompts):
-            ground_truth = answers[i]
+        samples = []
+        total_correct = 0
+        for completion in output.outputs:
+            generated = completion.text
+            try:
+                extracted = extract_boxed(generated)
+            except ValueError:
+                extracted = None
 
-            response = client.completions.create(
-                model=env.model_id,
-                prompt=prompt,
-                max_tokens=config.max_tokens,
-                temperature=config.temperature,
-                n=config.n_samples,
-            )
+            is_correct = False
+            if extracted is not None:
+                is_correct = grade_answer(extracted, ground_truth)
 
-            samples = []
-            total_correct = 0
-            for choice in response.choices:
-                generated = choice.text
-                try:
-                    extracted = extract_boxed(generated)
-                except ValueError:
-                    extracted = None
+            if is_correct:
+                total_correct += 1
 
-                is_correct = False
-                if extracted is not None:
-                    is_correct = grade_answer(extracted, ground_truth)
-
-                if is_correct:
-                    total_correct += 1
-
-                samples.append({
-                    "generated": generated,
-                    "extracted_answer": extracted,
-                    "correct": is_correct,
-                })
-
-            pass_at_1 += total_correct / config.n_samples
-            pass_at_k += (total_correct > 0)
-
-            results.append({
-                "problem": problems[i],
-                "ground_truth": ground_truth,
-                "samples": samples,
+            samples.append({
+                "generated": generated,
+                "extracted_answer": extracted,
+                "correct": is_correct,
             })
+
+        pass_at_1 += total_correct / config.n_samples
+        pass_at_k += (total_correct > 0)
+
+        results.append({
+            "problem": problems[i],
+            "ground_truth": ground_truth,
+            "samples": samples,
+        })
 
     avg_pass_at_1 = pass_at_1 / len(results)
     avg_pass_at_k = pass_at_k / len(results)
-    print(f"Pass@1: {avg_pass_at_1:.4f}")
     print(f"Pass@{config.n_samples}: {avg_pass_at_k:.4f} ({pass_at_k}/{len(results)})")
 
     output = {
@@ -202,24 +186,24 @@ def run_math500_eval(config: Math500EvalConfig):
         json.dump(output, f, indent=2)
 
 
+
 @dataclass(frozen=True)
 class Math500ProcessConfig:
     eval_path: str
     output_path: str
 
-    filter: str = "all"  # "correct", "incorrect", "all"
-
+    filter: str = "all" # "correct", "incorrect", "all"
 
 def process_math500_data(config: Math500ProcessConfig):
     with fsspec.open(os.path.join(config.eval_path, "results.json.gz"), "rt", compression="gzip") as f:
         output = json.load(f)
-
+    
     with fsspec.open(os.path.join(config.output_path, "data.jsonl.gz"), "wt", compression="gzip") as f:
         i = 0
         for result in output["results"]:
             problem = result["problem"]
             samples = result["samples"]
-
+            
             for sample in samples:
                 if config.filter == "correct" and not sample["correct"]:
                     continue
@@ -229,10 +213,10 @@ def process_math500_data(config: Math500ProcessConfig):
                 response = sample["generated"]
 
                 messages = [
-                    {"role": "user", "content": problem},
-                    {"role": "assistant", "content": response}
-                ]
-
+                        {"role": "user", "content": problem},
+                        {"role": "assistant", "content": response}
+                    ]
+                    
                 processed_row = {
                     "messages": messages,
                     "id": i,
@@ -242,7 +226,59 @@ def process_math500_data(config: Math500ProcessConfig):
                 f.write(json.dumps(processed_row) + "\n")
 
 
-name = "olmo-stuff5"
+def math500_eval_step(model_step: ExecutorStep, name: str) -> ExecutorStep:
+    return ExecutorStep(
+        name=f"rohith_math500_eval/{name}",
+        fn=run_math500_eval,
+        config=Math500EvalConfig(
+            model_path=output_path_of(model_step),
+            output_path=this_output_path(),
+        ),
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        pip_dependency_groups=["math"],
+    )
+
+def process_math500_data(config: Math500ProcessConfig):
+    with fsspec.open(os.path.join(config.eval_path, "results.json.gz"), "rt", compression="gzip") as f:
+        output = json.load(f)
+    
+    with fsspec.open(os.path.join(config.output_path, "data.jsonl.gz"), "wt", compression="gzip") as f:
+        i = 0
+        for result in output["results"]:
+            problem = result["problem"]
+            samples = result["samples"]
+            
+            for sample in samples:
+                if config.filter == "correct" and not sample["correct"]:
+                    continue
+                if config.filter == "incorrect" and sample["correct"]:
+                    continue
+
+                response = sample["generated"]
+
+                messages = [
+                        {"role": "user", "content": problem},
+                        {"role": "assistant", "content": response}
+                    ]
+                    
+                processed_row = {
+                    "messages": messages,
+                    "id": i,
+                }
+                i += 1
+
+                f.write(json.dumps(processed_row) + "\n")
+
+def dumb_run_math500_eval(config: Math500EvalConfig):
+    # from vllm import LLM, SamplingParams
+    # from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
+
+    dataset = Dataset.from_files(os.path.join(config.math500_path, "*.jsonl.gz")).flat_map(load_jsonl)
+    rows = Backend.execute(dataset)
+
+    print("HELLO WHAT'S UP!")
+
+name = "olmo-stuff"
 model_step = olmo_2_base_32b
 
 eval_step = ExecutorStep(
@@ -253,7 +289,7 @@ eval_step = ExecutorStep(
         output_path=this_output_path(),
     ),
     resources=ResourceConfig.with_tpu("v5p-8"),
-    pip_dependency_groups=["math"],
+    pip_dependency_groups=["math", "vllm"],
 )
 process_step = ExecutorStep(
     name=f"rohith_math500_eval/documents/{name}",
@@ -265,4 +301,4 @@ process_step = ExecutorStep(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[eval_step, process_step], description="MATH-500 evaluation with vLLM.")
+    executor_main(steps=[eval_step], description="MATH-500 evaluation with vLLM.")
