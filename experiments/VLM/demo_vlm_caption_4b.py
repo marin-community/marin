@@ -19,27 +19,25 @@ Generate image descriptions using a trained Vision-Language Model.
 
 Architecture:
 - Vision Encoder: SigLIP (384x384, patch16)
-- Language Model: Qwen3-1.7B
+- Language Model: Qwen3-4B
 - Projector: 2-layer MLP
 
 Usage:
-    # Basic usage with default checkpoint
-    uv run python experiments/VLM/demo_vlm_caption.py --image_path 7-1-scaled.jpg --checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-2-80caa3/checkpoints/step-20000
+    # IMPORTANT: This script is for Qwen3-4B checkpoints only!
+    # For Qwen3-1.7B checkpoints, use demo_vlm_caption.py instead.
 
-    uv run python experiments/VLM/demo_vlm_caption.py --image_path apple.jpg --checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage1-0-6004e7/hf/vlm-official-qwen3-1.7b-stage1-0-6004e7/step-725
-    
-    uv run python experiments/VLM/demo_vlm_caption.py --image_path image.png --checkpoint  gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-2-0abda3/hf/vlm-official-qwen3-1.7b-stage3_4096-2-0abda3/step-39061/      --prompt 'How many food item is shown in the bar graph?'
-
+    # Basic usage with 4B checkpoint
+    uv run python experiments/VLM/demo_vlm_caption_4b.py \
+        --image_path path/to/image.jpg \
+        --checkpoint gs://your-bucket/path/to/qwen3-4b-checkpoint
 
     # With custom prompt
-    python experiments/VLM/demo_vlm_caption.py \
+    python experiments/VLM/demo_vlm_caption_4b.py \
         --image_path path/to/image.jpg \
+        --checkpoint gs://your-bucket/path/to/qwen3-4b-checkpoint \
         --prompt "What objects are in this image?"
 
-    # With different checkpoint
-    python experiments/VLM/demo_vlm_caption.py \
-        --checkpoint gs://your-bucket/checkpoint-path \
-        --image_path path/to/image.jpg
+    uv run python experiments/VLM/demo_vlm_caption.py --image_path apple.jpg --checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage1-0-6004e7/hf/vlm-official-qwen3-1.7b-stage1-0-6004e7/step-725
 """
 
 import logging
@@ -95,14 +93,14 @@ class VLMCaptionConfig:
     """Configuration for VLM Image Caption generation."""
 
     # Checkpoint path (supports GCS)
-    checkpoint: str = "gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544"
+    checkpoint: str = "gs://your-bucket/path/to/qwen3-4b-checkpoint"  # TODO: Update with actual 4B checkpoint
 
     # Image input
     image_path: str = ""
     prompt: str = "Describe this image in detail."
 
     # Tokenizer and processor
-    tokenizer: str = "Qwen/Qwen3-1.7B"
+    tokenizer: str = "Qwen/Qwen3-4B"
     processor: str = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
 
     # Generation parameters
@@ -149,14 +147,15 @@ def build_vlm_config(tokenizer_name: str) -> LlavaOnevisionConfig:
         patch_size=16,
     )
 
-    # Language model: Qwen3-1.7B
+    # Language model: Qwen3-4B
     text_config = Qwen3Config(
         max_seq_len=2048,
-        hidden_dim=2048,
-        intermediate_dim=6144,
-        num_heads=16,
+        hidden_dim=2560,
+        intermediate_dim=9728,
+        num_heads=32,
         num_kv_heads=8,
-        num_layers=28,
+        num_layers=36,
+        head_dim=128,  # Required for HuggingFace Qwen3-4B compatibility
         rope=Llama3RotaryEmbeddingsConfig(),
         tie_word_embeddings=True,
     )
@@ -297,10 +296,12 @@ def load_model(
 
         # Switch to dot-product attention to avoid VMEM OOM with ragged_paged_attention
         # The paged attention kernel requires >16MB VMEM which exceeds TPU limits
+        # IMPORTANT: Explicitly set head_dim=128 for Qwen3-4B (HF uses explicit head_dim, not computed)
         text_config_updated = replace(
             lev_config.text_config,
             attn_backend="dot",
-            flash_attention_block_size=None
+            flash_attention_block_size=None,
+            head_dim=128,  # Required: Qwen3-4B uses explicit head_dim=128, not hidden_dim/num_heads=80
         )
         lev_config = replace(lev_config, text_config=text_config_updated)
     else:
@@ -327,10 +328,12 @@ def load_model(
 
         # Switch to dot-product attention to avoid VMEM OOM with ragged_paged_attention
         # The paged attention kernel requires >16MB VMEM which exceeds TPU limits
+        # Note: vlm_config from build_vlm_config() already has head_dim=128
         text_config_updated = replace(
             vlm_config.text_config,
             attn_backend="dot",
-            flash_attention_block_size=None
+            flash_attention_block_size=None,
+            head_dim=128,  # Ensure head_dim=128 for Qwen3-4B
         )
         vlm_config = replace(vlm_config, text_config=text_config_updated)
 

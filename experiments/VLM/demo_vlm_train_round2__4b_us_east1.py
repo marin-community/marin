@@ -223,11 +223,6 @@ train_config = SimpleVlmTrainConfig(
     freeze_vision_encoder=False,
     freeze_llm=False,
 
-    # Profiler configuration
-    profiler=True,
-    profiler_start_step=10,
-    profiler_num_steps=20,
-
     # Disable evaluation to save memory
     no_eval=True,
 

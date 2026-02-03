@@ -164,6 +164,9 @@ nemotron_hq_data_config = lm_mixture_data_config(
 # Can be overridden via TPU_TYPE environment variable (e.g., -e TPU_TYPE v4-128)
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 
+# Can be overridden via EXP_NAME environment variable (e.g., -e EXP_NAME llama-1b-tootsie-run1)
+EXP_NAME = os.environ.get("EXP_NAME", "llama-1b-tootsie")
+
 tootsie_1b_train_config = SimpleTrainConfig(
     resources=ResourceConfig.with_tpu(TPU_TYPE),
     train_batch_size=TRAIN_BATCH_SIZE,
@@ -183,14 +186,14 @@ tootsie_1b_train_config = SimpleTrainConfig(
 
 llama_1b_tootsie = dataclasses.replace(
     default_train(
-        name="llama-1b-tootsie",
+        name=EXP_NAME,
         tokenized=nemotron_hq_data_config,
         model_config=llama_3_2_1b,
         train_config=tootsie_1b_train_config,
         tags=["llama", "1b", "nemotron-hq", "exp600"],
         eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
     ),
-    override_output_path="checkpoints/llama-1b-tootsie",
+    override_output_path=f"checkpoints/{EXP_NAME}",
 )
 
 

@@ -1215,7 +1215,9 @@ class LlavaOnevisionModel(eqx.Module):
         """Creates an initial paged KV cache for the language model."""
         tc = self.config.text_config
         kv_heads = Axis("kv_head", tc.num_kv_heads)
-        head_size = Axis("head_size", tc.hidden_dim // tc.num_heads)
+        # Use explicit head_dim if set (e.g., Qwen3-4B uses 128), otherwise compute from hidden_dim/num_heads
+        head_dim = getattr(tc, 'head_dim', None) or (tc.hidden_dim // tc.num_heads)
+        head_size = Axis("head_size", head_dim)
         caches = [KvPageCache.init(spec, kv_heads, head_size, dtype=dtype) for _ in range(tc.num_layers)]
         return ListCache(caches)
 
