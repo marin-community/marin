@@ -13,7 +13,13 @@
 # limitations under the License.
 
 """
-Train a 1B Llama model on Nemotron CC high-quality data (real + synthetic).
+Train a Llama model on Nemotron CC high-quality data (real + synthetic).
+
+Model size and compute budget can be configured via environment variables:
+- MODEL_SIZE: Model size (e.g., "1_4b", "8b", "3_2_1b"). Default: "3_2_1b"
+- COMPUTE_BUDGET: Total FLOPs budget (e.g., "1e20", "1e21"). Default: "1e20"
+- TPU_TYPE: TPU type (e.g., "v4-64", "v4-128"). Default: "v4-64"
+- EXP_NAME: Experiment name. Default: "llama-{MODEL_SIZE}-tootsie"
 """
 
 import dataclasses
@@ -49,22 +55,38 @@ from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 
 ################################################################
+# Model Configuration
+# Available models for scaling laws experiments
+################################################################
+
+MODEL_CONFIGS = {
+    "30m": llama_30m,
+    "50m": llama_50m,
+    "75m": llama_75m,
+    "150m": llama_150m,
+    "300m": llama_300m,
+    "600m": llama_600m,
+    "1_4b": llama_1_4b,
+    "1_9b": llama_1_9b,
+    "3_2_1b": llama_3_2_1b,
+    "3_5b": llama_3_5b,
+    "8b": llama_8b,
+    "13b": llama_13b,
+    "24b": llama_24b,
+    "70b": llama_70b,
+}
+
+# Can be overridden via MODEL_SIZE environment variable (e.g., -e MODEL_SIZE 1_4b)
+MODEL_SIZE = os.environ.get("MODEL_SIZE", "3_2_1b")
+model_config = MODEL_CONFIGS[MODEL_SIZE]
+
+################################################################
 # Compute Budget Configuration
 # Following heuristics from "Relative Scaling Laws for LLMs"
 # (arXiv:2510.24626, Appendix A)
 ################################################################
 
-# Llama 3.2 1B model configuration
-LLAMA_1B_CONFIG = {
-    "hidden_dim": 2048,
-    "intermediate_dim": 8192,
-    "num_layers": 16,
-    "num_kv_heads": 8,
-    "num_heads": 32,
-    "vocab_size": 128256,
-}
-
-TRAIN_SEQ_LEN = 4096  # From llama_3_2_1b.max_seq_len
+TRAIN_SEQ_LEN = model_config.max_seq_len
 
 # Can be overridden via COMPUTE_BUDGET environment variable (e.g., -e COMPUTE_BUDGET 1e21)
 COMPUTE_BUDGET_FLOPS = float(os.environ.get("COMPUTE_BUDGET", "1e20"))
@@ -113,8 +135,16 @@ def nearest_power_of_two(x: int) -> int:
     return lower if (x - lower) < (upper - x) else upper
 
 
-# Compute FLOPs per token
-flops_per_token = compute_flops_per_token(seq_len=TRAIN_SEQ_LEN, **LLAMA_1B_CONFIG)
+# Compute FLOPs per token (dynamically from model_config)
+flops_per_token = compute_flops_per_token(
+    hidden_dim=model_config.hidden_dim,
+    intermediate_dim=model_config.intermediate_dim,
+    num_layers=model_config.num_layers,
+    num_kv_heads=model_config.num_kv_heads,
+    num_heads=model_config.num_heads,
+    seq_len=TRAIN_SEQ_LEN,
+    vocab_size=llama3_tokenizer_vocab_size,
+)
 
 # Compute total tokens from compute budget
 total_tokens = compute_total_tokens(COMPUTE_BUDGET_FLOPS, flops_per_token)
@@ -131,7 +161,7 @@ num_train_steps = total_tokens // (TRAIN_BATCH_SIZE * TRAIN_SEQ_LEN)
 
 # Heuristic 2: Learning rate η = η_base × (√B / d)
 # η_base calibrated so that η < 0.01 to avoid loss spikes
-HIDDEN_DIM = LLAMA_1B_CONFIG["hidden_dim"]  # 2048
+HIDDEN_DIM = model_config.hidden_dim
 LR_BASE = 0.1  # Base learning rate (calibrated for stability)
 learning_rate = LR_BASE * (math.sqrt(TRAIN_BATCH_SIZE) / HIDDEN_DIM)
 # Clamp to avoid instability (paper notes η ≥ 0.01 causes loss spikes)
@@ -190,16 +220,16 @@ nemotron_hq_data_config = lm_mixture_data_config(
 
 
 ################################################################
-# 1B Model Training Configuration
+# Model Training Configuration
 ################################################################
 
 # Can be overridden via TPU_TYPE environment variable (e.g., -e TPU_TYPE v4-128)
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 
 # Can be overridden via EXP_NAME environment variable (e.g., -e EXP_NAME llama-1b-tootsie-run1)
-EXP_NAME = os.environ.get("EXP_NAME", "llama-1b-tootsie")
+EXP_NAME = os.environ.get("EXP_NAME", f"llama-{MODEL_SIZE}-tootsie")
 
-tootsie_1b_train_config = SimpleTrainConfig(
+tootsie_train_config = SimpleTrainConfig(
     resources=ResourceConfig.with_tpu(TPU_TYPE),
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=num_train_steps,
@@ -216,23 +246,23 @@ tootsie_1b_train_config = SimpleTrainConfig(
     steps_per_export=10000,
 )
 
-_llama_1b_tootsie_step = default_train(
+_llama_tootsie_step = default_train(
     name=EXP_NAME,
     tokenized=nemotron_hq_data_config,
-    model_config=llama_3_2_1b,
-    train_config=tootsie_1b_train_config,
-    tags=["llama", "1b", "nemotron-hq", "exp600"],
+    model_config=model_config,
+    train_config=tootsie_train_config,
+    tags=["llama", MODEL_SIZE, "nemotron-hq", "exp600"],
     eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
 )
 
 # Allow cross-region tokenizer access (tokenizer in us-central2, VM in us-west4)
 _updated_config = dataclasses.replace(
-    _llama_1b_tootsie_step.config,
+    _llama_tootsie_step.config,
     allow_out_of_region=("data.tokenizer",),
 )
 
-llama_1b_tootsie = dataclasses.replace(
-    _llama_1b_tootsie_step,
+llama_tootsie = dataclasses.replace(
+    _llama_tootsie_step,
     config=_updated_config,
     override_output_path=f"checkpoints/{EXP_NAME}",
 )
@@ -241,8 +271,8 @@ llama_1b_tootsie = dataclasses.replace(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            llama_1b_tootsie,
-            *default_base_eval(llama_1b_tootsie),
+            llama_tootsie,
+            *default_base_eval(llama_tootsie),
         ],
-        description="Train 1B Llama model on Nemotron CC high-quality data (real + synthetic).",
+        description=f"Train Llama {MODEL_SIZE} model on Nemotron CC high-quality data (real + synthetic).",
     )
