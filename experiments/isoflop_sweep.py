@@ -708,7 +708,7 @@ MARIN_SCALING_SUITES = {
         budgets=LEGACY_BUDGETS,
     ),
     "common_pile": create_isoflop_sweep_steps(
-        tokenized=comma_main_mixture(permutation_type="linear"),
+        tokenized=comma_main_mixture(permutation_type="feistel"),
         experiment_name="comma-mix",
         recipe=MARIN_2025_RECIPE,
         budgets=LEGACY_BUDGETS,

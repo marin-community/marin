@@ -95,7 +95,7 @@ nemotron_mix = lm_mixture_data_config(
         "starcoderdata": 0.25,
         "proofpile_2": 0.055,
     },
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 llama_32b_tootsie = default_train(

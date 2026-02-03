@@ -45,7 +45,7 @@ dclm_components_llama3 = {
 dclm_mixture_config_llama3_old = lm_mixture_data_config(
     components=dclm_components_llama3,
     weights=DCLM_MIXTURE_WEIGHTS,
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 dclm_mixture_config_llama3 = lm_mixture_data_config(
@@ -81,7 +81,7 @@ dclm_components_llama3_wrong = {
 dclm_mixture_config_llama3_wrong = lm_mixture_data_config(
     components=dclm_components_llama3_wrong,
     weights=DCLM_MIXTURE_WEIGHTS,
-    permutation_type="linear",
+    permutation_type="feistel",
 )
 
 if __name__ == "__main__":
