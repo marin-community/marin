@@ -480,7 +480,6 @@ def _batch_sizes() -> dict[str, int]:
 
 def _lr_multipliers(start: float = 1.0, stop: float = 2.5, step: float = 0.5) -> list[float]:
     """Generate LR multipliers for sweep. Paper suggests training with increased LR."""
-    return [2.0, 2.5]
     vals = np.arange(start, stop + step / 2, step)  # +step/2 to include stop
     return [float(v) for v in vals]
 
@@ -554,7 +553,6 @@ if __name__ == "__main__":
     ###
 
     sizes = ["130m", "300m", "520m", "1_2b"]
-    # sizes = ["1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     use_gate = "elementwise"
     steps = []
