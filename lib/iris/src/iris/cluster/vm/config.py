@@ -632,28 +632,34 @@ def create_manual_autoscaler(
 def create_local_autoscaler(
     config: config_pb2.IrisClusterConfig,
     controller_address: str,
-    cache_path: Path,
-    fake_bundle: Path,
     threads: ThreadContainer | None = None,
 ):
     """Create Autoscaler with LocalVmManagers for all scale groups.
 
-    Parallels create_autoscaler() but uses LocalVmManagers.
-    Each scale group in the config gets a LocalVmManager that creates
-    in-process workers instead of cloud VMs.
+    Creates its own temp directories for worker cache and bundles.
+    The temp directory is stored as autoscaler._temp_dir for cleanup.
 
     Args:
         config: Cluster configuration (with defaults already applied)
         controller_address: Address for workers to connect to
-        cache_path: Path for worker cache
-        fake_bundle: Path to fake bundle for local workers
         threads: Optional thread container for testing
 
     Returns:
         Configured Autoscaler with local VM managers
     """
+    import tempfile
+
     from iris.cluster.vm.autoscaler import Autoscaler
     from iris.cluster.vm.local_platform import LocalVmManager, PortAllocator
+
+    # Create temp dirs for worker resources (autoscaler owns these)
+    temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_autoscaler_")
+    temp_path = Path(temp_dir.name)
+    cache_path = temp_path / "cache"
+    cache_path.mkdir()
+    fake_bundle = temp_path / "bundle"
+    fake_bundle.mkdir()
+    (fake_bundle / "pyproject.toml").write_text("[project]\nname='local'\n")
 
     vm_registry = VmRegistry()
     shared_port_allocator = PortAllocator(port_range=(30000, 40000))
@@ -675,12 +681,15 @@ def create_local_autoscaler(
             scale_down_cooldown=Duration.from_proto(config.defaults.autoscaler.scale_down_delay),
         )
 
-    return Autoscaler.from_config(
+    autoscaler = Autoscaler.from_config(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
         config=config.defaults.autoscaler,
         threads=threads,
     )
+    # Store temp_dir for cleanup (caller should clean up via autoscaler._temp_dir)
+    autoscaler._temp_dir = temp_dir
+    return autoscaler
 
 
 def _create_manager(

@@ -25,6 +25,7 @@ from typing import Self
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration, Timestamp
@@ -33,32 +34,24 @@ from iris.time_utils import Duration, Timestamp
 def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for local execution.
 
-    Sets up controller.local, bundle_prefix, scale groups with local vm_type,
-    and fast autoscaler evaluation for tests.
+    Creates a minimal base config and transforms it via make_local_config()
+    to ensure local defaults (fast autoscaler timings, etc.) are applied
+    consistently from config.py.
     """
-    config = config_pb2.IrisClusterConfig()
+    # Build minimal base config
+    base_config = config_pb2.IrisClusterConfig()
 
-    # Configure local controller
-    config.controller.local.port = 0  # auto-assign
-    config.controller.bundle_prefix = ""  # LocalController will set temp path
-    config.platform.local.SetInParent()
-
-    # Configure scale group with local provider
+    # Configure scale group (will be transformed to VM_TYPE_LOCAL_VM by make_local_config)
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
-        vm_type=config_pb2.VM_TYPE_LOCAL_VM,
         min_slices=1,
         max_slices=max_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
     )
-    config.scale_groups["local-cpu"].CopyFrom(sg)
+    base_config.scale_groups["local-cpu"].CopyFrom(sg)
 
-    # Fast autoscaler evaluation for tests
-    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
-    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
-    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
-
-    return config
+    # Transform to local config - applies local platform, controller, and fast autoscaler timings
+    return make_local_config(base_config)
 
 
 class LocalClusterClient:

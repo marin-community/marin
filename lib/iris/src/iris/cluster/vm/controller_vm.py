@@ -34,7 +34,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.vm.config import config_to_dict
+from iris.cluster.vm.autoscaler import Autoscaler
+
+from iris.cluster.controller.controller import (
+    Controller as _InnerController,
+    ControllerConfig as _InnerControllerConfig,
+    RpcWorkerStubFactory,
+)
+from iris.cluster.vm.config import config_to_dict, create_local_autoscaler
+from iris.cluster.vm.local_platform import find_free_port
 from iris.managed_thread import ThreadContainer
 from iris.cluster.vm.gcp_tpu_platform import (
     controller_address_metadata_key,
@@ -58,6 +66,8 @@ DEFAULT_CONTROLLER_PORT = 10000
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
 HEALTH_CHECK_TIMEOUT_SECONDS = 120
+RESTART_LOOP_THRESHOLD = 3  # Fail after N consecutive "restarting" statuses
+EARLY_TIMEOUT_SECONDS = 60  # Exit early after N seconds if in restart loop
 MAX_RETRIES = 5
 
 # Backoff parameters for health check polling: start at 2s, cap at 10s
@@ -167,8 +177,6 @@ def wait_healthy_via_ssh(
     attempt = 0
     last_result = None
     consecutive_restarts = 0
-    RESTART_LOOP_THRESHOLD = 3  # Fail after 3 consecutive "restarting" statuses
-    EARLY_TIMEOUT_SECONDS = 60  # Exit early after 1 minute if in restart loop
 
     while True:
         attempt += 1
@@ -574,7 +582,7 @@ class GcpController:
         to pull the latest image and restart the container. Faster than restart()
         since it doesn't delete/recreate the VM.
         """
-        vm_name = self._find_controller_name()
+        vm_name = self._find_controller_vm_name()
         if not vm_name:
             raise RuntimeError("Controller VM not found. Use 'start' to create a new one.")
 
@@ -643,7 +651,7 @@ class GcpController:
         if not address:
             return ControllerStatus(running=False, address=None, healthy=False, vm_name=None)
 
-        vm_name = self._find_controller_name()
+        vm_name = self._find_controller_vm_name()
         healthy = _check_health_rpc(address)
 
         return ControllerStatus(
@@ -653,7 +661,7 @@ class GcpController:
             vm_name=vm_name,
         )
 
-    def _find_controller_name(self) -> str | None:
+    def _find_controller_vm_name(self) -> str | None:
         """Find the name of the running controller VM."""
         meta_key = controller_metadata_key(self._label_prefix)
         cmd = [
@@ -802,7 +810,7 @@ class GcpController:
         Args:
             tail_lines: Number of lines to return from the end of the log
         """
-        vm_name = self._find_controller_name()
+        vm_name = self._find_controller_vm_name()
         if not vm_name:
             logger.warning("Cannot fetch logs: controller VM not found")
             return None
@@ -1028,25 +1036,13 @@ class LocalController:
         self._threads = threads
         self._controller: _InProcessController | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
+        self._autoscaler: Autoscaler | None = None
 
     def start(self) -> str:
-        from iris.cluster.controller.controller import (
-            Controller as _InnerController,
-            ControllerConfig as _InnerControllerConfig,
-            RpcWorkerStubFactory,
-        )
-        from iris.cluster.vm.config import create_local_autoscaler
-        from iris.cluster.vm.local_platform import find_free_port
-
-        self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_")
-        temp = Path(self._temp_dir.name)
-        bundle_dir = temp / "bundles"
+        # Create temp dir for controller's bundle storage
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_")
+        bundle_dir = Path(self._temp_dir.name) / "bundles"
         bundle_dir.mkdir()
-        cache_path = temp / "cache"
-        cache_path.mkdir()
-        fake_bundle = temp / "fake_bundle"
-        fake_bundle.mkdir()
-        (fake_bundle / "pyproject.toml").write_text("[project]\nname='local'\n")
 
         port = self._config.controller.local.port or find_free_port()
         address = f"http://127.0.0.1:{port}"
@@ -1054,13 +1050,13 @@ class LocalController:
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
-        autoscaler = create_local_autoscaler(
+        # Autoscaler creates its own temp dirs for worker resources
+        self._autoscaler = create_local_autoscaler(
             self._config,
             address,
-            cache_path,
-            fake_bundle,
             threads=autoscaler_threads,
         )
+
         self._controller = _InnerController(
             config=_InnerControllerConfig(
                 host="127.0.0.1",
@@ -1068,7 +1064,7 @@ class LocalController:
                 bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
-            autoscaler=autoscaler,
+            autoscaler=self._autoscaler,
             threads=controller_threads,
         )
         self._controller.start()
@@ -1078,6 +1074,11 @@ class LocalController:
         if self._controller:
             self._controller.stop()
             self._controller = None
+        # Clean up autoscaler's temp dir
+        if self._autoscaler and hasattr(self._autoscaler, "_temp_dir"):
+            self._autoscaler._temp_dir.cleanup()
+            self._autoscaler = None
+        # Clean up controller's temp dir
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None

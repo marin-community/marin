@@ -186,14 +186,18 @@ class GcpPlatform:
         from iris.cluster.vm.debug import controller_tunnel
 
         zone = self._platform.zone or (self._platform.default_zones[0] if self._platform.default_zones else "")
-        return controller_tunnel(
-            zone=zone,
-            project=self._platform.project_id,
-            label_prefix=self._label_prefix,
-            local_port=local_port,
-            timeout=timeout,
-            tunnel_logger=tunnel_logger,
-        )
+        kwargs: dict = {
+            "zone": zone,
+            "project": self._platform.project_id,
+            "label_prefix": self._label_prefix,
+        }
+        if local_port is not None:
+            kwargs["local_port"] = local_port
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        if tunnel_logger is not None:
+            kwargs["tunnel_logger"] = tunnel_logger
+        return controller_tunnel(**kwargs)
 
     def vm_manager(
         self,
@@ -281,6 +285,8 @@ class ManualPlatform:
 
 
 class LocalPlatform:
+    """Platform for local testing (no cloud resources)."""
+
     def vm_ops(self) -> PlatformOps:
         return _LocalPlatformOps()
 

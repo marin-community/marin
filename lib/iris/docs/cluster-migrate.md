@@ -10,4 +10,4 @@
 - Updated controller/config/client/cluster manager code to use `platform` and `controller` fields instead of legacy fields.
 - Updated README and `examples/eu-west4.yaml` to new schema.
 - Converted example/README duration literals to `milliseconds` to match proto `Duration` JSON/YAML parsing.
-- Updated controller test to patch `_find_controller_name` after controller lookup rename.
+- Updated controller test to patch `_find_controller_vm_name` after controller lookup rename.

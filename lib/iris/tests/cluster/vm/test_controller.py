@@ -381,7 +381,7 @@ class TestControllerLifecycle:
 
         controller = GcpController(gcp_config)
 
-        with patch.object(controller, "_find_controller_name", return_value="iris-controller-test"):
+        with patch.object(controller, "_find_controller_vm_name", return_value="iris-controller-test"):
             with patch.object(controller, "_get_vm_address", return_value="http://10.0.0.50:10000"):
                 result = controller.reload()
 

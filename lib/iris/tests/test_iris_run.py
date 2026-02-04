@@ -107,14 +107,14 @@ def local_cluster_and_config(tmp_path):
 @pytest.mark.slow
 def test_iris_run_cli_simple_job(local_cluster_and_config, tmp_path):
     """Test iris_run.py submits and runs a simple job successfully."""
-    test_config, _url, _client = local_cluster_and_config
+    _test_config, url, _client = local_cluster_and_config
 
     # Create test script that prints and exits
     test_script = tmp_path / "test.py"
     test_script.write_text('print("SUCCESS"); exit(0)')
 
     exit_code = run_iris_job(
-        config_path=test_config,
+        controller_url=url,
         command=[sys.executable, str(test_script)],
         env_vars={},
         wait=True,
@@ -126,7 +126,7 @@ def test_iris_run_cli_simple_job(local_cluster_and_config, tmp_path):
 @pytest.mark.slow
 def test_iris_run_cli_env_vars_propagate(local_cluster_and_config, tmp_path):
     """Test environment variables reach the job."""
-    test_config, _url, _client = local_cluster_and_config
+    _test_config, url, _client = local_cluster_and_config
 
     # Create script that checks env var
     test_script = tmp_path / "check_env.py"
@@ -143,7 +143,7 @@ sys.exit(0 if val == "test_value" else 1)
     env_vars = load_env_vars([["TEST_VAR", "test_value"]])
 
     exit_code = run_iris_job(
-        config_path=test_config,
+        controller_url=url,
         command=[sys.executable, str(test_script)],
         env_vars=env_vars,
         wait=True,
@@ -155,13 +155,13 @@ sys.exit(0 if val == "test_value" else 1)
 @pytest.mark.slow
 def test_iris_run_cli_job_failure(local_cluster_and_config, tmp_path):
     """Test iris_run.py returns non-zero on job failure."""
-    test_config, _url, _client = local_cluster_and_config
+    _test_config, url, _client = local_cluster_and_config
 
     test_script = tmp_path / "fail.py"
     test_script.write_text("exit(1)")
 
     exit_code = run_iris_job(
-        config_path=test_config,
+        controller_url=url,
         command=[sys.executable, str(test_script)],
         env_vars={},
         wait=True,

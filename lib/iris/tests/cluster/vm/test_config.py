@@ -423,7 +423,7 @@ class TestSshConfigMerging:
 
         assert ssh_config.user == "ubuntu"
         assert ssh_config.key_file == "~/.ssh/cluster_key"
-        assert ssh_config.port == 2222
+        assert ssh_config.port == 22  # DEFAULT_SSH_PORT
         assert ssh_config.connect_timeout == Duration.from_seconds(60)
 
     def test_applies_per_group_ssh_overrides(self):

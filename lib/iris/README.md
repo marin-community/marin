@@ -217,6 +217,8 @@ The controller will **fail at startup** if `bundle_prefix` is not configured.
 
 ## CLI Reference
 
+**Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml run ...` or `iris cluster --config cluster.yaml start`).
+
 ### Cluster Commands
 
 ```bash
@@ -278,9 +280,9 @@ iris cluster --config=... debug cleanup --no-dry-run
 
 ```bash
 # Submit a command to the cluster
-iris run --config cluster.yaml -- python train.py
-iris run --config cluster.yaml --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
-iris run --config cluster.yaml --no-wait -- python long_job.py
+iris --config cluster.yaml run -- python train.py
+iris --config cluster.yaml run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+iris --config cluster.yaml run --no-wait -- python long_job.py
 ```
 
 ## Smoke Test
