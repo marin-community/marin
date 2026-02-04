@@ -595,7 +595,25 @@ def _run_prefill(
     sys.stdout.flush()
 
     try:
-        result = _prefill_kernel(
+        # Try to lower and compile explicitly to get better error messages
+        print(f"[_run_prefill P{jax.process_index()}] === Trying to lower JIT explicitly ===", flush=True)
+        sys.stdout.flush()
+
+        # Get the underlying JIT function to call lower()
+        import equinox as eqx
+        lowered = _prefill_kernel.lower(
+            gen_state, model, sampler,
+            work.queue.queued_tokens, work.queue.queued_slot_ids, work.queue.queued_pos_ids,
+            max_seqs_in_prefill
+        )
+        print(f"[_run_prefill P{jax.process_index()}] === Lower succeeded! ===", flush=True)
+        sys.stdout.flush()
+
+        compiled = lowered.compile()
+        print(f"[_run_prefill P{jax.process_index()}] === Compile succeeded! ===", flush=True)
+        sys.stdout.flush()
+
+        result = compiled(
             gen_state, model, sampler,
             work.queue.queued_tokens, work.queue.queued_slot_ids, work.queue.queued_pos_ids,
             max_seqs_in_prefill
