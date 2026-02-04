@@ -1754,12 +1754,16 @@ class Attention(eqx.Module):
         describes where the new keys and values should be written in ``kv_cache``.
         Currently only causal masks are supported.
         """
+        import jax
+        jax.debug.print("[paged_decode] === ENTERED paged_decode ===")
 
         key_proj, key_o = maybe_rng_split(key, 2)
 
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
+        jax.debug.print("[paged_decode] === qkv computed ===")
 
         kv_cache = kv_cache.update(batch_info, k, v)
+        jax.debug.print("[paged_decode] === kv_cache updated ===")
 
         sm_scale = (
             self.config.scaling_factor
@@ -1767,6 +1771,7 @@ class Attention(eqx.Module):
             else 1.0 / math.sqrt(self.config.HeadSize.size)
         )
 
+        jax.debug.print("[paged_decode] === about to call ragged_paged_attention, use_tpu={u} ===", u=self.config.use_tpu_ragged_paged_attention)
         attn_tokens = ragged_paged_attention(
             q,
             kv_cache.kv_pages,
@@ -1778,10 +1783,12 @@ class Attention(eqx.Module):
             soft_cap=self.config.logits_soft_cap,
             use_tpu=self.config.use_tpu_ragged_paged_attention,
         )
+        jax.debug.print("[paged_decode] === ragged_paged_attention done ===")
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
         attn_output = self.o_proj(attn_output, key=key_o)
+        jax.debug.print("[paged_decode] === returning from paged_decode ===")
 
         return attn_output, kv_cache
 
@@ -1836,6 +1843,7 @@ def ragged_paged_attention(
     This function dispatches to the TPU implementation when available and
     supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
     """
+    jax.debug.print("[ragged_paged_attention] === ENTERED, use_tpu={u} ===", u=use_tpu)
 
     def _tpu_rpa_available() -> bool:
         if tpu_ragged_paged_attention is None:
@@ -1848,6 +1856,7 @@ def ragged_paged_attention(
         return True
 
     if use_tpu and _tpu_rpa_available():
+        jax.debug.print("[ragged_paged_attention] === using TPU implementation ===")
         try:
             out = _do_tpu_ragged_paged_attention(
                 q,
@@ -1867,6 +1876,7 @@ def ragged_paged_attention(
                 exc_info=True,
             )
 
+    jax.debug.print("[ragged_paged_attention] === calling default_ragged_paged_attention ===")
     return default_ragged_paged_attention(
         q,
         kv_pages,
@@ -1985,6 +1995,8 @@ def default_ragged_paged_attention(
 
     It does each sequence independently
     """
+    jax.debug.print("[default_ragged_paged_attention] === ENTERED ===")
+    jax.debug.print("[default_ragged_paged_attention] q_shape={s} num_seqs={n}", s=q.array.shape, n=num_seqs)
 
     # Optimized block sizes: larger blocks reduce loop overhead
     # Original values (Q_BS=1, KV_BS=2) were conservative; 16 provides better throughput

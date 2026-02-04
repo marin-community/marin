@@ -362,6 +362,7 @@ class LlamaDecoderLayer(eqx.Module):
         # self attention and skip connection
         residual = x
         x = self.input_layernorm(x)
+        # jax.debug.print only on layer 0 to reduce spam
         attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
 
         if self.post_attn_layernorm is not None:
@@ -426,6 +427,7 @@ class LlamaTransformer(eqx.Module):
         *,
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        jax.debug.print("[LlamaTransformer.decode] === ENTERED transformer.decode ===")
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
 
         # Unfortunately, JAX does not seem to want to intelligently reuse memory here, so we manually unroll the loop
@@ -441,6 +443,7 @@ class LlamaTransformer(eqx.Module):
         caches = list(kv_cache)
         updated_caches: list[KvPageCache] = []
 
+        jax.debug.print("[LlamaTransformer.decode] === starting layer loop, num_layers={n} ===", n=self.config.num_layers)
         for i in range(self.config.num_layers):
             with jax.named_scope("slice layer"):
                 layer = hax.tree_util.tree_map(lambda l: l["layer", i], self.layers.stacked)  # type: ignore
@@ -455,7 +458,10 @@ class LlamaTransformer(eqx.Module):
             )
             with jax.named_scope("update cache"):
                 updated_caches.append(this_cache)
+            if i == 0:
+                jax.debug.print("[LlamaTransformer.decode] === layer 0 done ===")
 
+        jax.debug.print("[LlamaTransformer.decode] === all layers done, applying norm ===")
         x = self.norm(x)
 
         return x, ListCache(updated_caches)
@@ -657,17 +663,23 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
             Updated cache to pass into the next decode call.
         """
 
+        import jax
+        jax.debug.print("[LlamaLMHeadModel.decode] === ENTERED decode ===")
         # Embed the incoming token IDs
         x = self.embeddings.embed(input_ids)
+        jax.debug.print("[LlamaLMHeadModel.decode] === embeddings done ===")
 
         # Propagate through the transformer with paged-KV caching
         k_t = maybe_rng_split(key, 1)[0] if key is not None else None
+        jax.debug.print("[LlamaLMHeadModel.decode] === about to call transformer.decode ===")
         x, new_state = self.transformer.decode(kv_cache, x, batch_info, pos_ids, key=k_t)
+        jax.debug.print("[LlamaLMHeadModel.decode] === transformer.decode done ===")
 
         # Project to logits
         if self.lm_head is not None:
             logits = self.lm_head(x, key=None)
         else:
             logits = self.embeddings.unembed(x)
+        jax.debug.print("[LlamaLMHeadModel.decode] === returning logits ===")
 
         return logits, new_state

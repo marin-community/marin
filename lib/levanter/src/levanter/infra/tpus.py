@@ -69,8 +69,11 @@ def describe_tpu_queued_resource(tpu_name, zone):
 
 
 def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version, zone, node_count):
-    # ensure alpha is enabled
-    run_command("gcloud", "components", "install", "alpha", "--quiet")
+    # ensure alpha is enabled (skip install if already available or if component manager is disabled)
+    try:
+        subprocess.run(["gcloud", "alpha", "--help"], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        run_command("gcloud", "components", "install", "alpha", "--quiet")
     if version is None:
         version = "tpu-ubuntu2204-base"
     tpu_stat = describe_tpu_queued_resource(tpu_name, zone)

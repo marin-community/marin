@@ -322,16 +322,32 @@ def main(config: SampleLmMultihostConfig):
             sys.stderr.flush()
             raise
 
-        memory_device = jax.local_devices()[0] if jax.local_devices() else None
-        hbm_free_before_engine = estimated_free_device_memory(memory_device)
+        print(f"[DEBUG P{jax.process_index()}] === About to get memory_device ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
 
+        memory_device = jax.local_devices()[0] if jax.local_devices() else None
+        print(f"[DEBUG P{jax.process_index()}] === Got memory_device: {memory_device} ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        hbm_free_before_engine = estimated_free_device_memory(memory_device)
+        print(f"[DEBUG P{jax.process_index()}] === HBM free before engine: {hbm_free_before_engine} GiB ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        print(f"[DEBUG P{jax.process_index()}] === STARTING engine creation ===", flush=True)
         logger.info("=== STARTING engine creation ===")
         sys.stdout.flush()
         sys.stderr.flush()
 
         engine_start_time = time.perf_counter()
         try:
+            print(f"[DEBUG P{jax.process_index()}] === About to call InferenceEngine.from_model_with_config ===", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
             engine = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+            print(f"[DEBUG P{jax.process_index()}] === ENGINE CREATION COMPLETE ===", flush=True)
             logger.info("=== ENGINE CREATION COMPLETE ===")
             sys.stdout.flush()
             sys.stderr.flush()
@@ -342,7 +358,14 @@ def main(config: SampleLmMultihostConfig):
             raise
 
         engine_creation_time = time.perf_counter() - engine_start_time
+        print(f"[DEBUG P{jax.process_index()}] === Engine creation took {engine_creation_time:.2f}s ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
         hbm_free_after_engine = estimated_free_device_memory(memory_device)
+        print(f"[DEBUG P{jax.process_index()}] === HBM free after engine: {hbm_free_after_engine} GiB ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
 
         if config.log_kernel_jaxprs_path:
             jaxprs_path = config.log_kernel_jaxprs_path
@@ -351,11 +374,25 @@ def main(config: SampleLmMultihostConfig):
             engine.write_kernel_jaxprs(jaxprs_path)
 
         base_key = jrandom.PRNGKey(base_seed)
+        print(f"[DEBUG P{jax.process_index()}] === Created base_key ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
 
         total_batches = (len(prompt_ids) + batch_size - 1) // batch_size
+        print(f"[DEBUG P{jax.process_index()}] === total_batches={total_batches}, prompt_ids={len(prompt_ids)}, batch_size={batch_size} ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
         try:
             for round_index in range(int(config.n_rounds)):
+                print(f"[DEBUG P{jax.process_index()}] === Starting round {round_index} ===", flush=True)
+                sys.stdout.flush()
+                sys.stderr.flush()
                 for batch_index, start in enumerate(range(0, len(prompt_ids), batch_size)):
+                    print(f"[DEBUG P{jax.process_index()}] === Starting batch {batch_index}, start={start} ===", flush=True)
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+
                     batch_prompt_ids = prompt_ids[start : start + batch_size]
                     batch_prompts = prompts[start : start + batch_size]
                     batch_requests: list[Request] = []
@@ -376,6 +413,9 @@ def main(config: SampleLmMultihostConfig):
                         )
 
                     total_expected = len(batch_prompt_ids) * int(config.n_generations)
+                    print(f"[DEBUG P{jax.process_index()}] === Built {len(batch_requests)} requests, total_expected={total_expected} ===", flush=True)
+                    sys.stdout.flush()
+                    sys.stderr.flush()
 
                     # Diagnostic logging: track which prompt we're on
                     if is_leader:
@@ -395,9 +435,16 @@ def main(config: SampleLmMultihostConfig):
                             step=round_index * total_batches + batch_index,
                         )
 
+                    print(f"[DEBUG P{jax.process_index()}] === About to call engine.generate() ===", flush=True)
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+
                     start_time = time.time()
                     result = engine.generate(batch_requests)
                     duration = time.time() - start_time
+                    print(f"[DEBUG P{jax.process_index()}] === engine.generate() completed in {duration:.2f}s ===", flush=True)
+                    sys.stdout.flush()
+                    sys.stderr.flush()
 
                     # Diagnostic: we completed generation for this batch
                     if is_leader:

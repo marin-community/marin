@@ -434,49 +434,47 @@ def _prefill_kernel(
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
+    jax.debug.print("[_prefill_kernel] === ENTERED prefill_kernel ===")
+
     tokens = queue.queued_tokens
     pos_ids = queue.queued_pos_ids
     slot_ids = queue.queued_slot_ids
 
+    jax.debug.print("[_prefill_kernel] === got tokens/pos/slots ===")
+
     decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+
+    jax.debug.print("[_prefill_kernel] === allocate_for_seq done ===")
 
     seq_lens = decode_state.seq_lens
 
     sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_seqs_in_prefill)
 
-    # jax.debug.print(
-    #     "[_run_prefill] tokens={tokens} slots={slots} pos={pos} seq_lens={lens}",
-    #     tokens=tokens.array,
-    #     slots=slot_ids.array,
-    #     pos=pos_ids.array,
-    #     lens=decode_state.seq_lens.array,
-    # )
+    jax.debug.print("[_prefill_kernel] === about to call model.decode ===")
     logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    jax.debug.print("[_prefill_kernel] === model.decode returned ===")
+    jax.debug.print("[_prefill_kernel] logits_shape={shape}", shape=logits.array.shape)
     logits_at_samples = logits["position", sample_indices]
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
-    # jax.debug.print(
-    #     "[prefill] sample_count={num} queued_before={queued}",
-    #     num=num_new_tokens,
-    #     queued=gen_state.decode_state.num_queued_tokens,
-    # )
+    jax.debug.print("[_prefill_kernel] === num_new_tokens={num} ===", num=num_new_tokens)
+
     new_slot_ids = slot_ids["position", sample_indices]
     new_pos_ids = pos_ids["position", sample_indices]
     prng_keys = gen_state.decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
-    # jax.debug.print(
-    #     "[_run_prefill] sample_indices={} new_slots={} new_pos={} prng_keys={}",
-    #     sample_indices.array,
-    #     new_slot_ids.array,
-    #     new_pos_ids.array,
-    #     prng_keys,
-    # )
+
+    jax.debug.print("[_prefill_kernel] === about to sample ===")
 
     temps = decode_state.temperature["seq", new_slot_ids]
 
     new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, key=prng_keys)
 
+    jax.debug.print("[_prefill_kernel] === sampling done ===")
+
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
+
+    jax.debug.print("[_prefill_kernel] === update_tokens done ===")
 
     # Initialize outputs buffer and append prefill-sampled tokens
     outputs = _DecodeOutputs.init(
@@ -486,6 +484,8 @@ def _prefill_kernel(
     )
     outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
+
+    jax.debug.print("[_prefill_kernel] === outputs created ===")
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
     if decode_state.clone_sources is not None:
@@ -498,14 +498,8 @@ def _prefill_kernel(
             outputs,
         )
 
-    # Device-side release of finished sequences (jit-safe)
-    # jax.debug.print("[_run_prefill] output_tokens={} output_slots={}", outputs.tokens, outputs.slot_ids)
+    jax.debug.print("[_prefill_kernel] === returning from prefill_kernel ===")
 
-    # jax.debug.print(
-    #     "[prefill] outputs_size={size} queued_after={queued}",
-    #     size=outputs.num_tokens,
-    #     queued=gen_state.decode_state.num_queued_tokens,
-    # )
     return gen_state, outputs
 
 
@@ -563,9 +557,7 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     return jax.lax.fori_loop(0, max_slots, body, gen_state)
 
 
-@hax.named_jit(
-    donate_args=(True, False, False, False, False),
-)
+# Temporarily no JIT to debug the actual computation
 def _run_prefill(
     gen_state: GenState,
     model: LmHeadModel,
@@ -573,8 +565,63 @@ def _run_prefill(
     work: PrefillWork,
     max_seqs_in_prefill: int,
 ) -> tuple[GenState, _DecodeOutputs]:
-    gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    import sys
+
+    # Multi-host debug: ensure all hosts agree on key shapes
+    print(f"[_run_prefill P{jax.process_index()}] === ENTERED ===", flush=True)
+    print(f"[_run_prefill P{jax.process_index()}] work.queue.num_queued_tokens shape={work.queue.num_queued_tokens.shape}", flush=True)
+    print(f"[_run_prefill P{jax.process_index()}] work.new_num_seqs shape={work.new_num_seqs.shape}", flush=True)
+    print(f"[_run_prefill P{jax.process_index()}] max_seqs_in_prefill={max_seqs_in_prefill}", flush=True)
+    sys.stdout.flush()
+
+    # CRITICAL: Use hax.named_jit which properly handles:
+    # 1. Equinox modules (model)
+    # 2. Haliax NamedArrays (gen_state, work)
+    # 3. Multi-host SPMD partitioning
+
+    # First, let's trace each step separately to find where it fails
+    # Step 1: Apply prefill work (updates gen_state with new sequences)
+    print(f"[_run_prefill P{jax.process_index()}] === Step 1: _apply_prefill_work ===", flush=True)
+    sys.stdout.flush()
+
+    @hax.named_jit
+    def _jit_apply_prefill_work(gs, w):
+        jax.debug.print("[_jit_apply_prefill_work] entered")
+        result = _apply_prefill_work(gs, w)
+        jax.debug.print("[_jit_apply_prefill_work] done")
+        return result
+
+    try:
+        gen_state = _jit_apply_prefill_work(gen_state, work)
+        print(f"[_run_prefill P{jax.process_index()}] === Step 1 DONE ===", flush=True)
+        sys.stdout.flush()
+    except Exception as e:
+        print(f"[_run_prefill P{jax.process_index()}] !!! Step 1 FAILED: {e}", flush=True)
+        sys.stdout.flush()
+        raise
+
+    # Step 2: Run prefill kernel
+    print(f"[_run_prefill P{jax.process_index()}] === Step 2: _prefill_kernel ===", flush=True)
+    sys.stdout.flush()
+
+    # The prefill kernel needs to be JIT'd with static_argnums for max_seqs_in_prefill
+    @functools.partial(hax.named_jit, static_argnums=(4,))
+    def _jit_prefill_kernel(gs, mdl, smplr, queue, max_seqs):
+        jax.debug.print("[_jit_prefill_kernel] entered")
+        result = _prefill_kernel(gs, mdl, smplr, queue, max_seqs)
+        jax.debug.print("[_jit_prefill_kernel] done")
+        return result
+
+    try:
+        result = _jit_prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+        print(f"[_run_prefill P{jax.process_index()}] === Step 2 DONE ===", flush=True)
+        sys.stdout.flush()
+    except Exception as e:
+        print(f"[_run_prefill P{jax.process_index()}] !!! Step 2 FAILED: {e}", flush=True)
+        sys.stdout.flush()
+        raise
+
+    return result
 
 
 def _handle_clones(
@@ -895,31 +942,84 @@ class InferenceEngine:
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         When `use_logical_reset` is True in config, skips expensive cache zeroing.
         """
-        if self.config.use_logical_reset:
-            self.gen_state = eqx.filter_jit(self.gen_state.reset_logical, donate="all")()
-        else:
-            self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
+        import sys
+        print(f"[DEBUG InferenceEngine.reset P{jax.process_index()}] === Starting reset, use_logical_reset={self.config.use_logical_reset} ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        # In multi-host mode, skip the reset of JAX arrays entirely on first call
+        # since the arrays were just initialized in from_model_with_config
+        # Instead, just clear the Python-side state
+        print(f"[DEBUG InferenceEngine.reset P{jax.process_index()}] === Skipping array reset for multi-host, just clearing Python state ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
+        print(f"[DEBUG InferenceEngine.reset P{jax.process_index()}] === Reset done ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
 
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
         """
+        import sys
+        print(f"[DEBUG _prefill_batch P{jax.process_index()}] === Starting _prefill_batch with {len(batch)} requests ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
         # Build a single PrefillWork description and run prefill exactly once
+        print(f"[DEBUG _prefill_batch P{jax.process_index()}] === About to call _prefill_prompts ===", flush=True)
+        print(f"[DEBUG _prefill_batch P{jax.process_index()}] === free_slots before: {self.free_slots} ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
         prefill_work = self._prefill_prompts(batch)
+        print(f"[DEBUG _prefill_batch P{jax.process_index()}] === free_slots after: {self.free_slots} ===", flush=True)
+        print(f"[DEBUG _prefill_batch P{jax.process_index()}] === _prefill_prompts done, work={prefill_work is not None} ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        if prefill_work is not None:
+            print(f"[DEBUG _prefill_batch P{jax.process_index()}] === prefill_work created ===", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
         if prefill_work is None:
             return None
-        new_state = _run_prefill(
-            self.gen_state,
-            self.model,
-            self.sampler,
-            prefill_work,
-            int(self.config.max_seqs_in_prefill),
-        )
+        print(f"[DEBUG _prefill_batch P{jax.process_index()}] === About to call _run_prefill ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        # Add barrier sync before JIT call to ensure all hosts are aligned
+        from levanter.utils.jax_utils import barrier_sync_with_tag
+        print(f"[DEBUG _prefill_batch P{jax.process_index()}] === Calling barrier_sync_with_tag before _run_prefill ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        barrier_sync_with_tag("prefill_start")
+        print(f"[DEBUG _prefill_batch P{jax.process_index()}] === barrier_sync done, now calling _run_prefill ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        try:
+            new_state = _run_prefill(
+                self.gen_state,
+                self.model,
+                self.sampler,
+                prefill_work,
+                int(self.config.max_seqs_in_prefill),
+            )
+            print(f"[DEBUG _prefill_batch P{jax.process_index()}] === _run_prefill done ===", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception as e:
+            import traceback
+            print(f"[DEBUG _prefill_batch P{jax.process_index()}] === _run_prefill FAILED: {e} ===", flush=True)
+            traceback.print_exc()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            raise
 
         # _run_prefill returns (GenState, _DecodeOutputs)
         self.gen_state, outputs = new_state
@@ -1053,31 +1153,76 @@ class InferenceEngine:
         if offset == 0:
             return None
 
+        # In multi-host mode, each host creates local arrays which are then combined
+        # during JIT compilation. Since all hosts have identical data, this should work.
+        import sys
+
+        # Barrier sync to ensure all hosts are ready to build PrefillWork at the same time
+        if jax.process_count() > 1:
+            from levanter.utils.jax_utils import barrier_sync_with_tag
+            print(f"[_prefill_prompts P{jax.process_index()}] === Waiting at barrier before building PrefillWork ===", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            barrier_sync_with_tag("prefill_prompts_build", timeout=60.0)
+
+        print(f"[_prefill_prompts P{jax.process_index()}] === Building PrefillWork ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        # Create proper global arrays using jax.make_array_from_callback.
+        # For replicated data, we use PartitionSpec() which means all devices get the same data.
+        from jax.sharding import NamedSharding, PartitionSpec
+        mesh = hax.partitioning._get_mesh()
+        replicated_sharding = NamedSharding(mesh, PartitionSpec())
+
+        print(f"[_prefill_prompts P{jax.process_index()}] === Building PrefillWork with global arrays ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        def _to_jax_arr(arr, dtype):
+            """Convert numpy array to a properly sharded global JAX array."""
+            np_arr = np.asarray(arr, dtype=dtype)
+            # Use make_array_from_callback with replicated sharding.
+            # The callback receives index tuples but for replicated sharding,
+            # each shard is the full array.
+            return jax.make_array_from_callback(
+                np_arr.shape,
+                replicated_sharding,
+                lambda _: np_arr
+            )
+
+        # Create the PrefillWork with local arrays first
         prefill_queue = TokenQueue(
-            queued_tokens=hax.named(jnp.asarray(queue_tokens, dtype=jnp.int32), axis="position"),
-            queued_slot_ids=hax.named(jnp.asarray(queue_slot_ids, dtype=jnp.int32), axis="position"),
-            queued_pos_ids=hax.named(jnp.asarray(queue_pos_ids, dtype=jnp.int32), axis="position"),
-            num_queued_tokens=jnp.array(offset, dtype=jnp.int32),
+            queued_tokens=hax.named(_to_jax_arr(queue_tokens, jnp.int32), axis="position"),
+            queued_slot_ids=hax.named(_to_jax_arr(queue_slot_ids, jnp.int32), axis="position"),
+            queued_pos_ids=hax.named(_to_jax_arr(queue_pos_ids, jnp.int32), axis="position"),
+            num_queued_tokens=_to_jax_arr(offset, jnp.int32),
         )
 
-        return PrefillWork(
+        prefill_work = PrefillWork(
             queue=prefill_queue,
-            new_num_seqs=jnp.array(total_new, dtype=jnp.int32),
-            new_slot_ids=hax.named(jnp.asarray(work_slot_ids, dtype=jnp.int32), axis="seq"),
-            clone_targets=hax.named(jnp.asarray(clone_targets, dtype=jnp.int32), axis="seq"),
-            prompt_tokens=hax.named(jnp.asarray(prompt_tokens, dtype=jnp.int32), axis=("seq", "position")),
-            prompt_lengths=hax.named(jnp.asarray(prompt_lengths, dtype=jnp.int32), axis="seq"),
+            new_num_seqs=_to_jax_arr(total_new, jnp.int32),
+            new_slot_ids=hax.named(_to_jax_arr(work_slot_ids, jnp.int32), axis="seq"),
+            clone_targets=hax.named(_to_jax_arr(clone_targets, jnp.int32), axis="seq"),
+            prompt_tokens=hax.named(_to_jax_arr(prompt_tokens, jnp.int32), axis=("seq", "position")),
+            prompt_lengths=hax.named(_to_jax_arr(prompt_lengths, jnp.int32), axis="seq"),
             seq_params=SeqDecodingParams(
-                max_num_tokens=jnp.asarray(max_num_tokens, dtype=jnp.int32),
+                max_num_tokens=_to_jax_arr(max_num_tokens, jnp.int32),
                 stop_tokens=(
                     None
                     if stop_tokens is None
-                    else hax.named(jnp.asarray(stop_tokens, dtype=jnp.int32), axis=("seq", "stop_seq", "position"))
+                    else hax.named(_to_jax_arr(stop_tokens, jnp.int32), axis=("seq", "stop_seq", "position"))
                 ),
-                temperature=jnp.asarray(temperatures, dtype=jnp.float32),
-                key=jnp.asarray(prng_keys, dtype=jnp.uint32),
+                temperature=_to_jax_arr(temperatures, jnp.float32),
+                key=_to_jax_arr(prng_keys, jnp.uint32),
             ),
         )
+
+        print(f"[_prefill_prompts P{jax.process_index()}] === PrefillWork created successfully ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        return prefill_work
 
     def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
         """Generate tokens for a batch of Requests.
@@ -1099,7 +1244,14 @@ class InferenceEngine:
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
+        import sys
+        print(f"[DEBUG engine.generate P{jax.process_index()}] === About to call reset() ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
         self.reset()
+        print(f"[DEBUG engine.generate P{jax.process_index()}] === reset() done ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
 
         # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]
@@ -1138,8 +1290,17 @@ class InferenceEngine:
 
         time_in = time.time()
         # Initial admission from queue and extract prompt tokens
+        print(f"[DEBUG engine.generate P{jax.process_index()}] === About to call _prefill_batch() ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
         decode_outputs = self._prefill_batch(requests)
+        print(f"[DEBUG engine.generate P{jax.process_index()}] === _prefill_batch() done ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
         self._ingest_outputs(decode_outputs)
+        print(f"[DEBUG engine.generate P{jax.process_index()}] === _ingest_outputs() done ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1154,7 +1315,13 @@ class InferenceEngine:
 
         stagnant_iters = 0
         decode_iteration = 0
-        for _ in range(self.config.max_seq_len // self.config.max_rounds):
+        print(f"[DEBUG engine.generate P{jax.process_index()}] === Entering decode loop, max_iters={self.config.max_seq_len // self.config.max_rounds} ===", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        for loop_iter in range(self.config.max_seq_len // self.config.max_rounds):
+            print(f"[DEBUG engine.generate P{jax.process_index()}] === Loop iteration {loop_iter} ===", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
             if _all_done():
                 break
             # Call step callback if provided
@@ -1177,6 +1344,9 @@ class InferenceEngine:
             fake_submit_done = time.time()
 
             submit_start = iter_start
+            print(f"[DEBUG engine.generate P{jax.process_index()}] === About to call _run_generation_loop() ===", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
             future_state, decode_outputs = _run_generation_loop(
                 self.gen_state,
                 self.model,
@@ -1186,6 +1356,9 @@ class InferenceEngine:
                 int(self.config.max_rounds),
                 bool(self.config.incremental_cleanup),
             )
+            print(f"[DEBUG engine.generate P{jax.process_index()}] === _run_generation_loop() returned ===", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
             submit_done = time.time()
             # Time spent with device executing (and the host thread waiting)
             self.gen_state = future_state

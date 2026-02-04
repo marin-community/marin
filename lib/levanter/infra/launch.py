@@ -87,8 +87,25 @@ def main():
     region = "-".join(zone.split("-")[:-1])
 
     env = config.env_for_accel(tpu_type)
+
+    # Load env vars from .marin.yaml if it exists (in lib/levanter/ directory)
+    from pathlib import Path
+    levanter_root = Path(__file__).parent.parent
+    marin_yaml_path = levanter_root / ".marin.yaml"
+    if marin_yaml_path.exists():
+        import yaml
+        with open(marin_yaml_path) as f:
+            marin_config = yaml.safe_load(f) or {}
+        if "env" in marin_config and isinstance(marin_config["env"], dict):
+            for key, value in marin_config["env"].items():
+                if value is not None:
+                    env[key] = str(value)
+
+    # Command-line env vars override .marin.yaml
     for key, value in args.env or []:
         env[key] = value
+
+    repo_root = cli.find_repo_root()
 
     if "WANDB_PROJECT" not in env:
         env["WANDB_PROJECT"] = "levanter"
@@ -103,7 +120,6 @@ def main():
     # make an image tag based on the unix timestamp to ensure we always pull the latest image
     tag = int(time.time())
 
-    repo_root = cli.find_repo_root()
     docker_file = repo_root / "lib/levanter/docker/tpu/Dockerfile.incremental"
 
     base_image, base_tag = docker.split_image_and_tag(args.docker_base_image)
