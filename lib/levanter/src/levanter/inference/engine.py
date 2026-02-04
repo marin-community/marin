@@ -681,6 +681,30 @@ def _run_prefill(
 
     # Extract the queue arrays to pass individually (avoiding nested dataclass issues)
     queue = work.queue
+
+    # DEBUG: try lowering explicitly to see the error
+    print(f"[_run_prefill P{jax.process_index()}] === Attempting to lower JIT ===", flush=True)
+    sys.stdout.flush()
+
+    try:
+        # Try to lower and compile to see if we get a more useful error
+        lowered = _jit_prefill_kernel.lower(
+            gen_state, model, sampler,
+            queue.queued_tokens, queue.queued_slot_ids, queue.queued_pos_ids, queue.num_queued_tokens,
+            max_seqs_in_prefill
+        )
+        print(f"[_run_prefill P{jax.process_index()}] === Lower succeeded! Compiling... ===", flush=True)
+        sys.stdout.flush()
+        compiled = lowered.compile()
+        print(f"[_run_prefill P{jax.process_index()}] === Compile succeeded! Running... ===", flush=True)
+        sys.stdout.flush()
+    except Exception as e:
+        print(f"[_run_prefill P{jax.process_index()}] !!! Lower/compile failed: {type(e).__name__}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
+        raise
+
     try:
         result = _jit_prefill_kernel(
             gen_state, model, sampler,
