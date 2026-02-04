@@ -474,21 +474,24 @@ def _prefill_kernel(
     print(f"[_prefill_kernel P{jax.process_index()}] local NamedArrays created", flush=True)
     sys.stdout.flush()
 
-    # DEBUG: Return immediately with dummy outputs to confirm crash is in allocate_for_seq
-    print(f"[_prefill_kernel P{jax.process_index()}] === RETURNING DUMMY OUTPUTS ===", flush=True)
+    # DEBUG: Test if allocate_for_seq works
+    print(f"[_prefill_kernel P{jax.process_index()}] === Calling allocate_for_seq ===", flush=True)
     sys.stdout.flush()
 
+    decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=local_slot_ids, token_pos_ids=local_pos_ids)
+
+    print(f"[_prefill_kernel P{jax.process_index()}] === allocate_for_seq SUCCEEDED! ===", flush=True)
+    sys.stdout.flush()
+
+    # Return dummy outputs - skip model.decode for now
     outputs = _DecodeOutputs.init(
         max_tokens=1,
         max_seqs=1,
         with_logprobs=True,
     )
-    print(f"[_prefill_kernel P{jax.process_index()}] === Dummy outputs created, returning ===", flush=True)
+    print(f"[_prefill_kernel P{jax.process_index()}] === Returning after allocate_for_seq ===", flush=True)
     sys.stdout.flush()
     return gen_state, outputs
-
-    # Original code that crashes:
-    # decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=local_slot_ids, token_pos_ids=local_pos_ids)
 
     print(f"[_prefill_kernel P{jax.process_index()}] === allocate_for_seq done ===", flush=True)
     sys.stdout.flush()
