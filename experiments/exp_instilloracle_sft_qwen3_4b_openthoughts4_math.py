@@ -55,13 +55,13 @@ tokenized_datasets = {DATASET_SHORT_NAME: tokenized_ot4_math}
 mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 
 # Training configuration
-# Using v5p-64 (32 chips)
+# Using v5p-32 (16 chips)
 TARGET_EPOCHS = 8
-TRAIN_BATCH_SIZE = 256  # 8 per device on v5p-64 (32 chips)
-MICROBATCH_SIZE = 256  # No gradient accumulation
+TRAIN_BATCH_SIZE = 128  # 8 per device on v5p-32 (16 chips)
+MICROBATCH_SIZE = 128  # No gradient accumulation
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 
-RESOURCES = ResourceConfig.with_tpu("v5p-64")
+RESOURCES = ResourceConfig.with_tpu("v5p-32")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
@@ -70,7 +70,7 @@ mixture_sft_config = SimpleSFTConfig(
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=4e-5,
+    learning_rate=2e-5,
     max_seq_len=32768,  # 32K context length
     seed=42,
     steps_per_checkpoint=(DATASET_SIZE / TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
