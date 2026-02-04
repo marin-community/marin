@@ -76,10 +76,9 @@ TRAIN_BATCH_SIZE = 16
 MICROBATCH_SIZE = 16
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
-# Use v5p-64 (32 chips) with tensor parallelism to keep batch=16
-# TP=2 means each example uses 2 chips, giving 32/2=16 data parallel replicas
-RESOURCES = ResourceConfig.with_tpu("v5p-64")
-TENSOR_PARALLEL_SIZE = 2
+# Use v5p-32 (16 chips) - batch=16 matches chip count exactly, no TP needed
+RESOURCES = ResourceConfig.with_tpu("v5p-32")
+TENSOR_PARALLEL_SIZE = 1
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
