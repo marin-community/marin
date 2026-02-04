@@ -32,9 +32,10 @@ from experiments.dna.defaults import (
 from marin.execution.executor import executor_main
 
 DATASETS = {
+    "three_prime_utr_baseline": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v12_256_128",
     "upstream_of_cds_512": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v13_256_128",
     "downstream_of_cds_512": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v14_256_128",
-    "three_prime_utr_baseline": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v12_256_128",
+    "downstream_of_cds_256": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v15_256_128",
 }
 
 
