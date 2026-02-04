@@ -76,14 +76,19 @@ TRAIN_BATCH_SIZE = 16
 MICROBATCH_SIZE = 16
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
-RESOURCES = ResourceConfig.with_tpu("v5p-8")
+# Use v5p-64 (32 chips) with tensor parallelism to keep batch=16
+# TP=2 means each example uses 2 chips, giving 32/2=16 data parallel replicas
+RESOURCES = ResourceConfig.with_tpu("v5p-64")
+TENSOR_PARALLEL_SIZE = 2
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
     tokenizer=qwen3_8b_tokenizer,
     model_name_or_path="Qwen/Qwen3-8B",
     train_batch_size=TRAIN_BATCH_SIZE,
-    per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
+    per_device_parallelism=compute_per_device_parallelism(
+        TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES, TENSOR_PARALLEL_SIZE
+    ),
     per_device_eval_parallelism=8,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=4e-5,
@@ -99,6 +104,7 @@ mixture_sft_config = SimpleSFTConfig(
     beta2=0.98,
     epsilon=1e-8,
     pad_tokenizer_to_match_model=True,  # Model and tokenizer vocab sizes differ
+    tensor_parallel_size=TENSOR_PARALLEL_SIZE,
 )
 
 mixture_config = lm_mixture_data_config(
@@ -118,12 +124,15 @@ qwen3_8b_32768_seq_len = dataclasses.replace(
     cross_entropy_block_size=32000,  # Process vocab in chunks to reduce memory during loss computation
 )
 
+# Derive resource name for experiment suffix (e.g., "v5p-64" -> "v5p64")
+RESOURCE_SUFFIX = RESOURCES.tpu_type.replace("-", "") if RESOURCES.tpu_type else "gpu"
+
 exp2601_sft_openthoughts_agent_v1_qwen3_8b = default_sft(
-    name="exp2601_sft_ot_agent_v1_qwen3_8b_32768tokens",
+    name=f"exp2601_sft_ot_agent_v1_qwen3_8b_32768tokens_{RESOURCE_SUFFIX}",
     tokenized=mixture_config,
     model_config=qwen3_8b_32768_seq_len,
     sft_config=mixture_sft_config,
-    tags=["qwen", "openthoughts-agent", "sft"],
+    tags=["qwen", "openthoughts-agent", "sft", RESOURCE_SUFFIX],
 )
 
 exp2601_checkpoint = exp2601_sft_openthoughts_agent_v1_qwen3_8b.cd(f"hf/step-{NUM_TRAIN_STEPS - 1}").nonblocking()
