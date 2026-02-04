@@ -48,7 +48,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 
 # The iris project root (lib/iris/) - used as workspace for the example

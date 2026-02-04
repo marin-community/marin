@@ -176,19 +176,23 @@ class Autoscaler:
         self,
         scale_groups: dict[str, ScalingGroup],
         vm_registry: VmRegistry,
-        config: config_pb2.AutoscalerConfig | None = None,
+        evaluation_interval: Duration,
+        requesting_timeout: Duration,
         threads: ThreadContainer | None = None,
     ):
+        """Create autoscaler with explicit parameters.
+
+        Args:
+            scale_groups: Map of scale group name to ScalingGroup instance
+            vm_registry: Shared VM registry for tracking all VMs
+            evaluation_interval: How often to evaluate scaling decisions
+            requesting_timeout: How long to wait for VMs to provision before timing out
+            threads: Optional thread container for testing
+        """
         self._groups = scale_groups
         self._vm_registry = vm_registry
-
-        if config is None:
-            config = config_pb2.AutoscalerConfig()
-        if not config.HasField("evaluation_interval"):
-            config.evaluation_interval.CopyFrom(Duration.from_seconds(10).to_proto())
-        if not config.HasField("requesting_timeout"):
-            config.requesting_timeout.CopyFrom(Duration.from_seconds(120).to_proto())
-        self._config = config
+        self._evaluation_interval = evaluation_interval
+        self._requesting_timeout = requesting_timeout
 
         # Track slice creation times for short-lived slice detection
         self._slice_created_at: dict[str, int] = {}
@@ -198,6 +202,33 @@ class Autoscaler:
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
+
+    @classmethod
+    def from_config(
+        cls,
+        scale_groups: dict[str, ScalingGroup],
+        vm_registry: VmRegistry,
+        config: config_pb2.AutoscalerConfig,
+        threads: ThreadContainer | None = None,
+    ) -> Autoscaler:
+        """Create autoscaler from proto config.
+
+        Args:
+            scale_groups: Map of scale group name to ScalingGroup instance
+            vm_registry: Shared VM registry for tracking all VMs
+            config: Autoscaler configuration proto (with defaults already applied)
+            threads: Optional thread container for testing
+
+        Returns:
+            Configured Autoscaler instance
+        """
+        return cls(
+            scale_groups=scale_groups,
+            vm_registry=vm_registry,
+            evaluation_interval=Duration.from_proto(config.evaluation_interval),
+            requesting_timeout=Duration.from_proto(config.requesting_timeout),
+            threads=threads,
+        )
 
     def _wait_for_inflight(self) -> None:
         """Wait for in-flight scale-ups to complete without terminating anything.
@@ -411,8 +442,7 @@ class Autoscaler:
         actual scale-up work. Returns immediately without blocking.
         """
         # Mark group as requesting before spawning thread
-        timeout = Duration.from_proto(self._config.requesting_timeout)
-        group.mark_requesting(ts, timeout)
+        group.mark_requesting(ts, self._requesting_timeout)
 
         # Spawn background thread for scale-up
         def _scale_up_wrapper(stop_event):
@@ -555,7 +585,7 @@ class Autoscaler:
     @property
     def evaluation_interval_seconds(self) -> float:
         """Configured evaluation interval in seconds."""
-        return Duration.from_proto(self._config.evaluation_interval).to_seconds()
+        return self._evaluation_interval.to_seconds()
 
     def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.

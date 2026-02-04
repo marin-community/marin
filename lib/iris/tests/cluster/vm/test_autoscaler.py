@@ -170,11 +170,24 @@ def make_autoscaler(
     config: config_pb2.AutoscalerConfig | None = None,
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
-    return Autoscaler(
-        scale_groups=scale_groups,
-        vm_registry=vm_registry or VmRegistry(),
-        config=config,
-    )
+    from iris.time_utils import Duration
+
+    registry = vm_registry or VmRegistry()
+
+    if config:
+        return Autoscaler.from_config(
+            scale_groups=scale_groups,
+            vm_registry=registry,
+            config=config,
+        )
+    else:
+        # Use default fast timings for tests
+        return Autoscaler(
+            scale_groups=scale_groups,
+            vm_registry=registry,
+            evaluation_interval=Duration.from_seconds(0.1),
+            requesting_timeout=Duration.from_seconds(120),
+        )
 
 
 # --- Tests for scaling decisions ---
@@ -646,7 +659,7 @@ class TestAutoscalerIdleVerification:
         )
         group.reconcile()
 
-        autoscaler = Autoscaler(
+        autoscaler = make_autoscaler(
             scale_groups={"test-group": group},
             vm_registry=VmRegistry(),
         )
@@ -782,7 +795,7 @@ class TestAutoscalerFailedSliceCleanup:
         group = ScalingGroup(scale_group_config, manager)
         group.reconcile()
 
-        autoscaler = Autoscaler(
+        autoscaler = make_autoscaler(
             scale_groups={"test-group": group},
             vm_registry=VmRegistry(),
         )

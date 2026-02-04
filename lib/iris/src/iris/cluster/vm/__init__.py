@@ -36,8 +36,8 @@ from iris.cluster.vm.ssh import (
     wait_for_connection,
 )
 
-# Health checking (from controller module where diagnostics matter)
-from iris.cluster.vm.controller import (
+# Health checking (from controller_vm module where diagnostics matter)
+from iris.cluster.vm.controller_vm import (
     HealthCheckResult,
     check_health,
 )
@@ -98,11 +98,18 @@ from iris.cluster.vm.autoscaler import (
 from iris.cluster.vm.config import (
     ScaleGroupSpec,
     config_to_dict,
-    create_autoscaler_from_config,
+    create_autoscaler,
     create_autoscaler_from_specs,
     create_manual_autoscaler,
     get_ssh_config,
     load_config,
+)
+
+# Platform abstraction
+from iris.cluster.vm.platform import (
+    Platform,
+    PlatformOps,
+    create_platform,
 )
 
 # Debug utilities
@@ -129,6 +136,8 @@ __all__ = [
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
+    "Platform",
+    "PlatformOps",
     "PoolExhaustedError",
     "QuotaExceededError",
     "RoutingResult",
@@ -151,9 +160,10 @@ __all__ = [
     "cleanup_iris_resources",
     "config_to_dict",
     "connection_available",
-    "create_autoscaler_from_config",
+    "create_autoscaler",
     "create_autoscaler_from_specs",
     "create_manual_autoscaler",
+    "create_platform",
     "discover_controller_vm",
     "get_ssh_config",
     "list_docker_containers",
