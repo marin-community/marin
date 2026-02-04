@@ -73,6 +73,19 @@ _EVAL_SUITES: dict[str, tuple] = {
     "core_plus_leaderboard": CORE_TASKS_PLUS_LEADERBOARD,
 }
 
+_DEFAULT_TPU_TYPE = "v5p-32"
+_DEFAULT_SEQ_LEN = 4096
+_DEFAULT_GLOBAL_BATCH_SIZE = 64
+_DEFAULT_EVAL_SUITE = "core_plus_leaderboard"
+_DEFAULT_EVAL_SUITE_MODE = "both"
+
+_SMOKE_TPU_TYPE = "v5p-8"
+_SMOKE_SEQ_LEN = 1024
+_SMOKE_GLOBAL_BATCH_SIZE = 32
+_SMOKE_NUM_TRAIN_STEPS = 5
+_SMOKE_EVAL_SUITE = "none"
+_SMOKE_EVAL_SUITE_MODE = "post_train"
+
 
 def _steps_for_token_target(token_target: int, global_batch_size: int, seq_len: int) -> int:
     return math.ceil(token_target / (global_batch_size * seq_len))
@@ -81,14 +94,22 @@ def _steps_for_token_target(token_target: int, global_batch_size: int, seq_len: 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Run a fast TPU sanity check (defaults: v5p-8, bs=32, seq=1024, steps=5, eval-suite=none). "
+            "If you also pass an explicit flag (e.g., --seq-len), that value is kept."
+        ),
+    )
+    parser.add_argument(
         "--dataset",
         choices=DATASET_OPTIONS.keys(),
         default="nemotron_dclm_fineweb_10b",
         help="Which tokenized dataset preset to train on.",
     )
-    parser.add_argument("--tpu-type", default="v5p-32")
-    parser.add_argument("--seq-len", type=int, default=4096)
-    parser.add_argument("--global-batch-size", type=int, default=64)
+    parser.add_argument("--tpu-type", default=_DEFAULT_TPU_TYPE)
+    parser.add_argument("--seq-len", type=int, default=_DEFAULT_SEQ_LEN)
+    parser.add_argument("--global-batch-size", type=int, default=_DEFAULT_GLOBAL_BATCH_SIZE)
     parser.add_argument(
         "--token-target",
         type=int,
@@ -112,13 +133,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--eval-suite",
         choices=tuple(_EVAL_SUITES.keys()),
-        default="core_plus_leaderboard",
+        default=_DEFAULT_EVAL_SUITE,
         help="Eval-harness suite to run (during training, post-training, or both).",
     )
     parser.add_argument(
         "--eval-suite-mode",
         choices=("post_train", "during_train", "both"),
-        default="both",
+        default=_DEFAULT_EVAL_SUITE_MODE,
         help="When to run eval-harness: post_train, during_train, or both.",
     )
     parser.add_argument(
@@ -144,20 +165,67 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--single-checkpoint", action="store_true")
     parser.add_argument("--checkpoint-save-minutes", type=int, default=60)
+    parser.add_argument(
+        "--cross-entropy-block-size",
+        type=int,
+        default=1024,
+        help=(
+            "Vocab block size for the fused next-token loss. Smaller blocks reduce peak memory at the cost of "
+            "more blocks. Use a multiple of 128 when using the Pallas kernel."
+        ),
+    )
+    parser.add_argument(
+        "--cross-entropy-implementation",
+        choices=("auto", "xla", "pallas_tpu", "reference"),
+        default="auto",
+        help=(
+            "Cross-entropy backend. 'auto' tries Pallas on TPU v5+ and falls back to XLA when unsupported (e.g. TPU v4)."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
+    tpu_type = args.tpu_type
+    seq_len = args.seq_len
+    global_batch_size = args.global_batch_size
+    num_train_steps_override = args.num_train_steps
+    eval_suite = args.eval_suite
+    eval_suite_mode = args.eval_suite_mode
+
+    if args.smoke:
+        if tpu_type == _DEFAULT_TPU_TYPE:
+            tpu_type = _SMOKE_TPU_TYPE
+        if seq_len == _DEFAULT_SEQ_LEN:
+            seq_len = _SMOKE_SEQ_LEN
+        if global_batch_size == _DEFAULT_GLOBAL_BATCH_SIZE:
+            global_batch_size = _SMOKE_GLOBAL_BATCH_SIZE
+        if eval_suite == _DEFAULT_EVAL_SUITE:
+            eval_suite = _SMOKE_EVAL_SUITE
+        if eval_suite_mode == _DEFAULT_EVAL_SUITE_MODE:
+            eval_suite_mode = _SMOKE_EVAL_SUITE_MODE
+        if num_train_steps_override is None:
+            num_train_steps_override = _SMOKE_NUM_TRAIN_STEPS
+
+    if args.cross_entropy_implementation in ("auto", "pallas_tpu") and args.cross_entropy_block_size % 128 != 0:
+        raise ValueError(
+            "--cross-entropy-block-size must be a multiple of 128 when using the Pallas kernel "
+            f"(got {args.cross_entropy_block_size})."
+        )
+
+    cross_entropy_implementation = (
+        None if args.cross_entropy_implementation == "auto" else args.cross_entropy_implementation
+    )
 
     token_target = args.token_target
     if token_target is None:
         token_target = COMPOSITE_TOKEN_TARGET if args.dataset == "nemotron_dclm_fineweb_10b" else DEFAULT_TOKEN_TARGET
 
     num_train_steps = (
-        args.num_train_steps
-        if args.num_train_steps is not None
-        else _steps_for_token_target(token_target, args.global_batch_size, args.seq_len)
+        num_train_steps_override
+        if num_train_steps_override is not None
+        else _steps_for_token_target(token_target, global_batch_size, seq_len)
     )
 
     warmup_steps = max(0, int(args.warmup_steps))
@@ -165,7 +233,7 @@ def main() -> None:
         warmup_steps = max(0, num_train_steps - 1)
 
     model_cfg = GrugformerMoeConfig(
-        max_seq_len=args.seq_len,
+        max_seq_len=seq_len,
         hidden_dim=2048,
         intermediate_dim=1024,
         num_layers=16,
@@ -177,7 +245,8 @@ def main() -> None:
         # Avoid XLA allocation-size overflow on large (tokens x vocab) logits tiles.
         # 32k blocks are fine for smaller local token counts, but can exceed XLA's 32-bit
         # allocation checks at large global batch/seq settings.
-        cross_entropy_block_size=4096,
+        cross_entropy_block_size=int(args.cross_entropy_block_size),
+        cross_entropy_implementation=cross_entropy_implementation,
     )
 
     tokenized = DATASET_OPTIONS[args.dataset]
@@ -191,15 +260,15 @@ def main() -> None:
         tokenizer=args.dataset_tokenizer,
     )
 
-    evals = _EVAL_SUITES[args.eval_suite]
+    evals = _EVAL_SUITES[eval_suite]
     eval_harness_tasks = ()
-    if args.eval_suite_mode in ("during_train", "both"):
+    if eval_suite_mode in ("during_train", "both"):
         eval_harness_tasks = evals
 
     train = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu(tpu_type=args.tpu_type),
-        train_seq_len=args.seq_len,
-        train_batch_size=args.global_batch_size,
+        resources=ResourceConfig.with_tpu(tpu_type=tpu_type),
+        train_seq_len=seq_len,
+        train_batch_size=global_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
@@ -218,9 +287,7 @@ def main() -> None:
         explicit_mesh_axes=True,
     )
 
-    default_suffix = (
-        f"grugformer_moe_olmoe1b7b_{args.tpu_type}_bs{args.global_batch_size}_{args.dataset}_seq{args.seq_len}"
-    )
+    default_suffix = f"grugformer_moe_olmoe1b7b_{tpu_type}_bs{global_batch_size}_{args.dataset}_seq{seq_len}"
     run_suffix = args.run_suffix or default_suffix
     wandb_group = args.wandb_group if args.wandb_group is not None else os.environ.get("WANDB_GROUP")
 
@@ -233,9 +300,9 @@ def main() -> None:
             "speedrun",
             "grugformer_moe",
             "olmoe_1b7b",
-            args.tpu_type,
-            f"b{args.global_batch_size}",
-            f"s{args.seq_len}",
+            tpu_type,
+            f"b{global_batch_size}",
+            f"s{seq_len}",
             f"perm={args.permutation_type}",
         ],
         eval_harness_tasks=eval_harness_tasks,
@@ -247,22 +314,22 @@ def main() -> None:
     )
 
     steps: list[ExecutorStep] = [train_step]
-    if args.eval_suite_mode in ("post_train", "both") and args.eval_suite != "none":
+    if eval_suite_mode in ("post_train", "both") and eval_suite != "none":
         steps.append(
             ExecutorStep(
-                name=f"evaluation/levanter_eval_harness/{run_suffix}/{args.eval_suite}",
+                name=f"evaluation/levanter_eval_harness/{run_suffix}/{eval_suite}",
                 fn=run_levanter_checkpoint_eval_harness,
                 config=LevanterEvalHarnessStepConfig(
-                    model_name=f"{run_suffix}_{args.eval_suite}",
+                    model_name=f"{run_suffix}_{eval_suite}",
                     model_config=model_cfg,
                     tokenizer=args.dataset_tokenizer,
                     checkpoint_root=train_step / "checkpoints",
                     evals=evals,
                     max_eval_instances=None,
-                    output_path=output_path_of(train_step, f"eval_harness/{args.eval_suite}"),
+                    output_path=output_path_of(train_step, f"eval_harness/{eval_suite}"),
                     wandb_group=wandb_group,
                 ),
-                resources=ResourceConfig.with_tpu(args.tpu_type),
+                resources=ResourceConfig.with_tpu(tpu_type),
                 pip_dependency_groups=["tpu", "eval"],
             )
         )

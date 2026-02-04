@@ -166,9 +166,9 @@ class CustomMixtralConfig(MistralConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        assert self.num_experts_per_tok <= self.n_routed_experts, (
-            f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
-        )
+        assert (
+            self.num_experts_per_tok <= self.n_routed_experts
+        ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
 
     def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
@@ -768,6 +768,11 @@ class MixtralTransformer(eqx.Module):
             for j in range(self.config.n_routed_experts):
                 stats[f"moe/layer{i}/expert{j}_load"] = jax.lax.stop_gradient(expert_loads.array[i, j])
         stats["moe/load_violation_max"] = jax.lax.stop_gradient(global_load_violation_max.array)
+        dense_first_n_layers = int(getattr(self.config, "dense_first_n_layers", 0) or 0)
+        if 0 < dense_first_n_layers < self.config.num_layers:
+            sparse_layers = jnp.arange(self.config.num_layers) >= dense_first_n_layers
+            sparse_load_violation_max = jnp.where(sparse_layers, load_violation_max.array, -jnp.inf)
+            stats["moe/load_violation_max_sparse_layers"] = jax.lax.stop_gradient(jnp.max(sparse_load_violation_max))
 
         if "load_balancing_loss" in extras:
             extras["load_balancing_loss"] = hax.sum(extras["load_balancing_loss"], axis=self.config.Layers)

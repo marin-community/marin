@@ -18,10 +18,13 @@ OLMoE-M LR sweep on the Nemotron+DCLM+FineWeb mixture (fixed token budget).
 This mirrors `experiments/speedrun/olmoe_s_dclm10b_moe_vs_dense_lr_sweep.py`, but:
 - uses the composite Nemotron+DCLM+FineWeb mixture (tokenized) from `olmoe_1b7b_nemotron_40b.py`
 - runs OLMoE-M geometry (16 experts, top-2 routing)
-- compares 3 MoE variants across 4 learning-rate multipliers:
+- compares 4 MoE variants across 4 learning-rate multipliers:
   1) `olmoe_m` (vanilla)
   2) `olmoe_m_bilinear` (bilinear expert MLPs; SwiGLU -> (W1 x) * (W3 x))
-  3) `olmoe_m_stab5` (five stability measures, including fp32 router compute):
+  3) `olmoe_m_stab2` (two stability measures):
+     - auxiliary-free load balancing (ALF-LB)
+     - fp32 router compute
+  4) `olmoe_m_stab5` (five stability measures, including fp32 router compute):
      - QK-norm
      - topk-then-softmax routing
      - auxiliary-free load balancing (ALF-LB)
@@ -84,7 +87,7 @@ def _build_olmoe_m_config(seq_len: int) -> MixtralConfig:
         gradient_checkpointing=True,
         scan_layers=True,
         use_gmm=True,
-        # Keep the CE vocab block size modest: very large (e.g. 32k) blocks can trigger XLA allocation-size
+        # Keep the CE vocab block size modest: very large (e.g. 32k) blocks can trigger TPU/XLA allocation-size
         # overflows for (tokens x vocab_block) intermediates at long seq / large batch settings.
         cross_entropy_block_size=4096,
         cross_entropy_implementation="xla",
@@ -193,7 +196,7 @@ def main() -> None:
     parser.add_argument(
         "--variants",
         nargs="+",
-        choices=("olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab5"),
+        choices=("olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab2", "olmoe_m_stab5"),
         default=["olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab5"],
         help="Which variants to run (default: all).",
     )
@@ -254,6 +257,11 @@ def main() -> None:
 
     olmoe_m = _build_olmoe_m_config(args.seq_len)
     olmoe_m_bilinear = dataclasses.replace(olmoe_m, activation_function=ActivationFunctionEnum.linear)
+    olmoe_m_stab2 = dataclasses.replace(
+        olmoe_m,
+        router_fp32=True,
+        alf_lb_loss_scale=args.stab_alf_lb_loss_scale,
+    )
     olmoe_m_stab5 = dataclasses.replace(
         olmoe_m,
         use_qk_norm=True,
@@ -266,6 +274,7 @@ def main() -> None:
     variants: list[tuple[str, MixtralConfig]] = [
         ("olmoe_m", olmoe_m),
         ("olmoe_m_bilinear", olmoe_m_bilinear),
+        ("olmoe_m_stab2", olmoe_m_stab2),
         ("olmoe_m_stab5", olmoe_m_stab5),
     ]
     selected_variants = {v.strip() for v in args.variants}
