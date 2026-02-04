@@ -425,21 +425,19 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     return sample_indices
 
 
-@functools.partial(hax.named_jit, static_argnums=(4,))
+@functools.partial(hax.named_jit, static_argnums=(6,))
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
-    queue: TokenQueue,
+    tokens: NamedArray,
+    slot_ids: NamedArray,
+    pos_ids: NamedArray,
     max_seqs_in_prefill: int,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
     jax.debug.print("[_prefill_kernel] === ENTERED prefill_kernel ===")
-
-    tokens = queue.queued_tokens
-    pos_ids = queue.queued_pos_ids
-    slot_ids = queue.queued_slot_ids
 
     jax.debug.print("[_prefill_kernel] === got tokens/pos/slots ===")
 
@@ -585,10 +583,15 @@ def _run_prefill(
     sys.stdout.flush()
 
     # Step 2: Call the module-level _prefill_kernel JIT (now decorated at module level)
+    # Pass individual arrays instead of the TokenQueue object for better multi-host JIT compatibility
     print(f"[_run_prefill P{jax.process_index()}] === Step 2: _prefill_kernel (module-level JIT) ===", flush=True)
     sys.stdout.flush()
 
-    result = _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    result = _prefill_kernel(
+        gen_state, model, sampler,
+        work.queue.queued_tokens, work.queue.queued_slot_ids, work.queue.queued_pos_ids,
+        max_seqs_in_prefill
+    )
 
     print(f"[_run_prefill P{jax.process_index()}] === DONE ===", flush=True)
     sys.stdout.flush()
