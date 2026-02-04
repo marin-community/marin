@@ -31,6 +31,5 @@ engine:
   max_stop_seqs: 1
   max_stop_tokens: 8
   seed: 0
-  use_logical_reset: true
 prompts:
   - "Prompt 001: Provide a concise overview of the benefits of sleep."
