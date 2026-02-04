@@ -15,7 +15,7 @@ trainer:
   mp: p=bfloat16,c=bfloat16
   mesh:
     axes:
-      model: 8
+      model: 4
 model:
   type: llama
   use_tpu_ragged_paged_attention: false
