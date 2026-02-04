@@ -26,16 +26,8 @@ class PageCache(eqx.Module):
         raise NotImplementedError
 
     def reset(self) -> Self:
-        """Return a reset version of this cache with zeroed contents."""
+        """Return a reset version of this cache."""
         raise NotImplementedError
-
-    def reset_logical(self) -> Self:
-        """Return a logically reset version of this cache without zeroing contents.
-
-        Subclasses may return self unchanged if stale data is never read due to
-        attention masking and allocation overwrite semantics.
-        """
-        return self.reset()  # Default to physical reset for safety
 
 
 class KvPageCache(PageCache):
@@ -66,20 +58,9 @@ class KvPageCache(PageCache):
         return KvPageCache(kv_pages)
 
     def reset(self) -> "KvPageCache":
-        """Return a reset version of this cache with zeroed pages."""
+        """Return a reset version of this cache."""
         reset_pages = jnp.zeros_like(self.kv_pages.array)
         return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
-
-    def reset_logical(self) -> "KvPageCache":
-        """Return self unchanged for logical reset.
-
-        Logical reset skips the expensive zeroing of KV pages. This is safe because:
-        1. Attention masks by kv_len, so stale data beyond the sequence length is never read
-        2. New allocations overwrite stale data before it can be used
-
-        This optimization significantly reduces reset time for large KV caches.
-        """
-        return self
 
     @named_call
     def update(
@@ -132,9 +113,6 @@ class ListCache(PageCache, Generic[PageCacheT]):
 
     def reset(self) -> "ListCache[PageCacheT]":
         return ListCache(tuple(cache.reset() for cache in self.caches))
-
-    def reset_logical(self) -> "ListCache[PageCacheT]":
-        return ListCache(tuple(cache.reset_logical() for cache in self.caches))
 
     @staticmethod
     def from_iterable(caches: Iterable[PageCacheT]) -> "ListCache[PageCacheT]":

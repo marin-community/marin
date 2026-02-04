@@ -4,7 +4,6 @@ max_new_tokens: 2048
 temperature: 0.7
 n_rounds: 1
 n_generations: 1
-max_prompts_per_batch: 1
 trainer:
   tracker:
     type: wandb

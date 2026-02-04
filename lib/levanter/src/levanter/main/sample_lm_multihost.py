@@ -1,6 +1,5 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
-import dataclasses
 import gc
 import logging
 import time
@@ -17,7 +16,7 @@ from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig, RepoRef, load_tokenizer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
@@ -61,7 +60,6 @@ class SampleLmMultihostConfig:
 
     n_generations: int = 1
     n_rounds: int = 1
-    max_prompts_per_batch: int | None = None
 
     log_kernel_jaxprs_path: Optional[str] = None
 
@@ -94,40 +92,15 @@ def _load_model(config: SampleLmMultihostConfig, vocab_axis: Axis, tokenizer, *,
     converter: HFCheckpointConverter = config.model.hf_checkpoint_converter()
     converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
 
-    hf_config: HFCompatConfig | None = None
-    if isinstance(config.model, HFCompatConfig):
-        hf_checkpoint_config = converter.hf_config_from_hf_checkpoint(config.hf_checkpoint)
-        base_config = converter.config_from_hf_config(hf_checkpoint_config)
-        overrides = _infer_non_default_overrides(config.model)
-        if overrides:
-            base_config = dataclasses.replace(base_config, **overrides)
-        hf_config = base_config
+    # Get config from HF checkpoint, but override with user-specified model settings
+    hf_config = converter.hf_config_from_hf_checkpoint(config.hf_checkpoint)
+    overrides = {"use_tpu_ragged_paged_attention": config.model.use_tpu_ragged_paged_attention}
+    merged_config = converter.config_from_hf_config(hf_config, overrides=overrides)
 
     model = converter.load_pretrained(
-        config.model.model_type, ref=config.hf_checkpoint, config=hf_config, dtype=config.trainer.mp.compute_dtype
+        config.model.model_type, ref=config.hf_checkpoint, config=merged_config, dtype=config.trainer.mp.compute_dtype
     )
     return model  # type: ignore[return-value]
-
-
-def _infer_non_default_overrides(config: HFCompatConfig) -> dict[str, object]:
-    """Return non-default fields so HF configs stay authoritative for shape."""
-
-    if not dataclasses.is_dataclass(config):
-        return {}
-
-    try:
-        default_config = type(config)()  # type: ignore[misc]
-    except TypeError:
-        logger.warning("Unable to construct default config for %s; skipping overrides.", type(config).__name__)
-        return {}
-
-    overrides: dict[str, object] = {}
-    for fld in dataclasses.fields(config):
-        value = getattr(config, fld.name)
-        default_value = getattr(default_config, fld.name)
-        if value != default_value:
-            overrides[fld.name] = value
-    return overrides
 
 
 def _normalize_prompts(prompts: list[str] | str | tuple[str, ...]) -> list[str]:
@@ -145,7 +118,6 @@ def _validate_engine_config(
     stop_ids: list[int] | None,
     *,
     is_multihost: bool,
-    batch_size: int,
 ) -> None:
     """Validate engine sizing constraints for deterministic multi-host inference."""
 
@@ -160,25 +132,18 @@ def _validate_engine_config(
     _require(config.n_generations > 0, "n_generations must be >= 1")
 
     num_prompts = len(prompt_ids)
-    batch_size = min(batch_size, num_prompts)
-    total_sequences = batch_size * int(config.n_generations)
+    total_sequences = num_prompts * int(config.n_generations)
+    total_prompt_tokens = sum(len(tokens) for tokens in prompt_ids)
     max_prompt_len = max((len(tokens) for tokens in prompt_ids), default=0)
-    max_batch_tokens = max(
-        (
-            sum(len(tokens) for tokens in prompt_ids[start : start + batch_size])
-            for start in range(0, num_prompts, batch_size)
-        ),
-        default=0,
-    )
 
-    _require(engine_config.max_seqs_in_prefill >= batch_size, "engine.max_seqs_in_prefill must cover batch size")
+    _require(engine_config.max_seqs_in_prefill >= num_prompts, "engine.max_seqs_in_prefill must cover all prompts")
     _require(engine_config.max_seqs >= total_sequences, "engine.max_seqs must cover all generations")
     _require(engine_config.max_seq_len >= max_prompt_len + config.max_new_tokens, "engine.max_seq_len is too small")
 
     if engine_config.max_prefill_size is not None:
         _require(
-            engine_config.max_prefill_size >= max_batch_tokens,
-            "engine.max_prefill_size must cover the sum of prompt lengths per batch",
+            engine_config.max_prefill_size >= total_prompt_tokens,
+            "engine.max_prefill_size must cover the sum of prompt lengths",
         )
 
     if stop_ids is not None:
@@ -258,8 +223,6 @@ def main(config: SampleLmMultihostConfig):
 
     prompts = _normalize_prompts(config.prompts)
     _require(prompts, "prompts must be non-empty")
-    batch_size = config.max_prompts_per_batch or len(prompts)
-    _require(batch_size > 0, "max_prompts_per_batch must be positive")
 
     if is_multihost:
         prompt_ids, stop_ids, base_seed = _broadcast_prompt_payload(
@@ -286,7 +249,6 @@ def main(config: SampleLmMultihostConfig):
         prompt_ids,
         stop_ids,
         is_multihost=is_multihost,
-        batch_size=batch_size,
     )
 
     if stop_ids is None:
@@ -301,100 +263,14 @@ def main(config: SampleLmMultihostConfig):
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         vocab_size = len(tokenizer)
         vocab_axis = round_axis_for_partitioning(Axis("vocab", vocab_size), config.trainer.compute_axis_mapping)
+        model = _load_model(config, vocab_axis, tokenizer, key=key)
 
-        print(f"[DEBUG P{jax.process_index()}] === STARTING model load ===", flush=True)
-        import sys
-
-        sys.stdout.flush()
-        sys.stderr.flush()
-
-        try:
-            model = _load_model(config, vocab_axis, tokenizer, key=key)
-            print(f"[DEBUG P{jax.process_index()}] === MODEL LOAD COMPLETE ===", flush=True)
-            sys.stdout.flush()
-            sys.stderr.flush()
-        except Exception as e:
-            print(f"[DEBUG P{jax.process_index()}] === MODEL LOAD FAILED: {e} ===", flush=True)
-            import traceback
-
-            traceback.print_exc()
-            sys.stdout.flush()
-            sys.stderr.flush()
-            raise
-
-        # === MULTIHOST SANITY TEST ===
-        print(f"[DEBUG P{jax.process_index()}] === Running multihost sanity test ===", flush=True)
-        sys.stdout.flush()
-        try:
-            # Test 1: Simple embedding lookup
-            test_tokens = hax.named(jnp.array([1, 2, 3]), axis="position")
-            print(f"[DEBUG P{jax.process_index()}] === Test tokens created: {test_tokens.axes} ===", flush=True)
-
-            # Test 2: Simple JIT function
-            @hax.named_jit()
-            def simple_test(x):
-                return x * 2
-
-            result = simple_test(test_tokens)
-            print(f"[DEBUG P{jax.process_index()}] === Simple JIT test passed ===", flush=True)
-
-            # Test 3: Model embedding lookup
-            embedded = model.embeddings.embed(test_tokens)
-            print(f"[DEBUG P{jax.process_index()}] === Model embedding test passed: {embedded.axes} ===", flush=True)
-
-            # Test 4: Create a minimal cache and test model.decode
-            from levanter.inference.page_table import PageTable
-
-            test_page_table = PageTable.init(max_pages=4, max_seqs=1, page_size=64, max_pages_per_seq=4)
-            test_cache = hax.named_jit(model.initial_cache)(test_page_table.spec(), dtype=jnp.bfloat16)
-            print(f"[DEBUG P{jax.process_index()}] === Cache created: {len(test_cache)} layers ===", flush=True)
-
-            # Note: model.decode test removed - it captures model as constant (16GB) and is slow
-            # The actual _run_prefill passes model as argument which avoids this
-
-            print(f"[DEBUG P{jax.process_index()}] === All sanity tests passed ===", flush=True)
-        except Exception as e:
-            print(f"[DEBUG P{jax.process_index()}] === SANITY TEST FAILED: {e} ===", flush=True)
-            import traceback
-
-            traceback.print_exc()
-            sys.stdout.flush()
-            raise
-        # === END SANITY TEST ===
-
-        print(f"[DEBUG P{jax.process_index()}] === GETTING MEMORY DEVICE ===", flush=True)
         memory_device = jax.local_devices()[0] if jax.local_devices() else None
-        print(f"[DEBUG P{jax.process_index()}] === ESTIMATING FREE MEMORY ===", flush=True)
         hbm_free_before_engine = estimated_free_device_memory(memory_device)
-        print(f"[DEBUG P{jax.process_index()}] === FREE MEMORY: {hbm_free_before_engine} ===", flush=True)
-
-        print(f"[DEBUG P{jax.process_index()}] === STARTING engine creation ===", flush=True)
-        logger.info("=== STARTING engine creation ===")
-        sys.stdout.flush()
-        sys.stderr.flush()
-
         engine_start_time = time.perf_counter()
-        print(
-            f"[DEBUG P{jax.process_index()}] === About to call InferenceEngine.from_model_with_config ===", flush=True
-        )
-        sys.stdout.flush()
-        try:
-            engine = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
-            print(f"[DEBUG P{jax.process_index()}] === InferenceEngine created successfully ===", flush=True)
-            logger.info("=== ENGINE CREATION COMPLETE ===")
-            sys.stdout.flush()
-            sys.stderr.flush()
-        except Exception as e:
-            logger.error("=== ENGINE CREATION FAILED: %s ===", e, exc_info=True)
-            sys.stdout.flush()
-            sys.stderr.flush()
-            raise
-
-        print(f"[DEBUG P{jax.process_index()}] === Engine creation done, computing time ===", flush=True)
+        engine = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
         engine_creation_time = time.perf_counter() - engine_start_time
-        print(f"[DEBUG P{jax.process_index()}] === Engine creation time: {engine_creation_time:.2f}s ===", flush=True)
         hbm_free_after_engine = estimated_free_device_memory(memory_device)
-        print(f"[DEBUG P{jax.process_index()}] === HBM free after engine: {hbm_free_after_engine} ===", flush=True)
 
         if config.log_kernel_jaxprs_path:
             jaxprs_path = config.log_kernel_jaxprs_path
@@ -402,182 +278,107 @@ def main(config: SampleLmMultihostConfig):
                 jaxprs_path = f"{jaxprs_path}.host{jax.process_index()}"
             engine.write_kernel_jaxprs(jaxprs_path)
 
-        print(f"[DEBUG P{jax.process_index()}] === Creating base PRNGKey ===", flush=True)
         base_key = jrandom.PRNGKey(base_seed)
-        print(f"[DEBUG P{jax.process_index()}] === PRNGKey created ===", flush=True)
+        requests: list[Request] = []
+        for request_index, tokens in enumerate(prompt_ids):
+            seq_params = SeqDecodingParams(
+                max_num_tokens=jnp.array(len(tokens) + config.max_new_tokens, dtype=jnp.int32),
+                stop_tokens=stop_tokens,
+                temperature=jnp.array(config.temperature, dtype=jnp.float32),
+                key=jrandom.fold_in(base_key, request_index),
+            )
+            requests.append(
+                Request(
+                    prompt_tokens=list(map(int, tokens)),
+                    request_id=request_index,
+                    decode_params=seq_params,
+                    n_generations=int(config.n_generations),
+                )
+            )
 
-        total_batches = (len(prompt_ids) + batch_size - 1) // batch_size
-        print(
-            f"[DEBUG P{jax.process_index()}] === Total batches: {total_batches}, starting decode loop ===", flush=True
-        )
+        total_expected = len(prompt_ids) * int(config.n_generations)
         try:
             for round_index in range(int(config.n_rounds)):
-                print(f"[DEBUG P{jax.process_index()}] === Round {round_index} starting ===", flush=True)
-                for batch_index, start in enumerate(range(0, len(prompt_ids), batch_size)):
-                    print(f"[DEBUG P{jax.process_index()}] === Batch {batch_index} starting ===", flush=True)
-                    batch_prompt_ids = prompt_ids[start : start + batch_size]
-                    batch_prompts = prompts[start : start + batch_size]
-                    batch_requests: list[Request] = []
-                    for request_index, tokens in enumerate(batch_prompt_ids):
-                        seq_params = SeqDecodingParams(
-                            max_num_tokens=jnp.array(len(tokens) + config.max_new_tokens, dtype=jnp.int32),
-                            stop_tokens=stop_tokens,
-                            temperature=jnp.array(config.temperature, dtype=jnp.float32),
-                            key=jrandom.fold_in(base_key, start + request_index),
-                        )
-                        batch_requests.append(
-                            Request(
-                                prompt_tokens=list(map(int, tokens)),
-                                request_id=request_index,
-                                decode_params=seq_params,
-                                n_generations=int(config.n_generations),
+                start_time = time.time()
+                result = engine.generate(requests)
+                duration = time.time() - start_time
+
+                if len(result.tokens) != total_expected:
+                    raise RuntimeError(
+                        f"Expected {total_expected} sequences but got {len(result.tokens)}. "
+                        "Check engine.max_seqs/max_seqs_in_prefill/max_prefill_size."
+                    )
+
+                hbm_free_after_gen = estimated_free_device_memory(memory_device)
+                tokens_per_second = result.total_generated / duration if duration > 0 else 0.0
+
+                if is_leader:
+                    logger.info(
+                        "Round %d finished in %.2fs: %d tokens across %d sequences",
+                        round_index,
+                        duration,
+                        result.total_generated,
+                        len(result.tokens),
+                    )
+
+                    metrics: dict[str, float | int] = {
+                        "sample/total_tokens": result.total_generated,
+                        "sample/num_sequences": len(result.tokens),
+                        "sample/round_time_sec": duration,
+                        "sample/tokens_per_second": tokens_per_second,
+                        "sample/num_prompts": len(prompts),
+                        "sample/n_generations": int(config.n_generations),
+                    }
+                    if round_index == 0:
+                        metrics["sample/engine_creation_time_sec"] = engine_creation_time
+                        if hbm_free_before_engine is not None:
+                            metrics["sample/hbm_free_before_engine_gib"] = hbm_free_before_engine
+                        if hbm_free_after_engine is not None:
+                            metrics["sample/hbm_free_after_engine_gib"] = hbm_free_after_engine
+                        if hbm_free_before_engine is not None and hbm_free_after_engine is not None:
+                            metrics["sample/hbm_used_by_engine_gib"] = hbm_free_before_engine - hbm_free_after_engine
+                    if hbm_free_after_gen is not None:
+                        metrics["sample/hbm_free_after_gen_gib"] = hbm_free_after_gen
+                    levanter.tracker.log(metrics, step=round_index)
+
+                    samples_rows: list[tuple[int, int, int, str, str, int]] = []
+                    for sequence_index, sequence_tokens in enumerate(result.tokens):
+                        filtered_tokens = [
+                            token for token in sequence_tokens if token != tokenizer.pad_token_id and token != INVALID
+                        ]
+                        generated_text = tokenizer.decode(filtered_tokens, skip_special_tokens=True)
+                        logger.info("Sequence %d: %s", sequence_index, generated_text)
+                        prompt_index = sequence_index // int(config.n_generations)
+                        generation_index = sequence_index % int(config.n_generations)
+                        prompt_text = prompts[prompt_index] if prompt_index < len(prompts) else ""
+                        samples_rows.append(
+                            (
+                                round_index,
+                                prompt_index,
+                                generation_index,
+                                prompt_text,
+                                generated_text,
+                                len(filtered_tokens),
                             )
                         )
-
-                    total_expected = len(batch_prompt_ids) * int(config.n_generations)
-
-                    # Diagnostic logging: track which prompt we're on
-                    if is_leader:
-                        logger.info(
-                            "=== STARTING batch %d/%d (prompts %d-%d) ===",
-                            batch_index + 1,
-                            total_batches,
-                            start,
-                            start + len(batch_prompt_ids) - 1,
-                        )
-                        # Log to W&B so we can see progress even if crash happens
-                        levanter.tracker.log(
-                            {
-                                "debug/batch_starting": batch_index,
-                                "debug/prompt_start_idx": start,
-                            },
-                            step=round_index * total_batches + batch_index,
-                        )
-
-                    print(f"[DEBUG P{jax.process_index()}] === About to call engine.generate ===", flush=True)
-                    sys.stdout.flush()
-                    start_time = time.time()
                     try:
-                        result = engine.generate(batch_requests)
-                        duration = time.time() - start_time
-                        print(
-                            f"[DEBUG P{jax.process_index()}] === engine.generate completed in {duration:.2f}s ===",
-                            flush=True,
-                        )
-                    except Exception as e:
-                        print(f"[DEBUG P{jax.process_index()}] === engine.generate FAILED: {e} ===", flush=True)
-                        import traceback
+                        import wandb
 
-                        traceback.print_exc()
-                        sys.stdout.flush()
-                        sys.stderr.flush()
-                        raise
-
-                    # Diagnostic: we completed generation for this batch
-                    if is_leader:
-                        logger.info(
-                            "=== COMPLETED batch %d/%d in %.2fs ===",
-                            batch_index + 1,
-                            total_batches,
-                            duration,
-                        )
-                        # Log completion (simplified - debug stats can cause issues)
-                        levanter.tracker.log(
-                            {
-                                "debug/batch_completed": batch_index,
-                                "debug/batch_duration_sec": duration,
-                            },
-                            step=round_index * total_batches + batch_index,
-                        )
-
-                    if len(result.tokens) != total_expected:
-                        raise RuntimeError(
-                            f"Expected {total_expected} sequences but got {len(result.tokens)}. "
-                            "Check engine.max_seqs/max_seqs_in_prefill/max_prefill_size."
-                        )
-
-                    hbm_free_after_gen = estimated_free_device_memory(memory_device)
-                    tokens_per_second = result.total_generated / duration if duration > 0 else 0.0
-                    log_step = round_index * total_batches + batch_index
-
-                    if is_leader:
-                        logger.info(
-                            "Round %d batch %d finished in %.2fs: %d tokens across %d sequences",
-                            round_index,
-                            batch_index,
-                            duration,
-                            result.total_generated,
-                            len(result.tokens),
-                        )
-
-                        metrics: dict[str, float | int] = {
-                            "sample/total_tokens": result.total_generated,
-                            "sample/num_sequences": len(result.tokens),
-                            "sample/round_time_sec": duration,
-                            "sample/tokens_per_second": tokens_per_second,
-                            "sample/num_prompts": len(batch_prompts),
-                            "sample/n_generations": int(config.n_generations),
-                            "sample/round": round_index,
-                            "sample/batch_index": batch_index,
-                            "sample/total_batches": total_batches,
-                            "sample/prompt_offset": start,
-                        }
-                        if round_index == 0 and batch_index == 0:
-                            metrics["sample/engine_creation_time_sec"] = engine_creation_time
-                            if hbm_free_before_engine is not None:
-                                metrics["sample/hbm_free_before_engine_gib"] = hbm_free_before_engine
-                            if hbm_free_after_engine is not None:
-                                metrics["sample/hbm_free_after_engine_gib"] = hbm_free_after_engine
-                            if hbm_free_before_engine is not None and hbm_free_after_engine is not None:
-                                metrics["sample/hbm_used_by_engine_gib"] = (
-                                    hbm_free_before_engine - hbm_free_after_engine
-                                )
-                        if hbm_free_after_gen is not None:
-                            metrics["sample/hbm_free_after_gen_gib"] = hbm_free_after_gen
-                        levanter.tracker.log(metrics, step=log_step)
-
-                        samples_rows: list[tuple[int, int, int, int, str, str, int]] = []
-                        for sequence_index, sequence_tokens in enumerate(result.tokens):
-                            filtered_tokens = [
-                                token
-                                for token in sequence_tokens
-                                if token != tokenizer.pad_token_id and token != INVALID
+                        samples_table = wandb.Table(
+                            columns=[
+                                "round",
+                                "prompt_id",
+                                "generation_id",
+                                "prompt",
+                                "generated_text",
+                                "num_tokens",
                             ]
-                            generated_text = tokenizer.decode(filtered_tokens, skip_special_tokens=True)
-                            logger.info("Sequence %d: %s", sequence_index, generated_text)
-                            prompt_index = sequence_index // int(config.n_generations)
-                            generation_index = sequence_index % int(config.n_generations)
-                            prompt_text = batch_prompts[prompt_index] if prompt_index < len(batch_prompts) else ""
-                            samples_rows.append(
-                                (
-                                    round_index,
-                                    batch_index,
-                                    prompt_index + start,
-                                    generation_index,
-                                    prompt_text,
-                                    generated_text,
-                                    len(filtered_tokens),
-                                )
-                            )
-                        try:
-                            import wandb
-
-                            samples_table = wandb.Table(
-                                columns=[
-                                    "round",
-                                    "batch",
-                                    "prompt_id",
-                                    "generation_id",
-                                    "prompt",
-                                    "generated_text",
-                                    "num_tokens",
-                                ]
-                            )
-                            for row in samples_rows:
-                                samples_table.add_data(*row)
-                            levanter.tracker.log({"sample/samples": samples_table}, step=log_step)
-                        except ImportError:
-                            levanter.tracker.log({"sample/samples": samples_rows}, step=log_step)
+                        )
+                        for row in samples_rows:
+                            samples_table.add_data(*row)
+                        levanter.tracker.log({"sample/samples": samples_table}, step=round_index)
+                    except ImportError:
+                        levanter.tracker.log({"sample/samples": samples_rows}, step=round_index)
         finally:
             if is_multihost:
                 barrier_sync_with_tag("sample_lm_multihost_done")
