@@ -169,7 +169,7 @@ sudo docker run -d --name iris-worker \
     -v /var/run/docker.sock:/var/run/docker.sock \
     {env_flags} \
     {docker_image} \
-    python -m iris.cluster.worker.main serve \
+    .venv/bin/python -m iris.cluster.worker.main serve \
         --host 0.0.0.0 --port {worker_port} \
         --controller-address "$CONTROLLER_ADDRESS"
 

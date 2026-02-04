@@ -46,9 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from iris.cluster.types import get_tpu_topology, tpu_device
-from iris.cluster.vm.autoscaler import Autoscaler
 from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
-from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
@@ -328,9 +326,14 @@ class _LocalContainerRuntime(ContainerRuntime):
     def remove(self, container_id: str) -> None:
         self._containers.pop(container_id, None)
 
-    def get_logs(self, container_id: str) -> list[LogLine]:
+    def get_logs(self, container_id: str, since: Timestamp | None = None) -> list[LogLine]:
         c = self._containers.get(container_id)
-        return c._logs if c else []
+        if not c:
+            return []
+        if since:
+            since_dt = datetime.fromtimestamp(since.epoch_seconds(), tz=timezone.utc)
+            return [log for log in c._logs if log.timestamp > since_dt]
+        return c._logs
 
     def get_stats(self, container_id: str) -> ContainerStats:
         del container_id
@@ -683,44 +686,3 @@ class LocalVmManager:
     def stop(self) -> None:
         """Stop all container threads managed by this VM manager."""
         self._threads.stop(timeout=Duration.from_seconds(5.0))
-
-
-def _create_local_autoscaler(
-    config: config_pb2.IrisClusterConfig,
-    controller_address: str,
-    cache_path: Path,
-    fake_bundle: Path,
-    threads: ThreadContainer | None = None,
-) -> Autoscaler:
-    """Create Autoscaler with LocalVmManagers for all scale groups.
-
-    Parallels create_autoscaler_from_config() but uses LocalVmManagers.
-    Each scale group in the config gets a LocalVmManager that creates
-    in-process workers instead of cloud VMs.
-    """
-    vm_registry = VmRegistry()
-    shared_port_allocator = PortAllocator(port_range=(30000, 40000))
-
-    scale_groups: dict[str, ScalingGroup] = {}
-    for name, sg_config in config.scale_groups.items():
-        manager = LocalVmManager(
-            scale_group_config=sg_config,
-            controller_address=controller_address,
-            cache_path=cache_path,
-            fake_bundle=fake_bundle,
-            vm_registry=vm_registry,
-            port_allocator=shared_port_allocator,
-        )
-        scale_groups[name] = ScalingGroup(
-            config=sg_config,
-            vm_manager=manager,
-            scale_up_cooldown=Duration.from_ms(1000),
-            scale_down_cooldown=Duration.from_ms(300_000),
-        )
-
-    return Autoscaler(
-        scale_groups=scale_groups,
-        vm_registry=vm_registry,
-        config=config.autoscaler,
-        threads=threads,
-    )

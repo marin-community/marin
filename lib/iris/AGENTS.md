@@ -116,6 +116,33 @@ When adding new modules or significant features:
 
 ## Key Modules
 
+### Time Utilities
+
+Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
+
+| Class | Purpose |
+|-------|---------|
+| `Timestamp` | Point in time (epoch-based). Use for created_at, timestamps in logs, etc. |
+| `Duration` | Time interval. Use for timeouts, intervals, configuration values. |
+| `Deadline` | Monotonic deadline for timeout checks. Use in polling loops. |
+| `Timer` | Elapsed time measurement. Use for performance tracking. |
+| `ExponentialBackoff` | Retry/polling with backoff. Use `wait_until()` for condition polling. |
+
+Example:
+```python
+from iris.time_utils import Timestamp, Duration, Deadline
+
+created_at = Timestamp.now()
+timeout = Duration.from_seconds(30.0)
+deadline = Deadline.from_now(timeout)
+deadline.wait_for(condition)
+
+while not deadline.expired():
+    if condition():
+        break
+    time.sleep(0.1)
+```
+
 ### Autoscaler and VM Management
 
 The autoscaler runs inside the Controller process and manages cloud VMs based on pending task demand. Key files:

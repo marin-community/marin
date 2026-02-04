@@ -16,7 +16,8 @@ import time
 import pytest
 from pathlib import Path
 from iris.chaos import reset_chaos
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import make_local_config
 from iris.cluster.vm.config import load_config
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec, is_job_finished

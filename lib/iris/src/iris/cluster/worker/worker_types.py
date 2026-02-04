@@ -33,6 +33,15 @@ class LogLine(BaseModel):
     def now(cls, source: str, data: str) -> "LogLine":
         return cls(timestamp=datetime.now(timezone.utc), source=source, data=data)
 
+    @classmethod
+    def at(cls, timestamp: Timestamp, source: str, data: str) -> "LogLine":
+        """Create a log line with an explicit timestamp."""
+        return cls(
+            timestamp=datetime.fromtimestamp(timestamp.epoch_seconds(), tz=timezone.utc),
+            source=source,
+            data=data,
+        )
+
     def to_proto(self) -> cluster_pb2.Worker.LogEntry:
         proto = cluster_pb2.Worker.LogEntry(
             source=self.source,
@@ -45,8 +54,11 @@ class LogLine(BaseModel):
 class TaskLogs(BaseModel):
     lines: list[LogLine] = []
 
-    def add(self, source: str, data: str) -> None:
-        self.lines.append(LogLine.now(source, data))
+    def add(self, source: str, data: str, timestamp: Timestamp | None = None) -> None:
+        if timestamp:
+            self.lines.append(LogLine.at(timestamp, source, data))
+        else:
+            self.lines.append(LogLine.now(source, data))
 
 
 class TaskInfo(Protocol):

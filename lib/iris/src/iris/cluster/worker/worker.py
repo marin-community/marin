@@ -579,6 +579,9 @@ class Worker:
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
         """Get logs for a task.
 
+        Logs are streamed into task.logs during execution (single source of truth).
+        Container is removed after task completion to release TPU devices.
+
         Args:
             task_id: ID of the task to get logs for
             start_line: Line offset (supports negative indexing: -1000 = last 1000 lines)
@@ -587,17 +590,8 @@ class Worker:
         if not task:
             return []
 
-        logs: list[cluster_pb2.Worker.LogEntry] = []
-
-        # Add build logs from task.logs (these have proper timestamps)
-        for log_line in task.logs.lines:
-            logs.append(log_line.to_proto())
-
-        # Fetch container stdout/stderr from Docker if container exists
-        if task.container_id:
-            container_logs = self._runtime.get_logs(task.container_id)
-            for log_line in container_logs:
-                logs.append(log_line.to_proto())
+        # All logs (build + container stdout/stderr) are now in task.logs
+        logs = [log_line.to_proto() for log_line in task.logs.lines]
 
         # Sort by timestamp
         logs.sort(key=lambda x: x.timestamp.epoch_ms)

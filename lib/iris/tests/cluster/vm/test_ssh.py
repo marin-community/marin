@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iris.cluster.vm.controller import check_health
+from iris.cluster.vm.controller_vm import check_health
 from iris.cluster.vm.ssh import (
     connection_available,
     run_streaming_with_retry,
