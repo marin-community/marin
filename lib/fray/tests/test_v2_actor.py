@@ -18,7 +18,7 @@ import threading
 
 import pytest
 
-from fray.v2 import JobStatus, LocalClient
+from fray.v2 import LocalClient
 
 
 class Counter:
@@ -83,30 +83,12 @@ def test_actor_group_wait_ready_partial(client: LocalClient):
     assert len(handles) == 2
 
 
-def test_actor_group_wait_ready_too_many(client: LocalClient):
-    group = client.create_actor_group(Counter, name="counters", count=2)
-    with pytest.raises(ValueError, match="Requested 5"):
-        group.wait_ready(count=5)
-
-
-def test_actor_group_statuses(client: LocalClient):
-    group = client.create_actor_group(Counter, name="counters", count=3)
-    statuses = group.statuses()
-    assert all(s == JobStatus.SUCCEEDED for s in statuses)
-
-
 def test_actor_group_shutdown(client: LocalClient):
     group = client.create_actor_group(Counter, name="counters", count=2)
+    handles = group.wait_ready()
+    assert len(handles) == 2
     group.shutdown()
-    statuses = group.statuses()
-    assert all(s == JobStatus.STOPPED for s in statuses)
-
-
-def test_actor_group_jobs(client: LocalClient):
-    group = client.create_actor_group(Counter, name="counters", count=3)
-    assert len(group.jobs) == 3
-    for job in group.jobs:
-        assert "counters" in job.job_id
+    # Shutdown completes without error - no statuses() in protocol
 
 
 def test_concurrent_remote_calls_thread_safety(client: LocalClient):

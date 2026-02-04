@@ -29,8 +29,8 @@ from pathlib import Path
 import requests
 import yaml
 
-from fray.v2.ray.dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
-from fray.v2.ray.auth import maybe_fetch_local_ray_token
+from fray.v2.ray_backend.dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
+from fray.v2.ray_backend.auth import maybe_fetch_local_ray_token
 
 logger = logging.getLogger(__name__)
 
