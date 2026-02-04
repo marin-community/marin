@@ -322,6 +322,39 @@ def main(config: SampleLmMultihostConfig):
             sys.stderr.flush()
             raise
 
+        # === MULTIHOST SANITY TEST ===
+        print(f"[DEBUG P{jax.process_index()}] === Running multihost sanity test ===", flush=True)
+        sys.stdout.flush()
+        try:
+            # Test 1: Simple embedding lookup
+            test_tokens = hax.named(jnp.array([1, 2, 3]), axis="position")
+            print(f"[DEBUG P{jax.process_index()}] === Test tokens created: {test_tokens.axes} ===", flush=True)
+
+            # Test 2: Simple JIT function
+            @hax.named_jit()
+            def simple_test(x):
+                return x * 2
+
+            result = simple_test(test_tokens)
+            print(f"[DEBUG P{jax.process_index()}] === Simple JIT test passed ===", flush=True)
+
+            # Test 3: Model embedding lookup
+            with jax.transfer_guard("disallow"):  # Ensure no host transfers
+                embedded = model.embeddings.embed(test_tokens)
+                print(
+                    f"[DEBUG P{jax.process_index()}] === Model embedding test passed: {embedded.axes} ===", flush=True
+                )
+
+            print(f"[DEBUG P{jax.process_index()}] === All sanity tests passed ===", flush=True)
+        except Exception as e:
+            print(f"[DEBUG P{jax.process_index()}] === SANITY TEST FAILED: {e} ===", flush=True)
+            import traceback
+
+            traceback.print_exc()
+            sys.stdout.flush()
+            raise
+        # === END SANITY TEST ===
+
         print(f"[DEBUG P{jax.process_index()}] === GETTING MEMORY DEVICE ===", flush=True)
         memory_device = jax.local_devices()[0] if jax.local_devices() else None
         print(f"[DEBUG P{jax.process_index()}] === ESTIMATING FREE MEMORY ===", flush=True)
