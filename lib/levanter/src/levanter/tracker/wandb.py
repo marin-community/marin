@@ -160,6 +160,9 @@ class WandbConfig(TrackerConfig):
     save_xla_dumps: bool = False
     """If True, will save the XLA code to wandb (as configured by XLA_FLAGS). This is useful for debugging."""
 
+    init_timeout: int = 300
+    """Timeout in seconds for wandb.init(). Increase this if you see timeout errors in distributed training."""
+
     def init(self, run_id: Optional[str]) -> WandbTracker:
         import wandb
 
@@ -187,6 +190,9 @@ class WandbConfig(TrackerConfig):
         if "git_commit" in git_settings:
             hparams_to_save["git_commit"] = git_settings["git_commit"]
 
+        # Create settings with init_timeout and git settings
+        init_settings = wandb.Settings(init_timeout=self.init_timeout, **git_settings)
+
         r = wandb.init(
             entity=self.entity,
             project=self.project,
@@ -197,7 +203,7 @@ class WandbConfig(TrackerConfig):
             resume=self.resume,
             mode=mode,
             config=hparams_to_save,
-            settings=git_settings,
+            settings=init_settings,
             allow_val_change=True,
         )
 
@@ -216,8 +222,10 @@ class WandbConfig(TrackerConfig):
                 id=r.id,
                 group=r.group,
             )
+            # Use a longer timeout to account for slow wandb.init() on some workers
+            sync_timeout = self.init_timeout + 120  # init_timeout + buffer
             metadata_to_share = jax_utils.multihost_broadcast_sync(
-                metadata_to_share, is_source=jax.process_index() == 0
+                metadata_to_share, is_source=jax.process_index() == 0, timeout=sync_timeout
             )
 
             # if jax.process_index() != 0:
