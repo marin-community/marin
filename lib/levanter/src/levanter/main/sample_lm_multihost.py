@@ -343,34 +343,14 @@ def main(config: SampleLmMultihostConfig):
             print(f"[DEBUG P{jax.process_index()}] === Model embedding test passed: {embedded.axes} ===", flush=True)
 
             # Test 4: Create a minimal cache and test model.decode
-            from levanter.inference.page_table import PageTable, PageBatchInfo
+            from levanter.inference.page_table import PageTable
 
             test_page_table = PageTable.init(max_pages=4, max_seqs=1, page_size=64, max_pages_per_seq=4)
             test_cache = hax.named_jit(model.initial_cache)(test_page_table.spec(), dtype=jnp.bfloat16)
             print(f"[DEBUG P{jax.process_index()}] === Cache created: {len(test_cache)} layers ===", flush=True)
 
-            # Test 5: Actually call model.decode
-            print(f"[DEBUG P{jax.process_index()}] === Testing model.decode ===", flush=True)
-            test_pos_ids = hax.named(jnp.array([0, 1, 2]), axis="position")
-            test_binfo = PageBatchInfo(
-                slot_ids=hax.named(jnp.array([0, 0, 0], dtype=jnp.int32), axis="position"),
-                page_indices=hax.named(jnp.array([[0, -1, -1, -1]], dtype=jnp.int32), axis=("seq", "page")),
-                seq_lens=hax.named(jnp.array([3], dtype=jnp.int32), axis="seq"),
-                cu_q_lens=hax.named(jnp.array([0, 3], dtype=jnp.int32), axis="seq"),
-                num_seqs=jnp.array(1, dtype=jnp.int32),
-                new_token_dests=hax.named(jnp.array([0, 1, 2], dtype=jnp.int32), axis="position"),
-                page_size=64,
-            )
-
-            @hax.named_jit()
-            def test_decode(tokens, cache, binfo, pos_ids):
-                return model.decode(tokens, cache, binfo, pos_ids)
-
-            test_logits, test_new_cache = test_decode(test_tokens, test_cache, test_binfo, test_pos_ids)
-            print(
-                f"[DEBUG P{jax.process_index()}] === model.decode test passed: logits shape {test_logits.axes} ===",
-                flush=True,
-            )
+            # Note: model.decode test removed - it captures model as constant (16GB) and is slow
+            # The actual _run_prefill passes model as argument which avoids this
 
             print(f"[DEBUG P{jax.process_index()}] === All sanity tests passed ===", flush=True)
         except Exception as e:
