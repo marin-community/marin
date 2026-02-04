@@ -16,9 +16,11 @@ trainer:
   mesh:
     axes:
       model: 4
+    dcn_axes:
+      replica_dcn: 2
 model:
   type: llama
-  use_tpu_ragged_paged_attention: true
+  use_tpu_ragged_paged_attention: false
 engine:
   max_seq_len: 2560
   max_pages: 48

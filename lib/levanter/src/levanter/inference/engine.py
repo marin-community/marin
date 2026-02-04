@@ -5,6 +5,7 @@ import dataclasses
 import functools
 import logging
 import os
+import sys
 import time
 import warnings
 from dataclasses import dataclass, field
@@ -478,6 +479,20 @@ def _prefill_kernel(
     #     lens=decode_state.seq_lens.array,
     # )
     print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: calling model.decode ===", flush=True)
+    # Debug: print cache shape info to detect multihost sharding issues
+    print(f"[DEBUG P{jax.process_index()}] === cache layers: {len(gen_state.cache)} ===", flush=True)
+    if len(gen_state.cache) > 0:
+        first_layer = gen_state.cache[0]
+        print(
+            f"[DEBUG P{jax.process_index()}] === cache[0].kv_pages axes: {first_layer.kv_pages.axes} ===", flush=True
+        )
+        print(
+            f"[DEBUG P{jax.process_index()}] === cache[0].kv_pages sharding: {first_layer.kv_pages.array.sharding if hasattr(first_layer.kv_pages.array, 'sharding') else 'no sharding attr'} ===",
+            flush=True,
+        )
+    print(f"[DEBUG P{jax.process_index()}] === tokens axes: {tokens.axes} ===", flush=True)
+    print(f"[DEBUG P{jax.process_index()}] === binfo.num_seqs: {binfo.num_seqs} ===", flush=True)
+    sys.stdout.flush()
     # Debug: print input shapes and values to identify multihost coordination issues
     jax.debug.print(
         "[_prefill_kernel P{pid}] tokens.shape={ts} pos_ids.shape={ps} binfo.num_seqs={ns}",
