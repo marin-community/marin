@@ -160,7 +160,7 @@ class WandbConfig(TrackerConfig):
     save_xla_dumps: bool = False
     """If True, will save the XLA code to wandb (as configured by XLA_FLAGS). This is useful for debugging."""
 
-    init_timeout: int = 300
+    init_timeout: int = 10 * 60
     """Timeout in seconds for wandb.init(). Increase this if you see timeout errors in distributed training."""
 
     def init(self, run_id: Optional[str]) -> WandbTracker:
