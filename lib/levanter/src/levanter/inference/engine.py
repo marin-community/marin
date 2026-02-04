@@ -627,12 +627,15 @@ def _run_prefill(
 
     sys.stdout.flush()
 
-    @functools.partial(hax.named_jit, static_argnums=(4,))
-    def _jit_prefill_kernel(gs, mdl, smplr, queue, max_seqs):
+    # Use eqx.filter_jit for Equinox models instead of hax.named_jit
+    import equinox as eqx
+
+    @functools.partial(eqx.filter_jit, donate="none")
+    def _jit_prefill_kernel(gs, mdl, smplr, queue_tokens, queue_slot_ids, queue_pos_ids, queue_num_tokens, max_seqs):
         jax.debug.print("[_jit_prefill_kernel] === 1. Getting queue arrays ===")
-        tokens = queue.queued_tokens
-        pos_ids = queue.queued_pos_ids
-        slot_ids = queue.queued_slot_ids
+        tokens = queue_tokens
+        pos_ids = queue_pos_ids
+        slot_ids = queue_slot_ids
 
         jax.debug.print("[_jit_prefill_kernel] === 2. allocate_for_seq ===")
         decode_state, binfo = gs.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
@@ -676,8 +679,14 @@ def _run_prefill(
         jax.debug.print("[_jit_prefill_kernel] === DONE ===")
         return gs_new, outputs
 
+    # Extract the queue arrays to pass individually (avoiding nested dataclass issues)
+    queue = work.queue
     try:
-        result = _jit_prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+        result = _jit_prefill_kernel(
+            gen_state, model, sampler,
+            queue.queued_tokens, queue.queued_slot_ids, queue.queued_pos_ids, queue.num_queued_tokens,
+            max_seqs_in_prefill
+        )
         print(f"[_run_prefill P{jax.process_index()}] === Step 2 DONE ===", flush=True)
         sys.stdout.flush()
     except Exception as e:
