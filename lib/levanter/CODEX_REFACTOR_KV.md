@@ -202,6 +202,14 @@ Exit criteria:
 Rollback:
 - Keep physical reset as default if logical reset exposes a bug; fix bug before re-enabling logical default.
 
+Notes:
+- Verified sequential single-prompt runs with both `reset_mode: physical` and `reset_mode: logical` completed without regression (multi-host v5p-16, 1 prompt, 2048 tokens).
+- Multi-prompt stress (5 prompts, 2048 tokens, v5p-16) still fails with TPU/XLA exit status 1 for both reset modes; DecodeStats remain healthy (no page exhaustion). This is expected given the known multi-prompt failure and is tracked under M5 (multi-prompt admission), not a regression in reset semantics.
+
+Expected vs Not Expected:
+- Expected: single-prompt runs (and sequential rounds) behave identically under logical vs physical reset, with logical potentially faster between rounds.
+- Not expected: multi-prompt stability is still broken; failures here are not caused by reset-mode changes and must be addressed under M5.
+
 ### M3 - Remove Redundant KV Page State (Single Source of Truth)
 
 Goal: remove duplicated state that can diverge silently.
