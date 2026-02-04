@@ -26,7 +26,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
-from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
 from iris.time_utils import Deadline, Duration
 
@@ -81,18 +80,13 @@ def pytest_addoption(parser):
     )
 
 
-@pytest.fixture(scope="session")
-def use_docker(request):
-    return request.config.getoption("--use-docker")
-
-
 # =============================================================================
 # Docker Cleanup Utilities
 # =============================================================================
 # TODO: This before/after snapshot approach can accidentally delete containers
 # created by other processes during the test window. Fix by patching
 # DockerRuntime -> TrackingDockerRuntime at the module level so all Docker
-# operations are tracked explicitly. See review.md for details.
+# operations are tracked explicitly.
 
 
 def _get_container_ids() -> set[str]:
@@ -123,6 +117,11 @@ def _docker_cleanup(*, cleanup_images: bool = True) -> Iterator[None]:
                 subprocess.run(["docker", "rmi", "-f", iid], capture_output=True, check=False)
 
 
+@pytest.fixture(scope="session")
+def use_docker(request):
+    return request.config.getoption("--use-docker")
+
+
 @pytest.fixture
 def docker_cleanup_scope():
     """Cleans up all Docker containers and images created during the test."""
@@ -130,39 +129,10 @@ def docker_cleanup_scope():
         yield
 
 
-@pytest.fixture(scope="session")
-def docker_cleanup_session(use_docker):
-    """Session-scoped cleanup for e2e tests that use real Docker."""
-    if use_docker:
-        with _docker_cleanup(cleanup_images=True):
-            yield
-    else:
-        # Skip Docker cleanup when not using Docker
-        yield
-
-
 @pytest.fixture
 def sentinel(tmp_path) -> SentinelFile:
     """Per-test sentinel file for blocking/unblocking job threads."""
     return SentinelFile(str(tmp_path / "sentinel"))
-
-
-@pytest.fixture
-def container():
-    """Provides an isolated thread container for the test.
-
-    Automatically cleans up all threads spawned within the container when
-    the test completes. This is the recommended way to use ThreadContainer
-    in tests that need explicit thread management.
-
-    Example:
-        def test_with_threads(container):
-            container.spawn(my_thread_fn, name="test-thread")
-            # Test code...
-            # Cleanup happens automatically
-    """
-    with thread_container_scope("test") as cont:
-        yield cont
 
 
 @pytest.fixture(autouse=True)

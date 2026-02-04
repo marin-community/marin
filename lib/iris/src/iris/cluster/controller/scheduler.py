@@ -29,7 +29,7 @@ from iris.cluster.controller.state import (
     get_gpu_count,
     get_tpu_chip_count,
 )
-from iris.cluster.types import AttributeValue, JobId, WorkerId
+from iris.cluster.types import AttributeValue, JobName, WorkerId
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -479,7 +479,7 @@ class Scheduler:
         scheduled_task_ids: set[str] = set()
 
         # Group tasks by job for coscheduled handling
-        tasks_by_job: dict[JobId, list[ControllerTask]] = defaultdict(list)
+        tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
         for task in pending_tasks:
             tasks_by_job[task.job_id].append(task)
 

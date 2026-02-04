@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.types import JobName
 from iris.cluster.worker.docker import DockerImageBuilder
 from iris.cluster.worker.worker_types import TaskLogs
 
@@ -123,10 +124,11 @@ class ImageCache:
                     h.update(fd.read())
             tag = h.hexdigest()[:tag_len]
 
+        safe_job_id = JobName.from_wire(job_id).to_safe_token()
         if self._registry:
-            image_tag = f"{self._registry}/iris-job-{job_id}:{tag}"
+            image_tag = f"{self._registry}/iris-job-{safe_job_id}:{tag}"
         else:
-            image_tag = f"iris-job-{job_id}:{tag}"
+            image_tag = f"iris-job-{safe_job_id}:{tag}"
 
         # Check if image exists locally
         if self._docker.exists(image_tag):

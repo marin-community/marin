@@ -18,7 +18,7 @@ import sys
 import time
 
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import Entrypoint, generate_dockerfile, is_job_finished
+from iris.cluster.types import Entrypoint, JobName, generate_dockerfile, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
@@ -56,7 +56,7 @@ class RemoteClusterClient:
 
     def submit_job(
         self,
-        job_id: str,
+        job_id: JobName,
         entrypoint: Entrypoint,
         resources: cluster_pb2.ResourceSpecProto,
         environment: cluster_pb2.EnvironmentConfig | None = None,
@@ -91,20 +91,15 @@ class RemoteClusterClient:
             dockerfile=dockerfile,
         )
 
-        # Determine parent job ID (all but last component)
-        parts = job_id.rsplit("/", 1)
-        parent_job_id = parts[0] if len(parts) > 1 else ""
-
         # Use bundle_gcs_path if available, otherwise use bundle_blob
         if self._bundle_gcs_path:
             request = cluster_pb2.Controller.LaunchJobRequest(
-                name=job_id,
+                name=job_id.to_wire(),
                 entrypoint=entrypoint_proto,
                 resources=resources,
                 environment=env_config,
                 bundle_gcs_path=self._bundle_gcs_path,
                 ports=ports or [],
-                parent_job_id=parent_job_id,
                 constraints=constraints or [],
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
@@ -112,13 +107,12 @@ class RemoteClusterClient:
             )
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
-                name=job_id,
+                name=job_id.to_wire(),
                 entrypoint=entrypoint_proto,
                 resources=resources,
                 environment=env_config,
                 bundle_blob=self._bundle_blob or b"",
                 ports=ports or [],
-                parent_job_id=parent_job_id,
                 constraints=constraints or [],
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
@@ -133,14 +127,14 @@ class RemoteClusterClient:
             request.coscheduling.CopyFrom(coscheduling)
         self._client.launch_job(request)
 
-    def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
+    def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
+        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
         response = self._client.get_job_status(request)
         return response.job
 
     def wait_for_job(
         self,
-        job_id: str,
+        job_id: JobName,
         timeout: float = 300.0,
         poll_interval: float = 2.0,
     ) -> cluster_pb2.JobStatus:
@@ -171,21 +165,21 @@ class RemoteClusterClient:
             interval = backoff.next_interval()
             time.sleep(min(interval, deadline.remaining_seconds()))
 
-    def terminate_job(self, job_id: str) -> None:
-        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
+    def terminate_job(self, job_id: JobName) -> None:
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
         self._client.terminate_job(request)
 
     def register_endpoint(
         self,
         name: str,
         address: str,
-        job_id: str,
+        job_id: JobName,
         metadata: dict[str, str] | None = None,
     ) -> str:
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
-            job_id=job_id,
+            job_id=job_id.to_wire(),
             metadata=metadata or {},
         )
         response = self._client.register_endpoint(request)
@@ -218,24 +212,21 @@ class RemoteClusterClient:
         del wait
         # No cleanup needed - controller client is managed separately
 
-    def get_task_status(self, job_id: str, task_index: int) -> cluster_pb2.TaskStatus:
+    def get_task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
         """Get status of a specific task within a job.
 
         Args:
-            job_id: Parent job ID
-            task_index: 0-indexed task number
+            task_name: Full task name (/job/.../index)
 
         Returns:
             TaskStatus proto for the requested task
         """
-        request = cluster_pb2.Controller.GetTaskStatusRequest(
-            job_id=job_id,
-            task_index=task_index,
-        )
+        task_name.require_task()
+        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
         response = self._client.get_task_status(request)
         return response.task
 
-    def list_tasks(self, job_id: str) -> list[cluster_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
         """List all tasks for a job.
 
         Args:
@@ -244,13 +235,13 @@ class RemoteClusterClient:
         Returns:
             List of TaskStatus protos, one per task in the job
         """
-        request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id)
+        request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
         response = self._client.list_tasks(request)
         return list(response.tasks)
 
     def fetch_task_logs(
         self,
-        task_id: str,
+        task_name: JobName,
         start: Timestamp | None = None,
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:
@@ -259,22 +250,15 @@ class RemoteClusterClient:
         Uses the controller as a proxy to fetch logs from the worker.
 
         Args:
-            task_id: Full task ID in format "{job_id}/task-{index}"
+            task_name: Full task name in format "/job/.../index"
             start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
 
         Returns:
             List of LogEntry protos from the worker
         """
-        if "/task-" not in task_id:
-            raise ValueError(f"Invalid task_id format: {task_id}. Expected 'job_id/task-index'")
-
-        job_id, task_suffix = task_id.rsplit("/", 1)
-        task_index = int(task_suffix.split("-")[1])
-
         request = cluster_pb2.Controller.GetTaskLogsRequest(
-            job_id=job_id,
-            task_index=task_index,
+            task_id=task_name.to_wire(),
             start_ms=start.epoch_ms() if start else 0,
             limit=max_lines,
             start_line=0,

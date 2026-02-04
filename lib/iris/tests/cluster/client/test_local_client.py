@@ -17,7 +17,7 @@
 import pytest
 
 from iris.cluster.client.local_client import LocalClusterClient
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2
 
 
@@ -31,7 +31,7 @@ def client():
 
 def test_command_entrypoint_preserves_env_vars(client):
     """Verify command entrypoints receive Iris environment variables."""
-    job_id = "test-env-vars"
+    job_id = JobName.root("test-env-vars")
 
     # Create a command that echoes an environment variable
     entrypoint = Entrypoint.from_command("sh", "-c", "echo IRIS_JOB_ID=$IRIS_JOB_ID")
@@ -46,14 +46,14 @@ def test_command_entrypoint_preserves_env_vars(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the job ID
-    logs = client.fetch_task_logs(f"{job_id}/task-0")
+    logs = client.fetch_task_logs(job_id.task(0))
     log_text = "\n".join(entry.data for entry in logs)
-    assert f"IRIS_JOB_ID={job_id}" in log_text
+    assert f"IRIS_JOB_ID={job_id.to_wire()}" in log_text
 
 
 def test_log_streaming_captures_output_without_trailing_newline(client):
     """Verify log streaming captures output without trailing newline."""
-    job_id = "test-no-newline"
+    job_id = JobName.root("test-no-newline")
 
     # Use printf which doesn't add a newline
     entrypoint = Entrypoint.from_command("sh", "-c", "printf 'output without newline'")
@@ -68,14 +68,14 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the output
-    logs = client.fetch_task_logs(f"{job_id}/task-0")
+    logs = client.fetch_task_logs(job_id.task(0))
     log_text = "\n".join(entry.data for entry in logs)
     assert "output without newline" in log_text
 
 
 def test_callable_entrypoint_succeeds(client):
     """Verify callable entrypoints execute and complete successfully."""
-    job_id = "test-callable-success"
+    job_id = JobName.root("test-callable-success")
 
     def task_func():
         print("hello from callable")
@@ -93,7 +93,7 @@ def test_callable_entrypoint_succeeds(client):
 
 def test_command_entrypoint_with_custom_env_var(client):
     """Verify command entrypoints can access custom environment variables."""
-    job_id = "test-custom-env"
+    job_id = JobName.root("test-custom-env")
 
     # Create a command that uses a custom env var
     entrypoint = Entrypoint.from_command("sh", "-c", "echo CUSTOM_VAR=$CUSTOM_VAR")
@@ -116,6 +116,6 @@ def test_command_entrypoint_with_custom_env_var(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the custom env var
-    logs = client.fetch_task_logs(f"{job_id}/task-0")
+    logs = client.fetch_task_logs(job_id.task(0))
     log_text = "\n".join(entry.data for entry in logs)
     assert "CUSTOM_VAR=custom_value" in log_text

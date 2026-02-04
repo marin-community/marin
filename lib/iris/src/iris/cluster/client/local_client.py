@@ -23,7 +23,7 @@ import time
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -115,7 +115,7 @@ class LocalClusterClient:
 
     def submit_job(
         self,
-        job_id: str,
+        job_id: JobName,
         entrypoint: Entrypoint,
         resources: cluster_pb2.ResourceSpecProto,
         environment: cluster_pb2.EnvironmentConfig | None = None,
@@ -143,25 +143,25 @@ class LocalClusterClient:
             timeout=timeout,
         )
 
-    def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
+    def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         return self._remote_client.get_job_status(job_id)
 
     def wait_for_job(
         self,
-        job_id: str,
+        job_id: JobName,
         timeout: float = 300.0,
         poll_interval: float = 2.0,
     ) -> cluster_pb2.JobStatus:
         return self._remote_client.wait_for_job(job_id, timeout=timeout, poll_interval=poll_interval)
 
-    def terminate_job(self, job_id: str) -> None:
+    def terminate_job(self, job_id: JobName) -> None:
         self._remote_client.terminate_job(job_id)
 
     def register_endpoint(
         self,
         name: str,
         address: str,
-        job_id: str,
+        job_id: JobName,
         metadata: dict[str, str] | None = None,
     ) -> str:
         return self._remote_client.register_endpoint(name=name, address=address, job_id=job_id, metadata=metadata)
@@ -175,15 +175,15 @@ class LocalClusterClient:
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         return self._remote_client.list_jobs()
 
-    def get_task_status(self, job_id: str, task_index: int) -> cluster_pb2.TaskStatus:
-        return self._remote_client.get_task_status(job_id, task_index)
+    def get_task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
+        return self._remote_client.get_task_status(task_name)
 
-    def list_tasks(self, job_id: str) -> list[cluster_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
         return self._remote_client.list_tasks(job_id)
 
     def fetch_task_logs(
         self,
-        task_id: str,
+        task_id: JobName,
         start: "Timestamp | None" = None,
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:

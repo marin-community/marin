@@ -31,6 +31,7 @@ from iris.cluster.worker.docker import ContainerRuntime, DockerRuntime
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.types import JobName
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
@@ -336,11 +337,12 @@ class Worker:
         if rule := chaos("worker.submit_task"):
             time.sleep(rule.delay_seconds)
             raise RuntimeError("chaos: worker rejecting task")
-        task_id = request.task_id
+        task_id_wire = request.task_id
+        task_id = JobName.from_wire(task_id_wire)
 
         should_kill_existing = False
         with self._lock:
-            existing = self._tasks.get(task_id)
+            existing = self._tasks.get(task_id_wire)
             if existing is not None and existing.status not in self._TERMINAL_STATES:
                 if request.attempt_id <= existing.attempt_id:
                     logger.info(
@@ -349,7 +351,7 @@ class Worker:
                         request.attempt_id,
                         existing.status,
                     )
-                    return task_id
+                    return task_id_wire
                 logger.info(
                     "Superseding task %s: attempt %d -> %d, killing old attempt",
                     task_id,
@@ -359,10 +361,9 @@ class Worker:
                 should_kill_existing = True
 
         if should_kill_existing:
-            self.kill_task(task_id)
+            self.kill_task(task_id_wire)
 
-        job_id = request.job_id
-        task_index = request.task_index
+        task_id.require_task()
         num_tasks = request.num_tasks
         attempt_id = request.attempt_id
 
@@ -372,16 +373,14 @@ class Worker:
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
         # Create task working directory with attempt isolation
-        # Use safe path component for hierarchical task IDs (e.g., "my-exp/task-0" -> "my-exp__task-0")
-        safe_task_id = task_id.replace("/", "__")
+        # Use safe path component for hierarchical task IDs (e.g., "/my-exp/0" -> "__my-exp__0")
+        safe_task_id = task_id.to_safe_token()
         workdir = Path(tempfile.gettempdir()) / "iris-worker" / "tasks" / f"{safe_task_id}_attempt_{attempt_id}"
         workdir.mkdir(parents=True, exist_ok=True)
 
         # Create TaskAttempt to handle the full execution lifecycle
         config = TaskAttemptConfig(
             task_id=task_id,
-            job_id=job_id,
-            task_index=task_index,
             num_tasks=num_tasks,
             attempt_id=attempt_id,
             request=request,
@@ -403,7 +402,7 @@ class Worker:
         )
 
         with self._lock:
-            self._tasks[task_id] = attempt
+            self._tasks[task_id_wire] = attempt
 
         # Start execution in a monitored non-daemon thread. When stop() is called,
         # the on_stop callback kills the container so attempt.run() exits promptly.
@@ -418,10 +417,10 @@ class Worker:
                 except RuntimeError:
                     pass
 
-        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id}", on_stop=_stop_task)
+        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id_wire}", on_stop=_stop_task)
         attempt.thread = mt._thread
 
-        return task_id
+        return task_id_wire
 
     def get_task(self, task_id: str) -> TaskInfo | None:
         """Get a task by ID.
@@ -489,8 +488,6 @@ class Worker:
                     completed_tasks.append(
                         cluster_pb2.Controller.CompletedTaskEntry(
                             task_id=task_id,
-                            job_id="",  # We don't have this information
-                            task_index=0,
                             state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                             exit_code=0,
                             error="Task not found on worker",
@@ -504,8 +501,6 @@ class Worker:
                     completed_tasks.append(
                         cluster_pb2.Controller.CompletedTaskEntry(
                             task_id=task_proto.task_id,
-                            job_id=task_proto.job_id,
-                            task_index=task_proto.task_index,
                             state=task_proto.state,
                             exit_code=task_proto.exit_code,
                             error=task_proto.error,

@@ -711,7 +711,7 @@ def show_task_logs(ctx, job_id: str, category: str | None, max_entries: int):
     click.echo()
 
     for task in job.tasks:
-        click.echo(f"=== Task: {task.task_id} (index {task.task_index}) ===")
+        click.echo(f"=== Task: {task.task_id} ===")
         click.echo(f"State: {cluster_pb2.TaskState.Name(task.state)}")
         if task.worker_id:
             click.echo(f"Worker: {task.worker_id}")
@@ -721,12 +721,10 @@ def show_task_logs(ctx, job_id: str, category: str | None, max_entries: int):
 
         try:
             logs_resp = client.get_task_logs(
-                cluster_pb2.Controller.GetTaskLogsRequest(
-                    job_id=job.job_id, task_index=task.task_index, start_ms=0, limit=max_entries
-                )
+                cluster_pb2.Controller.GetTaskLogsRequest(task_id=task.task_id, start_ms=0, limit=max_entries)
             )
         except Exception as e:
-            click.echo(f"Failed to fetch logs for task {task.task_index}: {e}", err=True)
+            click.echo(f"Failed to fetch logs for task {task.task_id}: {e}", err=True)
             continue
 
         log_entries = logs_resp.logs

@@ -40,7 +40,7 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
 )
-from iris.cluster.types import JobId, TaskId, WorkerId, DeviceType
+from iris.cluster.types import DeviceType, JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
@@ -68,7 +68,7 @@ def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: Worke
 
 def transition_task(
     state: ControllerState,
-    task_id: TaskId,
+    task_id: JobName,
     new_state: int,
     *,
     error: str | None = None,
@@ -100,8 +100,9 @@ def job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
     def _make(name: str = "test-job") -> cluster_pb2.Controller.LaunchJobRequest:
+        job_name = JobName.root(name)
         return cluster_pb2.Controller.LaunchJobRequest(
-            name=name,
+            name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
@@ -160,7 +161,8 @@ def submit_job(
     request: cluster_pb2.Controller.LaunchJobRequest,
 ) -> list[ControllerTask]:
     """Submit a job via event and return tasks."""
-    jid = JobId(job_id)
+    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root(job_id)
+    request.name = jid.to_wire()
     state.handle_event(
         JobSubmittedEvent(
             job_id=jid,
@@ -189,7 +191,7 @@ def test_job_lifecycle_success(job_request, worker_metadata):
     req.replicas = 2
     tasks = submit_job(state, "j1", req)
 
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
 
     assert job is not None
     assert len(tasks) == 2
@@ -218,7 +220,7 @@ def test_job_lifecycle_failure_exhausted_retries(job_request, worker_metadata):
     req = job_request("job1")
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
 
     # Dispatch and fail (default max_retries_failure=0)
     dispatch_task(state, task, worker_id)
@@ -242,7 +244,7 @@ def test_task_failure_with_retry_requeues(job_request, worker_metadata):
     req.max_retries_failure = 1
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
 
     # First attempt fails
     dispatch_task(state, task, worker_id)
@@ -266,7 +268,7 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
     req = job_request("test-job")
     req.replicas = 3
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
 
     # Dispatch 2 tasks, leave 1 pending
     dispatch_task(state, tasks[0], worker_id)
@@ -275,7 +277,7 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
     # Cancel job
     state.handle_event(
         JobCancelledEvent(
-            job_id=JobId("j1"),
+            job_id=JobName.root("j1"),
             reason="User cancelled",
         )
     )
@@ -389,7 +391,7 @@ def test_failure_domain_kills_remaining_tasks(worker_metadata):
         replicas=3,
     )
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
 
     # Dispatch 2 tasks, leave 1 pending
     dispatch_task(state, tasks[0], worker_id)
@@ -420,7 +422,7 @@ def test_max_task_failures_tolerance(worker_metadata):
         max_task_failures=1,
     )
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
 
     for task in tasks:
         dispatch_task(state, task, worker_id)
@@ -454,7 +456,7 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
         max_retries_preemption=1,
     )
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
 
     dispatch_task(state, tasks[0], worker_id)
     transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
@@ -486,7 +488,7 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
         endpoint_id="ep1",
         name="j1/actor",
         address="a:1",
-        job_id=JobId("j1"),
+        job_id=JobName.root("j1"),
     )
     state.add_endpoint(ep, task.task_id)
 
@@ -509,14 +511,14 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
 
     req = job_request("test")
     tasks = submit_job(state, "ns-1", req)
-    job = state.get_job(JobId("ns-1"))
+    job = state.get_job(JobName.root("ns-1"))
     task = tasks[0]
 
     ep = ControllerEndpoint(
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobId("ns-1"),
+        job_id=JobName.root("ns-1"),
     )
     state.add_endpoint(ep)
 
@@ -555,7 +557,7 @@ def test_namespace_isolation(job_request, worker_metadata):
             endpoint_id="ep-1",
             name="ns-1/actor",
             address="10.0.0.1:8080",
-            job_id=JobId("ns-1"),
+            job_id=JobName.root("ns-1"),
         )
     )
     state.add_endpoint(
@@ -563,7 +565,7 @@ def test_namespace_isolation(job_request, worker_metadata):
             endpoint_id="ep-2",
             name="ns-2/actor",
             address="10.0.0.2:8080",
-            job_id=JobId("ns-2"),
+            job_id=JobName.root("ns-2"),
         )
     )
 
@@ -593,8 +595,8 @@ def test_task_queue_fifo_order(job_request):
 
     pending = state.peek_pending_tasks()
     assert len(pending) == 2
-    assert pending[0].job_id == JobId("j1")
-    assert pending[1].job_id == JobId("j2")
+    assert pending[0].job_id == JobName.root("j1")
+    assert pending[1].job_id == JobName.root("j2")
 
 
 def test_hierarchical_job_tracking(job_request):
@@ -605,24 +607,21 @@ def test_hierarchical_job_tracking(job_request):
     submit_job(state, "parent", parent_req)
 
     child1_req = job_request("child1")
-    child1_req.parent_job_id = "parent"
-    submit_job(state, "child1", child1_req)
+    submit_job(state, "/parent/child1", child1_req)
 
     child2_req = job_request("child2")
-    child2_req.parent_job_id = "parent"
-    submit_job(state, "child2", child2_req)
+    submit_job(state, "/parent/child2", child2_req)
 
     grandchild_req = job_request("grandchild")
-    grandchild_req.parent_job_id = "child1"
-    submit_job(state, "grandchild", grandchild_req)
+    submit_job(state, "/parent/child1/grandchild", grandchild_req)
 
     # get_children only returns direct children
-    children = state.get_children(JobId("parent"))
+    children = state.get_children(JobName.root("parent"))
     assert len(children) == 2
-    assert {c.job_id for c in children} == {"child1", "child2"}
+    assert {c.job_id for c in children} == {JobName.from_string("/parent/child1"), JobName.from_string("/parent/child2")}
 
     # No children for leaf nodes
-    assert state.get_children(JobId("grandchild")) == []
+    assert state.get_children(JobName.from_string("/parent/child1/grandchild")) == []
 
 
 def test_thread_safety(job_request):
@@ -668,7 +667,7 @@ def test_excessive_replicas_fails_job(job_request):
     req.replicas = MAX_REPLICAS_PER_JOB + 1
 
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
 
     assert job is not None
     assert job.state == cluster_pb2.JOB_STATE_FAILED
@@ -726,7 +725,7 @@ def test_worker_cannot_accept_task_when_resources_committed(make_job_request, wo
 
     # The task cannot be scheduled - no worker has sufficient capacity
     assert len(result.assignments) == 0
-    assert pending[0].job_id == JobId("j2")
+    assert pending[0].job_id == JobName.root("j2")
 
 
 def test_worker_can_accept_new_task_after_previous_completes(make_job_request, worker_metadata):
@@ -760,7 +759,7 @@ def test_worker_can_accept_new_task_after_previous_completes(make_job_request, w
     pending = state.peek_pending_tasks()
     result = scheduler.find_assignments(pending, state.get_available_workers())
     assert len(result.assignments) == 1
-    assert result.assignments[0][0].job_id == JobId("j2")
+    assert result.assignments[0][0].job_id == JobName.root("j2")
 
 
 def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_metadata):
@@ -798,7 +797,7 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
     # Third task should still be pending
     pending = state.peek_pending_tasks()
     assert len(pending) == 1
-    assert pending[0].job_id == JobId("j2")
+    assert pending[0].job_id == JobName.root("j2")
 
     # Scheduler should not assign the third task (no capacity - 4 CPUs used)
     result = scheduler.find_assignments(pending, state.get_available_workers())
@@ -832,7 +831,7 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
     req.coscheduling.group_by = "tpu-name"
     tasks = submit_job(state, "j1", req)
 
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
     assert job.is_coscheduled
 
     # Dispatch all tasks
@@ -975,7 +974,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
     )
     tasks = submit_job(state, "j1", req)
 
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
     assert not job.is_coscheduled
 
     for i, task in enumerate(tasks):
