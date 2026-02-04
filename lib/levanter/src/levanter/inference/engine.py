@@ -437,44 +437,60 @@ def _prefill_kernel(
     max_seqs_in_prefill: int,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
+    import sys
 
-    jax.debug.print("[_prefill_kernel] === ENTERED prefill_kernel ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] === ENTERED ===", flush=True)
+    sys.stdout.flush()
 
-    jax.debug.print("[_prefill_kernel] === got tokens/pos/slots ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] tokens.array.shape={tokens.array.shape}", flush=True)
+    print(f"[_prefill_kernel P{jax.process_index()}] slot_ids.array.shape={slot_ids.array.shape}", flush=True)
+    print(f"[_prefill_kernel P{jax.process_index()}] pos_ids.array.shape={pos_ids.array.shape}", flush=True)
+    sys.stdout.flush()
+
+    print(f"[_prefill_kernel P{jax.process_index()}] === About to call allocate_for_seq ===", flush=True)
+    sys.stdout.flush()
 
     decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
 
-    jax.debug.print("[_prefill_kernel] === allocate_for_seq done ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] === allocate_for_seq done ===", flush=True)
+    sys.stdout.flush()
 
     seq_lens = decode_state.seq_lens
 
     sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_seqs_in_prefill)
 
-    jax.debug.print("[_prefill_kernel] === about to call model.decode ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] === about to call model.decode ===", flush=True)
+    sys.stdout.flush()
+
     logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-    jax.debug.print("[_prefill_kernel] === model.decode returned ===")
-    jax.debug.print("[_prefill_kernel] logits_shape={shape}", shape=logits.array.shape)
+
+    print(f"[_prefill_kernel P{jax.process_index()}] === model.decode returned, logits.array.shape={logits.array.shape} ===", flush=True)
+    sys.stdout.flush()
     logits_at_samples = logits["position", sample_indices]
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
-    jax.debug.print("[_prefill_kernel] === num_new_tokens={num} ===", num=num_new_tokens)
+    print(f"[_prefill_kernel P{jax.process_index()}] num_new_tokens={num_new_tokens}", flush=True)
+    sys.stdout.flush()
 
     new_slot_ids = slot_ids["position", sample_indices]
     new_pos_ids = pos_ids["position", sample_indices]
     prng_keys = gen_state.decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
 
-    jax.debug.print("[_prefill_kernel] === about to sample ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] === about to sample ===", flush=True)
+    sys.stdout.flush()
 
     temps = decode_state.temperature["seq", new_slot_ids]
 
     new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, key=prng_keys)
 
-    jax.debug.print("[_prefill_kernel] === sampling done ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] === sampling done ===", flush=True)
+    sys.stdout.flush()
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
 
-    jax.debug.print("[_prefill_kernel] === update_tokens done ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] === update_tokens done ===", flush=True)
+    sys.stdout.flush()
 
     # Initialize outputs buffer and append prefill-sampled tokens
     outputs = _DecodeOutputs.init(
@@ -485,7 +501,8 @@ def _prefill_kernel(
     outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
-    jax.debug.print("[_prefill_kernel] === outputs created ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] === outputs created ===", flush=True)
+    sys.stdout.flush()
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
     if decode_state.clone_sources is not None:
@@ -498,7 +515,8 @@ def _prefill_kernel(
             outputs,
         )
 
-    jax.debug.print("[_prefill_kernel] === returning from prefill_kernel ===")
+    print(f"[_prefill_kernel P{jax.process_index()}] === returning from prefill_kernel ===", flush=True)
+    sys.stdout.flush()
 
     return gen_state, outputs
 
