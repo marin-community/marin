@@ -353,10 +353,13 @@ def main(config: SampleLmMultihostConfig):
             print(f"[DEBUG P{jax.process_index()}] === Testing model.decode ===", flush=True)
             test_pos_ids = hax.named(jnp.array([0, 1, 2]), axis="position")
             test_binfo = PageBatchInfo(
-                cu_q_lens=jnp.array([0, 3], dtype=jnp.int32),
-                num_seqs=jnp.array(1, dtype=jnp.int32),
-                seq_lens=hax.named(jnp.array([3], dtype=jnp.int32), axis="seq"),
+                slot_ids=hax.named(jnp.array([0, 0, 0], dtype=jnp.int32), axis="position"),
                 page_indices=hax.named(jnp.array([[0, -1, -1, -1]], dtype=jnp.int32), axis=("seq", "page")),
+                seq_lens=hax.named(jnp.array([3], dtype=jnp.int32), axis="seq"),
+                cu_q_lens=hax.named(jnp.array([0, 3], dtype=jnp.int32), axis="seq"),
+                num_seqs=jnp.array(1, dtype=jnp.int32),
+                new_token_dests=hax.named(jnp.array([0, 1, 2], dtype=jnp.int32), axis="position"),
+                page_size=64,
             )
 
             @hax.named_jit()
