@@ -58,6 +58,10 @@ QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 # TPU resource type for inference steps
 RESOURCE_TYPE = "v5p-8"
 
+# Batch size for inference steps (smaller = less work lost on preemption)
+# With n=4 samples, batch_size=8 means 32 sequences per batch (~5-10 min per batch)
+BATCH_SIZE = 8
+
 # Flag to indicate this is an instruction-tuned model
 IS_INSTRUCTION_TUNED = True
 
@@ -259,7 +263,7 @@ generate_with_selection = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 128),
-        batch_size=64,
+        batch_size=BATCH_SIZE,
         tensor_parallel_size=1,
         preserve_order=False,
 
@@ -503,7 +507,7 @@ cycle_gen_questions = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 256),
-        batch_size=64,
+        batch_size=BATCH_SIZE,
         tensor_parallel_size=1,
         preserve_order=False,
 
@@ -651,7 +655,7 @@ cycle_compare = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 256),
-        batch_size=64,
+        batch_size=BATCH_SIZE,
         tensor_parallel_size=1,
         preserve_order=False,
 
@@ -712,7 +716,7 @@ factual_check = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 256),
-        batch_size=64,
+        batch_size=BATCH_SIZE,
         tensor_parallel_size=1,
         preserve_order=False,
 
@@ -773,7 +777,7 @@ correctness_check = ExecutorStep(
 
         # Ray Data
         num_instances=(1, 256),
-        batch_size=64,
+        batch_size=BATCH_SIZE,
         tensor_parallel_size=1,
         preserve_order=False,
 
