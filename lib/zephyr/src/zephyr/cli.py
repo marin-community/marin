@@ -26,10 +26,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
-
 from fray.v2.client import current_client
 from fray.v2.local_backend import LocalClient
 from fray.v2.types import ResourceConfig
+
 from zephyr.execution import ZephyrContext, _default_zephyr_context
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,7 @@ def run_local(
     main_fn()
 
 
-def run_cluster(
+def run_ray_cluster(
     config: CliConfig,
     cluster: str,
     script_path: str,
@@ -214,6 +214,7 @@ def run_cluster(
         "-m",
         "zephyr.cli",
         "--max-parallelism",
+        "--backend=local",
         str(config.max_parallelism),
     ]
 
@@ -242,7 +243,7 @@ def run_iris_cluster(
     script_args: list[str],
     entry_point: str,
 ) -> None:
-    """Submit script to Iris cluster via iris_run.py.
+    """Submit script to Iris cluster.
 
     Args:
         config: Backend configuration
@@ -257,11 +258,10 @@ def run_iris_cluster(
     iris_cmd = [
         "uv",
         "run",
-        "python",
-        "-m",
-        "iris.iris_run",
+        "iris",
         "--config",
         cluster_config_path,
+        "run",
     ]
 
     # Install CPU-only PyTorch on Iris workers (no GPU/TPU accelerators available for CPU tasks)
@@ -282,8 +282,7 @@ def run_iris_cluster(
         "python",
         "-m",
         "zephyr.cli",
-        "--backend",
-        "local",  # Inside cluster, use local execution
+        "--backend=local",  # Inside cluster, use the default context from Iris
         "--max-parallelism",
         str(config.max_parallelism),
     ]
@@ -384,7 +383,7 @@ def main(
             run_iris_cluster(config, config.cluster, str(relative_script_path), script_args, entry_point)
         else:
             # Ray cluster submission mode (default)
-            run_cluster(config, config.cluster, str(relative_script_path), script_args, entry_point)
+            run_ray_cluster(config, config.cluster, str(relative_script_path), script_args, entry_point)
     else:
         # Local mode - runs script locally with LocalClient
         run_local(config, str(script_path), script_args, entry_point)
