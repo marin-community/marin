@@ -452,7 +452,7 @@ def main():
     parser.add_argument("--log_every", type=int, default=50, help="Log every N steps")
     parser.add_argument("--use_stackedu", action="store_true", help="Use Stack-Edu data")
     parser.add_argument("--require_docstring", action="store_true", help="Only use examples with docstrings")
-    parser.add_argument("--output_dir", type=str, default="outputs/kelp", help="Output directory")
+    parser.add_argument("--output_dir", type=str, default="outputs/kelp_conditional", help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
