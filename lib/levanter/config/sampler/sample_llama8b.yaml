@@ -1,5 +1,4 @@
-hf_checkpoint: meta-llama/Llama-3.1-8B-Instruct
-tokenizer: meta-llama/Llama-3.1-8B-Instruct
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
 n_rounds: 1
 profile: true
 trainer:

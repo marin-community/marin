@@ -1,0 +1,102 @@
+# SimPO config for v5p-64 (8 hosts x 8 chips) with multi-host inference evaluation.
+# This config demonstrates running generation on process 0 while other hosts wait.
+#
+# Usage:
+# python infra/launch.py --foreground --zone us-central1-a --tpu_name simpo_worker --tpu_type v5p-64 --capacity_type on-demand -- \
+#   python src/levanter/main/train_simpo.py --config_path config/simpo_ultrafeedback_llama3_8b_v5p_64_inference.yaml --trainer.ray.auto_start_cluster false
+
+data:
+  tokenizer: marin-community/marin-tokenizer
+  shuffle: true
+  permutation_type: feistel
+  components:
+    ultrafeedback_train_prefs:
+      source:
+        type: url
+        train_urls:
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
+    ultrafeedback_test_prefs:
+      source:
+        type: url
+        validation_urls:
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_test_prefs_marin_tokenizer-29ecfb
+  train_weights:
+    ultrafeedback_train_prefs: 1.0
+    ultrafeedback_test_prefs: 0.0
+
+model:
+  type: llama
+  max_seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+train_seq_len: 4096
+
+trainer:
+  seed: 0
+  per_device_parallelism: -1
+  per_device_eval_parallelism: -1
+  tracker:
+    type: wandb
+    project: "simpo-multihost-inference"
+    tags: ["simpo", "ultrafeedback", "llama3", "inference-eval", "multihost", "v5p-64"]
+  mp: p=f32,c=bfloat16
+  train_batch_size: 256
+  num_train_steps: 500
+  steps_per_eval: 100
+  model_averaging: null
+  checkpointer:
+    save_interval: 30m
+    base_path: gs://marin-us-central1/checkpoints/simpo/ultrafeedback_llama3_8b_v5p64_inference_test
+
+optimizer:
+  learning_rate: 6e-7
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: "cosine"
+  warmup: 0.1
+
+beta: 2.0
+gamma_beta_ratio: 0.8
+validation_split_fraction: null
+
+initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
+use_hf_model_config: false
+
+# Inference evaluation configuration for multi-host
+# In multi-host mode (v5p-64 = 8 hosts):
+# - Process 0 runs inference using its local 8 chips
+# - Other 7 processes wait at a barrier
+# - After inference, all processes resume training together
+inference_eval:
+  enabled: true
+  eval_every: 2               # Run inference every 2 steps for debugging
+  max_new_tokens: 64
+  temperature: 0.7
+  max_seq_len: 512            # Keep short to minimize KV cache
+  hbm_utilization: 0.2        # Low utilization to leave room for training state
+  max_pages: 64               # Cap pages to avoid VMEM exhaustion
+  allow_multihost: true       # Enable multi-host inference (process 0 only)
+  prompts:
+    - "What is the capital of France?"
+    - "Explain the theory of relativity in simple terms."
+    - "Write a haiku about machine learning."
+    - "What are the benefits of exercise?"
+    - "How do you make a good cup of coffee?"

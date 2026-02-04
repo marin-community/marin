@@ -1,0 +1,54 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+stop_sequence: null
+max_new_tokens: 4096
+temperature: 0.7
+n_rounds: 1
+n_generations: 1
+max_prompts_per_batch: 1
+trainer:
+  tracker:
+    type: wandb
+    project: levanter-multihost-sampling
+    tags: ["multihost", "sampling", "llama3.1-8b", "realistic", "20prompts", "4096"]
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: false
+engine:
+  max_seq_len: 4608
+  max_pages: 80
+  page_size: 64
+  max_seqs: 1
+  max_seqs_in_prefill: 1
+  max_prefill_size: 64
+  max_queued_tokens: 16
+  max_rounds: 64
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0
+prompts:
+  - "Prompt 001: Provide a concise overview of the benefits of sleep."
+  - "Prompt 002: Summarize the main idea of photosynthesis in one paragraph."
+  - "Prompt 003: Explain what an API is to a non-technical audience."
+  - "Prompt 004: Write a short tip for staying focused while coding."
+  - "Prompt 005: Describe a simple strategy for managing time effectively."
+  - "Prompt 006: Give a brief explanation of how a neural network learns."
+  - "Prompt 007: Outline three steps for preparing a presentation."
+  - "Prompt 008: Explain the concept of compound interest in simple terms."
+  - "Prompt 009: Provide a short definition of machine learning."
+  - "Prompt 010: Write a few sentences about the importance of hydration."
+  - "Prompt 011: Explain the difference between RAM and storage."
+  - "Prompt 012: Summarize the purpose of unit tests."
+  - "Prompt 013: Give a quick checklist for reviewing a pull request."
+  - "Prompt 014: Explain the idea of version control."
+  - "Prompt 015: Provide a brief overview of containerization."
+  - "Prompt 016: Describe a simple way to reduce distractions at work."
+  - "Prompt 017: Summarize the main causes of climate change."
+  - "Prompt 018: Explain what a distributed system is."
+  - "Prompt 019: Give a short explanation of caching."
+  - "Prompt 020: Outline best practices for writing clear documentation."

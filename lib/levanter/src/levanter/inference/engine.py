@@ -101,6 +101,15 @@ class InferenceEngineConfig:
     """Devices to use for inference. If None, uses jax.devices(). For multi-host inference,
     pass jax.local_devices() to run inference on a single host's devices only."""
 
+    # Memory management options
+    incremental_cleanup: bool = False
+    """When True, call free_pages_for_finished() after each decode round to incrementally
+    release pages for finished sequences. Default False to preserve existing behavior."""
+
+    use_logical_reset: bool = False
+    """When True, skip physical zeroing of KV cache during reset. The attention mask
+    ensures stale data is never read. Default False to preserve existing behavior."""
+
     def __post_init__(self):
         # this one is only required because of clones. If we really care, we could relax this
         if self.max_queued_tokens < self.max_seqs:
@@ -284,8 +293,21 @@ class GenState(eqx.Module):
     decode_state: DecodeState
 
     def reset(self):
+        """Reset with physical cache zeroing."""
         return GenState(
             cache=self.cache.reset(),
+            decode_state=self.decode_state.reset(),
+        )
+
+    def reset_logical(self):
+        """Reset without physical cache zeroing.
+
+        Uses logical reset which skips the expensive zeroing of KV pages.
+        This is safe because attention masks by kv_len and new allocations
+        overwrite stale data before it can be used.
+        """
+        return GenState(
+            cache=self.cache.reset_logical(),
             decode_state=self.decode_state.reset(),
         )
 
@@ -667,7 +689,7 @@ def _handle_clones(
 
 # @hax.named_jit(donate_args=(True, False, False))
 @hax.named_jit(
-    donate_args=(True, False, False, False, False),
+    donate_args=(True, False, False, False, False, False),
 )
 def _run_generation_loop(
     gen_state: GenState,
@@ -675,8 +697,18 @@ def _run_generation_loop(
     sampler: Sampler,
     max_tokens_per_round: int,
     max_rounds: int,
+    incremental_cleanup: bool = False,
 ) -> tuple[GenState, _DecodeOutputs]:
-    """Run autoregressive generation until all sequences finish or `max_rounds` reached."""
+    """Run autoregressive generation until all sequences finish or `max_rounds` reached.
+
+    Args:
+        gen_state: Current generation state with cache and decode state.
+        model: Language model for decoding.
+        sampler: Sampler for token selection.
+        max_tokens_per_round: Maximum tokens to process per iteration.
+        max_rounds: Maximum number of iterations.
+        incremental_cleanup: When True, free pages for finished sequences after each round.
+    """
 
     def cond(state: tuple[GenState, _DecodeOutputs, jax.Array]):
         _gen_state, _outputs, step = state
@@ -727,10 +759,21 @@ def _run_generation_loop(
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
 
+        # Snapshot finished flags BEFORE cleanup for output extraction
+        finished_snapshot = decode_state.finished
+
+        # Incremental cleanup: free pages and invalidate metadata for finished sequences
+        if incremental_cleanup:
+            finished_mask = finished_snapshot.array
+            # Free pages to reclaim memory
+            decode_state = decode_state.free_pages_for_finished(finished_mask)
+            # Invalidate sequence metadata and clear finished flags
+            decode_state = decode_state.invalidate_finished()
+
         # Update the gen_state with all the new components
         new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
-        # Append non-stateful outputs for host-side extraction
-        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        # Append non-stateful outputs for host-side extraction (use snapshot from before cleanup)
+        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, finished_snapshot)
 
         # jax.debug.print(
         #     "[gen] step={step} outputs_size={size} queued_after={queued}",
@@ -850,8 +893,12 @@ class InferenceEngine:
         """Free all local sequence slots and reset to the initial `DecodeState`.
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
+        When `use_logical_reset` is True in config, skips expensive cache zeroing.
         """
-        self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
+        if self.config.use_logical_reset:
+            self.gen_state = eqx.filter_jit(self.gen_state.reset_logical, donate="all")()
+        else:
+            self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
@@ -1137,6 +1184,7 @@ class InferenceEngine:
                 # TODO: tune max_tokens_per_round
                 int(self.config.imputed_max_tokens_per_round),
                 int(self.config.max_rounds),
+                bool(self.config.incremental_cleanup),
             )
             submit_done = time.time()
             # Time spent with device executing (and the host thread waiting)
@@ -1160,6 +1208,19 @@ class InferenceEngine:
                     f"fake_submit {fake_submit_done - fake_submit_start:.3f}s, "
                     f"{tps_total:.2f} tok/s, {new_tokens} new"
                     f" (extract {extract_time:.3f}s"
+                )
+                # Log decode metrics to W&B
+                levanter.tracker.log(
+                    {
+                        "decode/tokens_per_sec": tps_total,
+                        "decode/iter_time_sec": iter_time,
+                        "decode/device_time_sec": device_time,
+                        "decode/host_time_sec": host_time,
+                        "decode/submit_time_sec": submit_time,
+                        "decode/extract_time_sec": extract_time,
+                        "decode/new_tokens": new_tokens,
+                    },
+                    step=decode_iteration,
                 )
 
             decode_iteration += 1
@@ -1212,6 +1273,7 @@ class InferenceEngine:
             # TODO: tune max_tokens_per_round
             int(self.config.imputed_max_tokens_per_round),
             int(self.config.max_rounds),
+            bool(self.config.incremental_cleanup),
         )
         with fsspec.open(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(traced.jaxpr))
@@ -1223,6 +1285,7 @@ class InferenceEngine:
                     self.sampler,
                     int(self.config.imputed_max_tokens_per_round),
                     int(self.config.max_rounds),
+                    bool(self.config.incremental_cleanup),
                 ).as_text()
             )
 

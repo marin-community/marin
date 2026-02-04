@@ -1,5 +1,4 @@
-hf_checkpoint: meta-llama/Llama-3.2-1B
-tokenizer: meta-llama/Llama-3.2-1B
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3.2-1B--main
 trainer:
   ray:
     auto_start_cluster: false

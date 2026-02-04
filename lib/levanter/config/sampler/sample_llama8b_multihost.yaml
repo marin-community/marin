@@ -1,0 +1,33 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+prompts:
+  - "What is the capital of France?"
+  - "Explain quantum computing in simple terms."
+  - "Write a short poem about the ocean."
+  - "Give a quick tip for staying focused while coding."
+max_new_tokens: 128
+temperature: 0.7
+n_rounds: 1
+n_generations: 1
+trainer:
+  tracker:
+    type: wandb
+    project: levanter-multihost-sampling
+    tags: ["multihost", "sampling", "llama3.1-8b"]
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+engine:
+  max_seq_len: 512
+  max_pages: 128
+  page_size: 128
+  max_seqs: 32
+  max_seqs_in_prefill: 32
+  max_prefill_size: 1024
+  max_queued_tokens: 64
+  max_rounds: 16
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0

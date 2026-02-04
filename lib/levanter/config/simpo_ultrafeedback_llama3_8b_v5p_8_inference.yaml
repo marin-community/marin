@@ -1,0 +1,99 @@
+# SimPO config for v5p-8 with inference evaluation enabled.
+# This config demonstrates running generation during training.
+#
+# Usage:
+# python infra/launch.py --foreground --zone us-central1-a --tpu_name simpo_worker --tpu_type v5p-8 --capacity_type on-demand -- \
+#   python src/levanter/main/train_simpo.py --config_path config/simpo_ultrafeedback_llama3_8b_v5p_8_inference.yaml --trainer.ray.auto_start_cluster false
+
+data:
+  tokenizer: marin-community/marin-tokenizer
+  shuffle: true
+  permutation_type: feistel
+  components:
+    ultrafeedback_train_prefs:
+      source:
+        type: url
+        train_urls:
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
+    ultrafeedback_test_prefs:
+      source:
+        type: url
+        validation_urls:
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_test_prefs_marin_tokenizer-29ecfb
+  train_weights:
+    ultrafeedback_train_prefs: 1.0
+    ultrafeedback_test_prefs: 0.0
+
+model:
+  type: llama
+  max_seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+train_seq_len: 4096
+
+trainer:
+  seed: 0
+  per_device_parallelism: 8
+  per_device_eval_parallelism: 8
+  tracker:
+    type: wandb
+    project: "simpo-inference-eval"
+    tags: ["simpo", "ultrafeedback", "llama3", "inference-eval"]
+  mp: p=f32,c=bfloat16
+  train_batch_size: 64
+  num_train_steps: 500
+  steps_per_eval: 100
+  model_averaging: null
+  checkpointer:
+    save_interval: 30m
+    base_path: gs://marin-us-central1/checkpoints/simpo/ultrafeedback_llama3_8b_inference_test
+
+optimizer:
+  learning_rate: 6e-7
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: "cosine"
+  warmup: 0.1
+
+beta: 2.0
+gamma_beta_ratio: 0.8
+validation_split_fraction: null
+
+initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
+use_hf_model_config: false
+
+# Inference evaluation configuration
+# Note: Keep these settings conservative to avoid OOM during training.
+# The inference engine allocates a separate KV cache which competes with training memory.
+inference_eval:
+  enabled: true
+  eval_every: 10
+  max_new_tokens: 64
+  temperature: 0.7
+  max_seq_len: 512        # Keep short to minimize KV cache
+  hbm_utilization: 0.2    # Low utilization to leave room for training
+  max_pages: 64           # Cap pages to avoid VMEM exhaustion in paged attention
+  prompts:
+    - "What is the capital of France?"
+    - "Explain the theory of relativity in simple terms."
+    - "Write a haiku about machine learning."
+    - "What are the benefits of exercise?"
+    - "How do you make a good cup of coffee?"

@@ -1,0 +1,134 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+stop_sequence: null
+max_new_tokens: 4096
+temperature: 0.7
+n_rounds: 1
+n_generations: 1
+max_prompts_per_batch: 1
+trainer:
+  tracker:
+    type: wandb
+    project: levanter-multihost-sampling
+    tags: ["multihost", "sampling", "llama3.1-8b", "realistic"]
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: false
+engine:
+  max_seq_len: 4608
+  max_pages: 80
+  page_size: 64
+  max_seqs: 1
+  max_seqs_in_prefill: 1
+  max_prefill_size: 64
+  max_queued_tokens: 16
+  max_rounds: 64
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0
+prompts:
+  - "Prompt 001: Provide a concise overview of the benefits of sleep."
+  - "Prompt 002: Summarize the main idea of photosynthesis in one paragraph."
+  - "Prompt 003: Explain what an API is to a non-technical audience."
+  - "Prompt 004: Write a short tip for staying focused while coding."
+  - "Prompt 005: Describe a simple strategy for managing time effectively."
+  - "Prompt 006: Give a brief explanation of how a neural network learns."
+  - "Prompt 007: Outline three steps for preparing a presentation."
+  - "Prompt 008: Explain the concept of compound interest in simple terms."
+  - "Prompt 009: Provide a short definition of machine learning."
+  - "Prompt 010: Write a few sentences about the importance of hydration."
+  - "Prompt 011: Explain the difference between RAM and storage."
+  - "Prompt 012: Summarize the purpose of unit tests."
+  - "Prompt 013: Give a quick checklist for reviewing a pull request."
+  - "Prompt 014: Explain the idea of version control."
+  - "Prompt 015: Provide a brief overview of containerization."
+  - "Prompt 016: Describe a simple way to reduce distractions at work."
+  - "Prompt 017: Summarize the main causes of climate change."
+  - "Prompt 018: Explain what a distributed system is."
+  - "Prompt 019: Give a short explanation of caching."
+  - "Prompt 020: Outline best practices for writing clear documentation."
+  - "Prompt 021: Describe a simple debugging workflow."
+  - "Prompt 022: Explain the purpose of load balancing."
+  - "Prompt 023: Summarize what a database index does."
+  - "Prompt 024: Provide a brief comparison of SQL and NoSQL."
+  - "Prompt 025: Explain what latency means in computing."
+  - "Prompt 026: Write a short paragraph about user experience design."
+  - "Prompt 027: Explain the idea of backpropagation."
+  - "Prompt 028: Summarize the role of a product manager."
+  - "Prompt 029: Give a short tip for improving code readability."
+  - "Prompt 030: Explain what a build system does."
+  - "Prompt 031: Describe a simple approach to incident response."
+  - "Prompt 032: Summarize the importance of code reviews."
+  - "Prompt 033: Explain the concept of encryption."
+  - "Prompt 034: Provide a short description of an A/B test."
+  - "Prompt 035: Outline a basic rollout plan for a feature."
+  - "Prompt 036: Explain what an LRU cache is."
+  - "Prompt 037: Summarize the purpose of pagination."
+  - "Prompt 038: Give a short explanation of JSON."
+  - "Prompt 039: Explain why monitoring and alerting matter."
+  - "Prompt 040: Describe a simple strategy for prioritizing tasks."
+  - "Prompt 041: Summarize the role of authentication vs authorization."
+  - "Prompt 042: Explain what a dependency graph is."
+  - "Prompt 043: Provide a brief overview of CI/CD."
+  - "Prompt 044: Explain how a search engine indexes content."
+  - "Prompt 045: Give a short description of feature flags."
+  - "Prompt 046: Summarize the impact of cold starts in services."
+  - "Prompt 047: Explain the idea of eventual consistency."
+  - "Prompt 048: Provide a short definition of an SLA."
+  - "Prompt 049: Describe a simple method for logging effectively."
+  - "Prompt 050: Explain the purpose of rate limiting."
+  - "Prompt 051: Summarize what observability includes."
+  - "Prompt 052: Explain how a queue differs from a stack."
+  - "Prompt 053: Provide a brief summary of graph databases."
+  - "Prompt 054: Explain the idea of data normalization."
+  - "Prompt 055: Summarize the concept of idempotency."
+  - "Prompt 056: Give a short explanation of retries with backoff."
+  - "Prompt 057: Explain what a service mesh provides."
+  - "Prompt 058: Summarize the difference between batch and streaming."
+  - "Prompt 059: Provide a brief note on schema migrations."
+  - "Prompt 060: Explain the purpose of feature extraction."
+  - "Prompt 061: Describe a simple strategy for handling failures."
+  - "Prompt 062: Explain the role of a message broker."
+  - "Prompt 063: Summarize the basics of REST APIs."
+  - "Prompt 064: Provide a brief overview of GraphQL."
+  - "Prompt 065: Explain what a data warehouse is."
+  - "Prompt 066: Summarize the difference between OLTP and OLAP."
+  - "Prompt 067: Give a short explanation of model overfitting."
+  - "Prompt 068: Explain the purpose of cross-validation."
+  - "Prompt 069: Summarize what a tokenizer does in NLP."
+  - "Prompt 070: Provide a brief explanation of embeddings."
+  - "Prompt 071: Explain what a checkpoint is in training."
+  - "Prompt 072: Summarize why reproducibility matters."
+  - "Prompt 073: Give a short overview of mixed precision."
+  - "Prompt 074: Explain what a gradient is in optimization."
+  - "Prompt 075: Provide a brief note on learning rate schedules."
+  - "Prompt 076: Explain the role of attention in transformers."
+  - "Prompt 077: Summarize the difference between supervised and unsupervised learning."
+  - "Prompt 078: Provide a short explanation of reinforcement learning."
+  - "Prompt 079: Explain the idea of prompt engineering."
+  - "Prompt 080: Summarize why evals are important for models."
+  - "Prompt 081: Give a short description of top-k sampling."
+  - "Prompt 082: Explain what temperature does in sampling."
+  - "Prompt 083: Summarize the concept of beam search."
+  - "Prompt 084: Provide a brief overview of data augmentation."
+  - "Prompt 085: Explain the role of regularization."
+  - "Prompt 086: Summarize the purpose of dropout."
+  - "Prompt 087: Provide a short description of layer normalization."
+  - "Prompt 088: Explain what a loss function measures."
+  - "Prompt 089: Summarize the idea of gradient clipping."
+  - "Prompt 090: Explain what a batch size affects."
+  - "Prompt 091: Provide a short overview of TPU vs GPU."
+  - "Prompt 092: Explain the concept of sharding."
+  - "Prompt 093: Summarize the role of the optimizer."
+  - "Prompt 094: Provide a brief explanation of Adam."
+  - "Prompt 095: Explain what weight decay is."
+  - "Prompt 096: Summarize the purpose of warmup steps."
+  - "Prompt 097: Explain what a tokenizer vocabulary is."
+  - "Prompt 098: Provide a short note on sequence length limits."
+  - "Prompt 099: Explain why memory usage matters in inference."
+  - "Prompt 100: Summarize best practices for monitoring throughput."

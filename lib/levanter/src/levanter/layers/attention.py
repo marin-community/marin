@@ -1575,6 +1575,8 @@ class AttentionConfig:
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
     """Configuration for QK normalization. If None, no normalization is applied."""
+    use_tpu_ragged_paged_attention: bool = True
+    """If False, skip the TPU ragged paged attention kernel and use the reference implementation."""
 
     def __post_init__(self):
         assert (
@@ -1774,6 +1776,7 @@ class Attention(eqx.Module):
             batch_info.num_seqs,
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
+            use_tpu=self.config.use_tpu_ragged_paged_attention,
         )
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
@@ -1825,6 +1828,8 @@ def ragged_paged_attention(
     num_seqs: jnp.ndarray,
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
+    *,
+    use_tpu: bool = True,
 ) -> NamedArray:
     """Ragged attention for paged KV caches.
 
@@ -1842,7 +1847,7 @@ def ragged_paged_attention(
             return False
         return True
 
-    if _tpu_rpa_available():
+    if use_tpu and _tpu_rpa_available():
         try:
             out = _do_tpu_ragged_paged_attention(
                 q,
@@ -1981,8 +1986,10 @@ def default_ragged_paged_attention(
     It does each sequence independently
     """
 
-    Q_BS = min(1, q.axis_size("position"))  # block size for query
-    KV_BS = min(2, page_indices.axis_size("page"))  # block size for key-value
+    # Optimized block sizes: larger blocks reduce loop overhead
+    # Original values (Q_BS=1, KV_BS=2) were conservative; 16 provides better throughput
+    Q_BS = min(16, q.axis_size("position"))  # block size for query
+    KV_BS = min(16, page_indices.axis_size("page"))  # block size for key-value
     Q_B = hax.Axis("position", Q_BS)
 
     H = q.resolve_axis("kv_head")

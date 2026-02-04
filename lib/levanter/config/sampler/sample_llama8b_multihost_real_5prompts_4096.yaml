@@ -1,0 +1,39 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+stop_sequence: null
+max_new_tokens: 4096
+temperature: 0.7
+n_rounds: 1
+n_generations: 1
+max_prompts_per_batch: 1
+trainer:
+  tracker:
+    type: wandb
+    project: levanter-multihost-sampling
+    tags: ["multihost", "sampling", "llama3.1-8b", "realistic", "5prompts", "4096"]
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: false
+engine:
+  max_seq_len: 4608
+  max_pages: 80
+  page_size: 64
+  max_seqs: 1
+  max_seqs_in_prefill: 1
+  max_prefill_size: 64
+  max_queued_tokens: 16
+  max_rounds: 64
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0
+prompts:
+  - "Prompt 001: Provide a concise overview of the benefits of sleep."
+  - "Prompt 002: Summarize the main idea of photosynthesis in one paragraph."
+  - "Prompt 003: Explain what an API is to a non-technical audience."
+  - "Prompt 004: Write a short tip for staying focused while coding."
+  - "Prompt 005: Describe a simple strategy for managing time effectively."
