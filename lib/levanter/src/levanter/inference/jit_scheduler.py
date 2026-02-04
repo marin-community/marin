@@ -581,13 +581,22 @@ class DecodeState(eqx.Module):
     finished: ht.bool_[NamedArray, "seq"]
 
     def reset(self):
-        return DecodeState.init(
-            page_table=self.page_table.reset(),
+        import jax
+
+        print(f"[DEBUG P{jax.process_index()}] === DecodeState.reset() called ===", flush=True)
+        print(f"[DEBUG P{jax.process_index()}] === About to call page_table.reset() ===", flush=True)
+        reset_pt = self.page_table.reset()
+        print(f"[DEBUG P{jax.process_index()}] === page_table.reset() completed ===", flush=True)
+        print(f"[DEBUG P{jax.process_index()}] === About to call DecodeState.init() ===", flush=True)
+        result = DecodeState.init(
+            page_table=reset_pt,
             pad_token_id=self.pad_token_id,
             max_stop_seqs=self.stop_tokens.shape["stop_seq"] if self.stop_tokens is not None else 0,
             max_stop_tokens=self.stop_tokens.shape["position"] if self.stop_tokens is not None else 0,
             max_queued_tokens=self.tqueue.max_queued_tokens,
         )
+        print(f"[DEBUG P{jax.process_index()}] === DecodeState.init() completed ===", flush=True)
+        return result
 
     @staticmethod
     def init(
@@ -600,34 +609,79 @@ class DecodeState(eqx.Module):
         """
         Initialize a DecodeState with empty buffers.
         """
+        import jax as _jax
+
+        print(f"[DEBUG P{_jax.process_index()}] === DecodeState.init() STATIC called ===", flush=True)
         max_seqs = page_table.max_seqs
         pages_per_seq = page_table.pages_per_seq
         page_size = page_table.page_size
         max_seq_len = page_table.max_len_per_seq
+        print(
+            f"[DEBUG P{_jax.process_index()}] === max_seqs={max_seqs}, pages_per_seq={pages_per_seq}, page_size={page_size}, max_seq_len={max_seq_len} ===",
+            flush=True,
+        )
 
+        print(f"[DEBUG P{_jax.process_index()}] === Creating SequenceTable ===", flush=True)
         sequence_table = SequenceTable.init(max_seqs, pages_per_seq, page_size)
+        print(f"[DEBUG P{_jax.process_index()}] === SequenceTable created ===", flush=True)
 
+        print(f"[DEBUG P{_jax.process_index()}] === Creating tokens array ===", flush=True)
+        tokens = hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32)
+        print(f"[DEBUG P{_jax.process_index()}] === tokens created ===", flush=True)
+
+        print(f"[DEBUG P{_jax.process_index()}] === Creating logprobs array ===", flush=True)
+        logprobs = hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32)
+        print(f"[DEBUG P{_jax.process_index()}] === logprobs created ===", flush=True)
+
+        print(f"[DEBUG P{_jax.process_index()}] === Creating max_num_tokens array ===", flush=True)
+        max_num_tokens = hax.full({"seq": max_seqs}, 0, dtype=jnp.int32)
+        print(f"[DEBUG P{_jax.process_index()}] === max_num_tokens created ===", flush=True)
+
+        print(
+            f"[DEBUG P{_jax.process_index()}] === Creating stop_tokens array (max_stop_tokens={max_stop_tokens}) ===",
+            flush=True,
+        )
+        stop_tokens = (
+            hax.full(
+                {"seq": max_seqs, "stop_seq": max_stop_seqs, "position": max_stop_tokens},
+                INVALID,
+                dtype=jnp.int32,
+            )
+            if max_stop_tokens > 0
+            else None
+        )
+        print(f"[DEBUG P{_jax.process_index()}] === stop_tokens created ===", flush=True)
+
+        print(f"[DEBUG P{_jax.process_index()}] === Creating temperature array ===", flush=True)
+        temperature = hax.ones({"seq": max_seqs}, dtype=jnp.float32)
+        print(f"[DEBUG P{_jax.process_index()}] === temperature created ===", flush=True)
+
+        print(f"[DEBUG P{_jax.process_index()}] === Creating prng_keys ===", flush=True)
+        prng_keys = _jax.vmap(_jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0)
+        print(f"[DEBUG P{_jax.process_index()}] === prng_keys created ===", flush=True)
+
+        print(f"[DEBUG P{_jax.process_index()}] === Creating tqueue ===", flush=True)
+        tqueue = TokenQueue.init(max_queued_tokens)
+        print(f"[DEBUG P{_jax.process_index()}] === tqueue created ===", flush=True)
+
+        print(f"[DEBUG P{_jax.process_index()}] === Creating finished array ===", flush=True)
+        finished = hax.zeros({"seq": max_seqs}, dtype=bool)
+        print(f"[DEBUG P{_jax.process_index()}] === finished created ===", flush=True)
+
+        print(f"[DEBUG P{_jax.process_index()}] === Creating DecodeState object ===", flush=True)
         return DecodeState(
             sequences=sequence_table,
             page_size=page_size,
             page_table=page_table,
             pad_token_id=pad_token_id,
-            tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
-            logprobs=hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32),
-            max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
-            stop_tokens=(
-                hax.full(
-                    {"seq": max_seqs, "stop_seq": max_stop_seqs, "position": max_stop_tokens},
-                    INVALID,
-                    dtype=jnp.int32,
-                )
-                if max_stop_tokens > 0
-                else None
-            ),
-            temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
-            prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
-            tqueue=TokenQueue.init(max_queued_tokens),
-            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
+            tokens=tokens,
+            logprobs=logprobs,
+            max_num_tokens=max_num_tokens,
+            stop_tokens=stop_tokens,
+            temperature=temperature,
+            prng_keys=prng_keys,
+            tqueue=tqueue,
+            finished=finished,
         )
 
     @property

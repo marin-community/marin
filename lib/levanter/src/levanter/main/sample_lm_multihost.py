@@ -126,7 +126,7 @@ def _infer_non_default_overrides(config: HFCompatConfig) -> dict[str, object]:
         value = getattr(config, fld.name)
         default_value = getattr(default_config, fld.name)
         if value != default_value:
-            overrides[field.name] = value
+            overrides[fld.name] = value
     return overrides
 
 
@@ -322,16 +322,25 @@ def main(config: SampleLmMultihostConfig):
             sys.stderr.flush()
             raise
 
+        print(f"[DEBUG P{jax.process_index()}] === GETTING MEMORY DEVICE ===", flush=True)
         memory_device = jax.local_devices()[0] if jax.local_devices() else None
+        print(f"[DEBUG P{jax.process_index()}] === ESTIMATING FREE MEMORY ===", flush=True)
         hbm_free_before_engine = estimated_free_device_memory(memory_device)
+        print(f"[DEBUG P{jax.process_index()}] === FREE MEMORY: {hbm_free_before_engine} ===", flush=True)
 
+        print(f"[DEBUG P{jax.process_index()}] === STARTING engine creation ===", flush=True)
         logger.info("=== STARTING engine creation ===")
         sys.stdout.flush()
         sys.stderr.flush()
 
         engine_start_time = time.perf_counter()
+        print(
+            f"[DEBUG P{jax.process_index()}] === About to call InferenceEngine.from_model_with_config ===", flush=True
+        )
+        sys.stdout.flush()
         try:
             engine = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+            print(f"[DEBUG P{jax.process_index()}] === InferenceEngine created successfully ===", flush=True)
             logger.info("=== ENGINE CREATION COMPLETE ===")
             sys.stdout.flush()
             sys.stderr.flush()
@@ -341,8 +350,11 @@ def main(config: SampleLmMultihostConfig):
             sys.stderr.flush()
             raise
 
+        print(f"[DEBUG P{jax.process_index()}] === Engine creation done, computing time ===", flush=True)
         engine_creation_time = time.perf_counter() - engine_start_time
+        print(f"[DEBUG P{jax.process_index()}] === Engine creation time: {engine_creation_time:.2f}s ===", flush=True)
         hbm_free_after_engine = estimated_free_device_memory(memory_device)
+        print(f"[DEBUG P{jax.process_index()}] === HBM free after engine: {hbm_free_after_engine} ===", flush=True)
 
         if config.log_kernel_jaxprs_path:
             jaxprs_path = config.log_kernel_jaxprs_path
@@ -350,12 +362,19 @@ def main(config: SampleLmMultihostConfig):
                 jaxprs_path = f"{jaxprs_path}.host{jax.process_index()}"
             engine.write_kernel_jaxprs(jaxprs_path)
 
+        print(f"[DEBUG P{jax.process_index()}] === Creating base PRNGKey ===", flush=True)
         base_key = jrandom.PRNGKey(base_seed)
+        print(f"[DEBUG P{jax.process_index()}] === PRNGKey created ===", flush=True)
 
         total_batches = (len(prompt_ids) + batch_size - 1) // batch_size
+        print(
+            f"[DEBUG P{jax.process_index()}] === Total batches: {total_batches}, starting decode loop ===", flush=True
+        )
         try:
             for round_index in range(int(config.n_rounds)):
+                print(f"[DEBUG P{jax.process_index()}] === Round {round_index} starting ===", flush=True)
                 for batch_index, start in enumerate(range(0, len(prompt_ids), batch_size)):
+                    print(f"[DEBUG P{jax.process_index()}] === Batch {batch_index} starting ===", flush=True)
                     batch_prompt_ids = prompt_ids[start : start + batch_size]
                     batch_prompts = prompts[start : start + batch_size]
                     batch_requests: list[Request] = []
@@ -395,9 +414,24 @@ def main(config: SampleLmMultihostConfig):
                             step=round_index * total_batches + batch_index,
                         )
 
+                    print(f"[DEBUG P{jax.process_index()}] === About to call engine.generate ===", flush=True)
+                    sys.stdout.flush()
                     start_time = time.time()
-                    result = engine.generate(batch_requests)
-                    duration = time.time() - start_time
+                    try:
+                        result = engine.generate(batch_requests)
+                        duration = time.time() - start_time
+                        print(
+                            f"[DEBUG P{jax.process_index()}] === engine.generate completed in {duration:.2f}s ===",
+                            flush=True,
+                        )
+                    except Exception as e:
+                        print(f"[DEBUG P{jax.process_index()}] === engine.generate FAILED: {e} ===", flush=True)
+                        import traceback
+
+                        traceback.print_exc()
+                        sys.stdout.flush()
+                        sys.stderr.flush()
+                        raise
 
                     # Diagnostic: we completed generation for this batch
                     if is_leader:

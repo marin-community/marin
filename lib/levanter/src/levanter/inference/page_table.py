@@ -36,7 +36,13 @@ class PageTable(eqx.Module):
         return PageTable(ref_counts, page_size, max_seqs, max_pages_per_seq)
 
     def reset(self) -> "PageTable":
+        import jax
+
+        print(f"[DEBUG P{jax.process_index()}] === PageTable.reset() called ===", flush=True)
+        print(f"[DEBUG P{jax.process_index()}] === page_ref_counts shape: {self.page_ref_counts.axes} ===", flush=True)
+        print(f"[DEBUG P{jax.process_index()}] === About to call hax.full_like ===", flush=True)
         ref_counts = hax.full_like(self.page_ref_counts, 0)
+        print(f"[DEBUG P{jax.process_index()}] === hax.full_like completed ===", flush=True)
         return PageTable(ref_counts, self.page_size, self._max_seqs, self._pages_per_seq)
 
     @property
