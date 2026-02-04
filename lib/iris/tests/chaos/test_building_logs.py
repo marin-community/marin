@@ -70,7 +70,7 @@ def test_build_logs_visible_during_building_state(cluster):
                 job_running_during_building = True
 
             # Try to fetch logs for the building task
-            task_id = f"{job.job_id}/task-0"
+            task_id = job.job_id.task(0)
             try:
                 logs = client.fetch_task_logs(task_id)
                 # Look for build logs

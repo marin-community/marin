@@ -18,6 +18,7 @@ These tests focus on observable behavior - scaling policy decisions,
 VM group management, and state tracking - not on implementation details.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -498,8 +499,7 @@ class TestScalingGroupIdleTracking:
         for slice_id, vm_addr in [("slice-001", slice_001_addr), ("slice-002", slice_002_addr)]:
             slice_obj = group.get_slice(slice_id)
             mock_vm = MagicMock()
-            mock_vm.info.worker_id = f"worker-{slice_id}"
-            mock_vm.info.address = vm_addr
+            mock_vm.info = SimpleNamespace(worker_id=f"worker-{slice_id}", address=vm_addr)
             slice_obj.vms.return_value = [mock_vm]
 
         # slice-001 has running tasks, slice-002 is idle
@@ -533,8 +533,7 @@ class TestScalingGroupIdleTracking:
         for slice_id, vm_addr in [("slice-001", slice_001_addr), ("slice-002", slice_002_addr)]:
             slice_obj = group.get_slice(slice_id)
             mock_vm = MagicMock()
-            mock_vm.info.worker_id = f"worker-{slice_id}"
-            mock_vm.info.address = vm_addr
+            mock_vm.info = SimpleNamespace(worker_id=f"worker-{slice_id}", address=vm_addr)
             slice_obj.vms.return_value = [mock_vm]
 
         # Mark both slices as active at t=0 (they'll be idle for 10s, exceeding 1s threshold)

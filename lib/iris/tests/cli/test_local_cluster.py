@@ -26,7 +26,6 @@ from unittest.mock import patch
 import pytest
 import yaml
 from click.testing import CliRunner
-
 from iris.cli import iris
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec

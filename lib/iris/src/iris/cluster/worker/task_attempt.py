@@ -28,9 +28,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
-from iris.cluster.types import Entrypoint, is_task_finished
-from iris.cluster.worker.bundle_cache import BundleProvider
+from iris.cluster.types import Entrypoint, JobName, is_task_finished
 from iris.cluster.worker.builder import ImageProvider
+from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -47,9 +47,7 @@ logger = logging.getLogger(__name__)
 class TaskAttemptConfig:
     """Immutable configuration for a task attempt, derived from the RPC request."""
 
-    task_id: str
-    job_id: str
-    task_index: int
+    task_id: JobName
     num_tasks: int
     attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
@@ -93,12 +91,13 @@ def build_iris_env(
     """
     env = {}
 
+    # N.B. This needs to mirror JobInfo.from_env()
+    # XXX: Should we move this code there instead?
     # Core task metadata
-    env["IRIS_JOB_ID"] = task.job_id
-    env["IRIS_TASK_ID"] = task.task_id
-    env["IRIS_TASK_INDEX"] = str(task.task_index)
+    env["IRIS_JOB_ID"] = task.task_id.to_wire()
     env["IRIS_NUM_TASKS"] = str(task.num_tasks)
     env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
+    env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
 
     if worker_id:
         env["IRIS_WORKER_ID"] = worker_id
@@ -187,9 +186,7 @@ class TaskAttempt:
         self._poll_interval_seconds = poll_interval_seconds
 
         # Task identity (from config)
-        self.task_id: str = config.task_id
-        self.job_id: str = config.job_id
-        self.task_index: int = config.task_index
+        self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
         self.request: cluster_pb2.Worker.RunTaskRequest = config.request
@@ -258,9 +255,7 @@ class TaskAttempt:
 
     def to_proto(self) -> cluster_pb2.TaskStatus:
         proto = cluster_pb2.TaskStatus(
-            task_id=self.task_id,
-            job_id=self.job_id,
-            task_index=self.task_index,
+            task_id=self.task_id.to_wire(),
             state=self.status,
             exit_code=self.exit_code or 0,
             error=self.error or "",
@@ -360,10 +355,11 @@ class TaskAttempt:
         if not self._image_provider:
             raise RuntimeError("Image provider not configured")
 
+        job_id, _ = self.task_id.require_task()
         build_result = self._image_provider.build(
             bundle_path=self._bundle_path,
             dockerfile=dockerfile,
-            job_id=self.job_id,
+            job_id=job_id.to_wire(),
             task_logs=self.logs,
         )
 
@@ -408,6 +404,7 @@ class TaskAttempt:
         if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
             timeout_seconds = self.request.timeout.milliseconds / 1000
 
+        job_id, _ = self.task_id.require_task()
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=entrypoint,
@@ -417,8 +414,8 @@ class TaskAttempt:
             ports=self.ports,
             network_mode="host",
             mounts=[(str(self.workdir), "/workdir", "rw")],
-            task_id=self.task_id,
-            job_id=self.job_id,
+            task_id=self.task_id.to_wire(),
+            job_id=job_id.to_wire(),
             worker_metadata=self._worker_metadata,
         )
 
@@ -524,9 +521,17 @@ class TaskAttempt:
                 elif status.exit_code == 0:
                     self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
+                    stderr_line = None
+                    for entry in reversed(self._runtime.get_logs(container_id)):
+                        if entry.source == "stderr" and entry.data:
+                            stderr_line = entry.data
+                            break
+                    error = f"Exit code: {status.exit_code}"
+                    if stderr_line:
+                        error = f"{error}. stderr: {stderr_line}"
                     self.transition_to(
                         cluster_pb2.TASK_STATE_FAILED,
-                        error=f"Exit code: {status.exit_code}",
+                        error=error,
                         exit_code=status.exit_code or -1,
                     )
                 break

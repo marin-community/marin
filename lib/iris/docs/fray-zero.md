@@ -355,7 +355,7 @@ from enum import StrEnum
 
 
 # Type aliases for clarity
-JobId = str
+JobName = str
 ActorId = str
 ReservationId = str
 Namespace = str
@@ -373,7 +373,7 @@ class JobState(StrEnum):
 @dataclass
 class JobInfo:
     """Information about a job's current state."""
-    job_id: JobId
+    job_id: JobName
     name: str
     state: JobState
     error_message: str | None = None
@@ -551,7 +551,7 @@ class ReservationInfo:
     reservation_id: ReservationId
     allocated_resources: ResourceConfig
     pending_resources: ResourceConfig
-    jobs: list[JobId]
+    jobs: list[JobName]
     expires_at: float
 ```
 
@@ -572,7 +572,7 @@ class Cluster(Protocol):
     Implementations: FrayCluster, LocalCluster
     """
 
-    def launch(self, request: JobRequest) -> JobId:
+    def launch(self, request: JobRequest) -> JobName:
         """Launch a job on the cluster.
 
         The job runs as an independent process with its own lifecycle.
@@ -580,15 +580,15 @@ class Cluster(Protocol):
         """
         ...
 
-    def monitor(self, job_id: JobId) -> JobInfo:
+    def monitor(self, job_id: JobName) -> JobInfo:
         """Stream logs from a running job, blocking until completion."""
         ...
 
-    def poll(self, job_id: JobId) -> JobInfo:
+    def poll(self, job_id: JobName) -> JobInfo:
         """Get current status of a job without blocking."""
         ...
 
-    def terminate(self, job_id: JobId) -> None:
+    def terminate(self, job_id: JobName) -> None:
         """Terminate a running job.
 
         Also terminates any child jobs spawned by this job.
@@ -601,7 +601,7 @@ class Cluster(Protocol):
 
     def wait(
         self,
-        job_ids: JobId | Sequence[JobId],
+        job_ids: JobName | Sequence[JobName],
         raise_on_failure: bool = False,
     ) -> JobInfo | list[JobInfo]:
         """Block until job(s) complete.
@@ -629,7 +629,7 @@ class Cluster(Protocol):
         requests: Sequence[JobRequest],
         group: JobGroupConfig,
         reservation_id: ReservationId | None = None,
-    ) -> list[JobId]:
+    ) -> list[JobName]:
         """Launch a group of co-located jobs atomically.
 
         All jobs in the group are scheduled together with locality
@@ -672,7 +672,7 @@ class ActorEndpoint:
     """Endpoint information for a registered actor."""
     actor_id: ActorId
     name: str
-    job_id: JobId
+    job_id: JobName
     namespace: Namespace
     metadata: dict[str, str] = field(default_factory=dict)
 
@@ -683,7 +683,7 @@ class Metadata(Protocol):
     def register(
         self,
         name: str,
-        job_id: JobId,
+        job_id: JobName,
         metadata: dict[str, str] | None = None,
     ) -> ActorId:
         """Register an actor endpoint.
@@ -857,7 +857,7 @@ class ActorContext:
     """
     cluster: Cluster
     resolver: Resolver
-    job_id: JobId
+    job_id: JobName
     namespace: Namespace
 
     @classmethod
