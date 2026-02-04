@@ -125,7 +125,7 @@ qwen3_8b_32768_seq_len = dataclasses.replace(
 )
 
 # Derive resource name for experiment suffix (e.g., "v5p-64" -> "v5p64")
-RESOURCE_SUFFIX = RESOURCES.tpu_type.replace("-", "") if RESOURCES.tpu_type else "gpu"
+RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
 
 exp2601_sft_openthoughts_agent_v1_qwen3_8b = default_sft(
     name=f"exp2601_sft_ot_agent_v1_qwen3_8b_32768tokens_{RESOURCE_SUFFIX}",
