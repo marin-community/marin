@@ -358,6 +358,12 @@ class DemoCluster:
         # Set environment for the kernel (inherited by subprocess)
         os.environ["IRIS_CONTROLLER_ADDRESS"] = self.controller_url
         os.environ["IRIS_WORKSPACE"] = str(self._workspace)
+        pythonpath = os.environ.get("PYTHONPATH")
+        iris_src = str(IRIS_ROOT / "src")
+        if pythonpath:
+            os.environ["PYTHONPATH"] = f"{iris_src}:{pythonpath}"
+        else:
+            os.environ["PYTHONPATH"] = iris_src
 
         # Create executor
         ep = ExecutePreprocessor(

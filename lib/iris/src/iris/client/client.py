@@ -218,7 +218,7 @@ class Job:
         Returns:
             List of Task handles, one per task in the job
         """
-        task_statuses = self._client._cluster_client.list_tasks(str(self._job_id))
+        task_statuses = self._client._cluster_client.list_tasks(self._job_id)
         return [Task(self._client, JobName.from_wire(ts.task_id)) for ts in task_statuses]
 
     def wait(

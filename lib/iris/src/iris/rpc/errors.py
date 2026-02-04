@@ -67,7 +67,7 @@ def connect_error_with_traceback(
     details = errors_pb2.ErrorDetails(
         message=message,
     )
-    details.timestamp.epoch_ms = Timestamp.now().to_proto()
+    details.timestamp.CopyFrom(Timestamp.now().to_proto())
 
     if exc is not None:
         details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"
