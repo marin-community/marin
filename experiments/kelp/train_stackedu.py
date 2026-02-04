@@ -48,7 +48,7 @@ import optax
 
 import haliax as hax
 
-from experiments.kelp.datasets import StackEduPythonDataset, load_stackv2_edu_python
+from experiments.kelp.data_pipeline import StackEduPythonDataset, load_stackv2_edu_python
 from experiments.kelp.edit_path import create_training_example
 from experiments.kelp.python_grammar import PythonNodeVocab, PythonValueVocab
 from experiments.kelp.toy_dataset import get_toy_programs
@@ -285,17 +285,62 @@ def train_step(
 
 
 def save_checkpoint(model: TreeDiffusionModel, path: str, step: int):
-    """Save model checkpoint."""
+    """Save model checkpoint using equinox serialization."""
     import pickle
+
+    # Separate arrays from structure
+    arrays, structure = eqx.partition(model, eqx.is_array)
 
     checkpoint = {
         "step": step,
-        "model": eqx.filter(model, eqx.is_array),
+        "arrays": jax.tree.map(lambda x: np.array(x), arrays),
+        "structure": structure,
         "config": model.config,
     }
     with open(path, "wb") as f:
         pickle.dump(checkpoint, f)
     logger.info(f"Saved checkpoint to {path}")
+
+
+def load_checkpoint(path: str) -> tuple[TreeDiffusionModel, int]:
+    """Load model checkpoint."""
+    import pickle
+
+    with open(path, "rb") as f:
+        checkpoint = pickle.load(f)
+
+    config = checkpoint["config"]
+    step = checkpoint["step"]
+
+    # Handle both old and new checkpoint formats
+    if "arrays" in checkpoint and "structure" in checkpoint:
+        # New format: use partition/combine
+        arrays = jax.tree.map(lambda x: jnp.array(x), checkpoint["arrays"])
+        structure = checkpoint["structure"]
+        model = eqx.combine(arrays, structure)
+    else:
+        # Old format: recreate model and copy arrays
+        key = jrandom.PRNGKey(0)
+        model = TreeDiffusionModel.init(config, key=key)
+
+        # Get the saved arrays
+        saved_arrays = checkpoint["model"]
+
+        # Replace arrays in model
+        def replace_arrays(model_leaf, saved_leaf):
+            if eqx.is_array(model_leaf):
+                return jnp.array(saved_leaf)
+            return model_leaf
+
+        model = jax.tree.map(
+            replace_arrays,
+            model,
+            saved_arrays,
+            is_leaf=eqx.is_array,
+        )
+
+    logger.info(f"Loaded checkpoint from {path} (step {step})")
+    return model, step
 
 
 def train(config: StackEduTrainConfig) -> tuple[TreeDiffusionModel, list[float]]:

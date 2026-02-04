@@ -128,39 +128,30 @@ def load_humaneval() -> list[HumanEvalProblem]:
             )
             for item in dataset
         ]
-    except ImportError:
-        logger.error("Please install datasets: pip install datasets")
+    except ImportError as e:
+        logger.error(f"Please install datasets: pip install datasets (ImportError: {e})")
+        import traceback
+        traceback.print_exc()
         return []
     except Exception as e:
         logger.error(f"Failed to load HumanEval: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
 def load_kelp_model(checkpoint_path: str) -> tuple[TreeDiffusionModel, TreeDiffusionConfig] | None:
     """Load Kelp model from checkpoint."""
     try:
-        with open(checkpoint_path, "rb") as f:
-            checkpoint = pickle.load(f)
+        from experiments.kelp.train_stackedu import load_checkpoint
 
-        config = checkpoint["config"]
-        model_state = checkpoint["model"]
-
-        # Initialize model structure
-        key = jrandom.PRNGKey(0)
-        model = TreeDiffusionModel.init(config, key=key)
-
-        # Load weights (simplified - full implementation would use eqx.tree_deserialise)
-        import equinox as eqx
-
-        model = eqx.tree_at(
-            lambda m: eqx.filter(m, eqx.is_array),
-            model,
-            model_state,
-        )
-
-        return model, config
+        model, step = load_checkpoint(checkpoint_path)
+        logger.info(f"Loaded model from step {step}")
+        return model, model.config
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 

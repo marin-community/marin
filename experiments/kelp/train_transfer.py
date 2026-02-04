@@ -99,7 +99,7 @@ def load_programs(config: TransferExperimentConfig) -> list[str]:
     """Load training programs."""
     if config.use_stackedu:
         try:
-            from experiments.kelp.datasets import load_stackv2_edu_python
+            from experiments.kelp.data_pipeline import load_stackv2_edu_python
 
             logger.info("Loading Stack-Edu Python dataset...")
             dataset = load_stackv2_edu_python(
