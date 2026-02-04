@@ -285,6 +285,7 @@ generate_with_selection = ExecutorStep(
         save_all_samples=True,  # Save for debugging
         all_samples_column_name="all_samples",
         static_check_type="boxed_only",  # Only require \boxed{}, allow non-English chars
+        selection_strategy="first",  # Pick first valid sample (no sorting by length)
 
         # Retry settings
         max_task_retries=10,

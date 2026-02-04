@@ -93,6 +93,10 @@ class TextGenerationInferenceConfig:
     #   - "default": requires \\boxed{} AND no non-English characters
     #   - "boxed_only": requires only \\boxed{} (allows non-English characters like Chinese, Greek symbols)
     static_check_type: str = "default"
+    # Selection strategy for multi-sample selection. Options:
+    #   - "longest": select longest valid sample (default, sorts by length descending)
+    #   - "first": select first valid sample (no sorting, faster)
+    selection_strategy: str = "longest"
 
     # Multi-sample as list (for validation/voting)
     # When enabled with n>1 in generation_kwargs, saves samples as a list instead of joining with space.
@@ -324,6 +328,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "save_all_samples": config.save_all_samples,
             "all_samples_column_name": config.all_samples_column_name,
             "static_check_fn": static_check_fn,
+            "selection_strategy": config.selection_strategy,
         }
     else:
         pipeline_class = vLLMTextGeneration

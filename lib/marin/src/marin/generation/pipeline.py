@@ -357,6 +357,7 @@ class vLLMTextGenerationWithSelection(vLLMTextGeneration):
         static_check_fn: Callable[[str], bool] | None = None,
         save_all_samples: bool = False,
         all_samples_column_name: str = "all_samples",
+        selection_strategy: str = "longest",
     ):
         """Initialize the multi-sample generation pipeline with selection.
 
@@ -377,6 +378,9 @@ class vLLMTextGenerationWithSelection(vLLMTextGeneration):
                 and no non-English characters. Returns True if sample is valid.
             save_all_samples: Whether to save all generated samples (for debugging).
             all_samples_column_name: Column name for all samples if save_all_samples=True.
+            selection_strategy: Strategy for selecting from valid samples. Options:
+                - "longest": select longest valid sample (default)
+                - "first": select first valid sample (no sorting, faster)
         """
         super().__init__(
             model_name=model_name,
@@ -395,22 +399,31 @@ class vLLMTextGenerationWithSelection(vLLMTextGeneration):
         self.static_check_fn = static_check_fn or default_static_check
         self.save_all_samples = save_all_samples
         self.all_samples_column_name = all_samples_column_name
+        self.selection_strategy = selection_strategy
 
     def _select_best_sample(self, samples: list[str]) -> str | None:
-        """Select the longest sample that passes static validation.
+        """Select the best sample that passes static validation.
 
         Args:
             samples: List of generated samples for a single prompt.
 
         Returns:
-            The longest valid sample, or None if no sample passes validation.
+            The selected valid sample, or None if no sample passes validation.
+            Selection depends on self.selection_strategy:
+            - "longest": returns longest valid sample
+            - "first": returns first valid sample (no sorting)
         """
-        # Sort by length descending (prefer longer responses)
-        sorted_samples = sorted(samples, key=len, reverse=True)
-
-        for sample in sorted_samples:
-            if self.static_check_fn(sample):
-                return sample
+        if self.selection_strategy == "first":
+            # Return first valid sample (no sorting)
+            for sample in samples:
+                if self.static_check_fn(sample):
+                    return sample
+        else:
+            # Default: sort by length descending (prefer longer responses)
+            sorted_samples = sorted(samples, key=len, reverse=True)
+            for sample in sorted_samples:
+                if self.static_check_fn(sample):
+                    return sample
 
         return None
 
