@@ -425,6 +425,7 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     return sample_indices
 
 
+@functools.partial(hax.named_jit, static_argnums=(4,))
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -557,7 +558,6 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     return jax.lax.fori_loop(0, max_slots, body, gen_state)
 
 
-# Temporarily no JIT to debug the actual computation
 def _run_prefill(
     gen_state: GenState,
     model: LmHeadModel,
@@ -565,162 +565,32 @@ def _run_prefill(
     work: PrefillWork,
     max_seqs_in_prefill: int,
 ) -> tuple[GenState, _DecodeOutputs]:
+    """Run prefill by applying work and then calling the module-level _prefill_kernel JIT."""
     import sys
 
-    # Multi-host debug: ensure all hosts agree on key shapes
     print(f"[_run_prefill P{jax.process_index()}] === ENTERED ===", flush=True)
-    print(f"[_run_prefill P{jax.process_index()}] work.queue.num_queued_tokens shape={work.queue.num_queued_tokens.shape}", flush=True)
-    print(f"[_run_prefill P{jax.process_index()}] work.new_num_seqs shape={work.new_num_seqs.shape}", flush=True)
-    print(f"[_run_prefill P{jax.process_index()}] max_seqs_in_prefill={max_seqs_in_prefill}", flush=True)
     sys.stdout.flush()
 
     # Step 1: Apply prefill work (updates gen_state with new sequences)
+    # This needs to run first to set up the decode_state with the new sequences
     print(f"[_run_prefill P{jax.process_index()}] === Step 1: _apply_prefill_work ===", flush=True)
     sys.stdout.flush()
 
     @hax.named_jit
     def _jit_apply_prefill_work(gs, w):
-        jax.debug.print("[_jit_apply_prefill_work] entered")
-        result = _apply_prefill_work(gs, w)
-        jax.debug.print("[_jit_apply_prefill_work] done")
-        return result
+        return _apply_prefill_work(gs, w)
 
-    try:
-        gen_state = _jit_apply_prefill_work(gen_state, work)
-        print(f"[_run_prefill P{jax.process_index()}] === Step 1 DONE ===", flush=True)
-        sys.stdout.flush()
-    except Exception as e:
-        print(f"[_run_prefill P{jax.process_index()}] !!! Step 1 FAILED: {e}", flush=True)
-        sys.stdout.flush()
-        raise
-
-    # Step 2: Run _prefill_kernel with debug prints inside
-    # This combines allocate_for_seq, model.decode, sampling, and handle_clones into one JIT
-    print(f"[_run_prefill P{jax.process_index()}] === Step 2: _prefill_kernel (single JIT) ===", flush=True)
+    gen_state = _jit_apply_prefill_work(gen_state, work)
+    print(f"[_run_prefill P{jax.process_index()}] === Step 1 DONE ===", flush=True)
     sys.stdout.flush()
 
-    # Debug: print sharding info for all arrays before JIT
-    def _print_sharding(name, arr):
-        if hasattr(arr, 'sharding'):
-            print(f"[_run_prefill P{jax.process_index()}] {name} sharding: {arr.sharding}", flush=True)
-        elif hasattr(arr, 'array') and hasattr(arr.array, 'sharding'):
-            print(f"[_run_prefill P{jax.process_index()}] {name}.array sharding: {arr.array.sharding}", flush=True)
-        else:
-            print(f"[_run_prefill P{jax.process_index()}] {name} no sharding attr", flush=True)
-
-    _print_sharding("work.queue.queued_tokens", work.queue.queued_tokens)
-    _print_sharding("work.queue.queued_slot_ids", work.queue.queued_slot_ids)
-    _print_sharding("work.queue.queued_pos_ids", work.queue.queued_pos_ids)
-    _print_sharding("work.queue.num_queued_tokens", work.queue.num_queued_tokens)
-    _print_sharding("gen_state.decode_state.tqueue.queued_tokens", gen_state.decode_state.tqueue.queued_tokens)
-
-    # Print some model weight sharding
-    import equinox as eqx
-    model_leaves = jax.tree_util.tree_leaves(eqx.filter(model, eqx.is_array))
-    if model_leaves:
-        print(f"[_run_prefill P{jax.process_index()}] model sample array sharding: {model_leaves[0].sharding}", flush=True)
-
-    # Print cache sharding
-    cache_leaves = jax.tree_util.tree_leaves(gen_state.cache)
-    if cache_leaves:
-        print(f"[_run_prefill P{jax.process_index()}] cache sample array sharding: {cache_leaves[0].sharding}", flush=True)
-
+    # Step 2: Call the module-level _prefill_kernel JIT (now decorated at module level)
+    print(f"[_run_prefill P{jax.process_index()}] === Step 2: _prefill_kernel (module-level JIT) ===", flush=True)
     sys.stdout.flush()
 
-    # Use eqx.filter_jit for Equinox models instead of hax.named_jit
-    import equinox as eqx
+    result = _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
 
-    @functools.partial(eqx.filter_jit, donate="none")
-    def _jit_prefill_kernel(gs, mdl, smplr, queue_tokens, queue_slot_ids, queue_pos_ids, queue_num_tokens, max_seqs):
-        jax.debug.print("[_jit_prefill_kernel] === 1. Getting queue arrays ===")
-        tokens = queue_tokens
-        pos_ids = queue_pos_ids
-        slot_ids = queue_slot_ids
-
-        jax.debug.print("[_jit_prefill_kernel] === 2. allocate_for_seq ===")
-        decode_state, binfo = gs.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
-
-        jax.debug.print("[_jit_prefill_kernel] === 3. model.decode ===")
-        logits, cache = mdl.decode(tokens, gs.cache, binfo, pos_ids)
-        jax.debug.print("[_jit_prefill_kernel] === 3. model.decode DONE, logits_shape={s} ===", s=logits.array.shape)
-
-        jax.debug.print("[_jit_prefill_kernel] === 4. _compute_sample_indices ===")
-        seq_lens = decode_state.seq_lens
-        sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_seqs)
-        logits_at_samples = logits["position", sample_indices]
-        num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
-        jax.debug.print("[_jit_prefill_kernel] num_new_tokens={n}", n=num_new_tokens)
-
-        jax.debug.print("[_jit_prefill_kernel] === 5. sampling ===")
-        new_slot_ids = slot_ids["position", sample_indices]
-        new_pos_ids = pos_ids["position", sample_indices]
-        prng_keys = decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
-        temps = decode_state.temperature["seq", new_slot_ids]
-        new_tokens, log_probs = hax.vmap(smplr, "position")(logits_at_samples, temps, key=prng_keys)
-
-        jax.debug.print("[_jit_prefill_kernel] === 6. update_tokens ===")
-        decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
-
-        jax.debug.print("[_jit_prefill_kernel] === 7. create outputs ===")
-        outputs = _DecodeOutputs.init(
-            max_tokens=decode_state.max_seqs * 2,
-            max_seqs=decode_state.max_seqs,
-            with_logprobs=True,
-        )
-        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
-        gs_new = dataclasses.replace(gs, cache=cache, decode_state=decode_state)
-
-        jax.debug.print("[_jit_prefill_kernel] === 8. handle_clones (if any) ===")
-        if decode_state.clone_sources is not None:
-            gs_new, outputs = _handle_clones(
-                gs_new, logits_at_samples, new_slot_ids, new_pos_ids, smplr, outputs
-            )
-
-        jax.debug.print("[_jit_prefill_kernel] === DONE ===")
-        return gs_new, outputs
-
-    # Extract the queue arrays to pass individually (avoiding nested dataclass issues)
-    queue = work.queue
-
-    # DEBUG: try lowering explicitly to see the error
-    print(f"[_run_prefill P{jax.process_index()}] === Attempting to lower JIT ===", flush=True)
-    sys.stdout.flush()
-
-    try:
-        # Try to lower and compile to see if we get a more useful error
-        lowered = _jit_prefill_kernel.lower(
-            gen_state, model, sampler,
-            queue.queued_tokens, queue.queued_slot_ids, queue.queued_pos_ids, queue.num_queued_tokens,
-            max_seqs_in_prefill
-        )
-        print(f"[_run_prefill P{jax.process_index()}] === Lower succeeded! Compiling... ===", flush=True)
-        sys.stdout.flush()
-        compiled = lowered.compile()
-        print(f"[_run_prefill P{jax.process_index()}] === Compile succeeded! Running... ===", flush=True)
-        sys.stdout.flush()
-    except Exception as e:
-        print(f"[_run_prefill P{jax.process_index()}] !!! Lower/compile failed: {type(e).__name__}: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-        sys.stdout.flush()
-        raise
-
-    try:
-        result = _jit_prefill_kernel(
-            gen_state, model, sampler,
-            queue.queued_tokens, queue.queued_slot_ids, queue.queued_pos_ids, queue.num_queued_tokens,
-            max_seqs_in_prefill
-        )
-        print(f"[_run_prefill P{jax.process_index()}] === Step 2 DONE ===", flush=True)
-        sys.stdout.flush()
-    except Exception as e:
-        print(f"[_run_prefill P{jax.process_index()}] !!! Step 2 FAILED: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-        sys.stdout.flush()
-        raise
-
-    print(f"[_run_prefill P{jax.process_index()}] === ALL DONE ===", flush=True)
+    print(f"[_run_prefill P{jax.process_index()}] === DONE ===", flush=True)
     sys.stdout.flush()
     return result
 
