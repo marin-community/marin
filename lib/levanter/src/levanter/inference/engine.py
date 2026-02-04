@@ -425,7 +425,8 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     return sample_indices
 
 
-@functools.partial(hax.named_jit, static_argnums=(6,))
+# Temporarily disable JIT to debug multi-host issue
+# @functools.partial(hax.named_jit, static_argnums=(6,))
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -595,29 +596,17 @@ def _run_prefill(
     sys.stdout.flush()
 
     try:
-        # Try to lower and compile explicitly to get better error messages
-        print(f"[_run_prefill P{jax.process_index()}] === Trying to lower JIT explicitly ===", flush=True)
+        # Run without JIT for debugging
+        print(f"[_run_prefill P{jax.process_index()}] === Calling _prefill_kernel WITHOUT JIT ===", flush=True)
         sys.stdout.flush()
 
-        # Get the underlying JIT function to call lower()
-        import equinox as eqx
-        lowered = _prefill_kernel.lower(
+        result = _prefill_kernel(
             gen_state, model, sampler,
             work.queue.queued_tokens, work.queue.queued_slot_ids, work.queue.queued_pos_ids,
             max_seqs_in_prefill
         )
-        print(f"[_run_prefill P{jax.process_index()}] === Lower succeeded! ===", flush=True)
+        print(f"[_run_prefill P{jax.process_index()}] === _prefill_kernel returned ===", flush=True)
         sys.stdout.flush()
-
-        compiled = lowered.compile()
-        print(f"[_run_prefill P{jax.process_index()}] === Compile succeeded! ===", flush=True)
-        sys.stdout.flush()
-
-        result = compiled(
-            gen_state, model, sampler,
-            work.queue.queued_tokens, work.queue.queued_slot_ids, work.queue.queued_pos_ids,
-            max_seqs_in_prefill
-        )
     except Exception as e:
         import traceback
         print(f"[_run_prefill P{jax.process_index()}] !!! EXCEPTION: {type(e).__name__}: {e}", flush=True)
