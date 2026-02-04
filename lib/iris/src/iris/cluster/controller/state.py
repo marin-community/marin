@@ -45,7 +45,15 @@ from iris.cluster.controller.events import (
     WorkerHeartbeatFailedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.types import AttributeValue, DeviceType, JobName, WorkerId
+from iris.cluster.types import (
+    AttributeValue,
+    JobName,
+    WorkerId,
+    get_device_variant,
+    get_device_type,
+    get_gpu_count,
+    get_tpu_count,
+)
 from iris.rpc import cluster_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
@@ -61,59 +69,9 @@ HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
 
 
-def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
-    """Extract device type as enum from DeviceConfig.
-
-    Args:
-        device: DeviceConfig proto from job request
-
-    Returns:
-        DeviceType enum value
-    """
-    if device.HasField("gpu"):
-        return DeviceType.GPU
-    elif device.HasField("tpu"):
-        return DeviceType.TPU
-    return DeviceType.CPU
-
-
 # =============================================================================
 # Device Helper Functions
 # =============================================================================
-
-
-def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
-    """Extract device type from config."""
-    if device.HasField("cpu"):
-        return "cpu"
-    elif device.HasField("gpu"):
-        return "gpu"
-    elif device.HasField("tpu"):
-        return "tpu"
-    return "cpu"
-
-
-def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
-    """Extract device variant (e.g., GPU model) from config."""
-    if device.HasField("gpu"):
-        return device.gpu.variant if device.gpu.variant else None
-    elif device.HasField("tpu"):
-        return device.tpu.variant if device.tpu.variant else None
-    return None
-
-
-def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
-    """Extract GPU count from config."""
-    if device.HasField("gpu"):
-        return device.gpu.count or 1
-    return 0
-
-
-def get_tpu_chip_count(device: cluster_pb2.DeviceConfig) -> int:
-    """Extract TPU chip count from config."""
-    if device.HasField("tpu"):
-        return device.tpu.count or 0
-    return 0
 
 
 # =============================================================================
@@ -898,7 +856,7 @@ class ControllerWorker:
         self.committed_cpu += resources.cpu
         self.committed_mem += resources.memory_bytes
         self.committed_gpu += get_gpu_count(resources.device)
-        self.committed_tpu += get_tpu_chip_count(resources.device)
+        self.committed_tpu += get_tpu_count(resources.device)
 
     def unassign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Unassign a task from this worker, updating committed resources."""
@@ -906,7 +864,7 @@ class ControllerWorker:
         self.committed_cpu -= resources.cpu
         self.committed_mem -= resources.memory_bytes
         self.committed_gpu -= get_gpu_count(resources.device)
-        self.committed_tpu -= get_tpu_chip_count(resources.device)
+        self.committed_tpu -= get_tpu_count(resources.device)
 
     @property
     def available_cpu(self) -> int:
@@ -926,7 +884,7 @@ class ControllerWorker:
     @property
     def available_tpus(self) -> int:
         """Available TPU chip count after subtracting committed resources."""
-        return get_tpu_chip_count(self.metadata.device) - self.committed_tpu
+        return get_tpu_count(self.metadata.device) - self.committed_tpu
 
     @property
     def device_type(self) -> str:

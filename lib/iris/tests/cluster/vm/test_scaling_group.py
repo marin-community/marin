@@ -29,11 +29,27 @@ from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.rpc import time_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
+DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
+    cpu=64,
+    memory_bytes=64 * 1024**3,
+    disk_bytes=100 * 1024**3,
+    gpu_count=0,
+    tpu_count=8,
+)
+
+
+def _with_resources(config: config_pb2.ScaleGroupConfig, *, slice_size: int = 1) -> config_pb2.ScaleGroupConfig:
+    if not config.HasField("resources"):
+        config.resources.CopyFrom(DEFAULT_RESOURCES)
+    if not config.HasField("slice_size"):
+        config.slice_size = slice_size
+    return config
+
 
 @pytest.fixture
 def scale_group_config() -> config_pb2.ScaleGroupConfig:
     """A standard scale group configuration for tests."""
-    return config_pb2.ScaleGroupConfig(
+    config = config_pb2.ScaleGroupConfig(
         name="test-group",
         min_slices=1,
         max_slices=5,
@@ -42,12 +58,13 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
+    return _with_resources(config)
 
 
 @pytest.fixture
 def unbounded_config() -> config_pb2.ScaleGroupConfig:
     """A scale group with no min/max constraints."""
-    return config_pb2.ScaleGroupConfig(
+    config = config_pb2.ScaleGroupConfig(
         name="unbounded-group",
         min_slices=0,
         max_slices=100,
@@ -56,6 +73,7 @@ def unbounded_config() -> config_pb2.ScaleGroupConfig:
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
+    return _with_resources(config)
 
 
 def make_mock_vm_group(
@@ -683,12 +701,14 @@ class TestScalingGroupAvailability:
         """Group is AT_CAPACITY when at max_slices."""
         from iris.cluster.vm.scaling_group import GroupAvailability
 
-        config = config_pb2.ScaleGroupConfig(
-            name="test-group",
-            min_slices=0,
-            max_slices=2,
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5p-8",
+        config = _with_resources(
+            config_pb2.ScaleGroupConfig(
+                name="test-group",
+                min_slices=0,
+                max_slices=2,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                accelerator_variant="v5p-8",
+            ),
         )
         discovered = [make_mock_vm_group(f"slice-{i}") for i in range(2)]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
@@ -720,12 +740,14 @@ class TestScalingGroupAvailability:
 
     def test_can_accept_demand_false_when_at_capacity(self):
         """can_accept_demand() returns False when AT_CAPACITY."""
-        config = config_pb2.ScaleGroupConfig(
-            name="test-group",
-            min_slices=0,
-            max_slices=1,
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5p-8",
+        config = _with_resources(
+            config_pb2.ScaleGroupConfig(
+                name="test-group",
+                min_slices=0,
+                max_slices=1,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                accelerator_variant="v5p-8",
+            ),
         )
         discovered = [make_mock_vm_group("slice-0")]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)

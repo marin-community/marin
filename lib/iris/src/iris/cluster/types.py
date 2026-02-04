@@ -182,6 +182,49 @@ class DeviceType(Enum):
     TPU = "tpu"
 
 
+def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
+    """Extract device type as enum from DeviceConfig."""
+    if device.HasField("gpu"):
+        return DeviceType.GPU
+    if device.HasField("tpu"):
+        return DeviceType.TPU
+    return DeviceType.CPU
+
+
+def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
+    """Extract device type from DeviceConfig."""
+    if device.HasField("cpu"):
+        return "cpu"
+    if device.HasField("gpu"):
+        return "gpu"
+    if device.HasField("tpu"):
+        return "tpu"
+    return "cpu"
+
+
+def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
+    """Extract device variant (e.g., GPU model) from DeviceConfig."""
+    if device.HasField("gpu"):
+        return device.gpu.variant if device.gpu.variant else None
+    if device.HasField("tpu"):
+        return device.tpu.variant if device.tpu.variant else None
+    return None
+
+
+def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
+    """Extract GPU count from DeviceConfig."""
+    if device.HasField("gpu"):
+        return device.gpu.count or 1
+    return 0
+
+
+def get_tpu_count(device: cluster_pb2.DeviceConfig) -> int:
+    """Extract TPU count from DeviceConfig."""
+    if device.HasField("tpu"):
+        return device.tpu.count or 0
+    return 0
+
+
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
 

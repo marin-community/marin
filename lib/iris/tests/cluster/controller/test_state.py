@@ -1154,7 +1154,8 @@ def test_compute_demand_entries_counts_coscheduled_job_once():
     assert len(demand) == 1
     assert demand[0].device_type == DeviceType.TPU
     assert demand[0].device_variant == "v5litepod-16"
-    assert demand[0].count == 1  # Only 1 slice needed for coscheduled job
+    assert demand[0].task_ids == ["/j1/0", "/j1/1", "/j1/2", "/j1/3"]
+    assert demand[0].coschedule_group_id == "/j1"
 
 
 def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
@@ -1175,10 +1176,12 @@ def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
     submit_job(state, "j1", req)
 
     demand = compute_demand_entries(state)
-    assert len(demand) == 1
-    assert demand[0].device_type == DeviceType.TPU
-    assert demand[0].device_variant == "v5litepod-16"
-    assert demand[0].count == 4  # 4 separate slices for non-coscheduled job
+    assert len(demand) == 4
+    for entry in demand:
+        assert entry.device_type == DeviceType.TPU
+        assert entry.device_variant == "v5litepod-16"
+        assert entry.coschedule_group_id is None
+        assert len(entry.task_ids) == 1
 
 
 def test_compute_demand_entries_mixed_coscheduled_and_regular():
@@ -1215,10 +1218,15 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
     submit_job(state, "j2", regular_req)
 
     demand = compute_demand_entries(state)
-    assert len(demand) == 1
-    assert demand[0].device_type == DeviceType.TPU
-    assert demand[0].device_variant == "v5litepod-16"
-    assert demand[0].count == 3  # 1 (coscheduled) + 2 (regular) = 3 slices
+    assert len(demand) == 3
+    coscheduled = [entry for entry in demand if entry.coschedule_group_id == "/j1"]
+    regular = [entry for entry in demand if entry.coschedule_group_id is None]
+    assert len(coscheduled) == 1
+    assert len(regular) == 2
+    assert coscheduled[0].task_ids == ["/j1/0", "/j1/1", "/j1/2", "/j1/3"]
+    for entry in regular:
+        assert entry.device_type == DeviceType.TPU
+        assert entry.device_variant == "v5litepod-16"
 
 
 def test_compute_demand_entries_separates_by_preemptible_constraint():
@@ -1271,10 +1279,10 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
     assert len(demand) == 2
 
     by_preemptible = {d.preemptible: d for d in demand}
-    assert by_preemptible[True].count == 1
     assert by_preemptible[True].device_type == DeviceType.TPU
-    assert by_preemptible[False].count == 1
+    assert by_preemptible[True].task_ids == ["/j1/0"]
     assert by_preemptible[False].device_type == DeviceType.TPU
+    assert by_preemptible[False].task_ids == ["/j2/0"]
 
 
 def test_compute_demand_entries_no_preemptible_constraint_gives_none():
