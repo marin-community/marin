@@ -108,6 +108,9 @@ class _LocalContainer:
         """Start container as subprocess and begin streaming logs."""
         self._running = True
         cmd = self._build_command()
+        if cmd and cmd[0] in {"python", "python3"}:
+            # Ensure we use the current interpreter even when PATH lacks "python".
+            cmd = [sys.executable, *cmd[1:]]
 
         try:
             env = dict(self.config.env)

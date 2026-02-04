@@ -360,6 +360,20 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
             elif "name" not in sg_data:
                 sg_data["name"] = name
 
+    # Normalize platform/controller oneof sections when YAML uses null values.
+    # PyYAML parses:
+    #   platform:
+    #     local:
+    # as {"platform": {"local": None}}, which ParseDict ignores for oneof fields.
+    for section_key, oneof_keys in (
+        ("platform", ("gcp", "manual", "local")),
+        ("controller", ("gcp", "manual", "local")),
+    ):
+        if section_key in data and isinstance(data[section_key], dict):
+            for oneof_key in oneof_keys:
+                if oneof_key in data[section_key] and data[section_key][oneof_key] is None:
+                    data[section_key][oneof_key] = {}
+
     # Convert lowercase accelerator types to enum format
     _normalize_accelerator_types(data)
     _normalize_vm_types(data)
