@@ -93,7 +93,7 @@ def test_ray_auto_detection():
     """Should auto-detect Ray when ray.is_initialized() is True."""
     with patch("iris.client.client.get_iris_ctx", return_value=None):
         with patch("ray.is_initialized", return_value=True):
-            with patch("fray.v2.ray.backend.RayClient") as mock_client_cls:
+            with patch("fray.v2.ray_backend.backend.RayClient") as mock_client_cls:
                 mock_ray_client = MagicMock()
                 mock_client_cls.return_value = mock_ray_client
 
