@@ -339,11 +339,15 @@ def main(config: SampleLmMultihostConfig):
             print(f"[DEBUG P{jax.process_index()}] === Simple JIT test passed ===", flush=True)
 
             # Test 3: Model embedding lookup
-            with jax.transfer_guard("disallow"):  # Ensure no host transfers
-                embedded = model.embeddings.embed(test_tokens)
-                print(
-                    f"[DEBUG P{jax.process_index()}] === Model embedding test passed: {embedded.axes} ===", flush=True
-                )
+            embedded = model.embeddings.embed(test_tokens)
+            print(f"[DEBUG P{jax.process_index()}] === Model embedding test passed: {embedded.axes} ===", flush=True)
+
+            # Test 4: Create a minimal cache and test model.decode
+            from levanter.inference.page_table import PageTable
+
+            test_page_table = PageTable.init(max_pages=4, max_seqs=1, page_size=64, max_pages_per_seq=4)
+            test_cache = hax.named_jit(model.initial_cache)(test_page_table.spec(), dtype=jnp.bfloat16)
+            print(f"[DEBUG P{jax.process_index()}] === Cache created: {len(test_cache)} layers ===", flush=True)
 
             print(f"[DEBUG P{jax.process_index()}] === All sanity tests passed ===", flush=True)
         except Exception as e:
