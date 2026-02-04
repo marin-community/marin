@@ -32,8 +32,9 @@ from experiments.dna.defaults import (
 from marin.execution.executor import executor_main
 
 DATASETS = {
-    "promoter_256": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v9_256_128",
-    "promoter_2048": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v10_256_128",
+    # "promoter_256": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v9_256_128",
+    # "promoter_2048": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v10_256_128",
+    "promoter_2048_v2": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v11_256_128",
 }
 
 
