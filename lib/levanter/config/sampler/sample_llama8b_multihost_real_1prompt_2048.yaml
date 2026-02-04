@@ -18,7 +18,7 @@ trainer:
       model: 4
 model:
   type: llama
-  use_tpu_ragged_paged_attention: false
+  use_tpu_ragged_paged_attention: true
 engine:
   max_seq_len: 2560
   max_pages: 48
