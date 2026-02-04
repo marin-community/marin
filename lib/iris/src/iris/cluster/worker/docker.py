@@ -28,9 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
-from iris.cluster.worker.worker_types import TaskLogs, LogLine
+from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class ContainerConfig:
     timeout_seconds: int | None = None
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
-    network_mode: str = ""  # e.g. "host" for --network=host
+    network_mode: str = "host"  # e.g. "host" for --network=host
     task_id: str | None = None
     job_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None

@@ -144,62 +144,75 @@ def cleanup_iris_resources(
     # TPU slices are named "{label_prefix}-{scale_group}-{timestamp}"
     # and are labeled with "{label_prefix}-managed=true"
     tpu_label_filter = f"labels.{label_prefix}-managed=true"
-    result = subprocess.run(
-        [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "list",
-            f"--filter={tpu_label_filter}",
-            f"--zone={zone}",
-            f"--project={project}",
-            "--format=value(name)",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    tpus = [t.strip() for t in result.stdout.strip().split("\n") if t.strip()]
+    try:
+        result = subprocess.run(
+            [
+                "gcloud",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "list",
+                f"--filter={tpu_label_filter}",
+                f"--zone={zone}",
+                f"--project={project}",
+                "--format=value(name)",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        tpus = [t.strip() for t in result.stdout.strip().split("\n") if t.strip()]
+    except subprocess.TimeoutExpired:
+        logger.warning("TPU list command timed out after 30s, skipping TPU cleanup")
+        tpus = []
 
     for vm in vms:
         if dry_run:
             logger.info("[DRY RUN] Would delete VM: %s", vm)
         else:
-            subprocess.run(
-                [
-                    "gcloud",
-                    "compute",
-                    "instances",
-                    "delete",
-                    vm,
-                    f"--zone={zone}",
-                    f"--project={project}",
-                    "-q",
-                ],
-                capture_output=True,
-            )
-            logger.info("Deleted VM: %s", vm)
+            try:
+                subprocess.run(
+                    [
+                        "gcloud",
+                        "compute",
+                        "instances",
+                        "delete",
+                        vm,
+                        f"--zone={zone}",
+                        f"--project={project}",
+                        "-q",
+                    ],
+                    capture_output=True,
+                    timeout=60,
+                )
+                logger.info("Deleted VM: %s", vm)
+            except subprocess.TimeoutExpired:
+                logger.warning("VM delete timed out after 60s: %s", vm)
         deleted.append(vm)
 
     for tpu in tpus:
         if dry_run:
             logger.info("[DRY RUN] Would delete TPU: %s", tpu)
         else:
-            subprocess.run(
-                [
-                    "gcloud",
-                    "compute",
-                    "tpus",
-                    "tpu-vm",
-                    "delete",
-                    tpu,
-                    f"--zone={zone}",
-                    f"--project={project}",
-                    "-q",
-                ],
-                capture_output=True,
-            )
-            logger.info("Deleted TPU: %s", tpu)
+            try:
+                subprocess.run(
+                    [
+                        "gcloud",
+                        "compute",
+                        "tpus",
+                        "tpu-vm",
+                        "delete",
+                        tpu,
+                        f"--zone={zone}",
+                        f"--project={project}",
+                        "-q",
+                    ],
+                    capture_output=True,
+                    timeout=60,
+                )
+                logger.info("Deleted TPU: %s", tpu)
+            except subprocess.TimeoutExpired:
+                logger.warning("TPU delete timed out after 60s: %s", tpu)
         deleted.append(tpu)
 
     return deleted

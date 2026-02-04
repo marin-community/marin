@@ -517,6 +517,7 @@ class SmokeTestRunner:
         self.config = config
         self.log_tree = LogTree(config.log_dir)
         self.logger = SmokeTestLogger(self.log_tree)
+        self._task_logs_dir = self.log_tree.get_dir("task-logs", "Task logs from each job/task")
         self._manager: ClusterManager | None = None
         self._interrupted = False
         self._deadline: float | None = None
@@ -586,14 +587,7 @@ class SmokeTestRunner:
                 if self._interrupted or self._check_deadline():
                     return False
 
-                if self.config.fast:
-                    # Fast mode: reload existing VMs instead of recreating
-                    self.logger.section("FAST MODE: Reloading Cluster")
-                    manager.reload()
-                    self.logger.log("Cluster reloaded successfully")
-                    if self._interrupted or self._check_deadline():
-                        return False
-                else:
+                if not self.config.fast:
                     # Normal mode: clean start + create VMs
                     if self.config.clean_start:
                         self.logger.section("PHASE 0b: Clean Start")
@@ -746,6 +740,27 @@ class SmokeTestRunner:
         except Exception as e:
             self.logger.log(f"  Failed to fetch task logs: {e}", level="WARN")
 
+    def _write_task_logs(self, job, test_name: str):
+        """Persist task logs for a job to the log directory."""
+        job_dir = self._task_logs_dir / str(job.job_id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        for task in job.tasks():
+            task_file = job_dir / f"task-{task.task_index}.log"
+            try:
+                entries = task.logs()
+                with open(task_file, "w") as handle:
+                    handle.write(f"test_name={test_name}\n")
+                    handle.write(f"job_id={job.job_id}\n")
+                    handle.write(f"task_index={task.task_index}\n")
+                    handle.write(f"task_state={cluster_pb2.TaskState.Name(task.state)}\n\n")
+                    for entry in entries:
+                        handle.write(f"[{entry.timestamp}] [{entry.source}] {entry.data}\n")
+            except Exception as e:
+                self.logger.log(
+                    f"  Failed to write logs for job {job.job_id} task {task.task_index}: {e}",
+                    level="WARN",
+                )
+
     def _run_job_test(
         self,
         client: IrisClient,
@@ -777,6 +792,7 @@ class SmokeTestRunner:
 
             status = job.wait(timeout=job_timeout, raise_on_failure=False)
             duration = time.monotonic() - start
+            self._write_task_logs(job, test_name)
 
             if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
                 self.logger.log(f"  [PASS] Completed in {duration:.1f}s")
@@ -790,6 +806,10 @@ class SmokeTestRunner:
         except TimeoutError:
             duration = time.monotonic() - start
             self.logger.log(f"  [FAIL] Timed out after {job_timeout}s", level="ERROR")
+            try:
+                self._write_task_logs(job, test_name)
+            except Exception:
+                pass
             return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _submit_and_wait_multiple(
@@ -824,6 +844,7 @@ class SmokeTestRunner:
             if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
                 state_name = cluster_pb2.JobState.Name(status.state)
                 failed_jobs.append(f"{job.job_id}: {state_name}")
+            self._write_task_logs(job, "Concurrent TPU jobs (3x)")
 
         return time.monotonic() - start, failed_jobs
 

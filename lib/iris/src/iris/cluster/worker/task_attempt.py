@@ -412,7 +412,6 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             timeout_seconds=timeout_seconds,
             ports=self.ports,
-            network_mode="host",
             mounts=[(str(self.workdir), "/workdir", "rw")],
             task_id=self.task_id.to_wire(),
             job_id=job_id.to_wire(),
