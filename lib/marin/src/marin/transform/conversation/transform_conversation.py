@@ -22,6 +22,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Import marin.utils first to apply the datasets List feature monkey-patch
+# before any datasets operations occur
+from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
+
 import datasets
 import draccus
 import fsspec

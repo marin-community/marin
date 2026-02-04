@@ -15,6 +15,8 @@ from typing import Any, TypeVar
 
 import braceexpand
 import datasets
+import datasets.features
+import datasets.features.features
 import fsspec
 import requests
 import transformers
@@ -22,6 +24,30 @@ from iris.marin_fs import url_to_fs
 from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
+
+
+def _patch_datasets_list_feature():
+    """Monkey-patch older datasets versions to support the `List` feature type.
+
+    The `List` feature type was introduced in datasets 3.0.0. Older versions only have `Sequence`.
+    This allows loading datasets created with newer versions on environments with older datasets.
+    """
+    # Always try to register List if it's not in _FEATURE_TYPES
+    # This is more robust than version checking
+    feature_types = getattr(datasets.features.features, "_FEATURE_TYPES", None)
+    if feature_types is not None and "List" not in feature_types:
+        # Register `List` as an alias for `Sequence`
+        feature_types["List"] = datasets.features.Sequence
+        logger.warning(
+            f"datasets version {datasets.__version__} doesn't have 'List' feature type. "
+            f"Registered 'List' as alias for 'Sequence' for compatibility."
+        )
+        return True
+    return False
+
+
+# Apply the patch immediately on import
+_patch_datasets_list_feature()
 T = TypeVar("T")
 
 
