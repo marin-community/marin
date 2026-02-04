@@ -370,8 +370,8 @@ scale_groups:
       cpu: 64
       ram: 64GB
       disk: 500GB
-      tpu: 4
-      gpu: 0
+      tpu_count: 4
+      gpu_count: 0
     min_slices: 0
     max_slices: 10
     preemptible: true
@@ -385,8 +385,8 @@ scale_groups:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu: 0
-      gpu: 0
+      tpu_count: 0
+      gpu_count: 0
     min_slices: 0
     max_slices: 2
     manual:

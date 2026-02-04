@@ -53,7 +53,7 @@ def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
             gpu_count=0,
-            tpu_chips=0,
+            tpu_count=0,
         ),
     )
     base_config.scale_groups["local-cpu"].CopyFrom(sg)

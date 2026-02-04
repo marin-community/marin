@@ -45,7 +45,7 @@ DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
     memory_bytes=64 * 1024**3,
     disk_bytes=200 * 1024**3,
     gpu_count=0,
-    tpu_chips=8,
+    tpu_count=8,
 )
 
 

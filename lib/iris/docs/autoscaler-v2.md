@@ -66,7 +66,7 @@ Introduce a `PendingGroup` accounting model:
 - Tracks the reason why the group is pending (first demand entry assigned, min_slices, etc.).
 
 Scale group capacity is defined per VM via `ScaleGroupConfig.resources`:
-- `cpu`, `memory_bytes`, `disk_bytes`, `gpu_count`, `tpu_chips`
+- `cpu`, `memory_bytes`, `disk_bytes`, `gpu_count`, `tpu_count`
 - `slice_size` is a separate field indicating how many tasks comprise a coscheduled slice.
 
 ### Algorithm

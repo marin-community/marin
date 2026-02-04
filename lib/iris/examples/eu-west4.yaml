@@ -48,8 +48,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
     max_slices: 2
     zones: [europe-west4-b]

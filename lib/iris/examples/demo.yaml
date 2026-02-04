@@ -52,8 +52,8 @@ scale_groups:
       cpu: 64
       ram: 64GB
       disk: 500GB
-      tpu: 4
-      gpu: 0
+      tpu_count: 4
+      gpu_count: 0
     min_slices: 2
     max_slices: 10
     zones: [europe-west4-b]
@@ -70,8 +70,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
     max_slices: 5
     zones: [europe-west4-b]
@@ -88,8 +88,8 @@ scale_groups:
       cpu: 256
       ram: 256GB
       disk: 2TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 0
     max_slices: 0  # ZERO MAX - simulates no quota available
     zones: [europe-west4-b]
@@ -106,8 +106,8 @@ scale_groups:
       cpu: 64
       ram: 128GB
       disk: 1TB
-      tpu: 0
-      gpu: 1
+      tpu_count: 0
+      gpu_count: 1
     min_slices: 0
     max_slices: 0
     zones: [europe-west4-b]
@@ -124,8 +124,8 @@ scale_groups:
       cpu: 96
       ram: 96GB
       disk: 1TB
-      tpu: 4
-      gpu: 0
+      tpu_count: 4
+      gpu_count: 0
     min_slices: 0
     max_slices: 3
     zones: [europe-west4-a, europe-west4-b, europe-west4-c]

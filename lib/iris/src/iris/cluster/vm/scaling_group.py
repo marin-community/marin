@@ -25,7 +25,7 @@ import threading
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.types import DeviceType, VmWorkerStatusMap
+from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmManagerProtocol
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -59,18 +59,6 @@ DEFAULT_BACKOFF_MAX = Duration.from_minutes(5)
 DEFAULT_BACKOFF_FACTOR = 2.0
 DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(5)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
-
-
-def _get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
-    if device.HasField("gpu"):
-        return device.gpu.count or 1
-    return 0
-
-
-def _get_tpu_chip_count(device: cluster_pb2.DeviceConfig) -> int:
-    if device.HasField("tpu"):
-        return device.tpu.count or 0
-    return 0
 
 
 class ScalingGroup:
@@ -331,12 +319,12 @@ class ScalingGroup:
         if resources.disk_bytes and resources.disk_bytes > sg_resources.disk_bytes:
             return False
 
-        gpu_count = _get_gpu_count(resources.device)
+        gpu_count = get_gpu_count(resources.device)
         if gpu_count > sg_resources.gpu_count:
             return False
 
-        tpu_chips = _get_tpu_chip_count(resources.device)
-        if tpu_chips > sg_resources.tpu_chips:
+        tpu_count = get_tpu_count(resources.device)
+        if tpu_count > sg_resources.tpu_count:
             return False
 
         return True

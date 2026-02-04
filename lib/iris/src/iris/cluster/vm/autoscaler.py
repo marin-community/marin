@@ -662,18 +662,18 @@ class Autoscaler:
 
         def _resource_spec_proto(resources: cluster_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
             gpu_count = 0
-            tpu_chips = 0
+            tpu_count = 0
             if resources.HasField("device"):
                 if resources.device.HasField("gpu"):
                     gpu_count = resources.device.gpu.count or 1
                 if resources.device.HasField("tpu"):
-                    tpu_chips = resources.device.tpu.count or 0
+                    tpu_count = resources.device.tpu.count or 0
             return vm_pb2.ResourceSpec(
                 cpu=resources.cpu,
                 memory_bytes=resources.memory_bytes,
                 disk_bytes=resources.disk_bytes,
                 gpu_count=gpu_count,
-                tpu_chips=tpu_chips,
+                tpu_count=tpu_count,
             )
 
         def _entry_to_proto(entry: DemandEntry) -> vm_pb2.DemandEntryStatus:

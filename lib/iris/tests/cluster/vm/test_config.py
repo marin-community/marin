@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from google.protobuf.json_format import ParseDict
 
 from iris.cluster.vm.config import (
     config_to_dict,
@@ -62,8 +61,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
@@ -112,8 +111,8 @@ scale_groups:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu: 0
-      gpu: 0
+      tpu_count: 0
+      gpu_count: 0
     manual:
       hosts: [10.0.0.1, 10.0.0.2]
       ssh_user: ubuntu
@@ -165,8 +164,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
@@ -180,8 +179,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 0
     max_slices: 4
     zones: [us-central1-a]
@@ -201,7 +200,7 @@ scale_groups:
         assert loaded_config.scale_groups["tpu_group_a"].vm_type == config_pb2.VM_TYPE_TPU_VM
         assert loaded_config.scale_groups["tpu_group_b"].vm_type == config_pb2.VM_TYPE_TPU_VM
 
-    def test_example_eu_west4_config_round_trips(self):
+    def test_example_eu_west4_config_round_trips(self, tmp_path: Path):
         """Real example config from examples/eu-west4.yaml round-trips correctly."""
         iris_root = Path(__file__).parent.parent.parent.parent
         config_path = iris_root / "examples" / "eu-west4.yaml"
@@ -214,9 +213,12 @@ scale_groups:
         assert "tpu_v5e_16" in original_config.scale_groups
         assert original_config.scale_groups["tpu_v5e_16"].vm_type == config_pb2.VM_TYPE_TPU_VM
 
-        # Round-trip via dict and ParseDict
+        # Round-trip via dict and YAML
         config_dict = config_to_dict(original_config)
-        loaded_config = ParseDict(config_dict, config_pb2.IrisClusterConfig())
+        yaml_str = yaml.dump(config_dict, default_flow_style=False)
+        round_trip_path = tmp_path / "round_trip.yaml"
+        round_trip_path.write_text(yaml_str)
+        loaded_config = load_config(round_trip_path)
 
         # Verify vm_type is still TPU
         assert loaded_config.scale_groups["tpu_v5e_16"].vm_type == config_pb2.VM_TYPE_TPU_VM
@@ -250,8 +252,8 @@ scale_groups:
       cpu: 8
       ram: 16GB
       disk: 50GB
-      tpu: 0
-      gpu: 0
+      tpu_count: 0
+      gpu_count: 0
     manual:
       hosts: [10.0.0.1]
     zones: [local]
@@ -288,8 +290,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
@@ -330,8 +332,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 0
     max_slices: 2
     zones: [us-central1-a]
@@ -380,8 +382,8 @@ scale_groups:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu: 0
-      gpu: 0
+      tpu_count: 0
+      gpu_count: 0
     manual:
       hosts: [10.0.0.1, 10.0.0.2]
 """
@@ -430,8 +432,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 0
     max_slices: 2
     zones: [us-central1-a]
@@ -594,8 +596,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
@@ -650,8 +652,8 @@ scale_groups:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu: 0
-      gpu: 0
+      tpu_count: 0
+      gpu_count: 0
     min_slices: 2
     max_slices: 5
     zones: [us-central1-a]
@@ -665,8 +667,8 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu: 8
-      gpu: 0
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
     max_slices: 3
     zones: [us-central1-a]

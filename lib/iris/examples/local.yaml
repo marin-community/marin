@@ -19,7 +19,7 @@ scale_groups:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu: 0
-      gpu: 0
+      tpu_count: 0
+      gpu_count: 0
     min_slices: 0
     max_slices: 4  # Allow up to 4 local workers

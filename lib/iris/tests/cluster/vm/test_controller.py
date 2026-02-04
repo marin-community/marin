@@ -154,8 +154,8 @@ scale_groups:
       cpu: 1
       ram: 1GB
       disk: 0
-      gpu: 0
-      tpu: 0
+      gpu_count: 0
+      tpu_count: 0
     manual:
       hosts: [10.0.0.1]
 """
@@ -200,8 +200,8 @@ scale_groups:
       cpu: 1
       ram: 1GB
       disk: 0
-      gpu: 0
-      tpu: 8
+      gpu_count: 0
+      tpu_count: 8
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -250,8 +250,8 @@ scale_groups:
       cpu: 1
       ram: 1GB
       disk: 0
-      gpu: 0
-      tpu: 8
+      gpu_count: 0
+      tpu_count: 8
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)

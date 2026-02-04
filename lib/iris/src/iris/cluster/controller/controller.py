@@ -40,8 +40,6 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
     ControllerWorker,
-    get_device_type_enum,
-    get_device_variant,
 )
 from iris.cluster.types import (
     JobName,
@@ -49,6 +47,8 @@ from iris.cluster.types import (
     VmWorkerStatus,
     VmWorkerStatusMap,
     PREEMPTIBLE_ATTRIBUTE_KEY,
+    get_device_type_enum,
+    get_device_variant,
 )
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer

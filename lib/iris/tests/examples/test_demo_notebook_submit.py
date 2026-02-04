@@ -34,7 +34,7 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
     cpu_sg.resources.memory_bytes = 1024**3
     cpu_sg.resources.disk_bytes = 0
     cpu_sg.resources.gpu_count = 0
-    cpu_sg.resources.tpu_chips = 0
+    cpu_sg.resources.tpu_count = 0
     return IrisConfig(config).as_local().proto
 
 

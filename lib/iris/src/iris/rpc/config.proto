@@ -83,7 +83,7 @@ message ScaleGroupResources {
   int64 memory_bytes = 2;
   int64 disk_bytes = 3;
   int32 gpu_count = 4;
-  int32 tpu_chips = 5;
+  int32 tpu_count = 5;
 }
 
 // Configuration for a scale group

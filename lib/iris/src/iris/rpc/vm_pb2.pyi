@@ -44,18 +44,18 @@ SCALING_ACTION_SCALE_DOWN: ScalingAction
 SCALING_ACTION_NONE: ScalingAction
 
 class ResourceSpec(_message.Message):
-    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "gpu_count", "tpu_chips")
+    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")
     CPU_FIELD_NUMBER: _ClassVar[int]
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
     DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
     GPU_COUNT_FIELD_NUMBER: _ClassVar[int]
-    TPU_CHIPS_FIELD_NUMBER: _ClassVar[int]
+    TPU_COUNT_FIELD_NUMBER: _ClassVar[int]
     cpu: int
     memory_bytes: int
     disk_bytes: int
     gpu_count: int
-    tpu_chips: int
-    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., gpu_count: _Optional[int] = ..., tpu_chips: _Optional[int] = ...) -> None: ...
+    tpu_count: int
+    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., gpu_count: _Optional[int] = ..., tpu_count: _Optional[int] = ...) -> None: ...
 
 class VmInfo(_message.Message):
     __slots__ = ("vm_id", "slice_id", "scale_group", "state", "address", "zone", "created_at", "state_changed_at", "worker_id", "worker_healthy", "init_phase", "init_log_tail", "init_error", "labels")

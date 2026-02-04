@@ -160,8 +160,8 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid disk_bytes={resources.disk_bytes}.")
         if resources.gpu_count < 0:
             raise ValueError(f"Scale group '{name}' has invalid gpu_count={resources.gpu_count}.")
-        if resources.tpu_chips < 0:
-            raise ValueError(f"Scale group '{name}' has invalid tpu_chips={resources.tpu_chips}.")
+        if resources.tpu_count < 0:
+            raise ValueError(f"Scale group '{name}' has invalid tpu_count={resources.tpu_count}.")
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -443,27 +443,33 @@ def _normalize_scale_group_resources(data: dict) -> None:
         if not isinstance(resources, dict):
             raise ValueError(f"scale_groups.{name}.resources must be a mapping")
 
+        allowed_keys = {"cpu", "ram", "disk", "gpu_count", "tpu_count"}
+        unknown_keys = set(resources.keys()) - allowed_keys
+        if unknown_keys:
+            unknown = ", ".join(sorted(unknown_keys))
+            raise ValueError(f"scale_groups.{name}.resources has unknown keys: {unknown}")
+
         normalized: dict[str, int] = {}
 
         cpu = resources.get("cpu")
         if cpu is not None:
             normalized["cpu"] = int(cpu)
 
-        memory = resources.get("memory_bytes", resources.get("memory", resources.get("ram")))
+        memory = resources.get("ram")
         if memory is not None:
             normalized["memory_bytes"] = _parse_memory_value(memory, f"scale_groups.{name}.resources.ram")
 
-        disk = resources.get("disk_bytes", resources.get("disk"))
+        disk = resources.get("disk")
         if disk is not None:
             normalized["disk_bytes"] = _parse_memory_value(disk, f"scale_groups.{name}.resources.disk")
 
-        gpu = resources.get("gpu_count", resources.get("gpu"))
+        gpu = resources.get("gpu_count")
         if gpu is not None:
             normalized["gpu_count"] = int(gpu)
 
-        tpu = resources.get("tpu_chips", resources.get("tpu"))
+        tpu = resources.get("tpu_count")
         if tpu is not None:
-            normalized["tpu_chips"] = int(tpu)
+            normalized["tpu_count"] = int(tpu)
 
         sg["resources"] = normalized
 
@@ -478,7 +484,28 @@ def _parse_memory_value(value: object, field_name: str) -> int:
 
 def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
     """Convert config to dict for YAML serialization."""
-    return MessageToDict(config, preserving_proto_field_name=True)
+    data = MessageToDict(config, preserving_proto_field_name=True)
+    scale_groups = data.get("scale_groups")
+    if isinstance(scale_groups, dict):
+        for sg in scale_groups.values():
+            if not isinstance(sg, dict):
+                continue
+            resources = sg.get("resources")
+            if not isinstance(resources, dict):
+                continue
+            normalized: dict[str, object] = {}
+            if "cpu" in resources:
+                normalized["cpu"] = resources["cpu"]
+            if "memory_bytes" in resources:
+                normalized["ram"] = resources["memory_bytes"]
+            if "disk_bytes" in resources:
+                normalized["disk"] = resources["disk_bytes"]
+            if "gpu_count" in resources:
+                normalized["gpu_count"] = resources["gpu_count"]
+            if "tpu_count" in resources:
+                normalized["tpu_count"] = resources["tpu_count"]
+            sg["resources"] = normalized
+    return data
 
 
 def get_ssh_config(

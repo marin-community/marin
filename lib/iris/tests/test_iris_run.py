@@ -99,8 +99,8 @@ def local_cluster_and_config(tmp_path):
                                 "cpu": 1,
                                 "ram": "1GB",
                                 "disk": 0,
-                                "gpu": 0,
-                                "tpu": 0,
+                                "gpu_count": 0,
+                                "tpu_count": 0,
                             },
                         }
                     },

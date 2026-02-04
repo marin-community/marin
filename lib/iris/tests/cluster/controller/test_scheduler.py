@@ -1159,7 +1159,7 @@ def test_tpu_job_rejected_when_insufficient_chips(scheduler, state):
     assert len(result.assignments) == 0
 
 
-def test_tpu_chips_released_after_task_completion(scheduler, state):
+def test_tpu_count_released_after_task_completion(scheduler, state):
     """TPU chips are released when task completes, allowing new tasks to schedule."""
     # Worker with 4 TPU chips
     meta = cluster_pb2.WorkerMetadata(
