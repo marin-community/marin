@@ -126,7 +126,7 @@ def _infer_non_default_overrides(config: HFCompatConfig) -> dict[str, object]:
         value = getattr(config, fld.name)
         default_value = getattr(default_config, fld.name)
         if value != default_value:
-            overrides[field.name] = value
+            overrides[fld.name] = value
     return overrides
 
 
