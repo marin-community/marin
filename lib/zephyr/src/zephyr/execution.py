@@ -279,7 +279,9 @@ class ZephyrCoordinator:
         """Initialize coordinator with worker group for continuous discovery.
 
         The worker group is created by ZephyrContext using the appropriate client,
-        then passed here. Coordinator owns the group and polls it for new workers.
+        then passed here. Coordinator owns the group and polls it for new workers
+        via discover_new() in the background loop - we do NOT block waiting for
+        all workers to be ready upfront.
 
         Args:
             chunk_prefix: Storage prefix for intermediate chunks
@@ -290,17 +292,13 @@ class ZephyrCoordinator:
         self._self_handle = coordinator_handle
         self._worker_group = worker_group
 
-        # Get initially ready workers
-        initial_handles = worker_group.wait_ready()
-        self._worker_handles.extend(initial_handles)
+        # Don't block on wait_ready() - let the coordinator loop discover workers
+        # as they become available. This allows execution to start immediately
+        # and work with whatever workers are ready.
 
-        logger.info("Coordinator initialized with %d workers", len(initial_handles))
+        logger.info("Coordinator initialized, discovering workers asynchronously")
 
-        # Start workers polling
-        for w in self._worker_handles:
-            self._worker_futures.append(w.start_polling.remote(self._self_handle))
-
-        # Start coordinator background loop
+        # Start coordinator background loop (handles discovery + heartbeats)
         self._coordinator_thread = threading.Thread(
             target=self._coordinator_loop, daemon=True, name="zephyr-coordinator-loop"
         )
@@ -461,19 +459,44 @@ class ZephyrCoordinator:
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
 
-    def _wait_for_stage(self) -> None:
-        """Block until current stage completes or error occurs."""
+    def _wait_for_stage(self, no_workers_timeout: float = 60.0) -> None:
+        """Block until current stage completes or error occurs.
+
+        Args:
+            no_workers_timeout: Seconds to wait for at least one worker before failing.
+                If no workers are discovered within this time, raises ZephyrWorkerError.
+        """
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         last_log_completed = -1
+        start_time = time.monotonic()
+        warned_no_workers = False
 
         while True:
             with self._lock:
                 if self._fatal_error:
                     raise ZephyrWorkerError(self._fatal_error)
+
+                num_workers = len(self._worker_handles)
                 completed = self._completed_shards
                 total = self._total_shards
+
                 if completed >= total:
                     return
+
+                # Fail fast if no workers appear within timeout
+                if num_workers == 0:
+                    elapsed = time.monotonic() - start_time
+                    if elapsed > no_workers_timeout:
+                        raise ZephyrWorkerError(
+                            f"No workers available after {elapsed:.1f}s. "
+                            "Check cluster resources and worker group configuration."
+                        )
+                    if not warned_no_workers and elapsed > 5.0:
+                        logger.warning(
+                            "No workers available yet after %.1fs, waiting for discovery...",
+                            elapsed,
+                        )
+                        warned_no_workers = True
 
             if completed != last_log_completed:
                 logger.info("[%s] %d/%d tasks completed", self._stage_name, completed, total)
@@ -836,12 +859,19 @@ class ZephyrContext:
     pool. Workers persist across pipeline stages and execute() calls, allowing
     cached state (tokenizers, models) to be reused. Shared data broadcast via
     put() is delivered to workers with each task.
+
+    Args:
+        client: The fray client to use. If None, auto-detects using current_client().
+        num_workers: Number of workers. If None, defaults to os.cpu_count() for LocalClient,
+            or 128 for distributed clients.
+        resources: Resource config per worker.
+        chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
+            to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
     """
 
-    client: Client
-    num_workers: int
+    client: Client | None = None
+    num_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="16g"))
-    max_parallelism: int = 1024
     chunk_storage_prefix: str | None = None
 
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -850,6 +880,19 @@ class ZephyrContext:
     _instance_id: str = field(default_factory=lambda: __import__("uuid").uuid4().hex[:8], repr=False)
 
     def __post_init__(self):
+        if self.client is None:
+            from fray.v2.client import current_client
+
+            self.client = current_client()
+
+        if self.num_workers is None:
+            from fray.v2.local_backend import LocalClient
+
+            if isinstance(self.client, LocalClient):
+                self.num_workers = os.cpu_count() or 1
+            else:
+                self.num_workers = 128
+
         if self.chunk_storage_prefix is None:
             marin_prefix = os.environ.get("MARIN_PREFIX", "")
             if marin_prefix:
@@ -1036,9 +1079,7 @@ def get_default_zephyr_context() -> ZephyrContext:
     """Get the current default ZephyrContext, creating one if unset."""
     ctx = _default_zephyr_context.get()
     if ctx is None:
-        from fray.v2.client import current_client
-
-        ctx = ZephyrContext(client=current_client(), num_workers=os.cpu_count() or 1)
+        ctx = ZephyrContext()
     return ctx
 
 
@@ -1068,23 +1109,3 @@ def _print_plan(original_ops: list, plan: PhysicalPlan) -> None:
         logger.info(f"  {i}. {stage_desc}{hint_str}")
 
     logger.info("\n=== End Plan ===\n")
-
-
-class Backend:
-    """Shim preserving the old Backend.execute() calling convention.
-
-    Delegates to ZephyrContext under the hood. Callers can continue writing
-    ``Backend.execute(pipeline)`` during the v1 -> v2 migration.
-    """
-
-    @staticmethod
-    def execute(
-        dataset: Dataset,
-        hints: ExecutionHint = ExecutionHint(),
-        verbose: bool = False,
-        max_parallelism: int = 1024,
-        dry_run: bool = False,
-    ) -> Sequence:
-        ctx = get_default_zephyr_context()
-        ctx.max_parallelism = max_parallelism
-        return ctx.execute(dataset, hints=hints, verbose=verbose, dry_run=dry_run)

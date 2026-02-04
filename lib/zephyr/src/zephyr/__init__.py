@@ -17,7 +17,7 @@
 import logging
 
 from zephyr.dataset import Dataset
-from zephyr.execution import Backend, DiskChunk, ZephyrContext, shard_ctx
+from zephyr.execution import DiskChunk, ZephyrContext, shard_ctx
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import ExecutionHint, compute_plan
 from zephyr.readers import InputFileSpec, load_file, load_jsonl, load_parquet, load_vortex, load_zip_members
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
-    "Backend",
     "Dataset",
     "ExecutionHint",
     "Expr",

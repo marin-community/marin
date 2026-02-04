@@ -42,8 +42,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from zephyr import Backend, Dataset, shard_ctx
-from zephyr.execution import get_default_zephyr_context
+from zephyr import Dataset, ZephyrContext, shard_ctx
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
@@ -322,12 +321,13 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
-        file_stats = list(
-            Backend.execute(
-                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
-                verbose=False,
+        with ZephyrContext() as ctx:
+            file_stats = list(
+                ctx.execute(
+                    Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+                    verbose=False,
+                )
             )
-        )
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
         logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size.")
 
@@ -337,26 +337,26 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        # Broadcast the tokenizer to all workers via ZephyrContext
-        zephyr_ctx = get_default_zephyr_context()
-        zephyr_ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
-
         temp_shards = (
             ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = Backend.execute(temp_shards)
+        with ZephyrContext() as ctx:
+            # Broadcast the tokenizer to all workers via ZephyrContext
+            ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
-        logger.info("Computing exemplar for cache consolidation")
-        exemplar = Backend.execute(
-            Dataset.from_list(paths[0:1])
-            .flat_map(load_file)
-            .take_per_shard(1)
-            .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
-            verbose=False,
-        )[0]
+            shard_paths = ctx.execute(temp_shards)
+
+            logger.info("Computing exemplar for cache consolidation")
+            exemplar = ctx.execute(
+                Dataset.from_list(paths[0:1])
+                .flat_map(load_file)
+                .take_per_shard(1)
+                .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
+                verbose=False,
+            )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
