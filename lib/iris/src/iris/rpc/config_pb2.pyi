@@ -74,8 +74,22 @@ class ManualProvider(_message.Message):
     ssh_key_file: str
     def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ...) -> None: ...
 
+class ScaleGroupResources(_message.Message):
+    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")
+    CPU_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
+    GPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    TPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    cpu: int
+    memory_bytes: int
+    disk_bytes: int
+    gpu_count: int
+    tpu_count: int
+    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., gpu_count: _Optional[int] = ..., tpu_count: _Optional[int] = ...) -> None: ...
+
 class ScaleGroupConfig(_message.Message):
-    __slots__ = ("name", "vm_type", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "topology", "runtime_version", "preemptible", "zones", "priority", "manual")
+    __slots__ = ("name", "vm_type", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "topology", "runtime_version", "preemptible", "resources", "slice_size", "zones", "priority", "manual")
     NAME_FIELD_NUMBER: _ClassVar[int]
     VM_TYPE_FIELD_NUMBER: _ClassVar[int]
     MIN_SLICES_FIELD_NUMBER: _ClassVar[int]
@@ -85,6 +99,8 @@ class ScaleGroupConfig(_message.Message):
     TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_VERSION_FIELD_NUMBER: _ClassVar[int]
     PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
+    RESOURCES_FIELD_NUMBER: _ClassVar[int]
+    SLICE_SIZE_FIELD_NUMBER: _ClassVar[int]
     ZONES_FIELD_NUMBER: _ClassVar[int]
     PRIORITY_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
@@ -97,10 +113,12 @@ class ScaleGroupConfig(_message.Message):
     topology: str
     runtime_version: str
     preemptible: bool
+    resources: ScaleGroupResources
+    slice_size: int
     zones: _containers.RepeatedScalarFieldContainer[str]
     priority: int
     manual: ManualProvider
-    def __init__(self, name: _Optional[str] = ..., vm_type: _Optional[_Union[VmType, str]] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., topology: _Optional[str] = ..., runtime_version: _Optional[str] = ..., preemptible: _Optional[bool] = ..., zones: _Optional[_Iterable[str]] = ..., priority: _Optional[int] = ..., manual: _Optional[_Union[ManualProvider, _Mapping]] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., vm_type: _Optional[_Union[VmType, str]] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., topology: _Optional[str] = ..., runtime_version: _Optional[str] = ..., preemptible: _Optional[bool] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., slice_size: _Optional[int] = ..., zones: _Optional[_Iterable[str]] = ..., priority: _Optional[int] = ..., manual: _Optional[_Union[ManualProvider, _Mapping]] = ...) -> None: ...
 
 class BootstrapConfig(_message.Message):
     __slots__ = ("controller_address", "worker_id", "worker_port", "docker_image", "cache_dir", "env_vars")

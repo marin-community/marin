@@ -77,6 +77,15 @@ enum VmType {
   VM_TYPE_LOCAL_VM = 4;
 }
 
+// Resources available per slice in a scale group.
+message ScaleGroupResources {
+  int32 cpu = 1;
+  int64 memory_bytes = 2;
+  int64 disk_bytes = 3;
+  int32 gpu_count = 4;
+  int32 tpu_count = 5;
+}
+
 // Configuration for a scale group
 message ScaleGroupConfig {
   string name = 1;
@@ -90,6 +99,8 @@ message ScaleGroupConfig {
   string topology = 11;                  // Optional topology override (e.g., "4x4")
   string runtime_version = 12;
   bool preemptible = 13 [features.field_presence = EXPLICIT];
+  ScaleGroupResources resources = 14;
+  int32 slice_size = 15 [features.field_presence = EXPLICIT];
 
   // Zones to use (in priority order)
   repeated string zones = 20;

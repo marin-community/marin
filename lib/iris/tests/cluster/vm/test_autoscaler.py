@@ -34,10 +34,60 @@ from iris.cluster.vm.autoscaler import (
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 # --- Test fixtures and helpers ---
+
+
+def make_demand_entries(
+    count: int,
+    *,
+    device_type: DeviceType = DeviceType.TPU,
+    device_variant: str | None = "v5p-8",
+    preemptible: bool | None = None,
+    task_prefix: str = "task",
+) -> list[DemandEntry]:
+    if count <= 0:
+        return []
+    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024)
+    return [
+        DemandEntry(
+            task_ids=[f"{task_prefix}-{i}"],
+            coschedule_group_id=None,
+            device_type=device_type,
+            device_variant=device_variant,
+            constraints=[],
+            resources=resources,
+            preemptible=preemptible,
+        )
+        for i in range(count)
+    ]
+
+
+DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
+    cpu=128,
+    memory_bytes=128 * 1024**3,
+    disk_bytes=100 * 1024**3,
+    gpu_count=8,
+    tpu_count=8,
+)
+
+
+def ensure_scale_group_resources(config: config_pb2.ScaleGroupConfig) -> config_pb2.ScaleGroupConfig:
+    if not config.HasField("resources"):
+        config.resources.CopyFrom(DEFAULT_RESOURCES)
+    if not config.HasField("slice_size"):
+        config.slice_size = 1
+    return config
+
+
+def make_scale_group_config(**kwargs: object) -> config_pb2.ScaleGroupConfig:
+    if "accelerator_type" not in kwargs:
+        kwargs["accelerator_type"] = config_pb2.ACCELERATOR_TYPE_TPU
+    if "accelerator_variant" not in kwargs:
+        kwargs["accelerator_variant"] = "v5p-8"
+    return ensure_scale_group_resources(config_pb2.ScaleGroupConfig(**kwargs))
 
 
 def make_mock_slice(
@@ -126,7 +176,7 @@ def make_mock_vm_manager(slices_to_discover: list[MagicMock] | None = None) -> M
 @pytest.fixture
 def scale_group_config() -> config_pb2.ScaleGroupConfig:
     """A standard scale group configuration."""
-    return config_pb2.ScaleGroupConfig(
+    return make_scale_group_config(
         name="test-group",
         min_slices=0,
         max_slices=5,
@@ -198,7 +248,7 @@ class TestAutoscalerScaleUp:
 
     def test_scales_up_when_demand_exceeds_capacity(self, empty_autoscaler: Autoscaler):
         """Evaluates scale-up when demand > capacity."""
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         decisions = empty_autoscaler.evaluate(demand)
 
         assert len(decisions) == 1
@@ -235,7 +285,7 @@ class TestAutoscalerScaleUp:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=demand_count)]
+        demand = make_demand_entries(demand_count, device_type=DeviceType.TPU, device_variant="v5p-8")
         decisions = autoscaler.evaluate(demand)
 
         assert len(decisions) == 0
@@ -255,7 +305,7 @@ class TestAutoscalerScaleUp:
         group.record_failure(timestamp=Timestamp.now())
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         decisions = autoscaler.evaluate(demand)
 
         # Decision blocked by backoff
@@ -271,7 +321,7 @@ class TestAutoscalerScaleUp:
         group.scale_up(timestamp=Timestamp.now())
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         decisions = autoscaler.evaluate(demand)
 
         # Decision blocked by cooldown (only 1 slice at time of evaluate)
@@ -280,7 +330,7 @@ class TestAutoscalerScaleUp:
 
     def test_scales_up_to_enforce_min_slices(self):
         """Scales up to enforce min_slices even with zero demand."""
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=2,
             max_slices=5,
@@ -303,7 +353,7 @@ class TestAutoscalerScaleUp:
 
     def test_no_scale_up_when_at_min_slices(self):
         """Does not scale up when already at min_slices and no demand."""
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=2,
             max_slices=5,
@@ -349,7 +399,7 @@ class TestAutoscalerScaleDown:
         # Mark slices as idle (never had activity, so eligible for scaledown)
         # The idle_threshold=Duration.from_ms(1000) means slices need to be idle for 1s
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         # All workers are idle
         # VM addresses are generated as f"10.0.{hash(slice_id) % 256}.{i}"
@@ -368,7 +418,7 @@ class TestAutoscalerScaleDown:
 
     def test_no_scale_down_at_min_slices(self):
         """Does not scale down when at min_slices."""
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=2,
             max_slices=5,
@@ -387,7 +437,7 @@ class TestAutoscalerScaleDown:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=0)]
+        demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
         slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
         vm_status_map = {
@@ -427,7 +477,7 @@ class TestAutoscalerScaleDown:
         }
         group.update_slice_activity(vm_status_map_active, timestamp=Timestamp.from_ms(1000))
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         vm_status_map_idle = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
@@ -456,7 +506,7 @@ class TestAutoscalerScaleDown:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         worker_idle_map = {}
 
         # run_once() cleans up failed slices first
@@ -487,7 +537,7 @@ class TestAutoscalerScaleDown:
         group.scale_down("slice-003", timestamp=Timestamp.now())
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
         slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
         vm_status_map = {
@@ -552,7 +602,7 @@ class TestAutoscalerExecution:
 
     def test_run_once_evaluates_and_executes(self, empty_autoscaler: Autoscaler):
         """run_once() performs evaluate then execute."""
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         vm_status_map = {}  # Empty - no workers yet
         decisions = empty_autoscaler.run_once(demand, vm_status_map)
         empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
@@ -565,7 +615,7 @@ class TestAutoscalerExecution:
 
     def test_execute_skips_unknown_scale_group(self):
         """execute() skips decisions for unknown scale groups."""
-        config = config_pb2.ScaleGroupConfig(name="known-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="known-group", min_slices=0, max_slices=5)
         manager = make_mock_vm_manager()
         group = ScalingGroup(config, manager)
 
@@ -589,8 +639,8 @@ class TestAutoscalerReconcile:
 
     def test_reconcile_discovers_slices_in_all_groups(self):
         """reconcile() calls reconcile on all groups."""
-        config1 = config_pb2.ScaleGroupConfig(name="group-1", min_slices=0, max_slices=5)
-        config2 = config_pb2.ScaleGroupConfig(name="group-2", min_slices=0, max_slices=5)
+        config1 = make_scale_group_config(name="group-1", min_slices=0, max_slices=5)
+        config2 = make_scale_group_config(name="group-2", min_slices=0, max_slices=5)
 
         manager1 = make_mock_vm_manager(
             slices_to_discover=[make_mock_slice("slice-1", scale_group="group-1", all_ready=True)]
@@ -664,7 +714,7 @@ class TestAutoscalerIdleVerification:
             vm_registry=VmRegistry(),
         )
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=0)]
+        demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         # Create vm_status_map that reports a task running on the worker
         slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
@@ -709,8 +759,8 @@ class TestAutoscalerStatusReporting:
 
     def test_get_status_includes_all_groups(self):
         """get_status() includes status for all groups."""
-        config1 = config_pb2.ScaleGroupConfig(name="group-1", min_slices=0, max_slices=5)
-        config2 = config_pb2.ScaleGroupConfig(name="group-2", min_slices=0, max_slices=5)
+        config1 = make_scale_group_config(name="group-1", min_slices=0, max_slices=5)
+        config2 = make_scale_group_config(name="group-2", min_slices=0, max_slices=5)
 
         manager1 = make_mock_vm_manager()
         manager2 = make_mock_vm_manager()
@@ -733,6 +783,18 @@ class TestAutoscalerStatusReporting:
         assert status.current_demand["group-1"] == 5
         assert status.current_demand["group-2"] == 3
 
+    def test_get_status_includes_last_routing_decision(self):
+        """get_status() includes the last routing decision."""
+        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        group = ScalingGroup(config, make_mock_vm_manager())
+        autoscaler = make_autoscaler({"test-group": group})
+
+        autoscaler.evaluate(make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8"))
+        status = autoscaler.get_status()
+
+        assert status.HasField("last_routing_decision")
+        assert "test-group" in status.last_routing_decision.routed_entries
+
 
 class TestAutoscalerFailedSliceCleanup:
     """Tests for automatic cleanup of failed slices via run_once()."""
@@ -745,7 +807,7 @@ class TestAutoscalerFailedSliceCleanup:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {})
 
         # Failed slice should be cleaned up
@@ -781,7 +843,7 @@ class TestAutoscalerFailedSliceCleanup:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=5)]
+        demand = make_demand_entries(5, device_type=DeviceType.TPU, device_variant="v5p-8")
         decisions = autoscaler.evaluate(demand)
 
         # evaluate() only returns SCALE_UP now
@@ -811,14 +873,14 @@ class TestWaterfallRouting:
 
     def test_routes_demand_to_highest_priority_group_first(self):
         """Demand routes to highest priority (lowest number) matching group."""
-        config_high = config_pb2.ScaleGroupConfig(
+        config_high = make_scale_group_config(
             name="high-priority",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_low = config_pb2.ScaleGroupConfig(
+        config_low = make_scale_group_config(
             name="low-priority",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -831,7 +893,7 @@ class TestWaterfallRouting:
 
         autoscaler = make_autoscaler({"high-priority": group_high, "low-priority": group_low})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=3)]
+        demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
         decisions = autoscaler.evaluate(demand)
 
         # All demand should go to high-priority group
@@ -840,14 +902,14 @@ class TestWaterfallRouting:
 
     def test_cpu_demand_routes_by_priority(self):
         """CPU demand matches all groups and routes by priority."""
-        config_high = config_pb2.ScaleGroupConfig(
+        config_high = make_scale_group_config(
             name="high-priority",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_low = config_pb2.ScaleGroupConfig(
+        config_low = make_scale_group_config(
             name="low-priority",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
             accelerator_variant="A100",
@@ -860,7 +922,7 @@ class TestWaterfallRouting:
 
         autoscaler = make_autoscaler({"high-priority": group_high, "low-priority": group_low})
 
-        demand = [DemandEntry(device_type=DeviceType.CPU, device_variant=None, count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
         decisions = autoscaler.evaluate(demand)
 
         assert len(decisions) == 1
@@ -870,14 +932,14 @@ class TestWaterfallRouting:
 
     def test_demand_overflows_to_lower_priority_when_at_capacity(self):
         """When high-priority group is at capacity, demand overflows to lower priority."""
-        config_high = config_pb2.ScaleGroupConfig(
+        config_high = make_scale_group_config(
             name="high-priority",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=2,
             priority=10,
         )
-        config_low = config_pb2.ScaleGroupConfig(
+        config_low = make_scale_group_config(
             name="low-priority",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -894,7 +956,7 @@ class TestWaterfallRouting:
 
         autoscaler = make_autoscaler({"high-priority": group_high, "low-priority": group_low})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=3)]
+        demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
         decisions = autoscaler.evaluate(demand)
 
         # Overflow should go to low-priority
@@ -903,14 +965,14 @@ class TestWaterfallRouting:
 
     def test_routing_filters_by_accelerator_type(self):
         """Only groups matching accelerator_type receive demand."""
-        config_v5p = config_pb2.ScaleGroupConfig(
+        config_v5p = make_scale_group_config(
             name="v5p-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_v5lite = config_pb2.ScaleGroupConfig(
+        config_v5lite = make_scale_group_config(
             name="v5lite-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-4",
@@ -923,7 +985,7 @@ class TestWaterfallRouting:
 
         autoscaler = make_autoscaler({"v5p-group": group_v5p, "v5lite-group": group_v5lite})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5litepod-4", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5litepod-4")
         decisions = autoscaler.evaluate(demand)
 
         # Only v5lite-group should receive demand
@@ -932,7 +994,7 @@ class TestWaterfallRouting:
 
     def test_demand_with_no_matching_group_is_unmet(self):
         """Demand for unknown accelerator type results in unmet demand."""
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -945,7 +1007,7 @@ class TestWaterfallRouting:
         autoscaler = make_autoscaler({"test-group": group})
 
         # Request an accelerator type that doesn't exist
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="unknown-type", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="unknown-type")
         decisions = autoscaler.evaluate(demand)
 
         # No decisions should be made (no matching group)
@@ -953,14 +1015,14 @@ class TestWaterfallRouting:
 
     def test_multiple_demand_entries_route_independently(self):
         """Multiple demand entries with different accelerator types route to appropriate groups."""
-        config_v5p = config_pb2.ScaleGroupConfig(
+        config_v5p = make_scale_group_config(
             name="v5p-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_v5lite = config_pb2.ScaleGroupConfig(
+        config_v5lite = make_scale_group_config(
             name="v5lite-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-4",
@@ -974,8 +1036,8 @@ class TestWaterfallRouting:
         autoscaler = make_autoscaler({"v5p-group": group_v5p, "v5lite-group": group_v5lite})
 
         demand = [
-            DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2),
-            DemandEntry(device_type=DeviceType.TPU, device_variant="v5litepod-4", count=3),
+            *make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", task_prefix="v5p"),
+            *make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5litepod-4", task_prefix="v5lite"),
         ]
         decisions = autoscaler.evaluate(demand)
 
@@ -991,7 +1053,7 @@ class TestPreemptibleRouting:
 
     def test_route_demand_filters_by_preemptible_true(self):
         """Demand with preemptible=True only routes to preemptible groups."""
-        config_preemptible = config_pb2.ScaleGroupConfig(
+        config_preemptible = make_scale_group_config(
             name="preemptible-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -999,7 +1061,7 @@ class TestPreemptibleRouting:
             priority=10,
             preemptible=True,
         )
-        config_on_demand = config_pb2.ScaleGroupConfig(
+        config_on_demand = make_scale_group_config(
             name="on-demand-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1010,15 +1072,15 @@ class TestPreemptibleRouting:
         group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
         group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2, preemptible=True)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=True)
         result = route_demand([group_preemptible, group_on_demand], demand)
 
-        assert result.allocations["preemptible-group"] == 2
-        assert result.allocations["on-demand-group"] == 0
+        assert len(result.routed_entries["preemptible-group"]) == 2
+        assert result.routed_entries.get("on-demand-group") is None
 
     def test_route_demand_filters_by_preemptible_false(self):
         """Demand with preemptible=False only routes to non-preemptible groups."""
-        config_preemptible = config_pb2.ScaleGroupConfig(
+        config_preemptible = make_scale_group_config(
             name="preemptible-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1026,7 +1088,7 @@ class TestPreemptibleRouting:
             priority=10,
             preemptible=True,
         )
-        config_on_demand = config_pb2.ScaleGroupConfig(
+        config_on_demand = make_scale_group_config(
             name="on-demand-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1037,15 +1099,15 @@ class TestPreemptibleRouting:
         group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
         group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2, preemptible=False)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=False)
         result = route_demand([group_preemptible, group_on_demand], demand)
 
-        assert result.allocations["preemptible-group"] == 0
-        assert result.allocations["on-demand-group"] == 2
+        assert result.routed_entries.get("preemptible-group") is None
+        assert len(result.routed_entries["on-demand-group"]) == 2
 
     def test_route_demand_no_preference_routes_to_any(self):
         """Demand with preemptible=None routes to any matching group."""
-        config_preemptible = config_pb2.ScaleGroupConfig(
+        config_preemptible = make_scale_group_config(
             name="preemptible-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1053,7 +1115,7 @@ class TestPreemptibleRouting:
             priority=10,
             preemptible=True,
         )
-        config_on_demand = config_pb2.ScaleGroupConfig(
+        config_on_demand = make_scale_group_config(
             name="on-demand-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1064,12 +1126,12 @@ class TestPreemptibleRouting:
         group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
         group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=3, preemptible=None)]
+        demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=None)
         result = route_demand([group_preemptible, group_on_demand], demand)
 
         # Both groups are eligible; preemptible has higher priority (10 < 20)
-        assert result.allocations["preemptible-group"] == 3
-        assert result.unmet_demand == 0
+        assert len(result.routed_entries["preemptible-group"]) == 3
+        assert result.unmet_entries == []
 
 
 class TestAutoscalerWaterfallEndToEnd:
@@ -1090,14 +1152,14 @@ class TestAutoscalerWaterfallEndToEnd:
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig, FailureMode
         from iris.cluster.vm.scaling_group import GroupAvailability
 
-        config_primary = config_pb2.ScaleGroupConfig(
+        config_primary = make_scale_group_config(
             name="primary",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_fallback = config_pb2.ScaleGroupConfig(
+        config_fallback = make_scale_group_config(
             name="fallback",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1121,7 +1183,7 @@ class TestAutoscalerWaterfallEndToEnd:
             config=config,
         )
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         # First run: routes to primary, but execute fails with quota
         # This sets primary to QUOTA_EXCEEDED but nothing is created yet
@@ -1158,14 +1220,14 @@ class TestAutoscalerWaterfallEndToEnd:
         from iris.cluster.vm.scaling_group import GroupAvailability
         from iris.time_utils import Timestamp
 
-        config_primary = config_pb2.ScaleGroupConfig(
+        config_primary = make_scale_group_config(
             name="primary",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_fallback = config_pb2.ScaleGroupConfig(
+        config_fallback = make_scale_group_config(
             name="fallback",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1192,7 +1254,7 @@ class TestAutoscalerWaterfallEndToEnd:
             config=config,
         )
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         # First run: tries primary, fails with quota (nothing created yet)
         autoscaler.run_once(demand, {})
@@ -1217,7 +1279,7 @@ class TestAutoscalerWaterfallEndToEnd:
         assert group_primary.availability(ts_now).status == GroupAvailability.AVAILABLE
 
         # Increase demand to verify routing goes to primary now
-        demand_increased = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand_increased = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         decisions = autoscaler.evaluate(demand_increased, timestamp=ts_now)
         assert len(decisions) == 1
         assert decisions[0].scale_group == "primary"
@@ -1230,14 +1292,14 @@ class TestAutoscalerWaterfallEndToEnd:
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig, FailureMode
         from iris.cluster.vm.scaling_group import GroupAvailability
 
-        config_primary = config_pb2.ScaleGroupConfig(
+        config_primary = make_scale_group_config(
             name="primary",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_fallback = config_pb2.ScaleGroupConfig(
+        config_fallback = make_scale_group_config(
             name="fallback",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1265,7 +1327,7 @@ class TestAutoscalerWaterfallEndToEnd:
             config=config,
         )
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         # First run: primary fails, triggers backoff
         autoscaler.run_once(demand, {})
@@ -1284,14 +1346,14 @@ class TestAutoscalerWaterfallEndToEnd:
         """Different accelerator types route through their own group chains."""
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig
 
-        config_v5p = config_pb2.ScaleGroupConfig(
+        config_v5p = make_scale_group_config(
             name="v5p-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_v5lite = config_pb2.ScaleGroupConfig(
+        config_v5lite = make_scale_group_config(
             name="v5lite-group",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-4",
@@ -1311,8 +1373,8 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # Demand for both types
         demand = [
-            DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2),
-            DemandEntry(device_type=DeviceType.TPU, device_variant="v5litepod-4", count=1),
+            *make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", task_prefix="v5p"),
+            *make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5litepod-4", task_prefix="v5lite"),
         ]
 
         autoscaler.run_once(demand, {})
@@ -1336,14 +1398,14 @@ class TestAutoscalerWaterfallEndToEnd:
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig
         from iris.time_utils import Timestamp
 
-        config_primary = config_pb2.ScaleGroupConfig(
+        config_primary = make_scale_group_config(
             name="primary",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=2,
             priority=10,
         )
-        config_fallback = config_pb2.ScaleGroupConfig(
+        config_fallback = make_scale_group_config(
             name="fallback",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1367,7 +1429,7 @@ class TestAutoscalerWaterfallEndToEnd:
         )
 
         # Demand exceeds primary's max_slices (4 > 2)
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=4)]
+        demand = make_demand_entries(4, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         # First run: routing allocates primary=2, fallback=2 (based on headroom)
         # Creates one slice in each group (both now have capacity=1 from booting)
@@ -1446,7 +1508,7 @@ class TestAutoscalerQuotaHandling:
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000))
         autoscaler._wait_for_inflight()  # Wait for async scale-up to complete
 
@@ -1458,14 +1520,14 @@ class TestAutoscalerQuotaHandling:
         """When primary group has quota exceeded, demand routes to fallback."""
         from iris.cluster.vm.managed_vm import QuotaExceededError
 
-        config_primary = config_pb2.ScaleGroupConfig(
+        config_primary = make_scale_group_config(
             name="primary",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
             max_slices=5,
             priority=10,
         )
-        config_fallback = config_pb2.ScaleGroupConfig(
+        config_fallback = make_scale_group_config(
             name="fallback",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
@@ -1490,7 +1552,7 @@ class TestAutoscalerQuotaHandling:
         autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback}, config=config)
 
         # First call: primary fails with quota, triggers quota state
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000))
         autoscaler._wait_for_inflight()  # Wait for async scale-up to complete
 
@@ -1535,7 +1597,7 @@ class TestAutoscalerQuotaHandling:
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000))
         autoscaler._wait_for_inflight()  # Wait for async scale-up to complete
 
@@ -1550,7 +1612,7 @@ class TestAutoscalerActionLogging:
 
     def test_action_log_records_scale_up(self, empty_autoscaler: Autoscaler):
         """Verify scale-up actions are logged."""
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
         empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
 
@@ -1590,7 +1652,7 @@ class TestAutoscalerActionLogging:
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {})
         autoscaler._wait_for_inflight()  # Wait for async scale-up
 
@@ -1640,7 +1702,7 @@ class TestAutoscalerActionLogging:
     def test_get_status_includes_actions(self, empty_autoscaler: Autoscaler):
         """Verify get_status returns recent actions."""
         # Run a scale-up to generate an action
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
         empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
 
@@ -1657,7 +1719,7 @@ class TestAutoscalerActionLogging:
         from iris.time_utils import Timestamp
 
         before = Timestamp.now().epoch_ms()
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
         empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
         after = Timestamp.now().epoch_ms()
@@ -1675,7 +1737,7 @@ class TestScalingGroupRequestingState:
         from iris.cluster.vm.scaling_group import GroupAvailability
         from iris.time_utils import Duration, Timestamp
 
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=0,
             max_slices=5,
@@ -1699,7 +1761,7 @@ class TestScalingGroupRequestingState:
         from iris.cluster.vm.scaling_group import GroupAvailability
         from iris.time_utils import Duration, Timestamp
 
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=0,
             max_slices=5,
@@ -1726,7 +1788,7 @@ class TestScalingGroupRequestingState:
         from iris.cluster.vm.scaling_group import GroupAvailability
         from iris.time_utils import Duration, Timestamp
 
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=0,
             max_slices=5,
@@ -1745,11 +1807,11 @@ class TestScalingGroupRequestingState:
         availability = group.availability(ts)
         assert availability.status == GroupAvailability.AVAILABLE
 
-    def test_demand_routing_skips_requesting_groups(self):
-        """route_demand() skips groups in REQUESTING state."""
+    def test_demand_routing_prefers_requesting_groups(self):
+        """route_demand() prefers pending/requesting groups."""
         from iris.time_utils import Duration, Timestamp
 
-        config1 = config_pb2.ScaleGroupConfig(
+        config1 = make_scale_group_config(
             name="group-1",
             min_slices=0,
             max_slices=5,
@@ -1757,7 +1819,7 @@ class TestScalingGroupRequestingState:
             accelerator_variant="v5p-8",
             priority=10,
         )
-        config2 = config_pb2.ScaleGroupConfig(
+        config2 = make_scale_group_config(
             name="group-2",
             min_slices=0,
             max_slices=5,
@@ -1775,14 +1837,14 @@ class TestScalingGroupRequestingState:
         # Mark group1 as requesting (higher priority)
         group1.mark_requesting(ts, Duration.from_ms(120_000))
 
-        demand_entries = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand_entries = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
 
-        # Route demand - should skip group1 and use group2
+        # Route demand - should prefer group1 even while requesting
         result = route_demand([group1, group2], demand_entries, ts)
 
-        assert result.allocations["group-1"] == 0
-        assert result.allocations["group-2"] == 2
-        assert result.unmet_demand == 0
+        assert len(result.routed_entries["group-1"]) == 2
+        assert result.routed_entries.get("group-2") is None
+        assert result.unmet_entries == []
 
 
 class TestAutoscalerAsyncScaleUp:
@@ -1793,7 +1855,7 @@ class TestAutoscalerAsyncScaleUp:
 
         from iris.time_utils import Timestamp
 
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=0,
             max_slices=5,
@@ -1835,7 +1897,7 @@ class TestAutoscalerAsyncScaleUp:
         from iris.cluster.vm.scaling_group import GroupAvailability
         from iris.time_utils import Timestamp
 
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=0,
             max_slices=5,
@@ -1879,7 +1941,7 @@ class TestAutoscalerAsyncScaleUp:
 
         from iris.time_utils import Timestamp
 
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=0,
             max_slices=5,
@@ -1919,7 +1981,7 @@ class TestAutoscalerAsyncScaleUp:
     def test_autoscaler_shutdown_stops_vm_threads(self):
         """shutdown() calls stop() on all VM threads before terminating."""
 
-        config = config_pb2.ScaleGroupConfig(
+        config = make_scale_group_config(
             name="test-group",
             min_slices=0,
             max_slices=5,

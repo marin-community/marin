@@ -36,12 +36,6 @@ from iris.cluster.vm.ssh import (
     wait_for_connection,
 )
 
-# Health checking (from controller_vm module where diagnostics matter)
-from iris.cluster.vm.controller_vm import (
-    HealthCheckResult,
-    check_health,
-)
-
 # Platform protocols and status types
 from iris.cluster.vm.vm_platform import (
     MAX_RECONCILE_WORKERS,
@@ -88,9 +82,10 @@ from iris.cluster.vm.scaling_group import (
 from iris.cluster.vm.autoscaler import (
     Autoscaler,
     DemandEntry,
-    RoutingResult,
+    RoutingDecision,
     ScalingAction,
     ScalingDecision,
+    UnmetDemand,
     route_demand,
 )
 
@@ -132,7 +127,6 @@ __all__ = [
     "GceSshConnection",
     "GcloudSshConnection",
     "GroupAvailability",
-    "HealthCheckResult",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
@@ -140,7 +134,7 @@ __all__ = [
     "PlatformOps",
     "PoolExhaustedError",
     "QuotaExceededError",
-    "RoutingResult",
+    "RoutingDecision",
     "ScaleGroupSpec",
     "ScalingAction",
     "ScalingDecision",
@@ -150,13 +144,13 @@ __all__ = [
     "TpuVmGroup",
     "TpuVmManager",
     "TrackedVmFactory",
+    "UnmetDemand",
     "VmFactory",
     "VmGroupProtocol",
     "VmGroupStatus",
     "VmManagerProtocol",
     "VmRegistry",
     "VmSnapshot",
-    "check_health",
     "cleanup_iris_resources",
     "config_to_dict",
     "connection_available",

@@ -39,9 +39,9 @@ from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
-from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.cluster.vm.scaling_group import GroupAvailability, ScalingGroup
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -75,86 +75,162 @@ class ScalingDecision:
 
 @dataclass
 class DemandEntry:
-    """A demand entry specifying resource requirements and count."""
+    """A demand entry specifying resource requirements and constraints."""
 
-    device_type: DeviceType = DeviceType.CPU
-    device_variant: str | None = None  # None = any variant of this type
-    count: int = 0
-    total_cpu: int = 0
-    total_memory_bytes: int = 0
+    task_ids: list[str]
+    coschedule_group_id: str | None
+    device_type: DeviceType
+    device_variant: str | None  # None = any variant of this type
+    constraints: list[cluster_pb2.Constraint]
+    resources: cluster_pb2.ResourceSpecProto
     preemptible: bool | None = None  # None = no preference
+    invalid_reason: str | None = None
 
 
 @dataclass
-class RoutingResult:
-    """Result of demand routing across groups."""
+class PendingGroup:
+    name: str
+    pending_slices: int
+    remaining_slices: int
+    assigned_entries: list[DemandEntry]
+    reason: str
 
-    allocations: dict[str, int]  # group_name -> allocated count
-    unmet_demand: int
+
+@dataclass
+class UnmetDemand:
+    entry: DemandEntry
+    reason: str
+
+
+@dataclass
+class RoutingDecision:
+    group_to_launch: dict[str, int]
+    routed_entries: dict[str, list[DemandEntry]]
+    unmet_entries: list[UnmetDemand]
+    group_reasons: dict[str, str]
 
 
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
     timestamp: Timestamp | None = None,
-) -> RoutingResult:
-    """Route demand to groups based on requirements and priority.
-
-    For each demand entry:
-    1. Find groups that match the device type/variant requirement
-    2. Sort matching groups by priority (lower = higher priority)
-    3. Route demand through available groups until satisfied or all exhausted
-
-    Groups are skipped if not available (backoff, quota exceeded, at capacity).
-    """
+) -> RoutingDecision:
+    """Route demand to groups based on requirements and priority."""
     ts = timestamp or Timestamp.now()
-    allocations: dict[str, int] = {g.name: 0 for g in groups}
-    total_unmet = 0
+    sorted_groups = sorted(groups, key=lambda g: g.config.priority or 100)
+    group_by_name = {g.name: g for g in sorted_groups}
+
+    pending: dict[str, PendingGroup] = {}
+    routed: dict[str, list[DemandEntry]] = {}
+    unmet: list[UnmetDemand] = []
+    group_reasons: dict[str, str] = {}
+
+    def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
+        if not group.matches_device_requirement(entry.device_type, entry.device_variant):
+            return False
+        if entry.preemptible is not None and group.config.preemptible != entry.preemptible:
+            return False
+        if entry.invalid_reason:
+            return False
+        if entry.coschedule_group_id and group.slice_size != len(entry.task_ids):
+            return False
+        if check_accept and not group.can_accept_demand(ts):
+            return False
+        if not group.can_fit_resources(entry.resources):
+            return False
+        return True
+
+    def can_fit_pending(pg: PendingGroup, group: ScalingGroup, entry: DemandEntry) -> bool:
+        if pg.remaining_slices <= 0:
+            return False
+        return can_fit_group(group, entry, check_accept=False)
+
+    def assign(pg: PendingGroup, entry: DemandEntry) -> None:
+        pg.remaining_slices -= 1
+        pg.assigned_entries.append(entry)
+        routed.setdefault(pg.name, []).append(entry)
+
+    def make_pending(group: ScalingGroup) -> PendingGroup:
+        counts = group.slice_state_counts()
+        pending_slices = counts.get("requesting", 0) + counts.get("booting", 0) + counts.get("initializing", 0)
+        current = sum(counts.values())
+        headroom = group.max_slices - current
+        return PendingGroup(
+            name=group.name,
+            pending_slices=pending_slices,
+            remaining_slices=pending_slices + headroom,
+            assigned_entries=[],
+            reason="demand-routed",
+        )
+
+    for group in sorted_groups:
+        if group.availability(ts).status == GroupAvailability.REQUESTING:
+            pending[group.name] = make_pending(group)
 
     for entry in demand_entries:
-        matching = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
-        if entry.preemptible is not None:
-            matching = [g for g in matching if g.config.preemptible == entry.preemptible]
-        # Sort by priority (lower = higher priority). Default to 100 if not set (proto3 defaults to 0).
-        matching.sort(key=lambda g: g.config.priority or 100)
+        if entry.invalid_reason:
+            unmet.append(UnmetDemand(entry=entry, reason=entry.invalid_reason))
+            continue
 
-        remaining = entry.count
-        for group in matching:
-            if remaining <= 0:
+        matching_groups = [
+            g
+            for g in sorted_groups
+            if g.matches_device_requirement(entry.device_type, entry.device_variant)
+            and (entry.preemptible is None or g.config.preemptible == entry.preemptible)
+        ]
+        if not matching_groups:
+            unmet.append(UnmetDemand(entry=entry, reason="no_matching_group"))
+            continue
+
+        if entry.coschedule_group_id and not any(g.slice_size == len(entry.task_ids) for g in matching_groups):
+            unmet.append(UnmetDemand(entry=entry, reason="coschedule_mismatch"))
+            continue
+
+        if not any(g.can_fit_resources(entry.resources) for g in matching_groups):
+            unmet.append(UnmetDemand(entry=entry, reason="insufficient_resources"))
+            continue
+
+        matched_pending = False
+        for name, pg in pending.items():
+            group = group_by_name.get(name)
+            if group is None:
+                continue
+            if can_fit_pending(pg, group, entry):
+                assign(pg, entry)
+                matched_pending = True
                 break
+        if matched_pending:
+            continue
 
-            # Check availability (handles backoff, quota, capacity)
-            if not group.can_accept_demand(ts):
+        matched_group = False
+        for group in sorted_groups:
+            if not can_fit_group(group, entry):
                 continue
-
-            # Compute headroom accounting for already-allocated demand
-            counts = group.slice_state_counts()
-            current = sum(counts.values())
-            headroom = group.max_slices - current - allocations[group.name]
-
-            if headroom <= 0:
+            if group.name not in pending:
+                pending[group.name] = make_pending(group)
+            if pending[group.name].remaining_slices <= 0:
                 continue
+            assign(pending[group.name], entry)
+            matched_group = True
+            group_reasons.setdefault(group.name, "demand-routed")
+            break
 
-            absorbed = min(remaining, headroom)
-            allocations[group.name] += absorbed
-            remaining -= absorbed
+        if not matched_group:
+            unmet.append(UnmetDemand(entry=entry, reason="no_capacity"))
 
-        if remaining > 0:
-            logger.warning(
-                "Demand overflow: %d/%d slices for device_type=%s, device_variant=%s unmet (tried %d groups)",
-                remaining,
-                entry.count,
-                entry.device_type.value,
-                entry.device_variant,
-                len(matching),
-            )
-            total_unmet += remaining
+    group_to_launch: dict[str, int] = {}
+    for name, pg in pending.items():
+        if not pg.assigned_entries:
+            continue
+        needed = max(0, len(pg.assigned_entries) - pg.pending_slices)
+        group_to_launch[name] = needed
 
-    routed_groups = [(name, count) for name, count in allocations.items() if count > 0]
-    if routed_groups:
-        logger.debug("Demand routed: %s", ", ".join(f"{name}={count}" for name, count in routed_groups))
-
-    return RoutingResult(allocations=allocations, unmet_demand=total_unmet)
+    return RoutingDecision(
+        group_to_launch=group_to_launch,
+        routed_entries=routed,
+        unmet_entries=unmet,
+        group_reasons=group_reasons,
+    )
 
 
 class Autoscaler:
@@ -199,6 +275,9 @@ class Autoscaler:
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
+
+        # Most recent routing decision (for status API)
+        self._last_routing_decision: RoutingDecision | None = None
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
@@ -337,18 +416,20 @@ class Autoscaler:
         ts = timestamp or Timestamp.now()
 
         result = route_demand(list(self._groups.values()), demand_entries, ts)
+        self._last_routing_decision = result
 
-        if result.unmet_demand > 0:
+        if result.unmet_entries:
             logger.error(
-                "CAPACITY INSUFFICIENT: %d slices of demand cannot be satisfied by any group",
-                result.unmet_demand,
+                "CAPACITY INSUFFICIENT: %d demand entries cannot be satisfied by any group",
+                len(result.unmet_entries),
             )
 
         decisions = []
         for name, group in self._groups.items():
-            allocated = result.allocations.get(name, 0)
-            group.update_demand(allocated)
-            decision = self._evaluate_group(group, allocated, ts)
+            allocated_entries = result.routed_entries.get(name, [])
+            demand = len(allocated_entries)
+            group.update_demand(demand)
+            decision = self._evaluate_group(group, demand, ts)
             if decision:
                 decisions.append(decision)
 
@@ -561,11 +642,63 @@ class Autoscaler:
         """Build status for the status API."""
         from iris.rpc import time_pb2
 
-        return vm_pb2.AutoscalerStatus(
+        status = vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
             last_evaluation=time_pb2.Timestamp(epoch_ms=0),  # Controlled by controller now
             recent_actions=list(self._action_log),
+        )
+        if self._last_routing_decision is not None:
+            status.last_routing_decision.CopyFrom(self._routing_decision_to_proto(self._last_routing_decision))
+        return status
+
+    def _routing_decision_to_proto(self, decision: RoutingDecision) -> vm_pb2.RoutingDecision:
+        def _device_type_to_proto(device_type: DeviceType) -> int:
+            if device_type == DeviceType.GPU:
+                return config_pb2.ACCELERATOR_TYPE_GPU
+            if device_type == DeviceType.TPU:
+                return config_pb2.ACCELERATOR_TYPE_TPU
+            return config_pb2.ACCELERATOR_TYPE_CPU
+
+        def _resource_spec_proto(resources: cluster_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
+            gpu_count = 0
+            tpu_count = 0
+            if resources.HasField("device"):
+                if resources.device.HasField("gpu"):
+                    gpu_count = resources.device.gpu.count or 1
+                if resources.device.HasField("tpu"):
+                    tpu_count = resources.device.tpu.count or 0
+            return vm_pb2.ResourceSpec(
+                cpu=resources.cpu,
+                memory_bytes=resources.memory_bytes,
+                disk_bytes=resources.disk_bytes,
+                gpu_count=gpu_count,
+                tpu_count=tpu_count,
+            )
+
+        def _entry_to_proto(entry: DemandEntry) -> vm_pb2.DemandEntryStatus:
+            return vm_pb2.DemandEntryStatus(
+                task_ids=entry.task_ids,
+                coschedule_group_id=entry.coschedule_group_id or "",
+                accelerator_type=_device_type_to_proto(entry.device_type),
+                accelerator_variant=entry.device_variant or "",
+                preemptible=bool(entry.preemptible),
+                resources=_resource_spec_proto(entry.resources),
+            )
+
+        routed_entries = {
+            name: vm_pb2.DemandEntryStatusList(entries=[_entry_to_proto(e) for e in entries])
+            for name, entries in decision.routed_entries.items()
+        }
+        unmet_entries = [
+            vm_pb2.UnmetDemand(entry=_entry_to_proto(u.entry), reason=u.reason) for u in decision.unmet_entries
+        ]
+
+        return vm_pb2.RoutingDecision(
+            group_to_launch=decision.group_to_launch,
+            group_reasons=decision.group_reasons,
+            routed_entries=routed_entries,
+            unmet_entries=unmet_entries,
         )
 
     def get_group(self, name: str) -> ScalingGroup | None:
