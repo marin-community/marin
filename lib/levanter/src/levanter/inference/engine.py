@@ -1238,10 +1238,10 @@ class InferenceEngine:
         sys.stderr.flush()
 
         # Create proper global arrays using jax.make_array_from_callback.
-        # For replicated data, we use PartitionSpec() which means all devices get the same data.
+        # For replicated data, we use PartitionSpec(None, None, ...) with one None per dimension.
+        # IMPORTANT: PartitionSpec() (empty) is different from PartitionSpec(None,) for 1D arrays!
         from jax.sharding import NamedSharding, PartitionSpec
         mesh = hax.partitioning._get_mesh()
-        replicated_sharding = NamedSharding(mesh, PartitionSpec())
 
         print(f"[_prefill_prompts P{jax.process_index()}] === Building PrefillWork with global arrays ===", flush=True)
         sys.stdout.flush()
@@ -1250,6 +1250,10 @@ class InferenceEngine:
         def _to_jax_arr(arr, dtype):
             """Convert numpy array to a properly sharded global JAX array."""
             np_arr = np.asarray(arr, dtype=dtype)
+            # Create a PartitionSpec with one None per dimension - this is fully replicated
+            # but with correct dimensionality for the array.
+            spec = PartitionSpec(*([None] * np_arr.ndim))
+            replicated_sharding = NamedSharding(mesh, spec)
             # Use make_array_from_callback with replicated sharding.
             # The callback receives index tuples but for replicated sharding,
             # each shard is the full array.
