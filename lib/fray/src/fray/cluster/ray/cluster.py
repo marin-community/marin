@@ -47,6 +47,33 @@ from fray.job.context import RayContext, fray_default_job_ctx
 
 logger = logging.getLogger("ray")
 
+_SENSITIVE_ENV_VAR_MARKERS = (
+    "API_KEY",
+    "AUTH",
+    "KEY",
+    "PASSWORD",
+    "SECRET",
+    "TOKEN",
+)
+
+
+def _is_sensitive_env_var(name: str) -> bool:
+    upper = name.upper()
+    return any(marker in upper for marker in _SENSITIVE_ENV_VAR_MARKERS)
+
+
+def _redact_runtime_env(runtime_env: dict) -> dict:
+    """Return a shallow copy of `runtime_env` with sensitive env var values redacted."""
+    redacted = dict(runtime_env)
+    env_vars = runtime_env.get("env_vars")
+    if isinstance(env_vars, dict):
+        redacted_env_vars = dict(env_vars)
+        for key in redacted_env_vars:
+            if _is_sensitive_env_var(key):
+                redacted_env_vars[key] = "<redacted>"
+        redacted["env_vars"] = redacted_env_vars
+    return redacted
+
 
 # We can't launch TPU or callable entrypoint jobs directly via Ray, as it
 # doesn't support gang-scheduling and jobs are always started with a single task
@@ -233,7 +260,7 @@ class RayCluster(Cluster):
         # strip out keys that can only be set at the Job level
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["excludes", "config", "working_dir"]}
 
-        logger.info(f"Launching TPU job {request.name} with runtime env: {runtime_env}")
+        logger.info("Launching TPU job %s with runtime env: %s", request.name, _redact_runtime_env(runtime_env))
 
         if callable_ep.args or callable_ep.kwargs:
             remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(
@@ -320,7 +347,7 @@ class RayCluster(Cluster):
             env_vars["PYTHONPATH"] = ":".join(python_path)
             runtime_env = {"env_vars": env_vars}
 
-        logger.info("Ray runtime env: %s", runtime_env)
+        logger.info("Ray runtime env: %s", _redact_runtime_env(runtime_env))
         return runtime_env
 
     def _get_entrypoint_params(self, request: JobRequest) -> dict[str, Any]:
