@@ -587,11 +587,26 @@ def _run_prefill(
     print(f"[_run_prefill P{jax.process_index()}] === Step 2: _prefill_kernel (module-level JIT) ===", flush=True)
     sys.stdout.flush()
 
-    result = _prefill_kernel(
-        gen_state, model, sampler,
-        work.queue.queued_tokens, work.queue.queued_slot_ids, work.queue.queued_pos_ids,
-        max_seqs_in_prefill
-    )
+    # Debug: print shapes and shardings of all inputs
+    print(f"[_run_prefill P{jax.process_index()}] tokens shape: {work.queue.queued_tokens.array.shape}", flush=True)
+    print(f"[_run_prefill P{jax.process_index()}] tokens sharding: {work.queue.queued_tokens.array.sharding}", flush=True)
+    print(f"[_run_prefill P{jax.process_index()}] slot_ids shape: {work.queue.queued_slot_ids.array.shape}", flush=True)
+    print(f"[_run_prefill P{jax.process_index()}] pos_ids shape: {work.queue.queued_pos_ids.array.shape}", flush=True)
+    sys.stdout.flush()
+
+    try:
+        result = _prefill_kernel(
+            gen_state, model, sampler,
+            work.queue.queued_tokens, work.queue.queued_slot_ids, work.queue.queued_pos_ids,
+            max_seqs_in_prefill
+        )
+    except Exception as e:
+        import traceback
+        print(f"[_run_prefill P{jax.process_index()}] !!! EXCEPTION: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise
 
     print(f"[_run_prefill P{jax.process_index()}] === DONE ===", flush=True)
     sys.stdout.flush()
