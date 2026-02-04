@@ -72,22 +72,14 @@ class SeqDecodingParams(eqx.Module):
 
 
 class SequenceTable(eqx.Module):
-    """Compact view over per-sequence metadata tracked by :class:`DecodeState`.
-
-    Note: ``kv_pages`` was previously a separate field but is now a property alias
-    for ``page_indices`` to eliminate redundant memory and synchronization.
-    """
+    """Compact view over per-sequence metadata tracked by :class:`DecodeState`."""
 
     seq_lens: ht.i32[NamedArray, "seq"]
     clone_sources: ht.i32[NamedArray, "seq"]
+    kv_pages: ht.i32[NamedArray, "seq page"]
     page_indices: ht.i32[NamedArray, "seq page"]
     used_mask: ht.bool_[NamedArray, "seq"]
     page_size: int = eqx.field(static=True)
-
-    @property
-    def kv_pages(self) -> ht.i32[NamedArray, "seq page"]:
-        """Alias for page_indices for backward compatibility."""
-        return self.page_indices
 
     @staticmethod
     def init(max_seqs: int, pages_per_seq: int, page_size: int) -> "SequenceTable":
@@ -95,6 +87,7 @@ class SequenceTable(eqx.Module):
         return SequenceTable(
             seq_lens=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
             clone_sources=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
+            kv_pages=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
             page_indices=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
             used_mask=hax.full({"seq": max_seqs}, False, dtype=bool),
             page_size=page_size,
@@ -147,6 +140,7 @@ class SequenceTable(eqx.Module):
         def do_assign(table):
             seq_lens = table.seq_lens.at["seq", slot].set(0)
             clone_sources = table.clone_sources.at["seq", slot].set(INVALID)
+            kv_pages = table.kv_pages.at["seq", slot].set(hax.full_like(table.kv_pages["seq", slot], INVALID))
             page_indices = table.page_indices.at["seq", slot].set(
                 hax.full_like(table.page_indices["seq", slot], INVALID)
             )
@@ -155,6 +149,7 @@ class SequenceTable(eqx.Module):
                 table,
                 seq_lens=seq_lens,
                 clone_sources=clone_sources,
+                kv_pages=kv_pages,
                 page_indices=page_indices,
                 used_mask=used_mask,
             )
@@ -173,14 +168,17 @@ class SequenceTable(eqx.Module):
     ) -> "SequenceTable":
         seq_lens = self.seq_lens.at["seq", slot_id].set(seq_len)
         clone_sources = self.clone_sources.at["seq", slot_id].set(clone_source)
-        # Use page_indices if provided, otherwise use kv_pages (for backward compat)
-        indices_row = page_indices if page_indices is not None else kv_pages
+        kv_pages_arr = self.kv_pages.at["seq", slot_id].set(kv_pages)
+        indices_row = (
+            page_indices if page_indices is not None else hax.full_like(self.page_indices["seq", slot_id], INVALID)
+        )
         page_indices_arr = self.page_indices.at["seq", slot_id].set(indices_row)
         used_mask = self.used_mask.at["seq", slot_id].set(True)
         return dataclasses.replace(
             self,
             seq_lens=seq_lens,
             clone_sources=clone_sources,
+            kv_pages=kv_pages_arr,
             page_indices=page_indices_arr,
             used_mask=used_mask,
         )
@@ -192,11 +190,13 @@ class SequenceTable(eqx.Module):
     def clear_slots(self, mask: ht.bool_[NamedArray, "seq"]) -> "SequenceTable":  # type: ignore[name-defined]
         new_seq_lens = hax.where(mask, INVALID, self.seq_lens)
         new_clone_sources = hax.where(mask, INVALID, self.clone_sources)
+        new_kv_pages = hax.where(mask, INVALID, self.kv_pages)
         new_page_indices = hax.where(mask, INVALID, self.page_indices)
         new_used_mask = hax.where(mask, False, self.used_mask)
         return SequenceTable(
             new_seq_lens,
             new_clone_sources,
+            new_kv_pages,
             new_page_indices,
             new_used_mask,
             self.page_size,
@@ -353,7 +353,8 @@ class SequenceTable(eqx.Module):
             token_pos_ids,
         )
 
-        new_sequences = dataclasses.replace(self, seq_lens=new_lens, page_indices=page_indices)
+        kv_pages = self.kv_pages.at["seq", safe_updated].set(page_indices["seq", safe_updated])
+        new_sequences = dataclasses.replace(self, seq_lens=new_lens, page_indices=page_indices, kv_pages=kv_pages)
         new_page_table = dataclasses.replace(page_table, page_ref_counts=page_ref_counts)
 
         return new_sequences, new_page_table, batch_info
@@ -416,6 +417,7 @@ class SequenceTable(eqx.Module):
 
         new_seq_lens = self.seq_lens.at["seq", seq_id].set(0)
         new_clone_sources = self.clone_sources.at["seq", seq_id].set(INVALID)
+        new_kv_pages = self.kv_pages.at["seq", seq_id].set(hax.full_like(self.kv_pages["seq", seq_id], INVALID))
         new_page_indices = self.page_indices.at["seq", seq_id].set(
             hax.full_like(self.page_indices["seq", seq_id], INVALID)
         )
@@ -424,6 +426,7 @@ class SequenceTable(eqx.Module):
         new_sequences = SequenceTable(
             new_seq_lens,
             new_clone_sources,
+            new_kv_pages,
             new_page_indices,
             new_used_mask,
             self.page_size,
@@ -519,11 +522,13 @@ class SequenceTable(eqx.Module):
         seq_lens = self.seq_lens.at["seq", dst_seq_id].set(src_len)
         used_mask = self.used_mask.at["seq", dst_seq_id].set(True)
 
+        kv_pages = self.kv_pages.at["seq", dst_seq_id].set(page_indices["seq", dst_seq_id])
         sequences = dataclasses.replace(
             self,
             seq_lens=seq_lens,
             page_indices=page_indices,
             used_mask=used_mask,
+            kv_pages=kv_pages,
         )
         page_table = dataclasses.replace(page_table, page_ref_counts=ref_counts)
         return sequences, page_table
@@ -581,22 +586,13 @@ class DecodeState(eqx.Module):
     finished: ht.bool_[NamedArray, "seq"]
 
     def reset(self):
-        import jax
-
-        print(f"[DEBUG P{jax.process_index()}] === DecodeState.reset() called ===", flush=True)
-        print(f"[DEBUG P{jax.process_index()}] === About to call page_table.reset() ===", flush=True)
-        reset_pt = self.page_table.reset()
-        print(f"[DEBUG P{jax.process_index()}] === page_table.reset() completed ===", flush=True)
-        print(f"[DEBUG P{jax.process_index()}] === About to call DecodeState.init() ===", flush=True)
-        result = DecodeState.init(
-            page_table=reset_pt,
+        return DecodeState.init(
+            page_table=self.page_table.reset(),
             pad_token_id=self.pad_token_id,
             max_stop_seqs=self.stop_tokens.shape["stop_seq"] if self.stop_tokens is not None else 0,
             max_stop_tokens=self.stop_tokens.shape["position"] if self.stop_tokens is not None else 0,
             max_queued_tokens=self.tqueue.max_queued_tokens,
         )
-        print(f"[DEBUG P{jax.process_index()}] === DecodeState.init() completed ===", flush=True)
-        return result
 
     @staticmethod
     def init(
@@ -609,79 +605,34 @@ class DecodeState(eqx.Module):
         """
         Initialize a DecodeState with empty buffers.
         """
-        import jax as _jax
-
-        print(f"[DEBUG P{_jax.process_index()}] === DecodeState.init() STATIC called ===", flush=True)
         max_seqs = page_table.max_seqs
         pages_per_seq = page_table.pages_per_seq
         page_size = page_table.page_size
         max_seq_len = page_table.max_len_per_seq
-        print(
-            f"[DEBUG P{_jax.process_index()}] === max_seqs={max_seqs}, pages_per_seq={pages_per_seq}, page_size={page_size}, max_seq_len={max_seq_len} ===",
-            flush=True,
-        )
 
-        print(f"[DEBUG P{_jax.process_index()}] === Creating SequenceTable ===", flush=True)
         sequence_table = SequenceTable.init(max_seqs, pages_per_seq, page_size)
-        print(f"[DEBUG P{_jax.process_index()}] === SequenceTable created ===", flush=True)
 
-        print(f"[DEBUG P{_jax.process_index()}] === Creating tokens array ===", flush=True)
-        tokens = hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32)
-        print(f"[DEBUG P{_jax.process_index()}] === tokens created ===", flush=True)
-
-        print(f"[DEBUG P{_jax.process_index()}] === Creating logprobs array ===", flush=True)
-        logprobs = hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32)
-        print(f"[DEBUG P{_jax.process_index()}] === logprobs created ===", flush=True)
-
-        print(f"[DEBUG P{_jax.process_index()}] === Creating max_num_tokens array ===", flush=True)
-        max_num_tokens = hax.full({"seq": max_seqs}, 0, dtype=jnp.int32)
-        print(f"[DEBUG P{_jax.process_index()}] === max_num_tokens created ===", flush=True)
-
-        print(
-            f"[DEBUG P{_jax.process_index()}] === Creating stop_tokens array (max_stop_tokens={max_stop_tokens}) ===",
-            flush=True,
-        )
-        stop_tokens = (
-            hax.full(
-                {"seq": max_seqs, "stop_seq": max_stop_seqs, "position": max_stop_tokens},
-                INVALID,
-                dtype=jnp.int32,
-            )
-            if max_stop_tokens > 0
-            else None
-        )
-        print(f"[DEBUG P{_jax.process_index()}] === stop_tokens created ===", flush=True)
-
-        print(f"[DEBUG P{_jax.process_index()}] === Creating temperature array ===", flush=True)
-        temperature = hax.ones({"seq": max_seqs}, dtype=jnp.float32)
-        print(f"[DEBUG P{_jax.process_index()}] === temperature created ===", flush=True)
-
-        print(f"[DEBUG P{_jax.process_index()}] === Creating prng_keys ===", flush=True)
-        prng_keys = _jax.vmap(_jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0)
-        print(f"[DEBUG P{_jax.process_index()}] === prng_keys created ===", flush=True)
-
-        print(f"[DEBUG P{_jax.process_index()}] === Creating tqueue ===", flush=True)
-        tqueue = TokenQueue.init(max_queued_tokens)
-        print(f"[DEBUG P{_jax.process_index()}] === tqueue created ===", flush=True)
-
-        print(f"[DEBUG P{_jax.process_index()}] === Creating finished array ===", flush=True)
-        finished = hax.zeros({"seq": max_seqs}, dtype=bool)
-        print(f"[DEBUG P{_jax.process_index()}] === finished created ===", flush=True)
-
-        print(f"[DEBUG P{_jax.process_index()}] === Creating DecodeState object ===", flush=True)
         return DecodeState(
             sequences=sequence_table,
             page_size=page_size,
             page_table=page_table,
             pad_token_id=pad_token_id,
-            tokens=tokens,
-            logprobs=logprobs,
-            max_num_tokens=max_num_tokens,
-            stop_tokens=stop_tokens,
-            temperature=temperature,
-            prng_keys=prng_keys,
-            tqueue=tqueue,
-            finished=finished,
+            tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
+            logprobs=hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32),
+            max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
+            stop_tokens=(
+                hax.full(
+                    {"seq": max_seqs, "stop_seq": max_stop_seqs, "position": max_stop_tokens},
+                    INVALID,
+                    dtype=jnp.int32,
+                )
+                if max_stop_tokens > 0
+                else None
+            ),
+            temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
+            prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
+            tqueue=TokenQueue.init(max_queued_tokens),
+            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
         )
 
     @property
@@ -1023,70 +974,6 @@ max_num_tokens: {max_num_tokens}
             kv_pages=self.sequences.kv_pages,
             logprobs=self.logprobs if self.logprobs is not None else "None",
             max_num_tokens=self.max_num_tokens,
-        )
-
-    def debug_stats(self) -> dict:
-        """Return diagnostic statistics about the decode state.
-
-        Returns a dict with:
-            - active_seq_count: Number of sequences currently in use
-            - total_pages_allocated: Total number of pages with non-zero ref counts
-            - free_page_count: Number of pages with zero ref counts
-            - page_ref_histogram: Histogram of page ref counts (as dict)
-            - max_seqs: Maximum number of sequences supported
-            - total_pages: Total number of pages in the page table
-        """
-        ref_counts = self.page_table.page_ref_counts.array
-        used_mask = self.sequences.used_mask.array
-
-        active_seq_count = jnp.sum(used_mask).astype(jnp.int32)
-        allocated_pages = jnp.sum(ref_counts > 0).astype(jnp.int32)
-        free_pages = jnp.sum(ref_counts == 0).astype(jnp.int32)
-        total_pages = ref_counts.shape[0]
-
-        # Build a simple histogram of ref counts (0, 1, 2, 3+)
-        hist_0 = jnp.sum(ref_counts == 0).astype(jnp.int32)
-        hist_1 = jnp.sum(ref_counts == 1).astype(jnp.int32)
-        hist_2 = jnp.sum(ref_counts == 2).astype(jnp.int32)
-        hist_3plus = jnp.sum(ref_counts >= 3).astype(jnp.int32)
-
-        return {
-            "active_seq_count": active_seq_count,
-            "total_pages_allocated": allocated_pages,
-            "free_page_count": free_pages,
-            "max_seqs": self.max_seqs,
-            "total_pages": total_pages,
-            "page_ref_histogram": {
-                "ref_0": hist_0,
-                "ref_1": hist_1,
-                "ref_2": hist_2,
-                "ref_3plus": hist_3plus,
-            },
-        }
-
-    def debug_stats_print(self):
-        """Print diagnostic statistics about the decode state using jax.debug.print."""
-        ref_counts = self.page_table.page_ref_counts
-        used_mask = self.sequences.used_mask
-
-        active_seq_count = hax.sum(used_mask.astype(jnp.int32))
-        allocated_pages = hax.sum((ref_counts > 0).astype(jnp.int32))
-        free_pages = hax.sum((ref_counts == 0).astype(jnp.int32))
-
-        jax.debug.print(
-            """
-DecodeState Stats:
-  active_seqs: {active} / {max_seqs}
-  allocated_pages: {alloc} / {total}
-  free_pages: {free}
-  ref_counts: {refs}
-""",
-            active=active_seq_count,
-            max_seqs=self.max_seqs,
-            alloc=allocated_pages,
-            total=self.page_table.page_ref_counts.axis_size("page"),
-            free=free_pages,
-            refs=ref_counts,
         )
 
 
