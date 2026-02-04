@@ -28,6 +28,7 @@ engine:
   max_prefill_size: 1024
   max_queued_tokens: 64
   max_rounds: 16
+  debug_stats_every_n: 10
   max_stop_seqs: 1
   max_stop_tokens: 8
   seed: 0

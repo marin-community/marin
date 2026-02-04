@@ -17,3 +17,4 @@ engine:
   max_prefill_size: 128
   max_tokens_per_round: 8
   max_rounds: 16
+  debug_stats_every_n: 10

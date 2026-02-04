@@ -541,6 +541,15 @@ class SequenceTable(eqx.Module):
         return dataclasses.replace(self, seq_lens=new_seq_lens)
 
 
+class DecodeStats(eqx.Module):
+    """Lightweight stats for KV cache state."""
+
+    active_seqs: jnp.ndarray
+    pages_in_use: jnp.ndarray
+    free_pages: jnp.ndarray
+    max_refcount: jnp.ndarray
+
+
 class DecodeState(eqx.Module):
     """
     State of sequences during decoding. This manages a "hot set" of sequences that are currently being decoded.
@@ -633,6 +642,18 @@ class DecodeState(eqx.Module):
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
             tqueue=TokenQueue.init(max_queued_tokens),
             finished=hax.zeros({"seq": max_seqs}, dtype=bool),
+        )
+
+    def stats(self) -> DecodeStats:
+        """Return a small PyTree of scalar stats for logging/diagnostics."""
+        used_mask = self.sequences.used_mask.array
+        ref_counts = self.page_table.page_ref_counts.array
+        pages_in_use = jnp.sum(ref_counts > 0)
+        return DecodeStats(
+            active_seqs=jnp.sum(used_mask),
+            pages_in_use=pages_in_use,
+            free_pages=jnp.asarray(self.page_table.num_pages) - pages_in_use,
+            max_refcount=jnp.max(ref_counts),
         )
 
     @property

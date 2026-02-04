@@ -17,3 +17,4 @@ engine:
   page_size: 128
   max_seq_len: 4096
   max_rounds: 32
+  debug_stats_every_n: 10

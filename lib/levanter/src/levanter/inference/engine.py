@@ -58,6 +58,9 @@ class InferenceEngineConfig:
     max_rounds: int = 32
     """Maximum number of while-loop iterations per decode call. Higher values increase throughput but also latency."""
 
+    debug_stats_every_n: int | None = 10
+    """Log decode stats every N iterations. Set to None or 0 to disable."""
+
     # Stop-token capacity (used for validation and buffer sizing at init)
     max_stop_seqs: int = 4
     """Maximum number of stop sequences per active sequence. 0 disables stop tokens."""
@@ -857,6 +860,19 @@ class InferenceEngine:
         self.sequences.clear()
         self.results = {}
 
+    def _log_decode_stats(self, stage: str) -> None:
+        stats = jax.device_get(self.gen_state.decode_state.stats())
+        if jax.process_index() != 0:
+            return
+        logger.info(
+            "DecodeStats[%s]: active=%d pages_in_use=%d free=%d max_refcount=%d",
+            stage,
+            int(stats.active_seqs),
+            int(stats.pages_in_use),
+            int(stats.free_pages),
+            int(stats.max_refcount),
+        )
+
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
@@ -1053,6 +1069,7 @@ class InferenceEngine:
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
         self.reset()
+        self._log_decode_stats("after_reset")
 
         # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]
@@ -1093,6 +1110,7 @@ class InferenceEngine:
         # Initial admission from queue and extract prompt tokens
         decode_outputs = self._prefill_batch(requests)
         self._ingest_outputs(decode_outputs)
+        self._log_decode_stats("after_prefill")
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1162,6 +1180,10 @@ class InferenceEngine:
                     f" (extract {extract_time:.3f}s"
                 )
 
+            if self.config.debug_stats_every_n:
+                if decode_iteration % self.config.debug_stats_every_n == 0:
+                    self._log_decode_stats(f"iter{decode_iteration}")
+
             decode_iteration += 1
 
             # Safety: if nothing new was produced, avoid infinite loop
@@ -1172,6 +1194,8 @@ class InferenceEngine:
             if stagnant_iters >= 2:
                 logger.warning("No progress in decoding for 2 consecutive iterations; breaking to avoid hang.")
                 break
+
+        self._log_decode_stats("after_decode")
 
         # Assemble outputs in the order of the requests for this call
         outputs_list: list[list[int]] = []

@@ -1,11 +1,12 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import jax.numpy as jnp
 import haliax as hax
+import jax
+import jax.numpy as jnp
 import pytest
 
-from levanter.inference.jit_scheduler import SequenceTable, TokenQueue
+from levanter.inference.jit_scheduler import DecodeState, SequenceTable, TokenQueue
 from levanter.inference.page_table import PageTable
 from levanter.inference.utils import INVALID
 
@@ -122,3 +123,26 @@ def test_allocate_for_seq_ignores_invalid_padding_tokens():
     # Padding token should not produce a KV destination
     assert int(batch.new_token_dests.array[1]) == INVALID
     assert int(new_pt.page_ref_counts.array.sum()) == 1
+
+
+def test_decode_state_stats_tracks_pages():
+    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=4, max_pages_per_seq=2)
+    ds = DecodeState.init(pt, max_stop_seqs=0, max_stop_tokens=0, max_queued_tokens=4)
+
+    stats = jax.device_get(ds.stats())
+    assert int(stats.active_seqs) == 0
+    assert int(stats.pages_in_use) == 0
+    assert int(stats.free_pages) == pt.num_pages
+    assert int(stats.max_refcount) == 0
+
+    ds, slot = ds.reserve_slot(0)
+    slot_id = int(slot)
+    slot_ids = hax.named(jnp.array([slot_id], dtype=jnp.int32), axis=("position",))
+    pos_ids = hax.named(jnp.array([0], dtype=jnp.int32), axis=("position",))
+    ds, _ = ds.allocate_for_seq(slot_ids, pos_ids)
+
+    stats = jax.device_get(ds.stats())
+    assert int(stats.active_seqs) == 1
+    assert int(stats.pages_in_use) == 1
+    assert int(stats.free_pages) == pt.num_pages - 1
+    assert int(stats.max_refcount) == 1
