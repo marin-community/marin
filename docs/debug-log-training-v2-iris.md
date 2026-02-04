@@ -40,7 +40,11 @@ timeouts. A follow-up run with `ZEPHYR_NUM_WORKERS=4` reduced worker fan-out but
 still stalled with repeated retries/timeouts; I terminated the run to avoid a
 runaway local controller.
 
-Next: rerun with an even lower Zephyr worker count (e.g. `ZEPHYR_NUM_WORKERS=1`)
-and consider increasing Iris actor call timeouts for Zephyr-heavy workloads.
-Then attempt TPU tutorial on a TPU-capable Iris config with `--tpu v4-8` and
-`--extra marin:tpu`.
+Retried again with `ZEPHYR_NUM_WORKERS=1`. Zephyr worker/coordinator jobs still
+cycled with retries and were repeatedly relaunched. I terminated the run to
+avoid a runaway controller.
+
+Next: investigate Zephyr actor timeouts on Iris local (likely too aggressive
+RPC timeout or worker lifecycle churn). Consider testing tokenization with a
+smaller dataset or pre-tokenized cache to reduce Zephyr load. Then attempt TPU
+tutorial on a TPU-capable Iris config with `--tpu v4-8` and `--extra marin:tpu`.
