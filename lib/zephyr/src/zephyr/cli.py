@@ -26,10 +26,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
-
 from fray.v2.client import current_client
 from fray.v2.local_backend import LocalClient
 from fray.v2.types import ResourceConfig
+
 from zephyr.execution import ZephyrContext, _default_zephyr_context
 
 logger = logging.getLogger(__name__)
@@ -242,7 +242,7 @@ def run_iris_cluster(
     script_args: list[str],
     entry_point: str,
 ) -> None:
-    """Submit script to Iris cluster via iris_run.py.
+    """Submit script to Iris cluster.
 
     Args:
         config: Backend configuration
@@ -257,11 +257,10 @@ def run_iris_cluster(
     iris_cmd = [
         "uv",
         "run",
-        "python",
-        "-m",
-        "iris.iris_run",
+        "iris",
         "--config",
         cluster_config_path,
+        "run",
     ]
 
     # Install CPU-only PyTorch on Iris workers (no GPU/TPU accelerators available for CPU tasks)
