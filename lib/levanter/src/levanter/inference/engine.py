@@ -594,131 +594,74 @@ def _run_prefill(
         sys.stdout.flush()
         raise
 
-    # Step 2: Break down _prefill_kernel into smaller pieces
-    print(f"[_run_prefill P{jax.process_index()}] === Step 2: allocate_for_seq ===", flush=True)
+    # Step 2: Run _prefill_kernel with debug prints inside
+    # This combines allocate_for_seq, model.decode, sampling, and handle_clones into one JIT
+    print(f"[_run_prefill P{jax.process_index()}] === Step 2: _prefill_kernel (single JIT) ===", flush=True)
     sys.stdout.flush()
 
-    queue = work.queue
-    tokens = queue.queued_tokens
-    pos_ids = queue.queued_pos_ids
-    slot_ids = queue.queued_slot_ids
+    @functools.partial(hax.named_jit, static_argnums=(4,))
+    def _jit_prefill_kernel(gs, mdl, smplr, queue, max_seqs):
+        jax.debug.print("[_jit_prefill_kernel] === 1. Getting queue arrays ===")
+        tokens = queue.queued_tokens
+        pos_ids = queue.queued_pos_ids
+        slot_ids = queue.queued_slot_ids
 
-    @hax.named_jit
-    def _jit_allocate_for_seq(ds, sl_ids, pos_ids):
-        jax.debug.print("[_jit_allocate_for_seq] entered")
-        ds_new, binfo = ds.allocate_for_seq(token_slot_ids=sl_ids, token_pos_ids=pos_ids)
-        jax.debug.print("[_jit_allocate_for_seq] done")
-        return ds_new, binfo
+        jax.debug.print("[_jit_prefill_kernel] === 2. allocate_for_seq ===")
+        decode_state, binfo = gs.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+
+        jax.debug.print("[_jit_prefill_kernel] === 3. model.decode ===")
+        logits, cache = mdl.decode(tokens, gs.cache, binfo, pos_ids)
+        jax.debug.print("[_jit_prefill_kernel] === 3. model.decode DONE, logits_shape={s} ===", s=logits.array.shape)
+
+        jax.debug.print("[_jit_prefill_kernel] === 4. _compute_sample_indices ===")
+        seq_lens = decode_state.seq_lens
+        sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_seqs)
+        logits_at_samples = logits["position", sample_indices]
+        num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
+        jax.debug.print("[_jit_prefill_kernel] num_new_tokens={n}", n=num_new_tokens)
+
+        jax.debug.print("[_jit_prefill_kernel] === 5. sampling ===")
+        new_slot_ids = slot_ids["position", sample_indices]
+        new_pos_ids = pos_ids["position", sample_indices]
+        prng_keys = decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
+        temps = decode_state.temperature["seq", new_slot_ids]
+        new_tokens, log_probs = hax.vmap(smplr, "position")(logits_at_samples, temps, key=prng_keys)
+
+        jax.debug.print("[_jit_prefill_kernel] === 6. update_tokens ===")
+        decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
+
+        jax.debug.print("[_jit_prefill_kernel] === 7. create outputs ===")
+        outputs = _DecodeOutputs.init(
+            max_tokens=decode_state.max_seqs * 2,
+            max_seqs=decode_state.max_seqs,
+            with_logprobs=True,
+        )
+        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        gs_new = dataclasses.replace(gs, cache=cache, decode_state=decode_state)
+
+        jax.debug.print("[_jit_prefill_kernel] === 8. handle_clones (if any) ===")
+        if decode_state.clone_sources is not None:
+            gs_new, outputs = _handle_clones(
+                gs_new, logits_at_samples, new_slot_ids, new_pos_ids, smplr, outputs
+            )
+
+        jax.debug.print("[_jit_prefill_kernel] === DONE ===")
+        return gs_new, outputs
 
     try:
-        decode_state, binfo = _jit_allocate_for_seq(gen_state.decode_state, slot_ids, pos_ids)
-        gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
+        result = _jit_prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
         print(f"[_run_prefill P{jax.process_index()}] === Step 2 DONE ===", flush=True)
         sys.stdout.flush()
     except Exception as e:
         print(f"[_run_prefill P{jax.process_index()}] !!! Step 2 FAILED: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         sys.stdout.flush()
         raise
 
-    # Step 3: model.decode
-    print(f"[_run_prefill P{jax.process_index()}] === Step 3: model.decode ===", flush=True)
+    print(f"[_run_prefill P{jax.process_index()}] === ALL DONE ===", flush=True)
     sys.stdout.flush()
-
-    @hax.named_jit
-    def _jit_model_decode(mdl, toks, cache, bi, pids):
-        jax.debug.print("[_jit_model_decode] entered")
-        logits, new_cache = mdl.decode(toks, cache, bi, pids)
-        jax.debug.print("[_jit_model_decode] done")
-        return logits, new_cache
-
-    try:
-        logits, cache = _jit_model_decode(model, tokens, gen_state.cache, binfo, pos_ids)
-        gen_state = dataclasses.replace(gen_state, cache=cache)
-        print(f"[_run_prefill P{jax.process_index()}] === Step 3 DONE ===", flush=True)
-        sys.stdout.flush()
-    except Exception as e:
-        print(f"[_run_prefill P{jax.process_index()}] !!! Step 3 FAILED: {e}", flush=True)
-        sys.stdout.flush()
-        raise
-
-    # Step 4: sampling and output
-    print(f"[_run_prefill P{jax.process_index()}] === Step 4: sampling ===", flush=True)
-    sys.stdout.flush()
-
-    decode_state = gen_state.decode_state
-    seq_lens = decode_state.seq_lens
-
-    @functools.partial(hax.named_jit, static_argnums=(5,))
-    def _jit_sample_and_update(ds, lgts, smplr, sl_ids, pids, max_seqs):
-        jax.debug.print("[_jit_sample_and_update] entered")
-        sample_indices = _compute_sample_indices(pids, sl_ids, ds.seq_lens, max_seqs)
-        logits_at_samples = lgts["position", sample_indices]
-        num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
-
-        new_slot_ids = sl_ids["position", sample_indices]
-        new_pos_ids = pids["position", sample_indices]
-        prng_keys = ds.prng_keys_for(new_slot_ids, new_pos_ids)
-
-        temps = ds.temperature["seq", new_slot_ids]
-        new_tokens, log_probs = hax.vmap(smplr, "position")(logits_at_samples, temps, key=prng_keys)
-
-        ds_new = ds.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
-
-        outputs = _DecodeOutputs.init(
-            max_tokens=ds_new.max_seqs * 2,
-            max_seqs=ds_new.max_seqs,
-            with_logprobs=True,
-        )
-        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, ds_new.finished)
-        jax.debug.print("[_jit_sample_and_update] done")
-        return ds_new, outputs
-
-    try:
-        decode_state, outputs = _jit_sample_and_update(
-            decode_state, logits, sampler, slot_ids, pos_ids, max_seqs_in_prefill
-        )
-        gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
-        print(f"[_run_prefill P{jax.process_index()}] === Step 4 DONE ===", flush=True)
-        sys.stdout.flush()
-    except Exception as e:
-        print(f"[_run_prefill P{jax.process_index()}] !!! Step 4 FAILED: {e}", flush=True)
-        sys.stdout.flush()
-        raise
-
-    # Step 5: handle clones (if any)
-    print(f"[_run_prefill P{jax.process_index()}] === Step 5: handle_clones ===", flush=True)
-    sys.stdout.flush()
-
-    if decode_state.clone_sources is not None:
-        sample_indices = _compute_sample_indices(pos_ids, slot_ids, decode_state.seq_lens, max_seqs_in_prefill)
-        logits_at_samples = logits["position", sample_indices]
-        new_slot_ids = slot_ids["position", sample_indices]
-        new_pos_ids = pos_ids["position", sample_indices]
-
-        @hax.named_jit
-        def _jit_handle_clones(gs, lgt, sl_ids, p_ids, smplr, outs):
-            jax.debug.print("[_jit_handle_clones] entered")
-            gs_new, outs_new = _handle_clones(gs, lgt, sl_ids, p_ids, smplr, outs)
-            jax.debug.print("[_jit_handle_clones] done")
-            return gs_new, outs_new
-
-        try:
-            gen_state, outputs = _jit_handle_clones(
-                gen_state, logits_at_samples, new_slot_ids, new_pos_ids, sampler, outputs
-            )
-            print(f"[_run_prefill P{jax.process_index()}] === Step 5 DONE ===", flush=True)
-            sys.stdout.flush()
-        except Exception as e:
-            print(f"[_run_prefill P{jax.process_index()}] !!! Step 5 FAILED: {e}", flush=True)
-            sys.stdout.flush()
-            raise
-    else:
-        print(f"[_run_prefill P{jax.process_index()}] === Step 5 SKIPPED (no clones) ===", flush=True)
-        sys.stdout.flush()
-
-    print(f"[_run_prefill P{jax.process_index()}] === ALL STEPS DONE, returning ===", flush=True)
-    sys.stdout.flush()
-    return gen_state, outputs
+    return result
 
 
 def _handle_clones(
