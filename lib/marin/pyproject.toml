@@ -15,7 +15,7 @@ dependencies = [
     "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",
-
+    "dupekit",
     "fasteners>=0.19",
     "floret",
     "flask",
@@ -157,8 +157,6 @@ vllm =[
     "vllm-tpu==0.13.2.post6",
     "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
 ]
-
-dedup = ["dupekit"]
 
 math = ["pylatexenc", "sympy"]
 

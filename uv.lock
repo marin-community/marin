@@ -4573,6 +4573,7 @@ dependencies = [
     { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus" },
+    { name = "dupekit" },
     { name = "fasteners" },
     { name = "flask" },
     { name = "floret" },
@@ -4625,9 +4626,6 @@ cpu = [
     { name = "torch", version = "2.9.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'arm64' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "torchvision", version = "0.24.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-5-marin-cpu') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'darwin' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'darwin' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "torchvision", version = "0.24.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-5-marin-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-5-marin-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'win32' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-]
-dedup = [
-    { name = "dupekit" },
 ]
 eval = [
     { name = "lm-eval", extra = ["api", "math"] },
@@ -4741,7 +4739,7 @@ requires-dist = [
     { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
-    { name = "dupekit", marker = "extra == 'dedup'", editable = "lib/dupekit" },
+    { name = "dupekit", editable = "lib/dupekit" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "flask" },
     { name = "floret" },
@@ -4799,7 +4797,7 @@ requires-dist = [
     { name = "warcio" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "vllm", "dedup", "math"]
+provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "vllm", "math"]
 
 [package.metadata.requires-dev]
 dev = [
