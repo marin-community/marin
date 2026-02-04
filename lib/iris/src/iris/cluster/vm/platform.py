@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from contextlib import AbstractContextManager, nullcontext
 from typing import Protocol
 
 from iris.cluster.vm.gcp_tpu_platform import TpuVmManager
@@ -52,6 +53,29 @@ class Platform(Protocol):
         *,
         dry_run: bool = False,
     ) -> VmManagerProtocol: ...
+
+    def tunnel(
+        self,
+        controller_address: str,
+        local_port: int | None = None,
+        timeout: float | None = None,
+        tunnel_logger: logging.Logger | None = None,
+    ) -> AbstractContextManager[str]:
+        """Create tunnel to controller if needed.
+
+        For GCP: Returns SSH tunnel context manager that discovers controller VM
+        For local/manual: Returns nullcontext with direct address
+
+        Args:
+            controller_address: Controller address (used directly for local/manual)
+            local_port: Optional local port for tunnel (GCP only)
+            timeout: Optional connection timeout
+            tunnel_logger: Optional logger for tunnel status
+
+        Returns:
+            Context manager yielding controller URL
+        """
+        ...
 
 
 class _GcpPlatformOps:
@@ -147,6 +171,29 @@ class GcpPlatform:
     def vm_ops(self) -> PlatformOps:
         return _GcpPlatformOps(self._platform, self._label_prefix)
 
+    def tunnel(
+        self,
+        controller_address: str,
+        local_port: int | None = None,
+        timeout: float | None = None,
+        tunnel_logger: logging.Logger | None = None,
+    ) -> AbstractContextManager[str]:
+        """Create SSH tunnel to GCP controller VM.
+
+        Discovers the controller VM via labels and establishes port forwarding.
+        """
+        from iris.cluster.vm.debug import controller_tunnel
+
+        zone = self._platform.zone or (self._platform.default_zones[0] if self._platform.default_zones else "")
+        return controller_tunnel(
+            zone=zone,
+            project=self._platform.project_id,
+            label_prefix=self._label_prefix,
+            local_port=local_port,
+            timeout=timeout,
+            tunnel_logger=tunnel_logger,
+        )
+
     def vm_manager(
         self,
         group_config: config_pb2.ScaleGroupConfig,
@@ -197,6 +244,16 @@ class ManualPlatform:
     def vm_ops(self) -> PlatformOps:
         return _ManualPlatformOps(self._ssh, self._bootstrap)
 
+    def tunnel(
+        self,
+        controller_address: str,
+        local_port: int | None = None,
+        timeout: float | None = None,
+        tunnel_logger: logging.Logger | None = None,
+    ) -> AbstractContextManager[str]:
+        """Return direct connection for manual platform (no tunnel needed)."""
+        return nullcontext(controller_address)
+
     def vm_manager(
         self,
         group_config: config_pb2.ScaleGroupConfig,
@@ -234,6 +291,16 @@ class LocalPlatform:
         dry_run: bool = False,
     ) -> VmManagerProtocol:
         raise NotImplementedError("Local platform uses LocalController autoscaler")
+
+    def tunnel(
+        self,
+        controller_address: str,
+        local_port: int | None = None,
+        timeout: float | None = None,
+        tunnel_logger: logging.Logger | None = None,
+    ) -> AbstractContextManager[str]:
+        """Return direct connection for local platform (no tunnel needed)."""
+        return nullcontext(controller_address)
 
 
 def create_platform(
@@ -366,15 +433,17 @@ def _ssh_config_to_dataclass(ssh: config_pb2.SshConfig) -> SshConfig:
     Returns:
         SshConfig dataclass for use by SSH connections
     """
+    from iris.cluster.vm.config import DEFAULT_CONFIG
+
     connect_timeout = (
         Duration.from_proto(ssh.connect_timeout)
         if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
-        else Duration.from_seconds(30)
+        else Duration.from_proto(DEFAULT_CONFIG.ssh.connect_timeout)
     )
     return SshConfig(
-        user=ssh.user or "root",
+        user=ssh.user or DEFAULT_CONFIG.ssh.user,
         key_file=ssh.key_file or None,
-        port=ssh.port or 22,
+        port=ssh.port or DEFAULT_CONFIG.ssh.port,
         connect_timeout=connect_timeout,
     )
 

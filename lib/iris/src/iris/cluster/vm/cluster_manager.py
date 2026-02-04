@@ -25,8 +25,8 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from iris.cluster.vm.config import IrisConfig
 from iris.cluster.vm.controller_vm import ControllerProtocol, create_controller_vm
-from iris.cluster.vm.debug import controller_tunnel
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 
@@ -122,18 +122,11 @@ class ClusterManager:
         """
         address = self.start()
         try:
-            if self.is_local:
-                yield address
-                return
-            if self._config.platform.WhichOneof("platform") == "gcp":
-                platform = self._config.platform.gcp
-                zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
-                project = platform.project_id
-                label_prefix = self._config.platform.label_prefix or "iris"
-                with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
-                    yield tunnel_url
-                return
-            yield address
+            # Use Platform.tunnel() for consistent connection handling
+            iris_config = IrisConfig(self._config)
+            platform = iris_config.platform()
+            with platform.tunnel(address) as tunnel_url:
+                yield tunnel_url
         finally:
             self.stop()
 

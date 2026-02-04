@@ -408,13 +408,13 @@ def get_ssh_config(
     from iris.time_utils import Duration
 
     ssh = cluster_config.defaults.ssh
-    user = ssh.user or "root"
+    user = ssh.user or DEFAULT_CONFIG.ssh.user
     key_file = ssh.key_file or None
-    port = ssh.port or 22
+    port = ssh.port or DEFAULT_CONFIG.ssh.port
     connect_timeout = (
         Duration.from_proto(ssh.connect_timeout)
         if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
-        else Duration.from_seconds(30)
+        else Duration.from_proto(DEFAULT_CONFIG.ssh.connect_timeout)
     )
 
     # Apply per-group overrides if group_name provided
@@ -616,9 +616,7 @@ def create_manual_autoscaler(
     )
 
     timeouts = config_pb2.TimeoutConfig()
-    timeouts.boot_timeout.CopyFrom(Duration.from_seconds(300).to_proto())
-    timeouts.init_timeout.CopyFrom(Duration.from_seconds(600).to_proto())
-    timeouts.ssh_poll_interval.CopyFrom(Duration.from_seconds(5).to_proto())
+    timeouts.CopyFrom(DEFAULT_CONFIG.timeouts)
 
     spec = ScaleGroupSpec(
         config=sg_config,
@@ -736,3 +734,83 @@ def _create_manager(
         )
 
     raise ValueError(f"Unknown provider: {provider}")
+
+
+class IrisConfig:
+    """Lightweight wrapper for IrisClusterConfig proto with component factories.
+
+    Provides clean interface for creating Platform, Autoscaler, and other
+    components from configuration without scattering factory logic across CLI.
+
+    The proto is processed with apply_defaults() on construction, ensuring all
+    default values are populated.
+
+    Example:
+        config = IrisConfig.load("cluster.yaml")
+        platform = config.platform()
+
+        # Use tunnel for connection
+        with platform.tunnel(controller_address) as url:
+            client = IrisClient.remote(url)
+    """
+
+    def __init__(self, proto: config_pb2.IrisClusterConfig):
+        """Create IrisConfig from proto.
+
+        Args:
+            proto: Cluster configuration proto (defaults will be applied)
+        """
+        self._proto = apply_defaults(proto)
+
+    @classmethod
+    def load(cls, config_path: Path | str) -> "IrisConfig":
+        """Load IrisConfig from YAML file.
+
+        Args:
+            config_path: Path to YAML configuration file
+
+        Returns:
+            IrisConfig with defaults applied and validated
+        """
+        proto = load_config(config_path)
+        return cls(proto)
+
+    @property
+    def proto(self) -> config_pb2.IrisClusterConfig:
+        """Access underlying proto (read-only)."""
+        return self._proto
+
+    def platform(self):
+        """Create Platform instance from config.
+
+        Returns:
+            Platform implementation (GCP, Manual, or Local)
+        """
+        from iris.cluster.vm.platform import create_platform
+
+        return create_platform(
+            platform_config=self._proto.platform,
+            bootstrap_config=self._proto.defaults.bootstrap,
+            timeout_config=self._proto.defaults.timeouts,
+            ssh_config=self._proto.defaults.ssh,
+        )
+
+    def as_local(self) -> "IrisConfig":
+        """Create local variant of this config.
+
+        Returns:
+            New IrisConfig configured for local testing
+        """
+        local_proto = make_local_config(self._proto)
+        return IrisConfig(local_proto)
+
+    def controller_address(self) -> str:
+        """Get controller address from bootstrap config, if set.
+
+        Returns:
+            Controller address string, or empty string if not configured
+        """
+        bootstrap = self._proto.defaults.bootstrap
+        if bootstrap.HasField("controller_address"):
+            return bootstrap.controller_address
+        return ""

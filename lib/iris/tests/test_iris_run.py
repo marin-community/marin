@@ -22,11 +22,9 @@ import yaml
 
 from iris.client import IrisClient
 from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import make_local_config
-from iris.cluster.vm.config import load_config
+from iris.cluster.vm.config import IrisConfig, make_local_config, load_config
 from iris.cli.run import (
     build_resources,
-    load_cluster_config,
     load_env_vars,
     run_iris_job,
 )
@@ -46,26 +44,18 @@ def test_load_env_vars_invalid_key():
         load_env_vars([["KEY=VALUE"]])
 
 
-def test_load_cluster_config_missing_file(tmp_path):
+def test_iris_config_missing_file(tmp_path):
     """Test error on missing config file."""
     with pytest.raises(FileNotFoundError):
-        load_cluster_config(tmp_path / "nonexistent.yaml")
+        IrisConfig.load(tmp_path / "nonexistent.yaml")
 
 
-def test_load_cluster_config_missing_zone(tmp_path):
-    """Test error on missing zone field."""
+def test_iris_config_empty_file(tmp_path):
+    """Test error on empty config file."""
     bad_config = tmp_path / "bad.yaml"
-    bad_config.write_text(yaml.dump({"project_id": "test"}))
-    with pytest.raises(ValueError, match="Missing 'platform\\.gcp\\.zone'"):
-        load_cluster_config(bad_config)
-
-
-def test_load_cluster_config_missing_project_id(tmp_path):
-    """Test error on missing project_id field."""
-    bad_config = tmp_path / "bad.yaml"
-    bad_config.write_text(yaml.dump({"platform": {"gcp": {"zone": "us-central1-a"}}}))
-    with pytest.raises(ValueError, match="Missing 'platform\\.gcp\\.project_id'"):
-        load_cluster_config(bad_config)
+    bad_config.write_text("")
+    with pytest.raises(ValueError, match="Config file is empty"):
+        IrisConfig.load(bad_config)
 
 
 def test_build_resources_gpu_not_supported():
@@ -89,13 +79,23 @@ def local_cluster_and_config(tmp_path):
     manager = ClusterManager(config)
     with manager.connect() as url:
         # Create a test config file with controller_address for local access
+        # Uses the local platform with controller_address set
         test_config = tmp_path / "cluster.yaml"
         test_config.write_text(
             yaml.dump(
                 {
-                    "zone": config.zone,
-                    "region": config.region,
-                    "controller_address": url,  # Direct URL for local cluster
+                    "platform": {"local": {}},
+                    "defaults": {
+                        "bootstrap": {"controller_address": url},
+                    },
+                    "scale_groups": {
+                        "local-cpu": {
+                            "min_slices": 1,
+                            "max_slices": 1,
+                            "accelerator_type": "cpu",
+                            "vm_type": "local_vm",
+                        }
+                    },
                 }
             )
         )

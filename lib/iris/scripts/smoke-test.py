@@ -50,7 +50,6 @@ from typing import Literal, TextIO
 
 import click
 from google.protobuf.json_format import MessageToJson
-
 from iris.client import IrisClient
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -632,6 +631,8 @@ class SmokeTestRunner:
 
     def _handle_interrupt(self, _signum: int, _frame: object):
         self.logger.log("Interrupted! Cleaning up...", level="WARN")
+        signal.signal(signal.SIGINT, None)
+        signal.signal(signal.SIGTERM, None)
         self._interrupted = True
 
     def _check_deadline(self) -> bool:

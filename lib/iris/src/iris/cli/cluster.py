@@ -224,21 +224,13 @@ def cluster_stop(ctx):
     ops = platform.vm_ops()
     slice_ids_by_group: dict[str, list[str]] = {}
 
-    controller_url = ctx.obj.get("controller_url")
-    if controller_url:
-        try:
-            as_status = _get_autoscaler_status(controller_url)
-            for group in as_status.groups:
-                slice_ids_by_group[group.name] = [s.slice_id for s in group.slices]
-        except Exception as e:
-            click.echo(f"Warning: Failed to fetch autoscaler status via RPC: {e}", err=True)
-
-    if not slice_ids_by_group:
-        click.echo("Discovering existing slices via platform ops...")
-        for name, group_config in config.scale_groups.items():
-            slice_ids = ops.list_slices(group_config)
-            if slice_ids:
-                slice_ids_by_group[name] = slice_ids
+    # Discover slices via platform ops (more reliable than RPC since controller may be down)
+    click.echo("Discovering existing slices via platform ops...")
+    for name, group_config in config.scale_groups.items():
+        slice_ids = ops.list_slices(group_config)
+        if slice_ids:
+            slice_ids_by_group[name] = slice_ids
+        click.echo(f"  Found {len(slice_ids)} slice(s) in group '{name}'")
 
     ctrl = create_controller_vm(config)
     click.echo("Stopping controller...")

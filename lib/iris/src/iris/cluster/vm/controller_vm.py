@@ -153,6 +153,9 @@ def wait_healthy_via_ssh(
     that can block external HTTP access to the controller port.
 
     On failure, logs diagnostic info including container status and logs.
+
+    Detects restart loops: fails early if container is restarting repeatedly
+    after 60 seconds instead of waiting for full timeout.
     """
     logger.info("Starting SSH-based health check (port=%d, timeout=%ds)", port, int(timeout))
     start_time = time.monotonic()
@@ -163,6 +166,9 @@ def wait_healthy_via_ssh(
 
     attempt = 0
     last_result = None
+    consecutive_restarts = 0
+    RESTART_LOOP_THRESHOLD = 3  # Fail after 3 consecutive "restarting" statuses
+    EARLY_TIMEOUT_SECONDS = 60  # Exit early after 1 minute if in restart loop
 
     while True:
         attempt += 1
@@ -175,6 +181,19 @@ def wait_healthy_via_ssh(
 
         logger.info("SSH health check attempt %d failed (%.1fs): %s", attempt, elapsed, last_result.summary())
 
+        # Detect restart loop: if container keeps restarting, fail early
+        if last_result.container_status == "restarting":
+            consecutive_restarts += 1
+            if consecutive_restarts >= RESTART_LOOP_THRESHOLD and elapsed >= EARLY_TIMEOUT_SECONDS:
+                logger.error(
+                    "Container is in restart loop (restarting %d times in %.1fs). Failing early.",
+                    consecutive_restarts,
+                    elapsed,
+                )
+                break
+        else:
+            consecutive_restarts = 0
+
         if elapsed >= timeout:
             break
 
@@ -184,7 +203,7 @@ def wait_healthy_via_ssh(
 
     # Health check failed - log detailed diagnostics
     logger.error("=" * 60)
-    logger.error("SSH health check FAILED after %d attempts (%.1fs)", attempt, timeout)
+    logger.error("SSH health check FAILED after %d attempts (%.1fs)", attempt, elapsed)
     logger.error("=" * 60)
     logger.error("Final status: %s", last_result.summary())
     if last_result.container_status:
@@ -192,16 +211,27 @@ def wait_healthy_via_ssh(
     if last_result.curl_error:
         logger.error("Health endpoint error: %s", last_result.curl_error)
 
-    # Try to get more detailed container logs (more lines than check_health fetches)
+    # Get detailed container logs and diagnostics
     try:
-        logs_result = conn.run(f"sudo docker logs {container_name} --tail 50 2>&1", timeout=Duration.from_seconds(15))
+        # Full container logs (not just tail)
+        logs_result = conn.run(f"sudo docker logs {container_name} 2>&1", timeout=Duration.from_seconds(30))
         if logs_result.returncode == 0 and logs_result.stdout.strip():
-            logger.error("Container logs (last 50 lines):\n%s", logs_result.stdout.strip())
+            logger.error("Container logs (full output):\n%s", logs_result.stdout.strip())
         elif last_result.container_logs:
             logger.error("Container logs:\n%s", last_result.container_logs)
         else:
             logger.error("No container logs available (container may not exist)")
-    except Exception:
+
+        # Get container inspect for detailed status
+        inspect_result = conn.run(
+            f"sudo docker inspect {container_name} 2>&1",
+            timeout=Duration.from_seconds(15),
+        )
+        if inspect_result.returncode == 0:
+            logger.error("Container inspect output:\n%s", inspect_result.stdout.strip())
+
+    except Exception as e:
+        logger.error("Failed to fetch diagnostics: %s", e)
         if last_result.container_logs:
             logger.error("Container logs:\n%s", last_result.container_logs)
         else:
@@ -325,34 +355,54 @@ sudo docker run -d --name {container_name} \
     -v /var/cache/iris:/var/cache/iris \
     {config_volume} \
     {docker_image} \
-    python -m iris.cluster.controller.main serve \
+    .venv/bin/python -m iris.cluster.controller.main serve \
         --host 0.0.0.0 --port {port} {config_flag}
 
 echo "[iris-controller] [5/5] Controller container started"
 
 # Wait for health
 echo "[iris-controller] Waiting for controller to become healthy..."
-for i in $(seq 1 60); do
-    echo "[iris-controller] Health check attempt $i/60 at $(date -Iseconds)..."
+RESTART_COUNT=0
+for i in $(seq 1 30); do
+    echo "[iris-controller] Health check attempt $i/30 at $(date -Iseconds)..."
     if curl -sf http://localhost:{port}/health > /dev/null 2>&1; then
         echo "[iris-controller] ================================================"
         echo "[iris-controller] Controller is healthy! Bootstrap complete."
         echo "[iris-controller] ================================================"
         exit 0
     fi
-    # Show brief container status every 5 attempts
-    if [ $((i % 5)) -eq 0 ]; then
-        STATUS=$(sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'unknown')
-        echo "[iris-controller] Container status: $STATUS"
+    # Check container status and detect restart loop
+    STATUS=$(sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'unknown')
+    echo "[iris-controller] Container status: $STATUS"
+
+    # Detect restart loop - if container keeps restarting, fail early
+    if [ "$STATUS" = "restarting" ]; then
+        RESTART_COUNT=$((RESTART_COUNT + 1))
+        if [ $RESTART_COUNT -ge 3 ]; then
+            echo "[iris-controller] ================================================"
+            echo "[iris-controller] ERROR: Container in restart loop (restarting $RESTART_COUNT times)"
+            echo "[iris-controller] ================================================"
+            echo "[iris-controller] Full container logs:"
+            sudo docker logs {container_name} 2>&1
+            echo "[iris-controller] ================================================"
+            echo "[iris-controller] Container inspect:"
+            sudo docker inspect {container_name} 2>&1
+            exit 1
+        fi
+    else
+        RESTART_COUNT=0
     fi
     sleep 2
 done
 
 echo "[iris-controller] ================================================"
-echo "[iris-controller] ERROR: Controller failed to become healthy"
+echo "[iris-controller] ERROR: Controller failed to become healthy after 60 seconds"
 echo "[iris-controller] ================================================"
-echo "[iris-controller] Container logs (last 50 lines):"
-sudo docker logs {container_name} --tail 50
+echo "[iris-controller] Full container logs:"
+sudo docker logs {container_name} 2>&1
+echo "[iris-controller] ================================================"
+echo "[iris-controller] Container inspect:"
+sudo docker inspect {container_name} 2>&1
 exit 1
 """
 

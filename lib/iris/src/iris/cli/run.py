@@ -31,47 +31,11 @@ import yaml
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
-from iris.cluster.vm.debug import controller_tunnel
+from iris.cluster.vm.config import IrisConfig
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
-
-
-def load_cluster_config(config_path: Path) -> dict:
-    """Load cluster config YAML and extract connection info.
-
-    Args:
-        config_path: Path to cluster YAML file
-
-    Returns:
-        Dict with 'zone', 'project_id', and optionally 'controller_address' keys.
-
-    Raises:
-        FileNotFoundError: If config file doesn't exist
-        ValueError: If required fields are missing
-    """
-    with open(config_path) as f:
-        data = yaml.safe_load(f)
-
-    if not data:
-        raise ValueError(f"Empty or invalid YAML in {config_path}")
-
-    platform = data.get("platform", {}) or {}
-    gcp = platform.get("gcp", {}) or {}
-    zone = gcp.get("zone") or (gcp.get("default_zones") or [None])[0]
-    project_id = gcp.get("project_id", "")
-    bootstrap = data.get("bootstrap", {}) or {}
-    defaults_bootstrap = (data.get("defaults", {}) or {}).get("bootstrap", {}) or {}
-    controller_address = bootstrap.get("controller_address") or defaults_bootstrap.get("controller_address")
-
-    if not zone:
-        raise ValueError(f"Missing 'platform.gcp.zone' in {config_path}")
-
-    if not controller_address and not project_id:
-        raise ValueError(f"Missing 'platform.gcp.project_id' in {config_path} (required for remote clusters)")
-
-    return {"zone": zone, "project_id": project_id, "controller_address": controller_address}
 
 
 def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[str, str]:
@@ -186,7 +150,7 @@ def run_iris_job(
     Returns:
         Exit code: 0 for success, 1 for failure
     """
-    config = load_cluster_config(config_path)
+    iris_config = IrisConfig.load(config_path)
     env_vars = add_standard_env_vars(env_vars)
     resources = build_resources(tpu, gpu, cpu, memory)
     job_name = job_name or generate_job_name(command)
@@ -198,9 +162,13 @@ def run_iris_job(
     if resources.device and resources.device.HasField("tpu"):
         logger.info(f"TPU: {resources.device.tpu.variant}")
 
-    if config["controller_address"]:
-        controller_url = config["controller_address"]
-        logger.info(f"Connecting directly to controller: {controller_url}")
+    # Get controller address from config (may be empty for GCP discovery)
+    controller_address = iris_config.controller_address()
+
+    # Use platform.tunnel() - handles both direct connection and SSH tunnel
+    platform = iris_config.platform()
+    with platform.tunnel(controller_address, tunnel_logger=logger) as controller_url:
+        logger.info(f"Connected to controller: {controller_url}")
         return _submit_and_wait_job(
             controller_url=controller_url,
             job_name=job_name,
@@ -213,25 +181,6 @@ def run_iris_job(
             wait=wait,
             extras=extras,
         )
-    else:
-        with controller_tunnel(
-            zone=config["zone"],
-            project=config["project_id"],
-            tunnel_logger=logger,
-        ) as controller_url:
-            logger.info(f"Connected to controller: {controller_url}")
-            return _submit_and_wait_job(
-                controller_url=controller_url,
-                job_name=job_name,
-                command=command,
-                resources=resources,
-                env_vars=env_vars,
-                replicas=replicas,
-                max_retries=max_retries,
-                timeout=timeout,
-                wait=wait,
-                extras=extras,
-            )
 
 
 def _submit_and_wait_job(
