@@ -21,21 +21,12 @@ import contextvars
 import logging
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
+from fray.v2.actor import ActorGroup, ActorHandle
 from fray.v2.types import JobRequest, JobStatus, ResourceConfig
 
-if TYPE_CHECKING:
-    from fray.v2.actor import ActorGroup, ActorHandle
-
 logger = logging.getLogger(__name__)
-
-_current_client_var: contextvars.ContextVar[Client | None] = contextvars.ContextVar("_current_client_var", default=None)
-
-
-# ---------------------------------------------------------------------------
-# JobHandle protocol
-# ---------------------------------------------------------------------------
 
 
 @runtime_checkable
@@ -50,11 +41,6 @@ class JobHandle(Protocol):
     def status(self) -> JobStatus: ...
 
     def terminate(self) -> None: ...
-
-
-# ---------------------------------------------------------------------------
-# Client protocol
-# ---------------------------------------------------------------------------
 
 
 @runtime_checkable
@@ -91,11 +77,6 @@ class Client(Protocol):
         ...
 
 
-# ---------------------------------------------------------------------------
-# wait_all
-# ---------------------------------------------------------------------------
-
-
 class JobFailed(RuntimeError):
     """Raised when a job fails during wait_all with raise_on_failure=True."""
 
@@ -112,9 +93,6 @@ def wait_all(
     raise_on_failure: bool = True,
 ) -> list[JobStatus]:
     """Wait for all jobs to complete, monitoring concurrently.
-
-    Polls all jobs in a loop rather than waiting sequentially, so a failure
-    in a later job is detected without waiting for earlier jobs to finish.
 
     Args:
         jobs: Job handles to wait for.
@@ -152,9 +130,7 @@ def wait_all(
     return results  # type: ignore[return-value]
 
 
-# ---------------------------------------------------------------------------
-# current_client / set_current_client
-# ---------------------------------------------------------------------------
+_current_client_var: contextvars.ContextVar[Client | None] = contextvars.ContextVar("_current_client_var", default=None)
 
 
 def current_client() -> Client:
@@ -186,13 +162,13 @@ def current_client() -> Client:
         import ray
 
         if ray.is_initialized():
-            from fray.v2.ray.backend import RayClient
+            from fray.v2.ray_backend.backend import RayClient
 
             return RayClient()
     except ImportError:
         pass  # Ray not installed
 
-    from fray.v2.local import LocalClient
+    from fray.v2.local_backend import LocalClient
 
     return LocalClient()
 
