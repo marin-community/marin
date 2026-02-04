@@ -474,7 +474,26 @@ def _prefill_kernel(
     print(f"[_prefill_kernel P{jax.process_index()}] local NamedArrays created", flush=True)
     sys.stdout.flush()
 
-    decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=local_slot_ids, token_pos_ids=local_pos_ids)
+    # DEBUG: Try skipping allocate_for_seq to see if the crash is there
+    print(f"[_prefill_kernel P{jax.process_index()}] === SKIPPING allocate_for_seq for debug ===", flush=True)
+    sys.stdout.flush()
+
+    # Just use the existing decode_state and create a dummy binfo
+    decode_state = gen_state.decode_state
+
+    # Create a minimal PageBatchInfo for testing
+    from levanter.inference.page_table import PageBatchInfo
+    binfo = PageBatchInfo(
+        pages=jnp.zeros((64, 1), dtype=jnp.int32),  # dummy
+        seq_block_ids=jnp.zeros((64,), dtype=jnp.int32),  # dummy
+        page_size=64,
+        max_seq_len=2560,
+        seq_lens=hax.zeros({"seq": 1}, dtype=jnp.int32),  # dummy
+    )
+    print(f"[_prefill_kernel P{jax.process_index()}] === Created dummy binfo ===", flush=True)
+    sys.stdout.flush()
+
+    # decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=local_slot_ids, token_pos_ids=local_pos_ids)
 
     print(f"[_prefill_kernel P{jax.process_index()}] === allocate_for_seq done ===", flush=True)
     sys.stdout.flush()
