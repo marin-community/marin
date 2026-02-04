@@ -613,7 +613,18 @@ def _run_prefill(
     _print_sharding("work.queue.queued_pos_ids", work.queue.queued_pos_ids)
     _print_sharding("work.queue.num_queued_tokens", work.queue.num_queued_tokens)
     _print_sharding("gen_state.decode_state.tqueue.queued_tokens", gen_state.decode_state.tqueue.queued_tokens)
-    _print_sharding("gen_state.cache (sample)", gen_state.cache.transformer.layers[0].attn.key)
+
+    # Print some model weight sharding
+    import equinox as eqx
+    model_leaves = jax.tree_util.tree_leaves(eqx.filter(model, eqx.is_array))
+    if model_leaves:
+        print(f"[_run_prefill P{jax.process_index()}] model sample array sharding: {model_leaves[0].sharding}", flush=True)
+
+    # Print cache sharding
+    cache_leaves = jax.tree_util.tree_leaves(gen_state.cache)
+    if cache_leaves:
+        print(f"[_run_prefill P{jax.process_index()}] cache sample array sharding: {cache_leaves[0].sharding}", flush=True)
+
     sys.stdout.flush()
 
     @functools.partial(hax.named_jit, static_argnums=(4,))
