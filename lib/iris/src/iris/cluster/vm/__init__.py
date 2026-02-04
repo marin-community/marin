@@ -36,12 +36,6 @@ from iris.cluster.vm.ssh import (
     wait_for_connection,
 )
 
-# Health checking (from controller_vm module where diagnostics matter)
-from iris.cluster.vm.controller_vm import (
-    HealthCheckResult,
-    check_health,
-)
-
 # Platform protocols and status types
 from iris.cluster.vm.vm_platform import (
     MAX_RECONCILE_WORKERS,
@@ -133,7 +127,6 @@ __all__ = [
     "GceSshConnection",
     "GcloudSshConnection",
     "GroupAvailability",
-    "HealthCheckResult",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
@@ -158,7 +151,6 @@ __all__ = [
     "VmManagerProtocol",
     "VmRegistry",
     "VmSnapshot",
-    "check_health",
     "cleanup_iris_resources",
     "config_to_dict",
     "connection_available",

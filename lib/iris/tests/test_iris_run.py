@@ -94,6 +94,14 @@ def local_cluster_and_config(tmp_path):
                             "max_slices": 1,
                             "accelerator_type": "cpu",
                             "vm_type": "local_vm",
+                            "slice_size": 1,
+                            "resources": {
+                                "cpu": 1,
+                                "ram": "1GB",
+                                "disk": 0,
+                                "gpu": 0,
+                                "tpu": 0,
+                            },
                         }
                     },
                 }

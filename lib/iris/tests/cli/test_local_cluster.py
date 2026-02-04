@@ -66,6 +66,14 @@ def cluster_config_file(tmp_path: Path) -> Path:
                         "min_slices": 1,
                         "max_slices": 1,
                         "zones": ["us-central1-a"],
+                        "slice_size": 1,
+                        "resources": {
+                            "cpu": 1,
+                            "ram": "1GB",
+                            "disk": 0,
+                            "gpu": 0,
+                            "tpu": 0,
+                        },
                     },
                 },
             }

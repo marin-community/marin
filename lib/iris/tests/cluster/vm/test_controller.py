@@ -149,6 +149,13 @@ scale_groups:
   manual_hosts:
     vm_type: manual_vm
     accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 1
+      ram: 1GB
+      disk: 0
+      gpu: 0
+      tpu: 0
     manual:
       hosts: [10.0.0.1]
 """
@@ -188,6 +195,13 @@ scale_groups:
     max_slices: 10
     zones: [us-central1-a]
     preemptible: true
+    slice_size: 8
+    resources:
+      cpu: 1
+      ram: 1GB
+      disk: 0
+      gpu: 0
+      tpu: 8
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -231,6 +245,13 @@ scale_groups:
     zones: [us-central1-a]
     preemptible: true
     priority: 50
+    slice_size: 8
+    resources:
+      cpu: 1
+      ram: 1GB
+      disk: 0
+      gpu: 0
+      tpu: 8
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
