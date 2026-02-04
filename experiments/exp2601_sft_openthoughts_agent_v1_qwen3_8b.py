@@ -76,18 +76,15 @@ TRAIN_BATCH_SIZE = 16
 MICROBATCH_SIZE = 16
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
-# Use v5p-32 (16 chips) - batch=16 matches chip count exactly, no TP needed
+# Use v5p-32 (16 chips) - batch=16 matches chip count exactly
 RESOURCES = ResourceConfig.with_tpu("v5p-32")
-TENSOR_PARALLEL_SIZE = 1
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
     tokenizer=qwen3_8b_tokenizer,
     model_name_or_path="Qwen/Qwen3-8B",
     train_batch_size=TRAIN_BATCH_SIZE,
-    per_device_parallelism=compute_per_device_parallelism(
-        TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES, TENSOR_PARALLEL_SIZE
-    ),
+    per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     per_device_eval_parallelism=8,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=4e-5,
@@ -103,7 +100,6 @@ mixture_sft_config = SimpleSFTConfig(
     beta2=0.98,
     epsilon=1e-8,
     pad_tokenizer_to_match_model=True,  # Model and tokenizer vocab sizes differ
-    tensor_parallel_size=TENSOR_PARALLEL_SIZE,
 )
 
 mixture_config = lm_mixture_data_config(

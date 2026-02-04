@@ -23,7 +23,6 @@ def compute_per_device_parallelism(
     global_batch_size: int,
     microbatch_size: int,
     resources: ResourceConfig,
-    tensor_parallel_size: int = 1,
 ) -> int:
     """Compute per_device_parallelism for gradient accumulation.
 
@@ -31,8 +30,6 @@ def compute_per_device_parallelism(
         global_batch_size: The effective batch size after gradient accumulation.
         microbatch_size: The batch size that fits in memory (local batch size).
         resources: The ResourceConfig specifying TPU/GPU resources.
-        tensor_parallel_size: Number of chips used for tensor parallelism per model replica.
-            With TP > 1, each example is split across multiple chips.
 
     Returns:
         per_device_parallelism: Number of examples each device processes per forward/backward pass.
@@ -41,40 +38,24 @@ def compute_per_device_parallelism(
         For v5p-8 (4 chips), global_batch_size=128, microbatch_size=8:
         - per_device_parallelism = 8 / 4 = 2
         - gradient_accumulation = 128 / 8 = 16 steps
-
-        For v5p-64 (32 chips) with TP=2, global_batch_size=16, microbatch_size=16:
-        - data_parallel_replicas = 32 / 2 = 16
-        - per_device_parallelism = 16 / 16 = 1
-        - gradient_accumulation = 16 / 16 = 1
     """
-    num_chips = resources.chip_count()
+    num_devices = resources.chip_count()
 
-    if num_chips % tensor_parallel_size != 0:
-        raise ValueError(f"num_chips ({num_chips}) must be divisible by tensor_parallel_size ({tensor_parallel_size})")
-
-    # With tensor parallelism, the effective number of data-parallel replicas is reduced
-    data_parallel_replicas = num_chips // tensor_parallel_size
-
-    if microbatch_size % data_parallel_replicas != 0:
-        raise ValueError(
-            f"microbatch_size ({microbatch_size}) must be divisible by "
-            f"data_parallel_replicas ({data_parallel_replicas}) = num_chips / tensor_parallel_size"
-        )
+    if microbatch_size % num_devices != 0:
+        raise ValueError(f"microbatch_size ({microbatch_size}) must be divisible by " f"num_devices ({num_devices})")
 
     if global_batch_size % microbatch_size != 0:
         raise ValueError(
             f"global_batch_size ({global_batch_size}) must be divisible by " f"microbatch_size ({microbatch_size})"
         )
 
-    per_device_parallelism = microbatch_size // data_parallel_replicas
+    per_device_parallelism = microbatch_size // num_devices
     grad_accum_steps = global_batch_size // microbatch_size
 
     print(
         f"Gradient accumulation config: "
         f"global_batch={global_batch_size}, microbatch={microbatch_size}, "
-        f"num_chips={num_chips}, tensor_parallel={tensor_parallel_size}, "
-        f"data_parallel_replicas={data_parallel_replicas}, "
-        f"per_device_parallelism={per_device_parallelism}, "
+        f"num_devices={num_devices}, per_device_parallelism={per_device_parallelism}, "
         f"grad_accum_steps={grad_accum_steps}"
     )
 
@@ -200,8 +181,3 @@ class SimpleSFTConfig:
     if set, will reinitialize the embeddings for the given tokens. If True, will reinitialize the default tokens
     for llama3's tokenizer
     """
-
-    tensor_parallel_size: int = 1
-    """Tensor parallelism degree. Each example is split across this many chips.
-    Use this when you have more chips than batch size (e.g., batch=16 on v5p-64 with 32 chips).
-    Set to 2 to use TP=2, meaning 32 chips / 2 = 16 data parallel replicas for batch=16."""
