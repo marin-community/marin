@@ -281,7 +281,7 @@ generate_with_selection = ExecutorStep(
         generated_text_column_name="generated_text",
 
         # Checkpointing
-        checkpoint_id_column="ms_id_sample",
+        checkpoint_id_column="ms_id",
 
         # Multi-sample selection
         enable_multi_sample_selection=True,
