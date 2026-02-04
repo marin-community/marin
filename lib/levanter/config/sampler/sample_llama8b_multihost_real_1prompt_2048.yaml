@@ -16,8 +16,6 @@ trainer:
   mesh:
     axes:
       model: 4
-    dcn_axes:
-      replica_dcn: 2
 model:
   type: llama
   use_tpu_ragged_paged_attention: false
