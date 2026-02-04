@@ -92,17 +92,17 @@ def wait(client, job, timeout=60, chronos=None):
         # Virtual time: tick until job completes or timeout
         start_time = chronos.time()
         while chronos.time() - start_time < timeout:
-            status = client.status(str(job.job_id))
+            status = client.status(job.job_id)
             if is_job_finished(status.state):
                 return status
             chronos.tick(0.5)  # Advance by poll interval
-        return client.status(str(job.job_id))
+        return client.status(job.job_id)
     else:
         # Real time
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            status = client.status(str(job.job_id))
+            status = client.status(job.job_id)
             if is_job_finished(status.state):
                 return status
             time.sleep(0.5)
-        return client.status(str(job.job_id))
+        return client.status(job.job_id)
