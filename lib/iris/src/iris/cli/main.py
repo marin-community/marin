@@ -63,10 +63,18 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     if controller_url:
         ctx.obj["controller_url"] = controller_url
     elif config_file:
-        # Establish tunnel from config using Platform abstraction
+        # Establish controller URL from config using Platform abstraction.
         iris_config = IrisConfig(ctx.obj["config"])
         platform = iris_config.platform()
-        controller_address = iris_config.controller_address()
+
+        if iris_config.proto.controller.WhichOneof("controller") == "local":
+            from iris.cluster.vm.cluster_manager import ClusterManager
+
+            manager = ClusterManager(iris_config.proto)
+            controller_address = manager.start()
+            ctx.call_on_close(manager.stop)
+        else:
+            controller_address = iris_config.controller_address()
 
         # Establish tunnel with 5-second timeout and keep it alive for command duration
         try:
