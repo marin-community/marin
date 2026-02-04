@@ -103,3 +103,8 @@ class SimpleTrainConfig:
     """Which step to start profiling."""
     profiler_num_steps: int = 100
     """How many steps to profile for once started."""
+
+    tensor_parallel_size: int = 1
+    """Tensor parallelism degree. Each example is split across this many chips.
+    Use this when you have more chips than batch size (e.g., batch=16 on v5p-64 with 32 chips).
+    Set to 2 to use TP=2, meaning 32 chips / 2 = 16 data parallel replicas for batch=16."""

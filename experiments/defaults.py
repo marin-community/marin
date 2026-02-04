@@ -347,12 +347,15 @@ def default_train(
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
+                # Set tensor parallelism via model axis size
+                # data=-1 means absorb remaining chips for data parallelism
+                axes={"data": -1, "model": train_config.tensor_parallel_size},
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
-                }
+                },
             ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
@@ -500,6 +503,7 @@ def default_sft(
         pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
         per_device_parallelism=sft_config.per_device_parallelism,
         per_device_eval_parallelism=sft_config.per_device_eval_parallelism,
+        tensor_parallel_size=sft_config.tensor_parallel_size,
     )
 
     if sft_config.reinit_tokens:
