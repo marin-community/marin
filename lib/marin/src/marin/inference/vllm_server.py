@@ -705,7 +705,7 @@ def _start_vllm_docker_server(
                 )
 
             time.sleep(poll_interval_seconds)
-    except Exception:
+    except BaseException:
         subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
         raise
 
@@ -796,39 +796,48 @@ def _start_vllm_native_server(
     server_url: str = f"http://{host}:{resolved_port}/v1"
     start_time: float = time.time()
 
-    while True:
-        if process.poll() is not None:
-            stdout_f.close()
-            stderr_f.close()
-            logs = _native_logs_tail(log_dir)
-            raise RuntimeError(
-                "vLLM server process exited before becoming ready.\n"
-                f"Command: {cmd}\n"
-                f"Exit code: {process.returncode}\n"
-                f"Logs: {log_dir}\n"
-                f"{logs}"
-            )
+    try:
+        while True:
+            if process.poll() is not None:
+                stdout_f.close()
+                stderr_f.close()
+                logs = _native_logs_tail(log_dir)
+                raise RuntimeError(
+                    "vLLM server process exited before becoming ready.\n"
+                    f"Command: {cmd}\n"
+                    f"Exit code: {process.returncode}\n"
+                    f"Logs: {log_dir}\n"
+                    f"{logs}"
+                )
 
-        try:
-            response = requests.get(f"{server_url}/models", timeout=5)
-            if response.status_code == 200:
-                break
-        except requests.ConnectionError:
-            # Server not ready yet.
-            pass
-        except requests.Timeout:
-            # Server not ready yet.
-            pass
+            try:
+                response = requests.get(f"{server_url}/models", timeout=5)
+                if response.status_code == 200:
+                    break
+            except requests.ConnectionError:
+                # Server not ready yet.
+                pass
+            except requests.Timeout:
+                # Server not ready yet.
+                pass
 
-        elapsed_time = time.time() - start_time
-        if elapsed_time > timeout_seconds:
+            elapsed_time = time.time() - start_time
+            if elapsed_time > timeout_seconds:
+                process.kill()
+                stdout_f.close()
+                stderr_f.close()
+                logs = _native_logs_tail(log_dir)
+                raise TimeoutError(
+                    "Failed to start vLLM server within timeout period.\n" f"Logs: {log_dir}\n" f"{logs}"
+                )
+
+            time.sleep(5)
+    except BaseException:
+        if process.poll() is None:
             process.kill()
-            stdout_f.close()
-            stderr_f.close()
-            logs = _native_logs_tail(log_dir)
-            raise TimeoutError("Failed to start vLLM server within timeout period.\n" f"Logs: {log_dir}\n" f"{logs}")
-
-        time.sleep(5)
+        stdout_f.close()
+        stderr_f.close()
+        raise
 
     stdout_f.close()
     stderr_f.close()
