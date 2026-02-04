@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
-    "datasets",
+    "datasets>=3.0.0",  # Minimum version for `List` feature type support
     "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",
@@ -36,6 +36,7 @@ dependencies = [
     "multiprocess==0.70.16",
     "numpy",
     "openai",
+    "packaging",
     "pandas",
     "pyarrow>=22",
     "ray==2.53.0",

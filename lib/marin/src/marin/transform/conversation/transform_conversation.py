@@ -33,12 +33,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Import marin.utils first to apply the datasets List feature monkey-patch
+# before any datasets operations occur
+from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
+
 import datasets
 import draccus
 import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
-from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
 from zephyr import Backend, Dataset, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
