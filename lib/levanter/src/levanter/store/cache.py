@@ -463,6 +463,7 @@ def consolidate_shard_caches(
     Backend.execute(
         Dataset.from_list(shard_info).map(_copy_shard),
         verbose=False,
+        context=context,
     )
 
     # do metadata serially b/c of write amplification concerns
