@@ -43,6 +43,13 @@ scale_groups:
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 16
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 1
     max_slices: 2
     zones: [europe-west4-b]

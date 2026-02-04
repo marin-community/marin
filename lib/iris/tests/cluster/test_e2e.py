@@ -74,6 +74,14 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
         min_slices=num_workers,
         max_slices=num_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        slice_size=1,
+        resources=config_pb2.ScaleGroupResources(
+            cpu=8,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=50 * 1024**3,
+            gpu_count=0,
+            tpu_chips=0,
+        ),
     )
     config.scale_groups["local-cpu"].CopyFrom(sg)
 

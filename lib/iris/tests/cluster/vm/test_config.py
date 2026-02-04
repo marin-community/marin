@@ -57,6 +57,13 @@ scale_groups:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 8
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
@@ -100,6 +107,13 @@ scale_groups:
   manual_hosts:
     vm_type: manual_vm
     accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      tpu: 0
+      gpu: 0
     manual:
       hosts: [10.0.0.1, 10.0.0.2]
       ssh_user: ubuntu
@@ -146,6 +160,13 @@ scale_groups:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 8
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
@@ -154,6 +175,13 @@ scale_groups:
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 16
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 0
     max_slices: 4
     zones: [us-central1-a]
@@ -217,6 +245,13 @@ scale_groups:
   test_group:
     vm_type: manual_vm
     accelerator_type: {accelerator_type}
+    slice_size: 1
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      tpu: 0
+      gpu: 0
     manual:
       hosts: [10.0.0.1]
     zones: [local]
@@ -248,6 +283,13 @@ scale_groups:
     accelerator_type: TPU
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 8
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
@@ -283,6 +325,13 @@ scale_groups:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 8
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 0
     max_slices: 2
     zones: [us-central1-a]
@@ -326,6 +375,13 @@ scale_groups:
   manual_hosts:
     vm_type: manual_vm
     accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      tpu: 0
+      gpu: 0
     manual:
       hosts: [10.0.0.1, 10.0.0.2]
 """
@@ -369,6 +425,13 @@ scale_groups:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 8
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 0
     max_slices: 2
     zones: [us-central1-a]
@@ -526,6 +589,13 @@ scale_groups:
     vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
+    slice_size: 8
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 1
     max_slices: 10
     zones: [us-central1-a]
@@ -575,6 +645,13 @@ scale_groups:
   cpu_group:
     vm_type: gce_vm
     accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      tpu: 0
+      gpu: 0
     min_slices: 2
     max_slices: 5
     zones: [us-central1-a]
@@ -583,6 +660,13 @@ scale_groups:
     vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
+    slice_size: 16
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu: 8
+      gpu: 0
     min_slices: 1
     max_slices: 3
     zones: [us-central1-a]

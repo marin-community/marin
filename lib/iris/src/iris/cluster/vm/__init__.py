@@ -88,9 +88,10 @@ from iris.cluster.vm.scaling_group import (
 from iris.cluster.vm.autoscaler import (
     Autoscaler,
     DemandEntry,
-    RoutingResult,
+    RoutingDecision,
     ScalingAction,
     ScalingDecision,
+    UnmetDemand,
     route_demand,
 )
 
@@ -140,7 +141,7 @@ __all__ = [
     "PlatformOps",
     "PoolExhaustedError",
     "QuotaExceededError",
-    "RoutingResult",
+    "RoutingDecision",
     "ScaleGroupSpec",
     "ScalingAction",
     "ScalingDecision",
@@ -150,6 +151,7 @@ __all__ = [
     "TpuVmGroup",
     "TpuVmManager",
     "TrackedVmFactory",
+    "UnmetDemand",
     "VmFactory",
     "VmGroupProtocol",
     "VmGroupStatus",

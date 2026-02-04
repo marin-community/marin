@@ -41,6 +41,14 @@ enum ScalingAction {
   SCALING_ACTION_NONE = 3;
 }
 
+message ResourceSpec {
+  int32 cpu = 1;
+  int64 memory_bytes = 2;
+  int64 disk_bytes = 3;
+  int32 gpu_count = 4;
+  int32 tpu_chips = 5;
+}
+
 // Information about a managed VM
 message VmInfo {
   string vm_id = 1;
@@ -112,10 +120,36 @@ message AutoscalerAction {
   string status = 6;          // "pending", "completed", "failed"
 }
 
+message DemandEntryStatus {
+  repeated string task_ids = 1;
+  string coschedule_group_id = 2;
+  iris.config.AcceleratorType accelerator_type = 3;
+  string accelerator_variant = 4;
+  bool preemptible = 5;
+  ResourceSpec resources = 6;
+}
+
+message UnmetDemand {
+  DemandEntryStatus entry = 1;
+  string reason = 2;
+}
+
+message RoutingDecision {
+  map<string, int32> group_to_launch = 1;
+  map<string, string> group_reasons = 2;
+  map<string, DemandEntryStatusList> routed_entries = 3;
+  repeated UnmetDemand unmet_entries = 4;
+}
+
+message DemandEntryStatusList {
+  repeated DemandEntryStatus entries = 1;
+}
+
 // Full autoscaler status (for RPC response)
 message AutoscalerStatus {
   repeated ScaleGroupStatus groups = 1;
   map<string, int32> current_demand = 2;
   iris.time.Timestamp last_evaluation = 3;
   repeated AutoscalerAction recent_actions = 4;  // Last N actions (max 100)
+  RoutingDecision last_routing_decision = 5;
 }

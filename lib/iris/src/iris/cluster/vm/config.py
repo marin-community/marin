@@ -31,6 +31,7 @@ from pathlib import Path
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
+from iris.cluster.types import parse_memory_string
 from iris.cluster.vm.gcp_tpu_platform import TpuVmManager
 from iris.cluster.vm.managed_vm import SshConfig, TrackedVmFactory, VmRegistry
 from iris.cluster.vm.manual_platform import ManualVmManager
@@ -138,6 +139,36 @@ def _validate_vm_types(config: config_pb2.IrisClusterConfig) -> None:
     for name, sg_config in config.scale_groups.items():
         if sg_config.vm_type == config_pb2.VM_TYPE_UNSPECIFIED:
             raise ValueError(f"Scale group '{name}' must set vm_type to tpu_vm, gce_vm, manual_vm, or local_vm.")
+
+
+def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate that scale groups define per-VM resources and slice_size."""
+    for name, sg_config in config.scale_groups.items():
+        if not sg_config.HasField("resources"):
+            raise ValueError(f"Scale group '{name}' must set resources.")
+        if not sg_config.HasField("slice_size"):
+            raise ValueError(f"Scale group '{name}' must set slice_size.")
+        if sg_config.slice_size <= 0:
+            raise ValueError(f"Scale group '{name}' has invalid slice_size={sg_config.slice_size}.")
+
+        resources = sg_config.resources
+        if resources.cpu < 0:
+            raise ValueError(f"Scale group '{name}' has invalid cpu={resources.cpu}.")
+        if resources.memory_bytes < 0:
+            raise ValueError(f"Scale group '{name}' has invalid memory_bytes={resources.memory_bytes}.")
+        if resources.disk_bytes < 0:
+            raise ValueError(f"Scale group '{name}' has invalid disk_bytes={resources.disk_bytes}.")
+        if resources.gpu_count < 0:
+            raise ValueError(f"Scale group '{name}' has invalid gpu_count={resources.gpu_count}.")
+        if resources.tpu_chips < 0:
+            raise ValueError(f"Scale group '{name}' has invalid tpu_chips={resources.tpu_chips}.")
+
+
+def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
+    config = config_pb2.IrisClusterConfig()
+    for name, sg_config in scale_groups.items():
+        config.scale_groups[name].CopyFrom(sg_config)
+    return config
 
 
 def _merge_proto_fields(target, source) -> None:
@@ -351,6 +382,8 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
         if "controller_address" in defaults_bootstrap:
             defaults_bootstrap["controller_address"] = os.path.expandvars(defaults_bootstrap["controller_address"])
 
+    _normalize_scale_group_resources(data)
+
     # Ensure scale_groups have their name field set (proto uses map key, but config field needs it)
     if "scale_groups" in data:
         for name, sg_data in data["scale_groups"].items():
@@ -382,6 +415,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     config = apply_defaults(config)
     _validate_accelerator_types(config)
     _validate_vm_types(config)
+    _validate_scale_group_resources(config)
 
     platform_kind = config.platform.WhichOneof("platform") if config.HasField("platform") else "unspecified"
     logger.info(
@@ -391,6 +425,55 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     )
 
     return config
+
+
+def _normalize_scale_group_resources(data: dict) -> None:
+    """Normalize scale_group resources from YAML into proto-friendly fields."""
+    scale_groups = data.get("scale_groups")
+    if not isinstance(scale_groups, dict):
+        return
+
+    for name, sg in scale_groups.items():
+        if not isinstance(sg, dict):
+            continue
+
+        resources = sg.get("resources")
+        if resources is None:
+            continue
+        if not isinstance(resources, dict):
+            raise ValueError(f"scale_groups.{name}.resources must be a mapping")
+
+        normalized: dict[str, int] = {}
+
+        cpu = resources.get("cpu")
+        if cpu is not None:
+            normalized["cpu"] = int(cpu)
+
+        memory = resources.get("memory_bytes", resources.get("memory", resources.get("ram")))
+        if memory is not None:
+            normalized["memory_bytes"] = _parse_memory_value(memory, f"scale_groups.{name}.resources.ram")
+
+        disk = resources.get("disk_bytes", resources.get("disk"))
+        if disk is not None:
+            normalized["disk_bytes"] = _parse_memory_value(disk, f"scale_groups.{name}.resources.disk")
+
+        gpu = resources.get("gpu_count", resources.get("gpu"))
+        if gpu is not None:
+            normalized["gpu_count"] = int(gpu)
+
+        tpu = resources.get("tpu_chips", resources.get("tpu"))
+        if tpu is not None:
+            normalized["tpu_chips"] = int(tpu)
+
+        sg["resources"] = normalized
+
+
+def _parse_memory_value(value: object, field_name: str) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        return int(parse_memory_string(value))
+    raise ValueError(f"{field_name} must be an int or size string (got {type(value).__name__})")
 
 
 def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
@@ -484,6 +567,7 @@ def create_autoscaler(
 
     # Validate autoscaler config before using it
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
+    _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
     # Create shared infrastructure
     vm_registry = VmRegistry()
@@ -549,6 +633,8 @@ def create_autoscaler_from_specs(
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
 
+    _validate_scale_group_resources(_scale_groups_to_config({name: spec.config for name, spec in specs.items()}))
+
     # Use provided config or DEFAULT_CONFIG
     if autoscaler_config is None:
         autoscaler_config = DEFAULT_CONFIG.autoscaler
@@ -599,6 +685,8 @@ def create_manual_autoscaler(
     ssh_user: str = "root",
     ssh_key: str | None = None,
     worker_port: int = 10001,
+    resources: config_pb2.ScaleGroupResources | None = None,
+    slice_size: int = 1,
 ):
     """Create a ManualVmManager-based Autoscaler directly from CLI flags.
 
@@ -616,12 +704,17 @@ def create_manual_autoscaler(
         key_file=ssh_key,
     )
 
+    if resources is None:
+        raise ValueError("manual autoscaler requires explicit resources")
+
     sg_config = config_pb2.ScaleGroupConfig(
         name="manual",
         vm_type=config_pb2.VM_TYPE_MANUAL_VM,
         min_slices=0,
         max_slices=len(hosts),
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        resources=resources,
+        slice_size=slice_size,
         zones=["local"],
     )
 

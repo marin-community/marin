@@ -365,6 +365,13 @@ scale_groups:
     accelerator_type: tpu
     accelerator_variant: v5litepod-4
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 4
+    resources:
+      cpu: 64
+      ram: 64GB
+      disk: 500GB
+      tpu: 4
+      gpu: 0
     min_slices: 0
     max_slices: 10
     preemptible: true
@@ -373,6 +380,13 @@ scale_groups:
   manual_hosts:
     vm_type: manual_vm
     accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      tpu: 0
+      gpu: 0
     min_slices: 0
     max_slices: 2
     manual:

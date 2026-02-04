@@ -14,5 +14,12 @@ scale_groups:
     vm_type: local_vm
     accelerator_type: cpu
     accelerator_variant: cpu
+    slice_size: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      tpu: 0
+      gpu: 0
     min_slices: 0
     max_slices: 4  # Allow up to 4 local workers

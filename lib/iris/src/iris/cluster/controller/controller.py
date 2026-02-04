@@ -84,68 +84,55 @@ def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint
 
 
 def compute_demand_entries(state: ControllerState) -> list:
-    """Compute demand entries from controller state.
-
-    Groups pending tasks by device type and variant, returning DemandEntry objects.
-    CPU-only tasks get DeviceType.CPU with variant=None.
-
-    For coscheduled jobs, all tasks in the job share a single slice, so we count
-    the job once (not each task). For non-coscheduled jobs, each task counts as
-    one slice of demand.
-
-    Args:
-        state: Controller state with pending tasks.
-
-    Returns:
-        List of DemandEntry objects with device_type, device_variant, and count.
-    """
+    """Compute demand entries from controller state."""
     from iris.cluster.vm.autoscaler import DemandEntry
     from iris.cluster.types import DeviceType
 
-    @dataclass
-    class DemandAccumulator:
-        count: int = 0
-        total_cpu: int = 0
-        total_memory_bytes: int = 0
+    demand_entries: list[DemandEntry] = []
 
-    demand_by_device: dict[tuple[DeviceType, str | None, bool | None], DemandAccumulator] = {}
-    coscheduled_jobs_counted: set[str] = set()
-
+    tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
     for task in state.peek_pending_tasks():
-        job = state.get_job(task.job_id)
+        if not task.can_be_scheduled():
+            continue
+        tasks_by_job[task.job_id].append(task)
+
+    for job_id, tasks in tasks_by_job.items():
+        job = state.get_job(job_id)
         if not job:
             continue
-
-        # For coscheduled jobs, only count once per job (all tasks share one slice)
-        if job.is_coscheduled:
-            if job.job_id in coscheduled_jobs_counted:
-                continue
-            coscheduled_jobs_counted.add(job.job_id)
 
         device = job.request.resources.device
         device_type = get_device_type_enum(device)
         device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
         preemptible_pref = _extract_preemptible_preference(job.request.constraints)
 
-        key = (device_type, device_variant, preemptible_pref)
-        if key not in demand_by_device:
-            demand_by_device[key] = DemandAccumulator()
-        acc = demand_by_device[key]
-        acc.count += 1
-        acc.total_cpu += job.request.resources.cpu
-        acc.total_memory_bytes += job.request.resources.memory_bytes
+        if job.is_coscheduled:
+            task_ids = [t.task_id.to_wire() for t in tasks]
+            entry = DemandEntry(
+                task_ids=task_ids,
+                coschedule_group_id=job.job_id.to_wire(),
+                device_type=device_type,
+                device_variant=device_variant,
+                constraints=list(job.request.constraints),
+                resources=job.request.resources,
+                preemptible=preemptible_pref,
+            )
+            demand_entries.append(entry)
+            continue
 
-    return [
-        DemandEntry(
-            device_type=dt,
-            device_variant=variant,
-            count=acc.count,
-            total_cpu=acc.total_cpu,
-            total_memory_bytes=acc.total_memory_bytes,
-            preemptible=preemptible,
-        )
-        for (dt, variant, preemptible), acc in demand_by_device.items()
-    ]
+        for task in tasks:
+            entry = DemandEntry(
+                task_ids=[task.task_id.to_wire()],
+                coschedule_group_id=None,
+                device_type=device_type,
+                device_variant=device_variant,
+                constraints=list(job.request.constraints),
+                resources=job.request.resources,
+                preemptible=preemptible_pref,
+            )
+            demand_entries.append(entry)
+
+    return demand_entries
 
 
 class WorkerClient(Protocol):
