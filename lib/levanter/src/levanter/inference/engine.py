@@ -448,9 +448,33 @@ def _prefill_kernel(
     sys.stdout.flush()
 
     print(f"[_prefill_kernel P{jax.process_index()}] === About to call allocate_for_seq ===", flush=True)
+    print(f"[_prefill_kernel P{jax.process_index()}] slot_ids sharding: {slot_ids.array.sharding}", flush=True)
+    print(f"[_prefill_kernel P{jax.process_index()}] pos_ids sharding: {pos_ids.array.sharding}", flush=True)
     sys.stdout.flush()
 
-    decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+    # Debug: Check if the issue is with the global array - force to addressable shards
+    print(f"[_prefill_kernel P{jax.process_index()}] slot_ids.array is_fully_addressable: {slot_ids.array.is_fully_addressable}", flush=True)
+    print(f"[_prefill_kernel P{jax.process_index()}] slot_ids addressable_shards: {len(slot_ids.array.addressable_shards)}", flush=True)
+    sys.stdout.flush()
+
+    # Try using jnp.asarray to make a local copy
+    print(f"[_prefill_kernel P{jax.process_index()}] === Creating local copies of arrays ===", flush=True)
+    sys.stdout.flush()
+
+    local_slot_ids_arr = jnp.asarray(slot_ids.array)
+    print(f"[_prefill_kernel P{jax.process_index()}] local_slot_ids_arr done", flush=True)
+    sys.stdout.flush()
+
+    local_pos_ids_arr = jnp.asarray(pos_ids.array)
+    print(f"[_prefill_kernel P{jax.process_index()}] local_pos_ids_arr done", flush=True)
+    sys.stdout.flush()
+
+    local_slot_ids = hax.named(local_slot_ids_arr, axis=slot_ids.axes)
+    local_pos_ids = hax.named(local_pos_ids_arr, axis=pos_ids.axes)
+    print(f"[_prefill_kernel P{jax.process_index()}] local NamedArrays created", flush=True)
+    sys.stdout.flush()
+
+    decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=local_slot_ids, token_pos_ids=local_pos_ids)
 
     print(f"[_prefill_kernel P{jax.process_index()}] === allocate_for_seq done ===", flush=True)
     sys.stdout.flush()
