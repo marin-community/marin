@@ -65,16 +65,14 @@ class PlatformConfig(_message.Message):
     def __init__(self, label_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpPlatformConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualPlatformConfig, _Mapping]] = ..., local: _Optional[_Union[LocalPlatformConfig, _Mapping]] = ...) -> None: ...
 
 class ManualProvider(_message.Message):
-    __slots__ = ("hosts", "ssh_user", "ssh_key_file", "ssh_port")
+    __slots__ = ("hosts", "ssh_user", "ssh_key_file")
     HOSTS_FIELD_NUMBER: _ClassVar[int]
     SSH_USER_FIELD_NUMBER: _ClassVar[int]
     SSH_KEY_FILE_FIELD_NUMBER: _ClassVar[int]
-    SSH_PORT_FIELD_NUMBER: _ClassVar[int]
     hosts: _containers.RepeatedScalarFieldContainer[str]
     ssh_user: str
     ssh_key_file: str
-    ssh_port: int
-    def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ..., ssh_port: _Optional[int] = ...) -> None: ...
+    def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ...) -> None: ...
 
 class ScaleGroupConfig(_message.Message):
     __slots__ = ("name", "vm_type", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "topology", "runtime_version", "preemptible", "zones", "priority", "manual")
@@ -138,16 +136,14 @@ class TimeoutConfig(_message.Message):
     def __init__(self, boot_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., init_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ssh_poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class SshConfig(_message.Message):
-    __slots__ = ("user", "key_file", "port", "connect_timeout")
+    __slots__ = ("user", "key_file", "connect_timeout")
     USER_FIELD_NUMBER: _ClassVar[int]
     KEY_FILE_FIELD_NUMBER: _ClassVar[int]
-    PORT_FIELD_NUMBER: _ClassVar[int]
     CONNECT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
     user: str
     key_file: str
-    port: int
     connect_timeout: _time_pb2.Duration
-    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
     __slots__ = ("machine_type", "boot_disk_size_gb", "port")

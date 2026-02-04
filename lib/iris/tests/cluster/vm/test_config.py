@@ -413,7 +413,6 @@ class TestSshConfigMerging:
         ssh_config_proto = config_pb2.SshConfig(
             user="ubuntu",
             key_file="~/.ssh/cluster_key",
-            port=2222,
         )
         ssh_config_proto.connect_timeout.CopyFrom(Duration.from_seconds(60).to_proto())
 
@@ -432,7 +431,6 @@ class TestSshConfigMerging:
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-        config.defaults.ssh.port = 22
 
         config.scale_groups["manual_group"].CopyFrom(
             config_pb2.ScaleGroupConfig(
@@ -442,7 +440,6 @@ class TestSshConfigMerging:
                     hosts=["10.0.0.1"],
                     ssh_user="admin",
                     ssh_key_file="~/.ssh/group_key",
-                    ssh_port=2222,
                 ),
             )
         )
@@ -451,7 +448,7 @@ class TestSshConfigMerging:
 
         assert ssh_config.user == "admin"
         assert ssh_config.key_file == "~/.ssh/group_key"
-        assert ssh_config.port == 2222
+        assert ssh_config.port == 22
 
     def test_partial_per_group_overrides_merge_with_defaults(self):
         """Per-group overrides merge with cluster defaults for unset fields."""
@@ -460,7 +457,6 @@ class TestSshConfigMerging:
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-        config.defaults.ssh.port = 22
         config.defaults.ssh.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
 
         config.scale_groups["manual_group"].CopyFrom(

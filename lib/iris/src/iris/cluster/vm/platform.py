@@ -123,7 +123,8 @@ class _ManualPlatformOps:
                 )
                 if result.returncode == 0:
                     running.append(host)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Manual slice probe failed for host %s: %s", host, exc)
                 continue
         return running
 
@@ -433,7 +434,7 @@ def _ssh_config_to_dataclass(ssh: config_pb2.SshConfig) -> SshConfig:
     Returns:
         SshConfig dataclass for use by SSH connections
     """
-    from iris.cluster.vm.config import DEFAULT_CONFIG
+    from iris.cluster.vm.config import DEFAULT_CONFIG, DEFAULT_SSH_PORT
 
     connect_timeout = (
         Duration.from_proto(ssh.connect_timeout)
@@ -443,7 +444,7 @@ def _ssh_config_to_dataclass(ssh: config_pb2.SshConfig) -> SshConfig:
     return SshConfig(
         user=ssh.user or DEFAULT_CONFIG.ssh.user,
         key_file=ssh.key_file or None,
-        port=ssh.port or DEFAULT_CONFIG.ssh.port,
+        port=DEFAULT_SSH_PORT,
         connect_timeout=connect_timeout,
     )
 
@@ -452,6 +453,5 @@ def _apply_manual_overrides(ssh_config: SshConfig, manual: config_pb2.ManualProv
     return SshConfig(
         user=manual.ssh_user or ssh_config.user,
         key_file=manual.ssh_key_file or ssh_config.key_file,
-        port=manual.ssh_port or ssh_config.port,
         connect_timeout=ssh_config.connect_timeout,
     )

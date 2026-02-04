@@ -508,7 +508,8 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
     assert final_task.status == cluster_pb2.TASK_STATE_SUCCEEDED
 
     assert runtime.start_container.call_count == 2
-    assert runtime.remove.call_count == 1
+    # 1 remove from port retry cleanup + 1 remove from final task cleanup
+    assert runtime.remove.call_count == 2
 
     logs = worker.get_logs(task_id)
     build_logs = [log for log in logs if log.source == "build"]

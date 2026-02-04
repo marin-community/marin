@@ -42,6 +42,8 @@ from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_SSH_PORT = 22
+
 # Re-export IrisClusterConfig from proto for public API
 IrisClusterConfig = config_pb2.IrisClusterConfig
 
@@ -54,7 +56,6 @@ DEFAULT_CONFIG = config_pb2.DefaultsConfig(
     ),
     ssh=config_pb2.SshConfig(
         user="root",
-        port=22,
         connect_timeout=Duration.from_seconds(30).to_proto(),
     ),
     autoscaler=config_pb2.AutoscalerConfig(
@@ -391,7 +392,6 @@ def get_ssh_config(
 
     Uses cluster_config.defaults.ssh for base settings:
     - user: "root"
-    - port: 22
     - connect_timeout: 30s
     - key_file: None (passwordless/agent auth)
 
@@ -410,7 +410,6 @@ def get_ssh_config(
     ssh = cluster_config.defaults.ssh
     user = ssh.user or DEFAULT_CONFIG.ssh.user
     key_file = ssh.key_file or None
-    port = ssh.port or DEFAULT_CONFIG.ssh.port
     connect_timeout = (
         Duration.from_proto(ssh.connect_timeout)
         if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
@@ -426,13 +425,10 @@ def get_ssh_config(
                 user = manual.ssh_user
             if manual.ssh_key_file:
                 key_file = manual.ssh_key_file
-            if manual.ssh_port:
-                port = manual.ssh_port
-
     return SshConfig(
         user=user,
         key_file=key_file,
-        port=port,
+        port=DEFAULT_SSH_PORT,
         connect_timeout=connect_timeout,
     )
 
@@ -810,6 +806,7 @@ class IrisConfig:
         Returns:
             Controller address string, or empty string if not configured
         """
+        # TODO: Derive controller address from controller.manual/local when unset.
         bootstrap = self._proto.defaults.bootstrap
         if bootstrap.HasField("controller_address"):
             return bootstrap.controller_address

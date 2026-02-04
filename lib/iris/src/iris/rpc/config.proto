@@ -54,7 +54,6 @@ message ManualProvider {
   repeated string hosts = 1;
   string ssh_user = 2;           // Default: "root"
   string ssh_key_file = 3;
-  int32 ssh_port = 4;            // Default: 22
 }
 
 // ============================================================================
@@ -128,7 +127,6 @@ message TimeoutConfig {
 message SshConfig {
   string user = 1;                        // Default: "root"
   string key_file = 2;                    // Path to SSH private key
-  int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
 }
 

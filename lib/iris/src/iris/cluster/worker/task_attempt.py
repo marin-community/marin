@@ -462,9 +462,10 @@ class TaskAttempt:
         return container_id
 
     def _monitor(self, container_id: str) -> None:
-        """Monitor task execution: check status, collect stats, handle timeouts.
+        """Monitor task execution: check status, collect stats, stream logs, handle timeouts.
 
         Polls container status at regular intervals until the container stops.
+        Streams logs incrementally into task.logs (single source of truth).
         Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
 
@@ -476,6 +477,9 @@ class TaskAttempt:
         if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
             timeout_seconds = self.request.timeout.milliseconds / 1000
             deadline = Deadline.from_seconds(timeout_seconds)
+
+        # Track last log timestamp for incremental fetching
+        last_log_time: Timestamp | None = None
 
         while True:
             if rule := chaos("worker.task_monitor"):
@@ -501,6 +505,9 @@ class TaskAttempt:
             # Check container status
             status = self._runtime.inspect(container_id)
             if not status.running:
+                # Final log fetch before container stops
+                last_log_time = self._stream_logs(container_id, last_log_time)
+
                 # Read result file only if container succeeded
                 if status.exit_code == 0 and self.workdir:
                     result_path = self.workdir / "_result.pkl"
@@ -535,6 +542,9 @@ class TaskAttempt:
                     )
                 break
 
+            # Stream logs incrementally
+            last_log_time = self._stream_logs(container_id, last_log_time)
+
             # Collect stats
             try:
                 stats = self._runtime.get_stats(container_id)
@@ -553,15 +563,47 @@ class TaskAttempt:
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
 
+    def _stream_logs(self, container_id: str, since: Timestamp | None) -> Timestamp | None:
+        """Fetch new logs from container and append to task.logs.
+
+        Args:
+            container_id: Container to fetch logs from
+            since: Timestamp to fetch logs after (None for all logs)
+
+        Returns:
+            Timestamp of the last log line, or the input 'since' if no new logs
+        """
+        try:
+            new_logs = self._runtime.get_logs(container_id, since=since)
+            for log_line in new_logs:
+                ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
+                self.logs.add(log_line.source, log_line.data, timestamp=ts)
+            if new_logs:
+                return Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
+        except Exception:
+            pass  # Don't fail task on log streaming errors
+        return since
+
     def _cleanup(self) -> None:
-        """Clean up task resources: ports, image protection, workdir.
+        """Clean up task resources: container, ports, image protection, workdir.
 
         Idempotent - safe to call multiple times. Logs errors instead of
         silently swallowing them (RF-5 fix).
+
+        Container is removed here because logs are already streamed into task.logs
+        during monitoring. This releases TPU devices that would otherwise remain
+        busy until the container is removed.
         """
         if self.cleanup_done:
             return
         self.cleanup_done = True
+
+        # Remove container (logs already captured in monitor loop)
+        if self.container_id:
+            try:
+                self._runtime.remove(self.container_id)
+            except Exception as e:
+                logger.warning("Failed to remove container %s: %s", self.container_id, e)
 
         # Release ports
         try:
@@ -577,7 +619,6 @@ class TaskAttempt:
                 logger.warning("Failed to unprotect image %s: %s", self.image_tag, e)
 
         # Remove working directory
-        # Keep container around for log retrieval via docker logs
         if self.workdir and self.workdir.exists():
             try:
                 shutil.rmtree(self.workdir)

@@ -344,7 +344,6 @@ defaults:
   ssh:
     user: ubuntu
     key_file: ~/.ssh/cluster_key
-    port: 22
     connect_timeout: { milliseconds: 30000 }
   bootstrap:
     docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest

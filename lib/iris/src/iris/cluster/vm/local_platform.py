@@ -326,9 +326,14 @@ class _LocalContainerRuntime(ContainerRuntime):
     def remove(self, container_id: str) -> None:
         self._containers.pop(container_id, None)
 
-    def get_logs(self, container_id: str) -> list[LogLine]:
+    def get_logs(self, container_id: str, since: Timestamp | None = None) -> list[LogLine]:
         c = self._containers.get(container_id)
-        return c._logs if c else []
+        if not c:
+            return []
+        if since:
+            since_dt = datetime.fromtimestamp(since.epoch_seconds(), tz=timezone.utc)
+            return [log for log in c._logs if log.timestamp > since_dt]
+        return c._logs
 
     def get_stats(self, container_id: str) -> ContainerStats:
         del container_id
