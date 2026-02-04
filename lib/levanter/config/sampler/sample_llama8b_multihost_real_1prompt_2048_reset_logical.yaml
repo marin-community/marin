@@ -4,12 +4,11 @@ max_new_tokens: 2048
 temperature: 0.7
 n_rounds: 1
 n_generations: 1
-max_prompts_per_batch: 1
 trainer:
   tracker:
     type: wandb
     project: levanter-multihost-sampling
-    tags: ["singlehost", "sampling", "llama3.1-8b", "realistic", "1prompt", "2048", "v5p8"]
+    tags: ["multihost", "sampling", "llama3.1-8b", "realistic", "1prompt", "2048", "v5p16"]
   ray:
     auto_start_cluster: false
   mp: p=bfloat16,c=bfloat16
@@ -28,11 +27,10 @@ engine:
   max_prefill_size: 64
   max_queued_tokens: 16
   max_rounds: 32
-  debug_stats_every_n: 10
-  reset_mode: physical
+  debug_stats_every_n: 1
+  reset_mode: logical
   max_stop_seqs: 1
   max_stop_tokens: 8
   seed: 0
-  use_logical_reset: true
 prompts:
   - "Prompt 001: Provide a concise overview of the benefits of sleep."

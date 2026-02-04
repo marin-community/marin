@@ -25,6 +25,10 @@ class PageCache(eqx.Module):
         """Return a copy of this cache with ``src_page`` cloned into ``dst_page``."""
         raise NotImplementedError
 
+    def zero(self) -> Self:
+        """Return a version of this cache with KV pages zeroed."""
+        raise NotImplementedError
+
     def reset(self) -> Self:
         """Return a reset version of this cache."""
         raise NotImplementedError
@@ -59,6 +63,10 @@ class KvPageCache(PageCache):
 
     def reset(self) -> "KvPageCache":
         """Return a reset version of this cache."""
+        return self.zero()
+
+    def zero(self) -> "KvPageCache":
+        """Return a version of this cache with KV pages zeroed."""
         reset_pages = jnp.zeros_like(self.kv_pages.array)
         return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
 
@@ -112,7 +120,10 @@ class ListCache(PageCache, Generic[PageCacheT]):
         object.__setattr__(self, "caches", tuple(self.caches))
 
     def reset(self) -> "ListCache[PageCacheT]":
-        return ListCache(tuple(cache.reset() for cache in self.caches))
+        return self.zero()
+
+    def zero(self) -> "ListCache[PageCacheT]":
+        return ListCache(tuple(cache.zero() for cache in self.caches))
 
     @staticmethod
     def from_iterable(caches: Iterable[PageCacheT]) -> "ListCache[PageCacheT]":

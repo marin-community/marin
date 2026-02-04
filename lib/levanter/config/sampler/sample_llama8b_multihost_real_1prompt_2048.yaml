@@ -28,6 +28,7 @@ engine:
   max_queued_tokens: 16
   max_rounds: 32
   debug_stats_every_n: 10
+  reset_mode: physical
   max_stop_seqs: 1
   max_stop_tokens: 8
   seed: 0

@@ -8,7 +8,7 @@ import os
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence
 
 import equinox as eqx
 import fsspec
@@ -36,6 +36,8 @@ from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_
 
 logger = logging.getLogger(__name__)
 
+ResetMode = Literal["logical", "physical"]
+
 
 @dataclass(frozen=True)
 class InferenceEngineConfig:
@@ -60,6 +62,9 @@ class InferenceEngineConfig:
 
     debug_stats_every_n: int | None = 10
     """Log decode stats every N iterations. Set to None or 0 to disable."""
+
+    reset_mode: ResetMode = "physical"
+    """Reset behavior for the KV cache: "logical" resets metadata only; "physical" also zeros KV pages."""
 
     # Stop-token capacity (used for validation and buffer sizing at init)
     max_stop_seqs: int = 4
@@ -114,6 +119,9 @@ class InferenceEngineConfig:
 
         if self.max_queued_tokens < self.max_seqs_in_prefill:
             raise ValueError("max_queued_tokens must be >= max_seqs_in_prefill")
+
+        if self.reset_mode not in ("logical", "physical"):
+            raise ValueError(f"reset_mode must be 'logical' or 'physical', got {self.reset_mode!r}")
 
     @property
     def imputed_max_tokens_per_round(self) -> int:
@@ -286,9 +294,18 @@ class GenState(eqx.Module):
     cache: PageCache
     decode_state: DecodeState
 
-    def reset(self):
+    def reset(self) -> "GenState":
+        return self.reset_physical()
+
+    def reset_logical(self) -> "GenState":
         return GenState(
-            cache=self.cache.reset(),
+            cache=self.cache,
+            decode_state=self.decode_state.reset(),
+        )
+
+    def reset_physical(self) -> "GenState":
+        return GenState(
+            cache=self.cache.zero(),
             decode_state=self.decode_state.reset(),
         )
 
@@ -854,7 +871,11 @@ class InferenceEngine:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
+        if self.config.reset_mode == "logical":
+            reset_fn = self.gen_state.reset_logical
+        else:
+            reset_fn = self.gen_state.reset_physical
+        self.gen_state = eqx.filter_jit(reset_fn, donate="all")()
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()

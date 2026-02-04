@@ -150,6 +150,8 @@ Rollback:
 
 ### M1 - Observability Without Behavioral Changes
 
+Status: DONE (2026-02-04)
+
 Goal: add diagnostics that are safe for multi-host and do not change results.
 
 Key principle: diagnostics must be available without peppering JIT code with `print()`.
@@ -164,7 +166,7 @@ Deliverables:
   - after reset
   - after prefill
   - after generation loop completes
-- Optional: a debug flag to log stats every N decode iterations, but off by default.
+- Optional: a debug flag to log stats every N decode iterations (default 10; set to None/0 to disable).
 
 Exit criteria:
 - All existing inference unit tests pass.
@@ -174,6 +176,8 @@ Rollback:
 - Remove logging calls (keep the stats method if it's used by tests).
 
 ### M2 - Make Reset Semantics Explicit and Safe (Logical vs Physical)
+
+Status: IN PROGRESS (2026-02-04)
 
 Goal: remove the temptation to "skip reset on multihost" by making reset fast and correct.
 
