@@ -24,4 +24,23 @@ If Iris jobs fail, the most likely causes are missing extras (CPU vs TPU deps) o
 
 ## Results
 
-Pending: begin Iris runs and record outcomes.
+Smoke job (local Iris cluster) succeeded using:
+
+- `uv run iris --config lib/iris/examples/local.yaml run --extra marin:cpu -- python -c "print('smoke')"`
+
+Observed autoscaler scale-up, worker registration, and job completion with log output `smoke`.
+
+Attempted Levanter CPU tutorial (local Iris) without MARIN_PREFIX and saw:
+
+- `ValueError: Must specify a prefix or set the MARIN_PREFIX environment variable`
+
+Retried with MARIN_PREFIX, but tokenization step failed due to request timeouts
+from Zephyr actor RPCs (Iris local cluster). The job ended in failed state after
+timeouts. A follow-up run with `ZEPHYR_NUM_WORKERS=4` reduced worker fan-out but
+still stalled with repeated retries/timeouts; I terminated the run to avoid a
+runaway local controller.
+
+Next: rerun with an even lower Zephyr worker count (e.g. `ZEPHYR_NUM_WORKERS=1`)
+and consider increasing Iris actor call timeouts for Zephyr-heavy workloads.
+Then attempt TPU tutorial on a TPU-capable Iris config with `--tpu v4-8` and
+`--extra marin:tpu`.
