@@ -599,6 +599,23 @@ def _run_prefill(
     print(f"[_run_prefill P{jax.process_index()}] === Step 2: _prefill_kernel (single JIT) ===", flush=True)
     sys.stdout.flush()
 
+    # Debug: print sharding info for all arrays before JIT
+    def _print_sharding(name, arr):
+        if hasattr(arr, 'sharding'):
+            print(f"[_run_prefill P{jax.process_index()}] {name} sharding: {arr.sharding}", flush=True)
+        elif hasattr(arr, 'array') and hasattr(arr.array, 'sharding'):
+            print(f"[_run_prefill P{jax.process_index()}] {name}.array sharding: {arr.array.sharding}", flush=True)
+        else:
+            print(f"[_run_prefill P{jax.process_index()}] {name} no sharding attr", flush=True)
+
+    _print_sharding("work.queue.queued_tokens", work.queue.queued_tokens)
+    _print_sharding("work.queue.queued_slot_ids", work.queue.queued_slot_ids)
+    _print_sharding("work.queue.queued_pos_ids", work.queue.queued_pos_ids)
+    _print_sharding("work.queue.num_queued_tokens", work.queue.num_queued_tokens)
+    _print_sharding("gen_state.decode_state.tqueue.queued_tokens", gen_state.decode_state.tqueue.queued_tokens)
+    _print_sharding("gen_state.cache (sample)", gen_state.cache.transformer.layers[0].attn.key)
+    sys.stdout.flush()
+
     @functools.partial(hax.named_jit, static_argnums=(4,))
     def _jit_prefill_kernel(gs, mdl, smplr, queue, max_seqs):
         jax.debug.print("[_jit_prefill_kernel] === 1. Getting queue arrays ===")
