@@ -91,8 +91,14 @@ def _load_model(config: SampleLmMultihostConfig, vocab_axis: Axis, tokenizer, *,
     assert hasattr(config.model, "hf_checkpoint_converter"), "model config lacks HF loader"
     converter: HFCheckpointConverter = config.model.hf_checkpoint_converter()
     converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
+
+    # Get config from HF checkpoint, but override with user-specified model settings
+    hf_config = converter.hf_config_from_hf_checkpoint(config.hf_checkpoint)
+    overrides = {"use_tpu_ragged_paged_attention": config.model.use_tpu_ragged_paged_attention}
+    merged_config = converter.config_from_hf_config(hf_config, overrides=overrides)
+
     model = converter.load_pretrained(
-        config.model.model_type, ref=config.hf_checkpoint, dtype=config.trainer.mp.compute_dtype
+        config.model.model_type, ref=config.hf_checkpoint, config=merged_config, dtype=config.trainer.mp.compute_dtype
     )
     return model  # type: ignore[return-value]
 
@@ -248,7 +254,9 @@ def main(config: SampleLmMultihostConfig):
     if stop_ids is None:
         stop_tokens = None
     else:
-        stop_tokens = hax.named(jnp.asarray(stop_ids, dtype=jnp.int32), axis="position").broadcast_axis({"stop_seq": 1})
+        stop_tokens = hax.named(jnp.asarray(stop_ids, dtype=jnp.int32), axis="position").broadcast_axis(
+            {"stop_seq": 1}
+        )
 
     key = jrandom.PRNGKey(config.seed)
 
@@ -328,9 +336,7 @@ def main(config: SampleLmMultihostConfig):
                         if hbm_free_after_engine is not None:
                             metrics["sample/hbm_free_after_engine_gib"] = hbm_free_after_engine
                         if hbm_free_before_engine is not None and hbm_free_after_engine is not None:
-                            metrics["sample/hbm_used_by_engine_gib"] = (
-                                hbm_free_before_engine - hbm_free_after_engine
-                            )
+                            metrics["sample/hbm_used_by_engine_gib"] = hbm_free_before_engine - hbm_free_after_engine
                     if hbm_free_after_gen is not None:
                         metrics["sample/hbm_free_after_gen_gib"] = hbm_free_after_gen
                     levanter.tracker.log(metrics, step=round_index)
@@ -338,9 +344,7 @@ def main(config: SampleLmMultihostConfig):
                     samples_rows: list[tuple[int, int, int, str, str, int]] = []
                     for sequence_index, sequence_tokens in enumerate(result.tokens):
                         filtered_tokens = [
-                            token
-                            for token in sequence_tokens
-                            if token != tokenizer.pad_token_id and token != INVALID
+                            token for token in sequence_tokens if token != tokenizer.pad_token_id and token != INVALID
                         ]
                         generated_text = tokenizer.decode(filtered_tokens, skip_special_tokens=True)
                         logger.info("Sequence %d: %s", sequence_index, generated_text)

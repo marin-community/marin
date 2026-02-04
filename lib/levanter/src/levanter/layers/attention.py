@@ -1575,6 +1575,8 @@ class AttentionConfig:
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
     """Configuration for QK normalization. If None, no normalization is applied."""
+    use_tpu_ragged_paged_attention: bool = True
+    """Whether to use the TPU ragged paged attention kernel when available. Set to False to use the reference implementation."""
 
     def __post_init__(self):
         assert (
@@ -1774,6 +1776,7 @@ class Attention(eqx.Module):
             batch_info.num_seqs,
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
+            use_tpu_ragged_paged_attention=self.config.use_tpu_ragged_paged_attention,
         )
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
@@ -1825,14 +1828,21 @@ def ragged_paged_attention(
     num_seqs: jnp.ndarray,
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
+    use_tpu_ragged_paged_attention: bool = True,
 ) -> NamedArray:
     """Ragged attention for paged KV caches.
 
     This function dispatches to the TPU implementation when available and
     supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
+
+    Args:
+        use_tpu_ragged_paged_attention: If True (default), use the TPU kernel when available.
+            Set to False to force the reference implementation.
     """
 
     def _tpu_rpa_available() -> bool:
+        if not use_tpu_ragged_paged_attention:
+            return False
         if tpu_ragged_paged_attention is None:
             return False
         if jax.default_backend() != "tpu":

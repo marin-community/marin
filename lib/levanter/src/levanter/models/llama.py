@@ -76,6 +76,7 @@ class LlamaConfig(HFCompatConfig):
     upcast_attn: bool = False
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
+    use_tpu_ragged_paged_attention: bool = True
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     scan_layers: bool = True
@@ -243,6 +244,7 @@ class LlamaConfig(HFCompatConfig):
             flash_attention_block_size=self.flash_attention_block_size,
             rope=self.rope,
             qk_norm=self.norm_config if self.use_qk_norm else None,
+            use_tpu_ragged_paged_attention=self.use_tpu_ragged_paged_attention,
         )
 
     @property
