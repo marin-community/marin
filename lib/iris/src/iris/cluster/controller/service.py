@@ -488,7 +488,7 @@ class ControllerServiceImpl:
                     healthy=w.healthy,
                     consecutive_failures=w.consecutive_failures,
                     last_heartbeat=w.last_heartbeat.to_proto(),
-                    running_job_ids=list(w.running_tasks),  # Now contains task IDs
+                    running_job_ids=[task_id.to_wire() for task_id in w.running_tasks],
                     address=w.address,
                     metadata=w.metadata,
                     status_message=status_message,
