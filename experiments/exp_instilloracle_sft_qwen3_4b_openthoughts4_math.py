@@ -39,7 +39,7 @@ from marin.processing.tokenize import lm_mixture_data_config
 # Dataset configuration
 DATASET_ID = "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens"
 DATASET_SHORT_NAME = "openthoughts4_math"
-DATASET_SIZE = 30_000
+DATASET_SIZE = 29_963
 
 dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[DATASET_ID]
 dataset = get_instruction_dataset(DATASET_ID, splits=dataset_config.splits)
