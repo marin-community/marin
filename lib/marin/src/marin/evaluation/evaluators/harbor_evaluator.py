@@ -335,6 +335,8 @@ class HarborEvaluator(Evaluator):
             extras=("harbor", "tpu", "vllm"),
             pip_packages=pip_packages,
             env_vars=env_vars,
+            max_retries_failure=0,
+            max_retries_preemption=10,
         )
 
     def _run_eval_inner(
