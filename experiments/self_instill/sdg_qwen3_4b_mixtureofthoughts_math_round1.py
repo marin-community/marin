@@ -59,8 +59,8 @@ QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 RESOURCE_TYPE = "v5p-8"
 
 # Batch size for inference steps (smaller = less work lost on preemption)
-# With n=4 samples, batch_size=8 means 32 sequences per batch (~5-10 min per batch)
-BATCH_SIZE = 8
+# With n=4 samples, batch_size=16 means 64 sequences per batch
+BATCH_SIZE = 16
 
 # Flag to indicate this is an instruction-tuned model
 IS_INSTRUCTION_TUNED = True

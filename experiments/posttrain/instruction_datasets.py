@@ -469,6 +469,21 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=["math"],
         splits=["train"],
     ),
+    # OpenThoughts4 Math dataset (30k samples, 32768 max tokens)
+    "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens",
+        revision="6a05237",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id"],
+        name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
