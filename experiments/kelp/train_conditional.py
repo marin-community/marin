@@ -29,6 +29,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import random
 import sys
 import time
@@ -54,6 +55,7 @@ from experiments.kelp.conditioning import (
 )
 from experiments.kelp.python_grammar import PythonNodeVocab, PythonValueVocab
 from experiments.kelp.toy_dataset import get_toy_programs
+from experiments.kelp.train_stackedu import save_checkpoint
 from experiments.kelp.tree_diffusion import TreeDiffusionConfig, TreeDiffusionModel
 
 logging.basicConfig(
@@ -97,6 +99,7 @@ class ConditionalTrainConfig:
     # Misc
     seed: int = 42
     output_dir: str = "outputs/kelp_conditional"
+    save_every: int = 1000
 
 
 def load_programs(config: ConditionalTrainConfig) -> list[str]:
@@ -307,6 +310,9 @@ def train(config: ConditionalTrainConfig) -> tuple[TreeDiffusionModel, list[floa
     logger.info(f"JAX backend: {backend}")
     logger.info(f"JAX devices: {jax.devices()}")
 
+    # Create output directory
+    os.makedirs(config.output_dir, exist_ok=True)
+
     # Set seeds
     random.seed(config.seed)
     np.random.seed(config.seed)
@@ -409,11 +415,20 @@ def train(config: ConditionalTrainConfig) -> tuple[TreeDiffusionModel, list[floa
                 f"Speed: {steps_per_sec:.1f} steps/s"
             )
 
+        # Save checkpoint
+        if config.save_every > 0 and step > 0 and step % config.save_every == 0:
+            ckpt_path = os.path.join(config.output_dir, f"checkpoint_{step}.pkl")
+            save_checkpoint(model, ckpt_path, step)
+
     total_time = time.time() - start_time
     logger.info("-" * 70)
     logger.info(f"Training complete in {total_time:.1f}s")
     logger.info(f"Final loss: {loss_history[-1]:.4f}")
     logger.info(f"Best loss: {min(loss_history):.4f}")
+
+    # Save final checkpoint
+    final_path = os.path.join(config.output_dir, "checkpoint_final.pkl")
+    save_checkpoint(model, final_path, config.num_steps)
 
     # Check if loss decreased
     if len(loss_history) >= 20:
@@ -437,6 +452,7 @@ def main():
     parser.add_argument("--log_every", type=int, default=50, help="Log every N steps")
     parser.add_argument("--use_stackedu", action="store_true", help="Use Stack-Edu data")
     parser.add_argument("--require_docstring", action="store_true", help="Only use examples with docstrings")
+    parser.add_argument("--output_dir", type=str, default="outputs/kelp", help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
@@ -449,6 +465,7 @@ def main():
         log_every=args.log_every,
         use_stackedu=args.use_stackedu,
         require_docstring=args.require_docstring,
+        output_dir=args.output_dir,
         seed=args.seed,
     )
 
