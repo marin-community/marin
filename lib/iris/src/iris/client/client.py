@@ -911,8 +911,8 @@ def get_iris_ctx() -> IrisContext | None:
     # Get job info from environment
     job_info = get_job_info()
     if job_info is None:
-        # If no job info available, create minimal context
-        ctx = IrisContext(job_id=None)
+        return None
+
     else:
         # Set up client if controller address is available
         client = None

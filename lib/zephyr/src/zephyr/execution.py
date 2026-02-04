@@ -606,18 +606,16 @@ class ZephyrCoordinator:
 
     def shutdown(self) -> None:
         """Signal workers to exit and terminate the worker group."""
+        logger.info("[coordinator.shutdown] Starting shutdown")
         self._shutdown = True
 
         # Wait for coordinator thread to exit
         if self._coordinator_thread is not None:
             self._coordinator_thread.join(timeout=5.0)
 
-        # Wait for workers to exit gracefully
-        for f in self._worker_futures:
-            with suppress(Exception):
-                f.result(timeout=10.0)
-
-        # Terminate worker group
+        # Kill the worker group immediately - don't wait for graceful shutdown.
+        # Workers may not have even started their polling loops yet, so waiting
+        # for their futures could block for a very long time.
         if self._worker_group is not None:
             with suppress(Exception):
                 self._worker_group.shutdown()
@@ -725,7 +723,7 @@ class ZephyrWorker:
         logger.info("[%s] Heartbeat loop exiting after %d beats", worker_id, heartbeat_count)
 
     def _poll_loop(self, coordinator: ActorHandle, worker_id: str) -> None:
-        """Pure polling loop. Exits only on SHUTDOWN signal."""
+        """Pure polling loop. Exits only on SHUTDOWN signal or coordinator death."""
         loop_count = 0
         task_count = 0
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
@@ -735,7 +733,12 @@ class ZephyrWorker:
             if loop_count % 100 == 1:
                 logger.debug("[%s] Poll iteration #%d, tasks completed: %d", worker_id, loop_count, task_count)
 
-            response = coordinator.pull_task.remote(worker_id).result()
+            try:
+                response = coordinator.pull_task.remote(worker_id).result(timeout=30.0)
+            except Exception as e:
+                # Coordinator is dead or unreachable - exit gracefully
+                logger.warning("[%s] pull_task failed (coordinator may be dead): %s", worker_id, e)
+                break
 
             # SHUTDOWN signal - exit cleanly
             if response == "SHUTDOWN":
@@ -871,7 +874,7 @@ class ZephyrContext:
 
     client: Client | None = None
     num_workers: int | None = None
-    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="16g"))
+    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
     chunk_storage_prefix: str | None = None
 
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -891,7 +894,8 @@ class ZephyrContext:
             if isinstance(self.client, LocalClient):
                 self.num_workers = os.cpu_count() or 1
             else:
-                self.num_workers = 128
+                # Default to 128 for distributed, but allow override for testing
+                self.num_workers = int(os.environ.get("ZEPHYR_NUM_WORKERS", 128))
 
         if self.chunk_storage_prefix is None:
             marin_prefix = os.environ.get("MARIN_PREFIX", "")
