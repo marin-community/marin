@@ -234,8 +234,7 @@ def save_eval_datasets_to_gcs(
         )
 
         # Upload cache directory to GCS
-        # The trailing slash is needed to upload the contents of the folder to gcs_path
-        # rather than creating a subdirectory (see marin/evaluation/utils.py)
+        # trailing slash is needed to upload the contents of the folder to gcs_path
         log_obj.info(f"Uploading datasets to {gcs_path}")
         fs = fsspec.core.url_to_fs(gcs_path)[0]
         fs.put(cache_dir + "/", gcs_path, recursive=True)
