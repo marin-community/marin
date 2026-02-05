@@ -304,16 +304,28 @@ Validation runs:
 - Step 1 (end cleanup):
   - Config: `config/sampler/sample_llama8b_multihost_real_1prompt_2048.yaml`
   - Log: `/tmp/levanter_run_m4_step1.log`
-  - Result: `Job finished with no error`; `DecodeStats[after_cleanup] pages_in_use=0`.
+  - Result: `Job finished with no error`.
+  - Log evidence (2026-02-05):
+    - After reset: `active=0 pages_in_use=0 free=48 max_refcount=0` (00:35:40).
+    - After prefill: `active=1 pages_in_use=1 free=47 max_refcount=1` (00:36:09).
+    - After decode: `active=1 pages_in_use=33 free=15 max_refcount=1` (00:37:24).
+    - After cleanup: `active=0 pages_in_use=0 free=48 max_refcount=0` (00:37:25).
 - Step 2 (incremental cleanup):
   - Config: `config/sampler/sample_llama8b_multihost_real_1prompt_2048_cleanup_incremental.yaml`
   - Log: `/tmp/levanter_run_m4_step2.log`
-  - Result: `Job finished with no error`; `DecodeStats[after_decode] pages_in_use=0`.
+  - Result: `Job finished with no error`.
+  - Log evidence (2026-02-05):
+    - After reset: `active=0 pages_in_use=0 free=48 max_refcount=0` (00:42:11).
+    - After prefill: `active=1 pages_in_use=1 free=47 max_refcount=1` (00:42:40).
+    - After decode: `active=0 pages_in_use=0 free=48 max_refcount=0` (00:43:56).
+    - After cleanup: `active=0 pages_in_use=0 free=48 max_refcount=0` (00:43:57).
 
 Rollback:
 - Disable incremental cleanup (`cleanup_mode: end`), keep end-of-generation cleanup only.
 
 ### M5 - Multi-Prompt Admission: Pick One Strategy and Make It Boring
+
+Status: IN PROGRESS (2026-02-05)
 
 Goal: eliminate the "multi-prompt fails with exit status 1" class by reducing complexity in orchestration.
 
@@ -340,6 +352,31 @@ Exit criteria:
 
 Rollback:
 - Revert to known-good single-request mode; keep diagnostics.
+
+Progress so far:
+- Multi-prompt (5 prompts, 2048 tokens, reset_mode=physical, cleanup_mode=end) with `n_rounds: 5`
+  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical.yaml`
+  - Log: `/tmp/levanter_run_m5_5prompts_reset_physical.log`
+  - Log evidence (2026-02-05):
+    - After reset: `active=0 pages_in_use=0 free=240 max_refcount=0` (00:50:44).
+    - After prefill: `active=5 pages_in_use=5 free=235 max_refcount=1` (00:51:22).
+    - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (00:55:29).
+    - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (00:55:30).
+    - `launch.py` reports `Command execution on worker {0,1} failed with exit status 1` immediately after cleanup.
+- One-round diagnostic run to isolate multi-round behavior:
+  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round1.yaml`
+  - Log: `/tmp/levanter_run_m5_5prompts_round1.log`
+  - Log evidence (2026-02-05):
+    - After reset: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:03:36).
+    - After prefill: `active=5 pages_in_use=5 free=235 max_refcount=1` (01:04:14).
+    - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (01:08:21).
+    - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:08:22).
+    - `Job finished with no error`.
+
+Next steps for M5:
+- Run `n_rounds: 2` to confirm the failure is tied to >1 round (or a different issue).
+- Add explicit per-round logging/diagnostics in `sample_lm_multihost.py` (log round index + reset stats) to pinpoint where exit happens.
+- If failure only appears on round >1, add a post-round reset assertion helper (used mask + refcounts) and consider forcing a fresh engine reset between rounds as a diagnostic.
 
 ### M6 - Performance Work: Reference Attention and KV Update
 
