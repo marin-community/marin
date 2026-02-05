@@ -14,11 +14,8 @@
 
 """Configuration for Kelp tree diffusion models."""
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Type
-
-if TYPE_CHECKING:
-    from experiments.kelp.model.model import TreeDiffusionModel
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 
 @dataclass(frozen=True)
