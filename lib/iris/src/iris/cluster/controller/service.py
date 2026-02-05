@@ -371,11 +371,15 @@ class ControllerServiceImpl:
 
         all_jobs.sort(key=sort_key, reverse=reverse)
 
-        # Pagination
-        limit = min(request.limit if request.limit > 0 else 50, 500)
+        # Pagination (limit=0 means return all jobs)
         offset = max(request.offset, 0)
-        paginated_jobs = all_jobs[offset : offset + limit]
-        has_more = offset + limit < total_count
+        if request.limit > 0:
+            limit = min(request.limit, 500)
+            paginated_jobs = all_jobs[offset : offset + limit]
+            has_more = offset + limit < total_count
+        else:
+            paginated_jobs = all_jobs[offset:]
+            has_more = False
 
         return cluster_pb2.Controller.ListJobsResponse(
             jobs=paginated_jobs,
