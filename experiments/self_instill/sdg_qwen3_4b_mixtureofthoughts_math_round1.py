@@ -58,6 +58,9 @@ QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 # TPU resource type for inference steps
 RESOURCE_TYPE = "v5p-16"
 
+# Tensor parallel size for vLLM inference
+TENSOR_PARALLEL_SIZE = 4
+
 # Batch size for inference steps (smaller = less work lost on preemption)
 # With n=4 samples, batch_size=16 means 64 sequences per batch
 BATCH_SIZE = 16
@@ -244,7 +247,7 @@ generate_with_selection = ExecutorStep(
         # Model
         model_name=QWEN3_4B_HF_ID,
         engine_kwargs={
-            "tensor_parallel_size": 1,
+            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
             "max_model_len": 32768,
         },
         generation_kwargs={
@@ -264,7 +267,7 @@ generate_with_selection = ExecutorStep(
         # Ray Data
         num_instances=(1, 128),
         batch_size=BATCH_SIZE,
-        tensor_parallel_size=1,
+        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         preserve_order=False,
 
         # File
@@ -523,7 +526,7 @@ cycle_gen_questions = ExecutorStep(
         # Model
         model_name=QWEN3_4B_HF_ID,
         engine_kwargs={
-            "tensor_parallel_size": 1,
+            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
             "max_model_len": 32768,
         },
         generation_kwargs={
@@ -543,7 +546,7 @@ cycle_gen_questions = ExecutorStep(
         # Ray Data
         num_instances=(1, 256),
         batch_size=BATCH_SIZE,
-        tensor_parallel_size=1,
+        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         preserve_order=False,
 
         # File
@@ -671,7 +674,7 @@ cycle_compare = ExecutorStep(
         # Model
         model_name=QWEN3_4B_HF_ID,
         engine_kwargs={
-            "tensor_parallel_size": 1,
+            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
             "max_model_len": 32768,
         },
         generation_kwargs={
@@ -691,7 +694,7 @@ cycle_compare = ExecutorStep(
         # Ray Data
         num_instances=(1, 256),
         batch_size=BATCH_SIZE,
-        tensor_parallel_size=1,
+        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         preserve_order=False,
 
         # File
@@ -732,7 +735,7 @@ factual_check = ExecutorStep(
         # Model
         model_name=QWEN3_4B_HF_ID,
         engine_kwargs={
-            "tensor_parallel_size": 1,
+            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
             "max_model_len": 32768,
         },
         generation_kwargs={
@@ -752,7 +755,7 @@ factual_check = ExecutorStep(
         # Ray Data
         num_instances=(1, 256),
         batch_size=BATCH_SIZE,
-        tensor_parallel_size=1,
+        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         preserve_order=False,
 
         # File
@@ -793,7 +796,7 @@ correctness_check = ExecutorStep(
         # Model
         model_name=QWEN3_4B_HF_ID,
         engine_kwargs={
-            "tensor_parallel_size": 1,
+            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
             "max_model_len": 32768,
         },
         generation_kwargs={
@@ -813,7 +816,7 @@ correctness_check = ExecutorStep(
         # Ray Data
         num_instances=(1, 256),
         batch_size=BATCH_SIZE,
-        tensor_parallel_size=1,
+        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         preserve_order=False,
 
         # File
