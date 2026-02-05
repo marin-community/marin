@@ -57,7 +57,7 @@ from experiments.self_instill.prompts import REASONING_INSTRUCTION
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 
 # TPU resource type for inference steps
-RESOURCE_TYPE = "v5p-16"
+RESOURCE_TYPE = "v5p-8"
 
 # Batch size for inference steps (smaller = less work lost on preemption)
 # With n=4 samples, batch_size=16 means 64 sequences per batch
