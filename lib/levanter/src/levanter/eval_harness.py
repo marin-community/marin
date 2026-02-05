@@ -231,6 +231,9 @@ class _LmEvalHarnessWorker:
         generation_kwargs=None,
         sample_logging_config: SampleLoggingConfig | None = None,
         profiler_config: ProfilerConfig | None = None,
+        inference_max_seqs: int = 64,
+        inference_max_seqs_in_prefill: int = 16,
+        inference_hbm_utilization: float = 0.5,
     ):
         self.tokenizer = tokenizer
         self.max_packed_segments = max_packed_segments
@@ -243,6 +246,10 @@ class _LmEvalHarnessWorker:
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.sample_logging_config = sample_logging_config or SampleLoggingConfig()
         self.profiler_config = profiler_config or ProfilerConfig()
+        # Inference engine configuration
+        self.inference_max_seqs = inference_max_seqs
+        self.inference_max_seqs_in_prefill = inference_max_seqs_in_prefill
+        self.inference_hbm_utilization = inference_hbm_utilization
 
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
 
@@ -825,16 +832,16 @@ class LevanterHarnessLM(TemplateLM):
                 max_stop_seqs = max(max_stop_seqs, num_stop_seqs)
                 max_stop_tokens = max(max_stop_tokens, num_stop_tokens)
 
-        # [ChiHeem,2025-10-06] TODO: Pass this from marin to allow users to
-        # optimize the inference based on hardware and model.
+        # Use configurable inference parameters to avoid OOM on large models
         engine_cfg = InferenceEngineConfig(
             max_stop_seqs=max_stop_seqs,
             max_stop_tokens=max_stop_tokens,
             max_seq_len=max_length,
-            max_seqs=256,
+            max_seqs=self.leader.inference_max_seqs,
+            max_seqs_in_prefill=self.leader.inference_max_seqs_in_prefill,
             page_size=8,
             compute_dtype=jnp.bfloat16,
-            hbm_utilization=0.5,
+            hbm_utilization=self.leader.inference_hbm_utilization,
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
@@ -1065,6 +1072,25 @@ class LmEvalHarnessConfig:
 
     Use marin.evaluation.eval_dataset_cache.create_cache_eval_datasets_step() to
     pre-cache datasets before training.
+    """
+
+    # Inference engine configuration for generation tasks
+    inference_max_seqs: int = 64
+    """
+    Maximum concurrent sequences for generation. Lower values use less memory but
+    may be slower. Default reduced from 256 to 64 to avoid OOM on large models.
+    """
+
+    inference_max_seqs_in_prefill: int = 16
+    """
+    Maximum number of sequences to batch together during prefill. Controls memory
+    usage during the initial prompt processing phase.
+    """
+
+    inference_hbm_utilization: float = 0.5
+    """
+    Fraction of HBM to use for KV cache. Lower values leave more room for the model
+    and batch data. Range: 0.0 to 1.0.
     """
 
     @property
@@ -1349,6 +1375,9 @@ def _actually_run_eval_harness(
         generation_kwargs=config.generation_kwargs,
         sample_logging_config=config.sample_logging,
         profiler_config=profiler_config,
+        inference_max_seqs=config.inference_max_seqs,
+        inference_max_seqs_in_prefill=config.inference_max_seqs_in_prefill,
+        inference_hbm_utilization=config.inference_hbm_utilization,
     )
 
     if jax.process_index() == 0:
