@@ -251,7 +251,7 @@ def _extract_function_info(node, source: bytes) -> dict | None:
     body_nodes = []
 
     for child in node.children:
-        if child.type == "name":
+        if child.type == "identifier":
             name = node_text(child, source)
         elif child.type == "parameters":
             parameters = node_text(child, source)
