@@ -266,13 +266,11 @@ class ServiceCommands(click.MultiCommand):
     def __init__(self, service_name: str, **attrs):
         super().__init__(**attrs)
         self.service_name = service_name
-        self.available_methods = {}
 
     def list_commands(self, _ctx: click.Context) -> list[str]:
         svc = get_service(self.service_name)
         if not svc:
             return []
-        self.available_methods = svc.methods
         return [to_kebab_case(m) for m in sorted(svc.methods.keys())]
 
     def get_command(self, ctx: click.Context, name: str) -> click.Command | None:
@@ -284,28 +282,25 @@ class ServiceCommands(click.MultiCommand):
         if not method:
             return None
 
-        # Get controller_url from parent context (established in main.py)
-        controller_url = ctx.obj.get("controller_url")
-        if not controller_url:
-            raise click.ClickException(
-                f"Either --controller-url or --config is required for {self.service_name} RPC commands"
-            )
+        return self._build_command_for_method(method)
 
-        return self.build_command_from_method(controller_url, method, name)
-
-    def build_command_from_method(self, controller_url: str, method: MethodInfo, name: str) -> click.Command:
-        """Build a Click command for an RPC method with the controller URL already resolved."""
+    def _build_command_for_method(self, method: MethodInfo) -> click.Command:
+        """Build a Click command for an RPC method."""
         options: list[click.Parameter] = [
             click.Option(["--json", "json_str"], default=None, help="Full JSON request body"),
         ]
-
         options.extend(_build_options_from_proto(method.input_type))
+
+        service_name = self.service_name
 
         @click.pass_context
         def callback(ctx: click.Context, json_str: str | None, **kwargs):
+            controller_url = ctx.obj.get("controller_url")
+            if not controller_url:
+                raise click.ClickException("Either --controller-url or --config is required for RPC commands")
             field_values = {k: v for k, v in kwargs.items() if v is not None}
             request = build_request(method, json_str, field_values)
-            response = call_rpc(self.service_name, method.name, controller_url, request)
+            response = call_rpc(service_name, method.name, controller_url, request)
             click.echo(format_response(response))
 
         return click.Command(
@@ -316,8 +311,17 @@ class ServiceCommands(click.MultiCommand):
         )
 
 
+@click.group()
+def rpc():
+    """Execute RPC calls against Iris services."""
+    pass
+
+
+rpc.add_command(ServiceCommands("controller", name="controller", help="Controller service RPC methods"))
+rpc.add_command(ServiceCommands("worker", name="worker", help="Worker service RPC methods"))
+rpc.add_command(ServiceCommands("actor", name="actor", help="Actor service RPC methods"))
+
+
 def register_rpc_commands(iris_group: click.Group) -> None:
-    """Register RPC service commands on the top-level iris group."""
-    iris_group.add_command(ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods"))
-    iris_group.add_command(ServiceCommands("worker", name="worker-rpc", help="Worker service RPC methods"))
-    iris_group.add_command(ServiceCommands("actor", name="actor-rpc", help="Actor service RPC methods"))
+    """Register the rpc command group on the top-level iris group."""
+    iris_group.add_command(rpc)
