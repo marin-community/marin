@@ -226,10 +226,12 @@ def create_quine_data_iter(
         code_ids = tokenizer.encode(item["code"])
 
         if len(code_ids) <= max_seq_len:
-            encoded_examples.append({
-                "tokens": code_ids,
-                "prefix_len": min(len(prompt_ids), max_seq_len),
-            })
+            encoded_examples.append(
+                {
+                    "tokens": code_ids,
+                    "prefix_len": min(len(prompt_ids), max_seq_len),
+                }
+            )
 
     logger.info(f"Created {len(encoded_examples)} examples from quine dataset")
 

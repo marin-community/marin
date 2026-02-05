@@ -320,12 +320,12 @@ CONVERSION_PROGRAMS = [
     ToyProgram(
         docstring="Convert a binary string to an integer.",
         signature="def binary_to_int(s: str) -> int:",
-        body='    return int(s, 2)',
+        body="    return int(s, 2)",
     ),
     ToyProgram(
         docstring="Convert an integer to a binary string.",
         signature="def int_to_binary(n: int) -> str:",
-        body='    return bin(n)[2:]',
+        body="    return bin(n)[2:]",
     ),
 ]
 
