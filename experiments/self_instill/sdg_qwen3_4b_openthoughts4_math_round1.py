@@ -479,19 +479,26 @@ def prep_validation_prompts(config: PrepValidationConfig):
         question = question.strip()
         answer = answer.strip()
 
-        # Cycle consistency - step 1: generate inferred question
-        row["cycle_gen_prompt"] = cycle_gen_prompt_template.format(answer=answer)
+        # Extract final answer (after </think>) for cycle consistency
+        # We only want to check if the conclusion addresses the question, not the reasoning
+        if "</think>" in answer:
+            final_answer = answer.split("</think>")[-1].strip()
+        else:
+            final_answer = answer
 
-        # Factual error prompt
+        # Cycle consistency - step 1: generate inferred question (uses final answer only)
+        row["cycle_gen_prompt"] = cycle_gen_prompt_template.format(answer=final_answer)
+
+        # Factual error prompt (uses final answer only, not reasoning trace)
         row["factual_prompt"] = factual_prompt_template.format(
             question=question,
-            answer=answer,
+            answer=final_answer,
         )
 
-        # Total correctness prompt
+        # Total correctness prompt (uses final answer only, not reasoning trace)
         row["correctness_prompt"] = correctness_prompt_template.format(
             question=question,
-            answer=answer,
+            answer=final_answer,
         )
 
         return row
