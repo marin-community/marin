@@ -26,7 +26,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from iris.config import IrisConfig
-from iris.cluster.platform.controller_runtime import ControllerRuntime
+from iris.cluster.platform.controller_vm import ControllerVm
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 
@@ -61,7 +61,7 @@ class ClusterManager:
         self._threads = threads if threads is not None else get_thread_container()
         self._iris_config = IrisConfig(config)
         self._platform = self._iris_config.platform()
-        self._controller: ControllerRuntime | None = None
+        self._controller: ControllerVm | None = None
 
     @property
     def is_local(self) -> bool:
@@ -74,7 +74,7 @@ class ClusterManager:
         For local: starts in-process Controller, returns localhost URL.
         """
         if self._controller is None:
-            self._controller = ControllerRuntime(self._platform, self._iris_config.proto, threads=self._threads)
+            self._controller = ControllerVm(self._platform, self._iris_config.proto, threads=self._threads)
         address = self._controller.start()
         logger.info("Controller started at %s (local=%s)", address, self.is_local)
         return address
@@ -111,7 +111,7 @@ class ClusterManager:
         """
         # Reload controller - it will re-bootstrap workers on startup
         if self._controller is None:
-            self._controller = ControllerRuntime(self._platform, self._iris_config.proto, threads=self._threads)
+            self._controller = ControllerVm(self._platform, self._iris_config.proto, threads=self._threads)
         address = self._controller.reload()
         logger.info("Controller reloaded at %s", address)
 
@@ -133,7 +133,7 @@ class ClusterManager:
             self.stop()
 
     @property
-    def controller(self) -> ControllerRuntime:
+    def controller(self) -> ControllerVm:
         """Access the underlying controller (must call start() first)."""
         if self._controller is None:
             raise RuntimeError("ClusterManager.start() not called")

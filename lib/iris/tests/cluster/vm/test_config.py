@@ -29,7 +29,7 @@ from iris.config import (
     get_ssh_config,
     load_config,
 )
-from iris.cluster.platform.platform import create_platform
+from iris.cluster.platform import create_platform
 from iris.config import IrisConfig
 from iris.rpc import config_pb2
 

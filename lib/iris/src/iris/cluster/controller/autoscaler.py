@@ -125,10 +125,7 @@ def route_demand(
     routed: dict[str, list[DemandEntry]] = {}
     unmet: list[UnmetDemand] = []
     group_reasons: dict[str, str] = {}
-    group_zones = {
-        group.name: (group.config.zones[0] if group.config.zones else "")
-        for group in sorted_groups
-    }
+    group_zones = {group.name: group.config.zones[0] if group.config.zones else "" for group in sorted_groups}
 
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):

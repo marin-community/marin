@@ -40,14 +40,16 @@ import subprocess
 import sys
 import threading
 import uuid
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from iris.cluster.types import get_tpu_topology, tpu_device
-from iris.cluster.platform.worker_vm import WorkerVm, VmRegistry
-from iris.cluster.platform.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
+from iris.cluster.platform.base import VmBootstrapSpec, VmInfo, VmState
+from iris.cluster.platform.worker_vm import TrackedVmFactory, WorkerVm, VmRegistry
+from iris.cluster.platform.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot, VmManagerProtocol
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
@@ -689,3 +691,52 @@ class LocalVmManager:
     def stop(self) -> None:
         """Stop all container threads managed by this VM manager."""
         self._threads.stop(timeout=Duration.from_seconds(5.0))
+
+
+class _LocalPlatformOps:
+    def list_slices(self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None) -> list[str]:
+        return []
+
+    def delete_slice(
+        self,
+        group_config: config_pb2.ScaleGroupConfig,
+        slice_id: str,
+        *,
+        zone: str | None = None,
+    ) -> None:
+        return None
+
+
+class LocalPlatform:
+    """Platform for local testing (no cloud resources)."""
+
+    def vm_ops(self) -> _LocalPlatformOps:
+        return _LocalPlatformOps()
+
+    def vm_manager(
+        self,
+        group_config: config_pb2.ScaleGroupConfig,
+        vm_factory: TrackedVmFactory,
+        *,
+        dry_run: bool = False,
+    ) -> VmManagerProtocol:
+        raise NotImplementedError("Local platform uses LocalController autoscaler")
+
+    def tunnel(
+        self,
+        controller_address: str,
+        local_port: int | None = None,
+        timeout: float | None = None,
+        tunnel_logger: logging.Logger | None = None,
+    ) -> AbstractContextManager[str]:
+        """Return direct connection for local platform (no tunnel needed)."""
+        return nullcontext(controller_address)
+
+    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[VmInfo]:
+        return []
+
+    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[VmInfo]:
+        raise NotImplementedError("Local platform uses in-process controller runtime")
+
+    def stop_vms(self, ids: list[str], *, zone: str | None = None) -> None:
+        return None

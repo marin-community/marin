@@ -21,8 +21,8 @@ This module provides:
 - VmGroupStatus: Aggregate status computed from VM states
 
 Platform-specific implementations live in separate modules:
-- gcp_tpu_platform.py: TpuVmManager, TpuVmGroup
-- manual_platform.py: ManualVmManager, ManualVmGroup
+- gcp.py: TpuVmManager, TpuVmGroup
+- manual.py: ManualVmManager, ManualVmGroup
 """
 
 from __future__ import annotations

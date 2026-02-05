@@ -29,7 +29,7 @@ import pytest
 
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.docker import ContainerConfig, DockerRuntime
-from iris.cluster.worker.env_probe import collect_workdir_size_mb
+from iris.cluster.platform.env_probe import collect_workdir_size_mb
 from iris.rpc import cluster_pb2
 
 TEST_IMAGE = "iris-test-runtime:latest"

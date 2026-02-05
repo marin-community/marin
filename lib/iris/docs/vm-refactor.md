@@ -2,7 +2,7 @@
 
 ## Background (Pre-Refactor)
 
-Before this change, controller-owned autoscaler logic lived under `cluster/vm/`, which blurred ownership boundaries. The controller owned autoscaling policy, but the code lived alongside platform-specific VM operations and bootstrapping. That made it harder to reason about where controller responsibilities ended and platform responsibilities began.
+Historically, controller-owned autoscaler logic lived under `cluster/vm/`, which blurred ownership boundaries. The controller owned autoscaling policy, but the code lived alongside platform-specific VM operations and bootstrapping. That made it harder to reason about where controller responsibilities ended and platform responsibilities began.
 
 ## Goals
 
@@ -21,17 +21,28 @@ Non-goals:
 
 ```mermaid
 flowchart LR
-  CLI["iris CLI\n`cli/main.py`"] --> IrisConfig["IrisConfig\n`cluster/vm/config.py`"]
-  IrisConfig --> Platform["Platform\n`cluster/vm/platform.py`"]
+  CLI["iris CLI
+`cli/main.py`"] --> IrisConfig["IrisConfig
+`cluster/vm/config.py`"]
+  IrisConfig --> Platform["Platform
+`cluster/vm/platform.py`"]
   Platform -->|"tunnel()"| Tunnel["Controller URL"]
 
-  Controller["Controller\n`cluster/controller/controller.py`"] --> Autoscaler["Autoscaler\n`cluster/vm/autoscaler.py`"]
-  Autoscaler --> ScalingGroup["ScalingGroup\n`cluster/vm/scaling_group.py`"]
-  ScalingGroup --> VmManager["VmManager\n`cluster/vm/*_platform.py`"]
-  VmManager --> WorkerVm["ManagedVm + bootstrap\n`cluster/vm/managed_vm.py`"]
-  WorkerVm --> SSH["SSH\n`cluster/vm/ssh.py`"]
+  Controller["Controller
+`cluster/controller/controller.py`"] --> Autoscaler["Autoscaler
+`cluster/vm/autoscaler.py`"]
+  Autoscaler --> ScalingGroup["ScalingGroup
+`cluster/vm/scaling_group.py`"]
+  ScalingGroup --> VmManager["VmManager
+`cluster/vm/*_platform.py`"]
+  VmManager --> ManagedVm["ManagedVm + bootstrap
+`cluster/vm/managed_vm.py`"]
+  ManagedVm --> SSH["SSH
+`cluster/vm/ssh.py`"]
 
-  ClusterManager["ClusterManager\n`cluster/vm/cluster_manager.py`"] --> ControllerVm["Controller VM\n`cluster/vm/controller_vm.py`"]
+  ClusterManager["ClusterManager
+`cluster/vm/cluster_manager.py`"] --> ControllerVm["Controller VM
+`cluster/vm/controller_vm.py`"]
   ControllerVm --> Controller
 ```
 
@@ -47,14 +58,15 @@ lib/iris/src/iris/
       scaling_group.py
     platform/
       base.py                # shared VM lifecycle types
-      platform.py            # platform factory + GCP/manual/local implementations
-      gcp_tpu_platform.py    # GCP TPU management
-      manual_platform.py     # manual hosts
-      local_platform.py      # local platform
+      bootstrap.py           # controller/worker bootstrap scripts + health checks
+      gcp.py                 # GCP TPU + controller VM management
+      manual.py              # manual hosts
+      local.py               # local in-process platform
       ssh.py                 # SSH + tunneling helpers
-      worker_vm.py           # WorkerVm + bootstrap + registry
-      controller_runtime.py  # controller lifecycle wrapper
-      controller_vm.py       # controller bootstrap helpers + LocalController
+      env_probe.py           # environment discovery (worker)
+      worker_vm.py           # WorkerVm + registry + lifecycle
+      controller_vm.py       # controller lifecycle wrapper + LocalController
+      vm_platform.py         # VM group protocols/status helpers
 ```
 
 ## Shared Types (Avoiding Leakage)
@@ -90,16 +102,17 @@ class VmBootstrapSpec:
 
 Design rules:
 
-- `VmInfo` contains only identity and connectivity. Provider-specific metadata stays in platform-specific code.
+- `VmInfo` contains only identity + connectivity. Provider-specific metadata stays in platform-specific code.
 - `VmBootstrapSpec` describes *what to run*. Provisioning details live in `provider_overrides` and are interpreted only by the platform implementation.
+- `VmState` is platform-agnostic (booting/running/terminated/failed) and is mapped to platform-specific states in each provider module.
 
 ## Controller Lifecycle Wrapper
 
-`cluster/platform/controller_runtime.py` is a thin wrapper that composes platform VM APIs with the controller bootstrap recipe:
+`cluster/platform/controller_vm.py` is a thin wrapper that composes platform VM APIs with the controller bootstrap recipe:
 
 - Uses `Platform.list_vms/start_vms/stop_vms` for GCP/manual controller VMs.
-- Uses `LocalController` from `controller_vm.py` for local mode.
-- Keeps controller bootstrap logic (container command, config YAML, health checks) centralized.
+- Uses `LocalController` for local mode.
+- Pulls bootstrap scripts and health checks from `cluster/platform/bootstrap.py`.
 
 This keeps controller ownership intact while letting platform implementations manage infrastructure.
 
@@ -107,48 +120,78 @@ This keeps controller ownership intact while letting platform implementations ma
 
 - Platform APIs accept an optional `zone` parameter for operations that can be zoned.
 - Platform ops are **zone-scoped** and do not sweep all zones implicitly.
-- CLI commands that need global behavior (e.g., `cluster stop`) iterate all configured zones by default. `--zone` is an override.
-- Autoscaler status now includes `group_zones` in the routing decision for observability. The value is the first configured zone (single-zone support today).
+- CLI commands that need global behavior (e.g. `cluster stop`) iterate all configured zones by default. `--zone` is an override.
+- We currently support **single-zone** operation; if multiple zones are configured, platform helpers require the caller to pass `zone` explicitly.
 
 ## Current Control Flow
 
 ```mermaid
 flowchart LR
-  CLI["iris CLI\n`cli/main.py`"] --> IrisConfig["IrisConfig\n`iris/config.py`"]
-  IrisConfig --> Platform["Platform\n`cluster/platform/platform.py`"]
-  Platform --> ControllerRuntime["ControllerRuntime\n`cluster/platform/controller_runtime.py`"]
-  ControllerRuntime --> Controller["Controller\n`cluster/controller/controller.py`"]
+  CLI["iris CLI
+`cli/main.py`"] --> IrisConfig["IrisConfig
+`iris/config.py`"]
+  IrisConfig --> Platform["Platform
+`cluster/platform/__init__.py`"]
+  Platform --> ControllerVm["ControllerVm
+`cluster/platform/controller_vm.py`"]
+  ControllerVm --> Controller["Controller
+`cluster/controller/controller.py`"]
   Platform -->|"tunnel()"| Tunnel["Controller URL"]
 
-  Controller --> Autoscaler["Autoscaler\n`cluster/controller/autoscaler.py`"]
-  Autoscaler --> ScalingGroup["ScalingGroup\n`cluster/controller/scaling_group.py`"]
-  ScalingGroup --> VmManager["VmManager\n`cluster/platform/vm_platform.py`"]
-  VmManager --> WorkerVm["WorkerVm + bootstrap\n`cluster/platform/worker_vm.py`"]
-  WorkerVm --> SSH["SSH\n`cluster/platform/ssh.py`"]
+  Controller --> Autoscaler["Autoscaler
+`cluster/controller/autoscaler.py`"]
+  Autoscaler --> ScalingGroup["ScalingGroup
+`cluster/controller/scaling_group.py`"]
+  ScalingGroup --> VmManager["VmManager
+`cluster/platform/vm_platform.py`"]
+  VmManager --> WorkerVm["WorkerVm
+`cluster/platform/worker_vm.py`"]
+  WorkerVm --> Bootstrap["Bootstrap
+`cluster/platform/bootstrap.py`"]
+  WorkerVm --> SSH["SSH
+`cluster/platform/ssh.py`"]
 ```
+
+## Options Considered
+
+1) Separate `ControllerRuntime` module vs `ControllerVm`
+- Separate runtime wrapper adds an extra indirection layer but duplicates controller lifecycle logic.
+- Consolidating into `ControllerVm` keeps bootstrap + platform wiring in one place and removes an extra API surface.
+- **Chosen:** `ControllerVm` (no separate runtime wrapper).
+
+2) Global `list_slices()` vs zone-scoped `list_slices()`
+- Global sweeps are surprising and hard to reason about when zones expand.
+- Zone-scoped calls are explicit; the CLI can still iterate zones for global behavior.
+- **Chosen:** zone-scoped APIs with CLI-driven iteration.
+
+3) Bootstrap logic in `controller_vm.py` vs separate module
+- Keeping scripts in `controller_vm.py` co-locates controller lifecycle and shell templates.
+- Extracting to `bootstrap.py` makes both worker + controller bootstrap reusable and testable.
+- **Chosen:** `cluster/platform/bootstrap.py`.
 
 ## Change List (Implemented)
 
-- Moved autoscaler and scaling group code to `cluster/controller/`.
-- Renamed `ManagedVm` to `WorkerVm` and moved VM/SSH modules under `cluster/platform/`.
-- Added platform-generic VM lifecycle APIs (`list_vms/start_vms/stop_vms`) with optional `zone`.
-- Added `ControllerRuntime` to manage controller lifecycle via platform APIs.
-- Moved config handling to top-level `iris/config.py`.
-- Updated CLI to use the platform and controller runtime wrappers.
-- Extended autoscaler status with `group_zones` for routing visibility.
+- Consolidated platform code under `cluster/platform/` with a single platform factory in `cluster/platform/__init__.py`.
+- Introduced `bootstrap.py` to own controller/worker bootstrap scripts and health checks.
+- Renamed platform implementations to `gcp.py`, `manual.py`, `local.py`.
+- Added `ControllerVm` wrapper that drives controller lifecycle via platform APIs.
+- Moved environment probing to `cluster/platform/env_probe.py`.
+- Updated CLI and cluster manager to use `ControllerVm` and platform APIs.
+- Preserved shared type boundaries via `VmInfo`, `VmBootstrapSpec`, and `ContainerSpec`.
 
 ## Spiral Plan (Executed)
 
-Stage 1: Top-level config and platform factory
-- Add `iris/config.py` with `IrisConfig` and defaults.
-- Update imports to use top-level config.
+Stage 1: Shared types + bootstrap
+- Move shared VM lifecycle types to `cluster/platform/base.py`.
+- Extract controller + worker bootstrap scripts into `cluster/platform/bootstrap.py`.
+- Update WorkerVm to use shared bootstrap helpers.
 
-Stage 2: Platform VM lifecycle APIs + controller wrapper
-- Add `VmInfo`/`VmBootstrapSpec` shared types in `cluster/platform/base.py`.
-- Extend platform implementations with `list_vms/start_vms/stop_vms`.
-- Implement `ControllerRuntime` on top of platform APIs.
+Stage 2: Platform layout + controller wrapper
+- Rename platform modules to `gcp.py`, `manual.py`, `local.py`.
+- Add platform factory + `Platform` protocol in `cluster/platform/__init__.py`.
+- Implement `ControllerVm` wrapper and remove controller runtime indirection.
 
-Stage 3: Move packages, update autoscaler + UI
-- Move `cluster/vm/*` to `cluster/platform/*` and rename `ManagedVm` to `WorkerVm`.
-- Move autoscaler/scaling group into `cluster/controller/`.
-- Update autoscaler status with zone visibility and update dashboard rendering.
+Stage 3: Wire-up + cleanup
+- Update CLI and cluster manager imports to new platform layout.
+- Update tests and documentation to match new module structure.
+- Confirm zone handling is explicit and single-zone-safe.

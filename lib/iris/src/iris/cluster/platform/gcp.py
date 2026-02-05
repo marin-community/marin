@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Platform abstraction for VM lifecycle and direct operations."""
+"""GCP platform implementation for controller VMs and TPU worker slices."""
 
 from __future__ import annotations
 
@@ -21,95 +21,359 @@ import logging
 import shlex
 import subprocess
 import time
-from contextlib import AbstractContextManager, nullcontext
-from typing import Protocol
 from collections.abc import Mapping
+from contextlib import AbstractContextManager
 
 from iris.cluster.platform.base import VmBootstrapSpec, VmInfo, VmState
-from iris.cluster.platform.gcp_tpu_platform import (
-    TpuVmManager,
-    controller_address_metadata_key,
-    controller_metadata_key,
-)
-from iris.cluster.platform.worker_vm import SshConfig, TrackedVmFactory
-from iris.cluster.platform.manual_platform import ManualVmManager
-from iris.cluster.platform.ssh import DirectSshConnection, GceSshConnection, run_streaming_with_retry
-from iris.cluster.platform.vm_platform import VmManagerProtocol
-from iris.cluster.platform.controller_vm import (
-    CONTROLLER_CONTAINER_NAME,
-    CONTROLLER_STOP_SCRIPT,
+from iris.cluster.platform.bootstrap import (
     DEFAULT_BOOT_DISK_SIZE_GB,
     DEFAULT_CONTROLLER_PORT,
     DEFAULT_MACHINE_TYPE,
     wait_healthy_via_ssh,
 )
-from iris.rpc import config_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.cluster.platform.ssh import GceSshConnection, GcloudSshConnection, run_streaming_with_retry
+from iris.cluster.platform.vm_platform import VmGroupStatus, VmManagerProtocol, VmSnapshot
+from iris.cluster.platform.worker_vm import TrackedVmFactory, WorkerVm, VmFactory, VmRegistry
+from iris.cluster.types import get_tpu_topology
+from iris.rpc import config_pb2, vm_pb2
+from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
 
-class PlatformOps(Protocol):
-    """Direct, non-lifecycle VM operations used by CLI cleanup."""
+def controller_metadata_key(label_prefix: str) -> str:
+    """Metadata key to mark a VM as the controller for a given prefix."""
+    return f"iris-controller-{label_prefix}"
 
-    def list_slices(self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None) -> list[str]: ...
 
-    def delete_slice(
+def controller_address_metadata_key(label_prefix: str) -> str:
+    """Metadata key for the controller address for a given prefix."""
+    return f"iris-controller-address-{label_prefix}"
+
+
+class TpuVmGroup:
+    """A TPU VM group with lifecycle management.
+
+    Represents a TPU pod (potentially multi-host) that can be managed
+    as an atomic unit. The group owns its WorkerVm instances and
+    coordinates their lifecycle.
+    """
+
+    def __init__(
         self,
-        group_config: config_pb2.ScaleGroupConfig,
-        slice_id: str,
-        *,
-        zone: str | None = None,
-    ) -> None: ...
+        group_id: str,
+        scale_group: str,
+        zone: str,
+        project_id: str,
+        vms: list[WorkerVm],
+        vm_registry: VmRegistry,
+        created_at: Timestamp | None = None,
+    ):
+        self._group_id = group_id
+        self._scale_group = scale_group
+        self._zone = zone
+        self._project_id = project_id
+        self._vms = vms
+        self._vm_registry = vm_registry
+        self._created_at = created_at if created_at is not None else Timestamp.now()
 
+    @property
+    def group_id(self) -> str:
+        return self._group_id
 
-class Platform(Protocol):
-    """Factory for provider-specific VM managers and ops."""
+    @property
+    def slice_id(self) -> str:
+        return self._group_id
 
-    def vm_ops(self) -> PlatformOps: ...
+    @property
+    def scale_group(self) -> str:
+        return self._scale_group
 
-    def vm_manager(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        vm_factory: TrackedVmFactory,
-        *,
-        dry_run: bool = False,
-    ) -> VmManagerProtocol: ...
+    @property
+    def created_at_ms(self) -> int:
+        """Timestamp when this VM group was created (milliseconds since epoch)."""
+        return self._created_at.epoch_ms()
 
-    def tunnel(
-        self,
-        controller_address: str,
-        local_port: int | None = None,
-        timeout: float | None = None,
-        tunnel_logger: logging.Logger | None = None,
-    ) -> AbstractContextManager[str]:
-        """Create tunnel to controller if needed.
+    def status(self) -> VmGroupStatus:
+        """Compute status from current VM states."""
+        snapshots = [
+            VmSnapshot(
+                vm_id=vm.info.vm_id,
+                state=vm.info.state,
+                address=vm.info.address,
+                init_phase=vm.info.init_phase,
+                init_error=vm.info.init_error,
+            )
+            for vm in self._vms
+        ]
+        return VmGroupStatus(vms=snapshots)
 
-        For GCP: Returns SSH tunnel context manager that discovers controller VM
-        For local/manual: Returns nullcontext with direct address
+    def vms(self) -> list[WorkerVm]:
+        return list(self._vms)
 
-        Args:
-            controller_address: Controller address (used directly for local/manual)
-            local_port: Optional local port for tunnel (GCP only)
-            timeout: Optional connection timeout
-            tunnel_logger: Optional logger for tunnel status
+    def terminate(self) -> None:
+        """Terminate this VM group and unregister VMs.
 
-        Returns:
-            Context manager yielding controller URL
+        Performs three steps:
+        1. Stop all VM lifecycle threads
+        2. Unregister VMs from the registry
+        3. Delete TPU via gcloud command
         """
-        ...
+        for vm in self._vms:
+            vm.stop()
+            self._vm_registry.unregister(vm.info.vm_id)
 
-    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[VmInfo]:
-        """List VMs for the platform."""
-        ...
+        cmd = [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "delete",
+            self._group_id,
+            f"--zone={self._zone}",
+            f"--project={self._project_id}",
+            "--quiet",
+        ]
+        logger.info("Terminating TPU: %s", " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error("Failed to delete TPU %s: %s", self._group_id, result.stderr.strip())
 
-    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[VmInfo]:
-        """Start VMs using the bootstrap spec."""
-        ...
+    def to_proto(self) -> vm_pb2.SliceInfo:
+        """Convert to proto for RPC APIs."""
 
-    def stop_vms(self, ids: list[str], *, zone: str | None = None) -> None:
-        """Stop VMs by id."""
-        ...
+        return vm_pb2.SliceInfo(
+            slice_id=self._group_id,
+            scale_group=self._scale_group,
+            created_at=self._created_at.to_proto(),
+            vms=[vm.info for vm in self._vms],
+        )
+
+
+class TpuVmManager:
+    """Creates TPU VM groups via gcloud compute tpus tpu-vm.
+
+    One instance per scale group. This is a factory - it creates VM groups
+    but doesn't track them (the ScalingGroup tracks groups).
+
+    Multi-host TPUs (e.g., v5p-16, v5p-32) create a single TPU pod with
+    multiple workers, each accessed via a different worker index.
+    """
+
+    def __init__(
+        self,
+        project_id: str,
+        config: config_pb2.ScaleGroupConfig,
+        bootstrap_config: config_pb2.BootstrapConfig,
+        timeouts: config_pb2.TimeoutConfig,
+        vm_factory: VmFactory,
+        label_prefix: str = "iris",
+        dry_run: bool = False,
+    ):
+        self._project_id = project_id
+        self._config = config
+        self._zone = config.zones[0] if config.zones else "us-central1-a"
+        self._bootstrap_config = bootstrap_config
+        self._timeouts = timeouts
+        self._vm_factory = vm_factory
+        self._label_prefix = label_prefix
+        self._dry_run = dry_run
+
+    def create_vm_group(self, tags: dict[str, str] | None = None) -> TpuVmGroup:
+        """Create a new TPU VM group.
+
+        Creates the TPU pod via gcloud, then creates WorkerVm instances
+        for each worker in the pod.
+        """
+        group_id = f"{self._label_prefix}-{self._config.name}-{Timestamp.now().epoch_ms()}"
+
+        labels = {
+            f"{self._label_prefix}-managed": "true",
+            f"{self._label_prefix}-scale-group": self._config.name,
+            f"{self._label_prefix}-slice-id": group_id,
+        }
+        labels.update(tags or {})
+
+        logger.info(
+            "Creating TPU VM group %s (type=%s, zone=%s, dry_run=%s)",
+            group_id,
+            self._config.accelerator_variant,
+            self._zone,
+            self._dry_run,
+        )
+
+        if self._dry_run:
+            logger.info("[DRY-RUN] Would create TPU: %s", group_id)
+        else:
+            self._gcloud_create_tpu(group_id, labels)
+
+        return self._make_vm_group(group_id, labels, addresses=None)
+
+    def discover_vm_groups(self) -> list[TpuVmGroup]:
+        """Find existing TPU VM groups for this scale group.
+
+        Queries GCP for TPUs with the scale group label, then creates
+        TpuVmGroup objects for each discovered TPU.
+        """
+        groups = []
+        label_filter = f"labels.{self._label_prefix}-scale-group={self._config.name}"
+
+        for zone in self._config.zones or [self._zone]:
+            for tpu_data in self._gcloud_list_tpus(zone, label_filter):
+                state = tpu_data.get("state", "UNKNOWN")
+                if state not in ("READY", "CREATING"):
+                    logger.info(
+                        "Skipping TPU %s in state %s (not adoptable)",
+                        tpu_data["name"],
+                        state,
+                    )
+                    continue
+
+                addresses = [ep.get("ipAddress") for ep in tpu_data.get("networkEndpoints", [])]
+                vm_group = self._make_vm_group(
+                    group_id=tpu_data["name"],
+                    labels=tpu_data.get("labels", {}),
+                    addresses=addresses,
+                    zone=zone,
+                )
+                groups.append(vm_group)
+                logger.info("Discovered TPU VM group %s in zone %s", tpu_data["name"], zone)
+
+        return groups
+
+    def _get_discovery_preamble(self) -> str:
+        """Generate GCP metadata-based discovery script for worker bootstrap.
+
+        Workers query GCP instance metadata to find a running controller.
+        Uses prefix-scoped metadata keys to ensure workers connect to the correct
+        controller when multiple controllers exist with different prefixes.
+        """
+        meta_key = controller_metadata_key(self._label_prefix)
+        addr_key = controller_address_metadata_key(self._label_prefix)
+        return f"""
+# Discover controller from GCP instance metadata (prefix: {self._label_prefix})
+CONTROLLER_ADDRESS=$(gcloud compute instances list \\
+    --project={self._project_id} \\
+    --filter="metadata.items.{meta_key}=true AND status=RUNNING" \\
+    --format="value(metadata.items.filter(key:{addr_key}).firstof(value))" \\
+    --limit=1)
+
+if [ -z "$CONTROLLER_ADDRESS" ]; then
+    echo "[iris-init] ERROR: Could not discover controller via GCP metadata (prefix: {self._label_prefix})"
+    exit 1
+fi
+echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"
+"""
+
+    def _make_vm_group(
+        self,
+        group_id: str,
+        labels: dict[str, str],
+        addresses: list[str] | None,
+        zone: str | None = None,
+    ) -> TpuVmGroup:
+        """Create a TpuVmGroup with WorkerVm instances for each worker."""
+        zone = zone or self._zone
+        vm_count = get_tpu_topology(self._config.accelerator_variant).vm_count
+
+        # GCP workers discover controller via GCP instance metadata
+        discovery_preamble = self._get_discovery_preamble()
+
+        vms: list[WorkerVm] = []
+        for i in range(vm_count):
+            conn = GcloudSshConnection(
+                project_id=self._project_id,
+                _zone=zone,
+                vm_id=group_id,
+                worker_index=i,
+            )
+            address = addresses[i] if addresses and i < len(addresses) else None
+
+            vm = self._vm_factory.create_vm(
+                vm_id=f"{group_id}-worker-{i}",
+                slice_id=group_id,
+                scale_group=self._config.name,
+                zone=zone,
+                conn=conn,
+                bootstrap_config=self._bootstrap_config,
+                timeouts=self._timeouts,
+                labels=labels,
+                address=address,
+                discovery_preamble=discovery_preamble,
+            )
+            vms.append(vm)
+
+        return TpuVmGroup(
+            group_id=group_id,
+            scale_group=self._config.name,
+            zone=zone,
+            project_id=self._project_id,
+            vms=vms,
+            vm_registry=self._vm_factory.registry,
+        )
+
+    def _gcloud_create_tpu(self, group_id: str, labels: dict[str, str]) -> None:
+        """Create a TPU VM via gcloud."""
+        cmd = [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "create",
+            group_id,
+            f"--zone={self._zone}",
+            f"--project={self._project_id}",
+            f"--accelerator-type={self._config.accelerator_variant}",
+            f"--version={self._config.runtime_version}",
+            "--labels",
+            ",".join(f"{k}={v}" for k, v in labels.items()),
+        ]
+        if self._config.preemptible:
+            cmd.append("--preemptible")
+
+        logger.info("Running: %s", " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to create TPU: {result.stderr}")
+
+    def _gcloud_list_tpus(self, zone: str, label_filter: str) -> list[dict]:
+        """List TPU VMs in a zone matching a label filter."""
+        cmd = [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "list",
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--format=json",
+            f"--filter={label_filter}",
+        ]
+        logger.debug("Running: %s", " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning("Failed to list TPUs in zone %s: %s", zone, result.stderr.strip())
+            return []
+        if not result.stdout.strip():
+            return []
+        tpus = json.loads(result.stdout)
+        for tpu in tpus:
+            tpu["name"] = self._extract_node_name(tpu.get("name", ""))
+        return tpus
+
+    def _extract_node_name(self, resource_name: str) -> str:
+        """Extract node name from GCP resource path.
+
+        GCP returns 'projects/proj/locations/zone/nodes/my-tpu'
+        but gcloud delete expects just 'my-tpu'.
+        """
+        if "/" in resource_name:
+            return resource_name.split("/")[-1]
+        return resource_name
+
+    def stop(self) -> None:
+        """No-op: TpuVmManager has no background threads to stop."""
+        pass
 
 
 class _GcpPlatformOps:
@@ -140,61 +404,6 @@ class _GcpPlatformOps:
             raise RuntimeError(f"Failed to delete TPU slice {slice_id} in zone {resolved_zone}")
 
 
-class _ManualPlatformOps:
-    def __init__(self, ssh_config: SshConfig, bootstrap: config_pb2.BootstrapConfig):
-        self._ssh_config = ssh_config
-        self._bootstrap = bootstrap
-
-    def list_slices(self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None) -> list[str]:
-        hosts = list(group_config.manual.hosts)
-        if not hosts:
-            return []
-        port = self._bootstrap.worker_port or 10001
-        running: list[str] = []
-        for host in hosts:
-            conn = _direct_ssh(_apply_manual_overrides(self._ssh_config, group_config.manual), host)
-            try:
-                result = conn.run(
-                    f"curl -sf http://localhost:{port}/health",
-                    timeout=Duration.from_seconds(10),
-                )
-                if result.returncode == 0:
-                    running.append(host)
-            except Exception as exc:
-                logger.warning("Manual slice probe failed for host %s: %s", host, exc)
-                continue
-        return running
-
-    def delete_slice(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        slice_id: str,
-        *,
-        zone: str | None = None,
-    ) -> None:
-        conn = _direct_ssh(_apply_manual_overrides(self._ssh_config, group_config.manual), slice_id)
-        cmd = (
-            "sudo docker stop iris-worker 2>/dev/null || "
-            "sudo docker kill iris-worker 2>/dev/null || true; "
-            "sudo docker rm -f iris-worker 2>/dev/null || true"
-        )
-        conn.run(cmd, timeout=Duration.from_seconds(60))
-
-
-class _LocalPlatformOps:
-    def list_slices(self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None) -> list[str]:
-        return []
-
-    def delete_slice(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        slice_id: str,
-        *,
-        zone: str | None = None,
-    ) -> None:
-        return None
-
-
 class GcpPlatform:
     def __init__(
         self,
@@ -203,22 +412,13 @@ class GcpPlatform:
         bootstrap_config: config_pb2.BootstrapConfig,
         timeout_config: config_pb2.TimeoutConfig,
     ):
-        """Create GCP platform with explicit config sections.
-
-        No defaults here - all defaults resolved before this point.
-
-        Args:
-            gcp_config: GCP platform settings (project_id, region, zones, etc.)
-            label_prefix: Prefix for GCP resource labels
-            bootstrap_config: Worker bootstrap settings
-            timeout_config: VM lifecycle timeouts
-        """
+        """Create GCP platform with explicit config sections."""
         self._platform = gcp_config
         self._label_prefix = label_prefix
         self._bootstrap = bootstrap_config
         self._timeouts = timeout_config
 
-    def vm_ops(self) -> PlatformOps:
+    def vm_ops(self) -> _GcpPlatformOps:
         return _GcpPlatformOps(self._platform, self._label_prefix)
 
     def tunnel(
@@ -228,10 +428,7 @@ class GcpPlatform:
         timeout: float | None = None,
         tunnel_logger: logging.Logger | None = None,
     ) -> AbstractContextManager[str]:
-        """Create SSH tunnel to GCP controller VM.
-
-        Discovers the controller VM via labels and establishes port forwarding.
-        """
+        """Create SSH tunnel to GCP controller VM."""
         from iris.cluster.platform.debug import controller_tunnel
 
         zone = self._platform.zone or (self._platform.default_zones[0] if self._platform.default_zones else "")
@@ -357,217 +554,6 @@ class GcpPlatform:
             raise RuntimeError("platform.gcp.zone or platform.gcp.default_zones is required")
         for vm_id in ids:
             _gcloud_delete_instance(self._platform.project_id, resolved_zone, vm_id)
-
-
-class ManualPlatform:
-    def __init__(
-        self,
-        label_prefix: str,
-        bootstrap_config: config_pb2.BootstrapConfig,
-        timeout_config: config_pb2.TimeoutConfig,
-        ssh_config: config_pb2.SshConfig,
-    ):
-        """Create manual platform with explicit config sections.
-
-        Args:
-            label_prefix: Prefix for resource labels
-            bootstrap_config: Worker bootstrap settings
-            timeout_config: VM lifecycle timeouts
-            ssh_config: SSH connection settings
-        """
-        self._bootstrap = bootstrap_config
-        self._timeouts = timeout_config
-        self._label_prefix = label_prefix
-        self._ssh = _ssh_config_to_dataclass(ssh_config)
-
-    def vm_ops(self) -> PlatformOps:
-        return _ManualPlatformOps(self._ssh, self._bootstrap)
-
-    def tunnel(
-        self,
-        controller_address: str,
-        local_port: int | None = None,
-        timeout: float | None = None,
-        tunnel_logger: logging.Logger | None = None,
-    ) -> AbstractContextManager[str]:
-        """Return direct connection for manual platform (no tunnel needed)."""
-        return nullcontext(controller_address)
-
-    def vm_manager(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        vm_factory: TrackedVmFactory,
-        *,
-        dry_run: bool = False,
-    ) -> VmManagerProtocol:
-        if group_config.vm_type != config_pb2.VM_TYPE_MANUAL_VM:
-            raise ValueError(f"Unsupported vm_type for manual platform: {group_config.vm_type}")
-        hosts = list(group_config.manual.hosts)
-        if not hosts:
-            raise ValueError(f"Manual scale group {group_config.name} missing hosts")
-        ssh_config = _apply_manual_overrides(self._ssh, group_config.manual)
-        return ManualVmManager(
-            hosts=hosts,
-            config=group_config,
-            bootstrap_config=self._bootstrap,
-            timeouts=self._timeouts,
-            vm_factory=vm_factory,
-            ssh_config=ssh_config,
-            label_prefix=self._label_prefix,
-            dry_run=dry_run,
-        )
-
-    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[VmInfo]:
-        return []
-
-    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[VmInfo]:
-        if spec.role != "controller":
-            raise NotImplementedError("ManualPlatform.start_vms currently supports controller role only")
-
-        host = spec.provider_overrides.get("host")
-        if not host:
-            raise ValueError("provider_overrides.host is required for manual controller bootstrap")
-
-        port = spec.provider_overrides.get("port", DEFAULT_CONTROLLER_PORT)
-        ssh_user = spec.provider_overrides.get("ssh_user", self._ssh.user)
-        ssh_key_file = spec.provider_overrides.get("ssh_key_file", self._ssh.key_file)
-
-        conn = DirectSshConnection(
-            host=host,
-            user=ssh_user,
-            port=self._ssh.port,
-            key_file=ssh_key_file or None,
-            connect_timeout=self._ssh.connect_timeout,
-        )
-
-        if spec.bootstrap_script is None:
-            raise ValueError("bootstrap_script is required to start controller VM")
-
-        def on_line(line: str) -> None:
-            logger.info("[%s] %s", host, line)
-
-        run_streaming_with_retry(
-            conn,
-            f"bash -c {shlex.quote(spec.bootstrap_script)}",
-            on_line=on_line,
-        )
-
-        if port and not wait_healthy_via_ssh(conn, port):
-            raise RuntimeError(f"Controller at {host}:{port} failed health check after bootstrap")
-
-        address = spec.provider_overrides.get("address", f"http://{host}:{port}")
-
-        return [
-            VmInfo(
-                vm_id=host,
-                address=address,
-                zone=None,
-                labels=dict(spec.labels),
-                state=VmState.RUNNING,
-                created_at_ms=Timestamp.now().epoch_ms(),
-            )
-        ]
-
-    def stop_vms(self, ids: list[str], *, zone: str | None = None) -> None:
-        for host in ids:
-            conn = DirectSshConnection(
-                host=host,
-                user=self._ssh.user,
-                port=self._ssh.port,
-                key_file=self._ssh.key_file,
-                connect_timeout=self._ssh.connect_timeout,
-            )
-            try:
-                conn.run(
-                    f"bash -c {shlex.quote(CONTROLLER_STOP_SCRIPT.format(container_name=CONTROLLER_CONTAINER_NAME))}",
-                    timeout=Duration.from_seconds(60),
-                )
-            except Exception as exc:
-                logger.warning("Failed to stop controller on %s: %s", host, exc)
-
-
-class LocalPlatform:
-    """Platform for local testing (no cloud resources)."""
-
-    def vm_ops(self) -> PlatformOps:
-        return _LocalPlatformOps()
-
-    def vm_manager(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        vm_factory: TrackedVmFactory,
-        *,
-        dry_run: bool = False,
-    ) -> VmManagerProtocol:
-        raise NotImplementedError("Local platform uses LocalController autoscaler")
-
-    def tunnel(
-        self,
-        controller_address: str,
-        local_port: int | None = None,
-        timeout: float | None = None,
-        tunnel_logger: logging.Logger | None = None,
-    ) -> AbstractContextManager[str]:
-        """Return direct connection for local platform (no tunnel needed)."""
-        return nullcontext(controller_address)
-
-    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[VmInfo]:
-        return []
-
-    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[VmInfo]:
-        raise NotImplementedError("Local platform uses in-process controller runtime")
-
-    def stop_vms(self, ids: list[str], *, zone: str | None = None) -> None:
-        return None
-
-
-def create_platform(
-    platform_config: config_pb2.PlatformConfig,
-    bootstrap_config: config_pb2.BootstrapConfig,
-    timeout_config: config_pb2.TimeoutConfig,
-    ssh_config: config_pb2.SshConfig,
-) -> Platform:
-    """Create platform from explicit config sections.
-
-    Args:
-        platform_config: Platform type and settings (gcp/manual/local)
-        bootstrap_config: Worker bootstrap settings
-        timeout_config: VM lifecycle timeouts
-        ssh_config: SSH connection settings
-
-    Returns:
-        Platform instance for the configured platform type
-
-    Raises:
-        ValueError: If platform type is unspecified or invalid
-    """
-    if not platform_config.HasField("platform"):
-        raise ValueError("platform is required")
-
-    which = platform_config.WhichOneof("platform")
-
-    if which == "gcp":
-        if not platform_config.gcp.project_id:
-            raise ValueError("platform.gcp.project_id is required")
-        return GcpPlatform(
-            gcp_config=platform_config.gcp,
-            label_prefix=platform_config.label_prefix or "iris",
-            bootstrap_config=bootstrap_config,
-            timeout_config=timeout_config,
-        )
-
-    if which == "manual":
-        return ManualPlatform(
-            label_prefix=platform_config.label_prefix or "iris",
-            bootstrap_config=bootstrap_config,
-            timeout_config=timeout_config,
-            ssh_config=ssh_config,
-        )
-
-    if which == "local":
-        return LocalPlatform()
-
-    raise ValueError(f"Unknown platform: {which}")
 
 
 def _resolve_zones(
@@ -846,45 +832,3 @@ def _map_instance_status(status: str) -> VmState:
     if status in ("STOPPING", "TERMINATED"):
         return VmState.TERMINATED
     return VmState.FAILED
-
-
-def _direct_ssh(ssh_config: SshConfig, host: str) -> DirectSshConnection:
-    return DirectSshConnection(
-        host=host,
-        user=ssh_config.user,
-        port=ssh_config.port,
-        key_file=ssh_config.key_file or None,
-        connect_timeout=ssh_config.connect_timeout,
-    )
-
-
-def _ssh_config_to_dataclass(ssh: config_pb2.SshConfig) -> SshConfig:
-    """Convert proto SshConfig to dataclass SshConfig.
-
-    Args:
-        ssh: Proto SSH configuration (should have defaults already applied)
-
-    Returns:
-        SshConfig dataclass for use by SSH connections
-    """
-    from iris.config import DEFAULT_CONFIG, DEFAULT_SSH_PORT
-
-    connect_timeout = (
-        Duration.from_proto(ssh.connect_timeout)
-        if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
-        else Duration.from_proto(DEFAULT_CONFIG.ssh.connect_timeout)
-    )
-    return SshConfig(
-        user=ssh.user or DEFAULT_CONFIG.ssh.user,
-        key_file=ssh.key_file or None,
-        port=DEFAULT_SSH_PORT,
-        connect_timeout=connect_timeout,
-    )
-
-
-def _apply_manual_overrides(ssh_config: SshConfig, manual: config_pb2.ManualProvider) -> SshConfig:
-    return SshConfig(
-        user=manual.ssh_user or ssh_config.user,
-        key_file=manual.ssh_key_file or ssh_config.key_file,
-        connect_timeout=ssh_config.connect_timeout,
-    )

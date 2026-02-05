@@ -30,7 +30,7 @@ from connectrpc.errors import ConnectError
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.platform.cluster_manager import ClusterManager
-from iris.cluster.platform.controller_runtime import ControllerRuntime
+from iris.cluster.platform.controller_vm import ControllerVm
 from iris.config import make_local_config
 from iris.cluster.platform.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, config_pb2, vm_pb2
@@ -253,7 +253,7 @@ def cluster_stop(ctx, zone: str | None):
             zone_label = zone_name or "default"
             click.echo(f"  Found {len(slice_ids)} slice(s) in group '{name}' (zone={zone_label})")
 
-    ctrl = ControllerRuntime(platform, config)
+    ctrl = ControllerVm(platform, config)
     click.echo("Stopping controller...")
     try:
         ctrl.stop()

@@ -164,10 +164,16 @@ src/iris/
 │   │   ├── scaling_group.py     # Per-group state tracking
 │   │   └── main.py              # Controller daemon CLI (serve command)
 │   └── platform/
-│       ├── platform.py          # Platform factory + GCP/manual/local implementations
-│       ├── gcp_tpu_platform.py  # GCP TPU management
-│       ├── worker_vm.py         # WorkerVm + bootstrap + registry
-│       └── ssh.py               # SSH + tunneling helpers
+│       ├── __init__.py          # Platform factory + protocols
+│       ├── base.py              # Shared VM lifecycle types
+│       ├── bootstrap.py         # Controller/worker bootstrap + health checks
+│       ├── gcp.py               # GCP TPU + controller VM management
+│       ├── manual.py            # Manual host management
+│       ├── local.py             # Local in-process platform
+│       ├── controller_vm.py     # Controller lifecycle wrapper + LocalController
+│       ├── worker_vm.py         # WorkerVm + registry + lifecycle
+│       ├── ssh.py               # SSH + tunneling helpers
+│       └── env_probe.py         # Environment discovery
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.

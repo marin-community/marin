@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for controller runtime wrapper."""
+"""Tests for controller VM wrapper."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import pytest
 
 from iris.cluster.platform.base import VmInfo, VmState
-from iris.cluster.platform.controller_runtime import ControllerRuntime
+from iris.cluster.platform.controller_vm import ControllerVm
 from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
 
@@ -32,12 +32,6 @@ class _FakePlatform:
     start_result: list[VmInfo]
     started: int = 0
     stopped: list[str] | None = None
-
-    def slice_manager(self, scale_group):
-        raise NotImplementedError
-
-    def tunnel(self, host, ports, *, zone=None):
-        raise NotImplementedError
 
     def list_vms(self, *, tag=None, zone=None):
         return self.list_result
@@ -67,7 +61,7 @@ def _manual_config() -> config_pb2.IrisClusterConfig:
     )
 
 
-def test_controller_runtime_start_uses_platform():
+def test_controller_vm_start_uses_platform():
     vm = VmInfo(
         vm_id="controller-1",
         address="http://10.0.0.10:10000",
@@ -77,7 +71,7 @@ def test_controller_runtime_start_uses_platform():
         created_at_ms=Timestamp.now().epoch_ms(),
     )
     platform = _FakePlatform(list_result=[], start_result=[vm])
-    runtime = ControllerRuntime(platform=platform, config=_manual_config())
+    runtime = ControllerVm(platform=platform, config=_manual_config())
 
     address = runtime.start()
 
@@ -85,7 +79,7 @@ def test_controller_runtime_start_uses_platform():
     assert platform.started == 1
 
 
-def test_controller_runtime_reuses_existing(monkeypatch: pytest.MonkeyPatch):
+def test_controller_vm_reuses_existing(monkeypatch: pytest.MonkeyPatch):
     vm = VmInfo(
         vm_id="controller-1",
         address="http://10.0.0.10:10000",
@@ -95,10 +89,10 @@ def test_controller_runtime_reuses_existing(monkeypatch: pytest.MonkeyPatch):
         created_at_ms=Timestamp.now().epoch_ms(),
     )
     platform = _FakePlatform(list_result=[vm], start_result=[vm])
-    runtime = ControllerRuntime(platform=platform, config=_manual_config())
+    runtime = ControllerVm(platform=platform, config=_manual_config())
 
     monkeypatch.setattr(
-        "iris.cluster.platform.controller_runtime._check_health_rpc",
+        "iris.cluster.platform.controller_vm._check_health_rpc",
         lambda _address: True,
     )
 
@@ -108,7 +102,7 @@ def test_controller_runtime_reuses_existing(monkeypatch: pytest.MonkeyPatch):
     assert platform.started == 0
 
 
-def test_controller_runtime_stop_uses_platform():
+def test_controller_vm_stop_uses_platform():
     vm = VmInfo(
         vm_id="controller-1",
         address="http://10.0.0.10:10000",
@@ -118,7 +112,7 @@ def test_controller_runtime_stop_uses_platform():
         created_at_ms=Timestamp.now().epoch_ms(),
     )
     platform = _FakePlatform(list_result=[vm], start_result=[vm])
-    runtime = ControllerRuntime(platform=platform, config=_manual_config())
+    runtime = ControllerVm(platform=platform, config=_manual_config())
 
     runtime.stop()
 

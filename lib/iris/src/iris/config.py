@@ -32,9 +32,9 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.types import parse_memory_string
-from iris.cluster.platform.gcp_tpu_platform import TpuVmManager
+from iris.cluster.platform.gcp import TpuVmManager
 from iris.cluster.platform.worker_vm import SshConfig, TrackedVmFactory, VmRegistry
-from iris.cluster.platform.manual_platform import ManualVmManager
+from iris.cluster.platform.manual import ManualVmManager
 from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.cluster.platform.vm_platform import VmManagerProtocol
 from iris.managed_thread import ThreadContainer
@@ -53,7 +53,7 @@ def create_platform(
     ssh_config: config_pb2.SshConfig,
 ):
     """Create platform from explicit config sections."""
-    from iris.cluster.platform.platform import create_platform as _create_platform
+    from iris.cluster.platform import create_platform as _create_platform
 
     return _create_platform(
         platform_config=platform_config,
@@ -61,6 +61,7 @@ def create_platform(
         timeout_config=timeout_config,
         ssh_config=ssh_config,
     )
+
 
 # Re-export IrisClusterConfig from proto for public API
 IrisClusterConfig = config_pb2.IrisClusterConfig
@@ -801,7 +802,7 @@ def create_local_autoscaler(
     import tempfile
 
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.platform.local_platform import LocalVmManager, PortAllocator
+    from iris.cluster.platform.local import LocalVmManager, PortAllocator
 
     # Create temp dirs for worker resources (autoscaler owns these)
     temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_autoscaler_")
