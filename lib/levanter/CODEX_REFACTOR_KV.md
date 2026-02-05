@@ -212,7 +212,42 @@ Expected vs Not Expected:
 
 ### M3 - Remove Redundant KV Page State (Single Source of Truth)
 
-Goal: remove duplicated state that can diverge silently.
+Status: DONE (2026-02-05) — refactor landed; post-change validation recorded.
+
+High-level problem:
+We currently store the same mapping in two places (`SequenceTable.kv_pages` and `SequenceTable.page_indices`).
+This duplication is easy to accidentally de-sync, and when it diverges the failure mode is subtle:
+one part of the stack reads one mapping while another writes or validates against the other.
+That can produce silent corruption, allocator refcount mismatches, or multi-host nondeterminism that is hard to debug.
+
+What we are trying to fix:
+Make the sequence → page mapping have exactly one authoritative representation, and remove all redundant storage.
+This eliminates an entire class of “state drift” bugs and simplifies invariants and refcount reasoning.
+
+Conceptual clarification (why this is redundant):
+- `KvPageCache.kv_pages` is the *physical* KV tensor: `[Page, Slot, 2*KVHeads, HeadDim]`.
+- `SequenceTable.page_indices` is the *logical* mapping from sequence slot → global page IDs.
+- `SequenceTable.kv_pages` is **not** the KV tensor; it is just a second copy of the logical mapping.
+- In today’s code, `SequenceTable.kv_pages` is always written to match `page_indices`, so it adds no information.
+- This is called out in `KV_CACHING_RESTRUCTURE.MD` (Sections 3.1, 3.3, 5, and 10.3).
+
+Ideal outcome:
+- One canonical mapping (`page_indices`) used everywhere.
+- No compatibility alias that risks hiding divergence.
+- Fewer invariants to enforce; easier to reason about allocation, cloning, and freeing.
+- Multi-host behavior stays deterministic and test coverage improves around allocation/freeing.
+
+Implementation notes:
+- Removed redundant `SequenceTable.kv_pages` storage; `page_indices` is the single source of truth.
+- Updated assign/clone/reset paths and debug output to use `page_indices` only.
+
+Validation notes (post-M3):
+- v5p-16, 1 prompt, 2048 tokens completed with `Job finished with no error` (log: `/private/tmp/levanter_run_m3.log`).
+- DecodeStats progression: `after_reset` pages_in_use=0/free=48 → `after_prefill` pages_in_use=1/free=47 → `after_decode` pages_in_use=33/free=15.
+
+Takeaways:
+- Single-prompt run remains healthy after removing the redundant mapping.
+- Multi-prompt instability remains a separate issue (tracked in M5).
 
 Background:
 - `KV_CACHING_RESTRUCTURE.MD` notes `SequenceTable.kv_pages` was redundant with `page_indices`.

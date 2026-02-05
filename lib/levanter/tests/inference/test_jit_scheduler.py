@@ -95,7 +95,6 @@ def test_allocate_for_seq_ignores_out_of_range_slots():
 
     assert jnp.array_equal(new_sequences.seq_lens.array, jnp.zeros((pt.max_seqs,), dtype=jnp.int32))
     assert jnp.all(new_sequences.page_indices.array == INVALID)
-    assert jnp.all(new_sequences.kv_pages.array == INVALID)
     assert jnp.all(new_pt.page_ref_counts.array == 0)
     assert int(batch.num_seqs) == 0
     assert jnp.all(batch.new_token_dests.array == INVALID)

@@ -76,7 +76,6 @@ class SequenceTable(eqx.Module):
 
     seq_lens: ht.i32[NamedArray, "seq"]
     clone_sources: ht.i32[NamedArray, "seq"]
-    kv_pages: ht.i32[NamedArray, "seq page"]
     page_indices: ht.i32[NamedArray, "seq page"]
     used_mask: ht.bool_[NamedArray, "seq"]
     page_size: int = eqx.field(static=True)
@@ -87,7 +86,6 @@ class SequenceTable(eqx.Module):
         return SequenceTable(
             seq_lens=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
             clone_sources=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
-            kv_pages=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
             page_indices=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
             used_mask=hax.full({"seq": max_seqs}, False, dtype=bool),
             page_size=page_size,
@@ -140,7 +138,6 @@ class SequenceTable(eqx.Module):
         def do_assign(table):
             seq_lens = table.seq_lens.at["seq", slot].set(0)
             clone_sources = table.clone_sources.at["seq", slot].set(INVALID)
-            kv_pages = table.kv_pages.at["seq", slot].set(hax.full_like(table.kv_pages["seq", slot], INVALID))
             page_indices = table.page_indices.at["seq", slot].set(
                 hax.full_like(table.page_indices["seq", slot], INVALID)
             )
@@ -149,7 +146,6 @@ class SequenceTable(eqx.Module):
                 table,
                 seq_lens=seq_lens,
                 clone_sources=clone_sources,
-                kv_pages=kv_pages,
                 page_indices=page_indices,
                 used_mask=used_mask,
             )
@@ -162,13 +158,11 @@ class SequenceTable(eqx.Module):
         slot_id: int,
         *,
         seq_len: jnp.ndarray,
-        kv_pages: ht.i32[NamedArray, "page"],  # type: ignore[name-defined]
         page_indices: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         clone_source: jnp.ndarray | int = INVALID,
     ) -> "SequenceTable":
         seq_lens = self.seq_lens.at["seq", slot_id].set(seq_len)
         clone_sources = self.clone_sources.at["seq", slot_id].set(clone_source)
-        kv_pages_arr = self.kv_pages.at["seq", slot_id].set(kv_pages)
         indices_row = (
             page_indices if page_indices is not None else hax.full_like(self.page_indices["seq", slot_id], INVALID)
         )
@@ -178,7 +172,6 @@ class SequenceTable(eqx.Module):
             self,
             seq_lens=seq_lens,
             clone_sources=clone_sources,
-            kv_pages=kv_pages_arr,
             page_indices=page_indices_arr,
             used_mask=used_mask,
         )
@@ -190,13 +183,11 @@ class SequenceTable(eqx.Module):
     def clear_slots(self, mask: ht.bool_[NamedArray, "seq"]) -> "SequenceTable":  # type: ignore[name-defined]
         new_seq_lens = hax.where(mask, INVALID, self.seq_lens)
         new_clone_sources = hax.where(mask, INVALID, self.clone_sources)
-        new_kv_pages = hax.where(mask, INVALID, self.kv_pages)
         new_page_indices = hax.where(mask, INVALID, self.page_indices)
         new_used_mask = hax.where(mask, False, self.used_mask)
         return SequenceTable(
             new_seq_lens,
             new_clone_sources,
-            new_kv_pages,
             new_page_indices,
             new_used_mask,
             self.page_size,
@@ -353,8 +344,7 @@ class SequenceTable(eqx.Module):
             token_pos_ids,
         )
 
-        kv_pages = self.kv_pages.at["seq", safe_updated].set(page_indices["seq", safe_updated])
-        new_sequences = dataclasses.replace(self, seq_lens=new_lens, page_indices=page_indices, kv_pages=kv_pages)
+        new_sequences = dataclasses.replace(self, seq_lens=new_lens, page_indices=page_indices)
         new_page_table = dataclasses.replace(page_table, page_ref_counts=page_ref_counts)
 
         return new_sequences, new_page_table, batch_info
@@ -417,7 +407,6 @@ class SequenceTable(eqx.Module):
 
         new_seq_lens = self.seq_lens.at["seq", seq_id].set(0)
         new_clone_sources = self.clone_sources.at["seq", seq_id].set(INVALID)
-        new_kv_pages = self.kv_pages.at["seq", seq_id].set(hax.full_like(self.kv_pages["seq", seq_id], INVALID))
         new_page_indices = self.page_indices.at["seq", seq_id].set(
             hax.full_like(self.page_indices["seq", seq_id], INVALID)
         )
@@ -426,7 +415,6 @@ class SequenceTable(eqx.Module):
         new_sequences = SequenceTable(
             new_seq_lens,
             new_clone_sources,
-            new_kv_pages,
             new_page_indices,
             new_used_mask,
             self.page_size,
@@ -522,13 +510,11 @@ class SequenceTable(eqx.Module):
         seq_lens = self.seq_lens.at["seq", dst_seq_id].set(src_len)
         used_mask = self.used_mask.at["seq", dst_seq_id].set(True)
 
-        kv_pages = self.kv_pages.at["seq", dst_seq_id].set(page_indices["seq", dst_seq_id])
         sequences = dataclasses.replace(
             self,
             seq_lens=seq_lens,
             page_indices=page_indices,
             used_mask=used_mask,
-            kv_pages=kv_pages,
         )
         page_table = dataclasses.replace(page_table, page_ref_counts=ref_counts)
         return sequences, page_table
@@ -666,18 +652,13 @@ class DecodeState(eqx.Module):
         """Mapping from clone targets to their parent sequences."""
         return self.sequences.clone_sources
 
-    @property
-    def kv_pages(self) -> ht.i32[NamedArray, "seq page"]:  # type: ignore[name-defined]
-        """KV page assignments per sequence."""
-        return self.sequences.kv_pages
-
     @eqx.filter_jit(donate="all")
     def invalidate_finished(self) -> "DecodeState":
         """Invalidate metadata for sequences marked finished by ``finished_mask``.
 
         - Sets ``seq_lens`` to INVALID for finished slots
         - Resets ``clone_sources`` to INVALID
-        - Clears ``kv_pages`` rows for finished slots to INVALID
+        - Clears ``page_indices`` rows for finished slots to INVALID
         """
         mask = self.finished
         finished = hax.zeros_like(self.finished)
@@ -780,9 +761,7 @@ class DecodeState(eqx.Module):
         return dataclasses.replace(self, sequences=new_sequences)
 
     def clone_pages_from(self, src, dest) -> "DecodeState":
-        """
-        Clone kv_pages from src slot to dest slot.
-        """
+        """Clone page assignments and refcounts from src slot to dest slot."""
         sequences, page_table = self.sequences.clone_pages_from(self.page_table, src, dest)
         return dataclasses.replace(self, sequences=sequences, page_table=page_table)
 
@@ -824,7 +803,6 @@ class DecodeState(eqx.Module):
         local_slot_id: int,
         tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
         seq_len: jnp.ndarray | int = 0,
-        kv_pages: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         page_indices: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         seq_params: SeqDecodingParams | None = None,
     ) -> "DecodeState":
@@ -833,13 +811,9 @@ class DecodeState(eqx.Module):
         new_tokens = self.tokens.at["seq", local_slot_id, "position", 0 : tokens.axis_size("position")].set(tokens)
 
         sequences = self.sequences
-        if kv_pages is None:
-            kv_pages = hax.full_like(sequences.kv_pages["seq", local_slot_id], INVALID)
-
         new_sequences = sequences.assign_slot(
             local_slot_id,
             seq_len=seq_len,
-            kv_pages=kv_pages,
             page_indices=page_indices,
         )
 
@@ -984,7 +958,7 @@ num_tokens: {num_tokens}
 finished: {finished}
 tokens: {tokens}
 stop_tokens: {stop_tokens}
-kv_pages: {kv_pages}
+page_indices: {page_indices}
 logprobs: {logprobs}
 max_num_tokens: {max_num_tokens}
 """,
@@ -992,7 +966,7 @@ max_num_tokens: {max_num_tokens}
             finished=self.finished,
             tokens=self.tokens,
             stop_tokens=self.stop_tokens,
-            kv_pages=self.sequences.kv_pages,
+            page_indices=self.sequences.page_indices,
             logprobs=self.logprobs if self.logprobs is not None else "None",
             max_num_tokens=self.max_num_tokens,
         )

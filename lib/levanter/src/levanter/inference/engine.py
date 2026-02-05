@@ -359,14 +359,12 @@ def _clone_sequence(
             child_local_id, assigned_id != child_local_id, "Requested clone slot already in use."
         )
 
-    # Assign child sequence state (copies tokens up to prefix and kv_pages row)
-    parent_kv_pages = decode_state.kv_pages["seq", parent_local_id]
+    # Assign child sequence state (copies tokens up to prefix and page_indices row)
     parent_page_indices = decode_state.sequences.page_indices["seq", parent_local_id]
     decode_state = decode_state.assign_seq(
         local_slot_id=child_local_id,
         tokens=decode_state.tokens["seq", parent_local_id],
         seq_len=decode_state.seq_lens["seq", parent_local_id],
-        kv_pages=parent_kv_pages,
         page_indices=parent_page_indices,
         seq_params=seq_params,
     )
@@ -547,7 +545,6 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
                     local_slot_id=slot_val,
                     tokens=work.prompt_tokens["seq", i],
                     seq_len=prompt_len,
-                    kv_pages=None,  # Will be allocated later in allocate_for_seq
                     page_indices=None,  # Will be set during page allocation
                     seq_params=seq_params,
                 )
