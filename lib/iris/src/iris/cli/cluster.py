@@ -29,12 +29,9 @@ from connectrpc.errors import ConnectError
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
-from iris.cluster.vm.config import (
-    create_autoscaler_from_config,
-)
-from iris.cluster.vm.controller import create_controller
-from iris.cluster.vm.debug import controller_tunnel, discover_controller_vm
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import make_local_config
+from iris.cluster.vm.controller_vm import create_controller_vm
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
@@ -42,6 +39,7 @@ from iris.time_utils import Timestamp
 
 from iris.cli.build import _build_image, _push_to_registries
 from iris.cli.debug import debug
+from iris.cli.main import require_controller_url
 
 # =============================================================================
 # Helpers
@@ -154,7 +152,7 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
 
 
 def _build_cluster_images(config) -> None:
-    for tag, typ in [(config.bootstrap.docker_image, "worker"), (config.controller_vm.image, "controller")]:
+    for tag, typ in [(config.defaults.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
             params = _extract_image_params(tag, typ)
             if params:
@@ -216,29 +214,43 @@ def cluster_stop(ctx):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster stop")
-    ctrl = create_controller(config)
+    from iris.cluster.vm.config import IrisConfig
+
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+    ops = platform.vm_ops()
+    slice_ids_by_group: dict[str, list[str]] = {}
+
+    # Discover slices via platform ops (more reliable than RPC since controller may be down)
+    click.echo("Discovering existing slices via platform ops...")
+    for name, group_config in config.scale_groups.items():
+        slice_ids = ops.list_slices(group_config)
+        if slice_ids:
+            slice_ids_by_group[name] = slice_ids
+        click.echo(f"  Found {len(slice_ids)} slice(s) in group '{name}'")
+
+    ctrl = create_controller_vm(config)
     click.echo("Stopping controller...")
     try:
         ctrl.stop()
         click.echo("Controller stopped")
     except Exception as e:
         click.echo(f"Warning: Failed to stop controller: {e}", err=True)
-    click.echo("Discovering existing slices...")
-    autoscaler_obj = create_autoscaler_from_config(config)
-    autoscaler_obj.reconcile()
-    slice_ids = [vg.slice_id for g in autoscaler_obj.groups.values() for vg in g.vm_groups()]
-    if not slice_ids:
+
+    if not slice_ids_by_group:
         click.echo("No slices to terminate")
         return
-    click.echo(f"Terminating {len(slice_ids)} slice(s)...")
-    for g in autoscaler_obj.groups.values():
-        for vg in g.vm_groups():
-            if vg.slice_id in slice_ids:
-                try:
-                    g.scale_down(vg.slice_id)
-                    click.echo(f"Terminated: {vg.slice_id}")
-                except Exception as e:
-                    click.echo(f"Failed to terminate {vg.slice_id}: {e}", err=True)
+
+    total = sum(len(ids) for ids in slice_ids_by_group.values())
+    click.echo(f"Terminating {total} slice(s)...")
+    for name, slice_ids in slice_ids_by_group.items():
+        group_config = config.scale_groups[name]
+        for slice_id in slice_ids:
+            try:
+                ops.delete_slice(group_config, slice_id)
+                click.echo(f"Terminated: {slice_id}")
+            except Exception as e:
+                click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
     click.echo("Cluster stopped")
 
 
@@ -272,8 +284,9 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
         raise SystemExit(1) from e
     if validate:
         click.echo("\nValidating cluster health...")
+        controller_url = require_controller_url(ctx)
         try:
-            _validate_cluster_health(config)
+            _validate_cluster_health(controller_url)
             click.echo("Cluster validation passed.")
         except Exception as e:
             click.echo(f"Cluster validation failed: {e}", err=True)
@@ -284,65 +297,33 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
 @click.pass_context
 def cluster_status_cmd(ctx):
     """Show cluster status including controller and autoscaler."""
-    config = ctx.obj.get("config")
-    if not config:
-        raise click.ClickException("--config is required for cluster status")
-    ctrl = create_controller(config)
+    controller_url = require_controller_url(ctx)
     click.echo("Checking controller status...")
     try:
-        ctrl_status = ctrl.status()
+        as_status = _get_autoscaler_status(controller_url)
         click.echo("Controller Status:")
-        click.echo(f"  Running: {ctrl_status.running}")
-        click.echo(f"  Healthy: {ctrl_status.healthy}")
-        click.echo(f"  Address: {ctrl_status.address or 'N/A'}")
-        if ctrl_status.vm_name:
-            click.echo(f"  VM Name: {ctrl_status.vm_name}")
-    except Exception as e:
-        click.echo(f"Failed to get controller status: {e}", err=True)
-        click.echo("")
-
-    # Get autoscaler status from controller via RPC
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
+        click.echo("  Running: True")
+        click.echo("  Healthy: True")
+        click.echo(f"  Address: {controller_url}")
         click.echo("\nAutoscaler Status:")
-        click.echo("  (Controller not running - status unavailable)")
-    else:
-        try:
-            as_status = _get_autoscaler_status(controller_url)
-            click.echo("\nAutoscaler Status:")
-            if not as_status.groups:
-                click.echo("  No scale groups configured")
-            else:
-                click.echo(_format_status_table(as_status))
-        except Exception as e:
-            click.echo(f"\nFailed to get autoscaler status: {e}", err=True)
+        if not as_status.groups:
+            click.echo("  No scale groups configured")
+        else:
+            click.echo(_format_status_table(as_status))
+    except Exception as e:
+        click.echo("Controller Status:")
+        click.echo(f"  Running: False (RPC failed: {e})")
+        click.echo(f"  Address: {controller_url}")
 
 
 @cluster.command("dashboard")
-@click.option("--port", default=10000, type=int, help="Local port for tunnel")
 @click.pass_context
-def cluster_dashboard(ctx, port: int):
-    """Open SSH tunnel to controller and print dashboard URL.
+def cluster_dashboard(ctx):
+    """Print dashboard URL and keep tunnel open.
 
-    Discovers the controller VM, establishes an SSH port-forward tunnel, and
-    prints the local dashboard URL. Blocks until Ctrl+C.
+    Uses the tunnel established by the iris group. Blocks until Ctrl+C.
     """
-    config = ctx.obj.get("config")
-    if not config:
-        raise click.ClickException("--config is required for cluster dashboard")
-    zone = config.zone
-    project = config.project_id
-    label_prefix = config.label_prefix or "iris"
-    if not zone or not project:
-        click.echo("Error: Config must specify zone and project_id", err=True)
-        raise SystemExit(1)
-    click.echo(f"Discovering controller in {zone}...")
-    vm_name = discover_controller_vm(zone, project, label_prefix)
-    if not vm_name:
-        click.echo(f"No controller VM found in zone {zone}", err=True)
-        raise SystemExit(1)
-    click.echo(f"Found controller: {vm_name}")
-    click.echo(f"Establishing SSH tunnel (localhost:{port} -> {vm_name}:10000)...")
+    controller_url = require_controller_url(ctx)
     stop = threading.Event()
 
     def on_signal(sig, frame):
@@ -351,11 +332,11 @@ def cluster_dashboard(ctx, port: int):
 
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
-    with controller_tunnel(zone, project, local_port=port, label_prefix=label_prefix) as url:
-        click.echo(f"\nDashboard:      {url}")
-        click.echo(f"Controller RPC: {url}")
-        click.echo("\nPress Ctrl+C to close tunnel.")
-        stop.wait()
+
+    click.echo(f"\nDashboard:      {controller_url}")
+    click.echo(f"Controller RPC: {controller_url}")
+    click.echo("\nPress Ctrl+C to close tunnel.")
+    stop.wait()
 
 
 # =============================================================================
@@ -375,9 +356,7 @@ def vm(ctx):
 @click.pass_context
 def vm_status(ctx, scale_group):
     """Show VM and slice status from the controller."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
+    controller_url = require_controller_url(ctx)
     try:
         as_status = _get_autoscaler_status(controller_url)
     except Exception as e:
@@ -399,8 +378,9 @@ def vm_status(ctx, scale_group):
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
         click.echo(f"    Failed: {counts.get('failed', 0)}")
         click.echo(f"  Demand: {group.current_demand} (peak: {group.peak_demand})")
-        if group.backoff_until_ms > 0:
-            click.echo(f"  Backoff until: {_format_timestamp(group.backoff_until_ms)}")
+        backoff_ms = Timestamp.from_proto(group.backoff_until).epoch_ms()
+        if backoff_ms > 0:
+            click.echo(f"  Backoff until: {_format_timestamp(backoff_ms)}")
             click.echo(f"  Consecutive failures: {group.consecutive_failures}")
         if group.slices:
             click.echo("  Slices:")
@@ -411,7 +391,8 @@ def vm_status(ctx, scale_group):
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
                     if vi.init_error:
                         click.echo(f"        Error: {vi.init_error}")
-    click.echo(f"\nLast evaluation: {_format_timestamp(as_status.last_evaluation_ms)}")
+    last_eval_ms = Timestamp.from_proto(as_status.last_evaluation).epoch_ms()
+    click.echo(f"\nLast evaluation: {_format_timestamp(last_eval_ms)}")
 
 
 @vm.command("logs")
@@ -420,9 +401,7 @@ def vm_status(ctx, scale_group):
 @click.pass_context
 def vm_logs(ctx, vm_id, tail):
     """Show VM initialization logs."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
+    controller_url = require_controller_url(ctx)
     try:
         log_content, returned_vm_id, state = _get_vm_logs(controller_url, vm_id, tail)
     except ConnectError as e:
@@ -454,23 +433,19 @@ cluster.add_command(debug)
 # =============================================================================
 
 
-def _validate_cluster_health(config) -> None:
-    zone = config.zone
-    project = config.project_id
-    label_prefix = config.label_prefix or "iris"
-    with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
-        click.echo(f"  Connected to controller at {tunnel_url}")
-        client = IrisClient.remote(tunnel_url, workspace=Path.cwd())
+def _validate_cluster_health(controller_url: str) -> None:
+    click.echo(f"  Connected to controller at {controller_url}")
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
 
-        def _validate_hello():
-            print("Reload validation job OK")
-            return 42
+    def _validate_hello():
+        print("Reload validation job OK")
+        return 42
 
-        click.echo("  Submitting validation job...")
-        job = client.submit(
-            entrypoint=Entrypoint.from_callable(_validate_hello), name="reload-validate", resources=ResourceSpec(cpu=1)
-        )
-        click.echo(f"  Job submitted: {job.job_id}")
-        click.echo("  Waiting for job (workers may need to scale up)...")
-        status = job.wait(timeout=600, raise_on_failure=True)
-        click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")
+    click.echo("  Submitting validation job...")
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(_validate_hello), name="reload-validate", resources=ResourceSpec(cpu=1)
+    )
+    click.echo(f"  Job submitted: {job.job_id}")
+    click.echo("  Waiting for job (workers may need to scale up)...")
+    status = job.wait(timeout=600, raise_on_failure=True)
+    click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")

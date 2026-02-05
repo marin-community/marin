@@ -31,7 +31,7 @@ import pytest
 from iris.client import IrisClient
 from iris.cluster.client import get_job_info
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
+from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
 from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
@@ -57,29 +57,40 @@ def unique_name(prefix: str) -> str:
 def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
 
-    Sets up controller_vm.local, bundle_prefix, scale groups with local provider,
+    Sets up controller.local, bundle_prefix, scale groups with local vm_type,
     and fast autoscaler evaluation for tests.
     """
     config = config_pb2.IrisClusterConfig()
 
     # Configure local controller
-    config.controller_vm.local.port = 0  # auto-assign
-    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
+    config.controller.local.port = 0  # auto-assign
+    config.controller.bundle_prefix = ""  # LocalController will set temp path
+    config.platform.local.SetInParent()
 
     # Configure scale group with local provider
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
+        vm_type=config_pb2.VM_TYPE_LOCAL_VM,
         min_slices=num_workers,
         max_slices=num_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        slice_size=1,
+        resources=config_pb2.ScaleGroupResources(
+            cpu=8,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=50 * 1024**3,
+            gpu_count=0,
+            tpu_count=0,
+        ),
     )
-    sg.provider.local.SetInParent()
     config.scale_groups["local-cpu"].CopyFrom(sg)
 
     # Fast autoscaler evaluation for tests
     from iris.time_utils import Duration
 
-    config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
+    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
+    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
+    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
 
     return config
 
@@ -154,7 +165,7 @@ class E2ECluster:
 
         # Docker providers
         bundle_provider = BundleCache(cache_path, max_bundles=10)
-        image_provider = ImageCache(cache_path, registry="", max_images=10)
+        image_provider = ImageCache(cache_path, max_images=10)
         container_runtime = DockerRuntime()
         environment_provider = None  # Use default (probe real system)
 
@@ -246,7 +257,11 @@ class E2ECluster:
     def _to_job_id_str(self, job_or_id) -> str:
         """Convert Job object or string to job_id string."""
         if isinstance(job_or_id, str):
-            return job_or_id
+            return (
+                JobName.from_string(job_or_id).to_wire()
+                if job_or_id.startswith("/")
+                else JobName.root(job_or_id).to_wire()
+            )
         # Assume it's a Job object
         return str(job_or_id.job_id)
 
@@ -265,13 +280,12 @@ class E2ECluster:
     def task_status(self, job_or_id, task_index: int = 0) -> dict:
         """Get status of a specific task within a job."""
         job_id = self._to_job_id_str(job_or_id)
-        request = cluster_pb2.Controller.GetTaskStatusRequest(job_id=job_id, task_index=task_index)
+        task_id = JobName.from_wire(job_id).task(task_index).to_wire()
+        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
         assert self._controller_client is not None
         response = self._controller_client.get_task_status(request)
         return {
             "taskId": response.task.task_id,
-            "jobId": response.task.job_id,
-            "taskIndex": response.task.task_index,
             "state": cluster_pb2.TaskState.Name(response.task.state),
             "workerId": response.task.worker_id,
             "workerAddress": response.task.worker_address,
@@ -528,7 +542,7 @@ class TestJobInfo:
             # Verify JobInfo is available and provides expected context
             if info is None:
                 raise ValueError("JobInfo not available")
-            if info.job_id != expected_job_id:
+            if info.job_id.to_wire() != expected_job_id:
                 raise ValueError(f"JobInfo has wrong job_id: {info.job_id}")
             if info.worker_id is None:
                 raise ValueError("JobInfo missing worker_id")
@@ -536,7 +550,8 @@ class TestJobInfo:
                 raise ValueError("JobInfo missing expected port 'actor'")
             return "success"
 
-        job_id = test_cluster.submit(test_fn, job_name, name=job_name, ports=["actor"])
+        expected_job_id = JobName.root(job_name).to_wire()
+        job_id = test_cluster.submit(test_fn, expected_job_id, name=job_name, ports=["actor"])
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
@@ -574,8 +589,8 @@ class TestJobInfo:
                 raise ValueError("JobInfo not available")
 
             # Verify task context is correct
-            expected_task_id = f"{expected_job_name}/task-0"
-            if info.task_id != expected_task_id:
+            expected_task_id = JobName.root(expected_job_name).task(0).to_wire()
+            if info.task_id.to_wire() != expected_task_id:
                 raise ValueError(f"Expected task_id {expected_task_id}, got {info.task_id}")
             if info.task_index != 0:
                 raise ValueError(f"Expected task_index 0, got {info.task_index}")
@@ -615,7 +630,7 @@ class TestEndpoints:
                 request = cluster_pb2.Controller.RegisterEndpointRequest(
                     name=endpoint_name,
                     address="localhost:5000",
-                    job_id=info.job_id,
+                    job_id=info.job_id.to_wire(),
                     metadata={"type": "actor"},
                 )
                 response = client.register_endpoint(request)
@@ -661,7 +676,7 @@ class TestEndpoints:
                     request = cluster_pb2.Controller.RegisterEndpointRequest(
                         name=name,
                         address=addr,
-                        job_id=info.job_id,
+                        job_id=info.job_id.to_wire(),
                     )
                     client.register_endpoint(request)
 

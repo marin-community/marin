@@ -31,19 +31,20 @@ import time
 from pathlib import Path
 
 import click
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from iris.client.client import IrisClient
 from iris.cluster.types import (
     CoschedulingConfig,
     Constraint,
     ConstraintOp,
+    JobName,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
-from iris.cluster.vm.config import load_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import load_config, make_local_config
 from iris.rpc import cluster_pb2
 
 IRIS_ROOT = Path(__file__).parent.parent
@@ -243,7 +244,7 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
     # Wait for succeeded and failed jobs first
     deadline = time.monotonic() + timeout
     for name in ["succeeded", "failed"]:
-        jid = job_ids[name]
+        jid = JobName.from_wire(job_ids[name])
         logger.info("Waiting for %s job (%s) to finish...", name, jid)
         while time.monotonic() < deadline:
             status = client.status(jid)
@@ -257,7 +258,7 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
 
     # Verify building job is in BUILDING state with appropriate task status
     # Wait for the building job to enter BUILDING state (may take a few seconds for worker dispatch)
-    building_jid = job_ids.get("building")
+    building_jid = JobName.from_wire(job_ids["building"]) if job_ids.get("building") else None
     if building_jid:
         logger.info("Waiting for building job (%s) to enter BUILDING state...", building_jid)
         build_state_deadline = time.monotonic() + 10.0
@@ -277,7 +278,7 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
                 logger.warning("  Building job did not enter BUILDING state within timeout (state: %s)", task_state_name)
 
     # Wait for running job's task to actually reach RUNNING state (not just ASSIGNED)
-    running_jid = job_ids.get("running")
+    running_jid = JobName.from_wire(job_ids["running"]) if job_ids.get("running") else None
     if running_jid:
         logger.info("Waiting for running job (%s) task to enter RUNNING state...", running_jid)
         run_deadline = time.monotonic() + 15.0
@@ -296,7 +297,7 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
                 )
 
     # Kill the "killed" job after a brief delay so it has time to start
-    killed_jid = job_ids.get("killed")
+    killed_jid = JobName.from_wire(job_ids["killed"]) if job_ids.get("killed") else None
     if killed_jid:
         time.sleep(1.0)
         logger.info("Terminating killed job (%s)...", killed_jid)
@@ -326,13 +327,19 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1400, "height": 900})
 
+        def wait_for_ready(expression: str, label: str) -> None:
+            try:
+                page.wait_for_function(expression, timeout=30000)
+            except PlaywrightTimeoutError:
+                logger.warning("Timed out waiting for %s; capturing anyway", label)
+
         # Load dashboard once, wait for Preact to render, then screenshot each tab
         page.goto(f"{dashboard_url}/")
         page.wait_for_load_state("domcontentloaded")
-        page.wait_for_function(
+        wait_for_ready(
             "() => document.getElementById('root').children.length > 0"
             " && !document.getElementById('root').textContent.includes('Loading...')",
-            timeout=10000,
+            "dashboard root",
         )
 
         for tab in DASHBOARD_TABS:
@@ -354,10 +361,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             logger.info("Capturing job detail: %s (%s)", name, jid)
             page.goto(url)
             page.wait_for_load_state("domcontentloaded")
-            page.wait_for_function(
+            wait_for_ready(
                 "() => document.getElementById('root').children.length > 0"
                 " && !document.body.textContent.includes('Loading')",
-                timeout=10000,
+                f"job detail {label}",
             )
 
             path = output_dir / f"job-{label}.png"
@@ -373,10 +380,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             logger.info("Capturing %s job detail: %s", label, jid)
             page.goto(url)
             page.wait_for_load_state("domcontentloaded")
-            page.wait_for_function(
+            wait_for_ready(
                 "() => document.getElementById('root').children.length > 0"
                 " && !document.body.textContent.includes('Loading')",
-                timeout=10000,
+                f"job detail {label}",
             )
             path = output_dir / f"job-{label}.png"
             page.screenshot(path=str(path), full_page=True)
@@ -405,10 +412,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
                             logger.info("Capturing VM detail: %s", vm_id)
                             page.goto(url)
                             page.wait_for_load_state("domcontentloaded")
-                            page.wait_for_function(
+                            wait_for_ready(
                                 "() => document.getElementById('root').children.length > 0"
                                 " && !document.getElementById('root').textContent.includes('Loading...')",
-                                timeout=10000,
+                                "vm detail",
                             )
                             path = output_dir / "vm-detail.png"
                             page.screenshot(path=str(path), full_page=True)
@@ -423,13 +430,112 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
         logger.info("Capturing controller logs page")
         page.goto(f"{dashboard_url}#logs")
         page.wait_for_load_state("domcontentloaded")
-        page.wait_for_function(
+        wait_for_ready(
             "() => document.querySelectorAll('.log-line').length > 0",
-            timeout=10000,
+            "controller logs",
         )
         path = output_dir / "controller-logs.png"
         page.screenshot(path=str(path), full_page=True)
         saved.append(path)
+
+        browser.close()
+
+    return saved
+
+
+def capture_worker_screenshots(controller_url: str, output_dir: Path) -> list[Path]:
+    """Screenshot the worker dashboard for each worker in the cluster."""
+    import json
+    import urllib.request
+
+    saved: list[Path] = []
+
+    # Get list of workers from controller
+    try:
+        workers_resp = urllib.request.urlopen(
+            urllib.request.Request(
+                f"{controller_url}/iris.cluster.ControllerService/ListWorkers",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+        )
+        workers_data = json.loads(workers_resp.read())
+        workers = workers_data.get("workers", [])
+    except Exception as e:
+        logger.warning("Failed to get workers list: %s", e)
+        return saved
+
+    if not workers:
+        logger.info("No workers found, skipping worker screenshots")
+        return saved
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+
+        def wait_for_ready(expression: str, label: str) -> None:
+            try:
+                page.wait_for_function(expression, timeout=30000)
+            except PlaywrightTimeoutError:
+                logger.warning("Timed out waiting for %s; capturing anyway", label)
+
+        for i, worker in enumerate(workers):
+            worker_address = worker.get("address", "")
+            if not worker_address:
+                continue
+
+            # Worker address is host:port, construct URL
+            worker_url = f"http://{worker_address}"
+            logger.info("Capturing worker dashboard: %s", worker_url)
+
+            try:
+                page.goto(f"{worker_url}/")
+                page.wait_for_load_state("domcontentloaded")
+                wait_for_ready(
+                    "() => document.getElementById('root').children.length > 0"
+                    " && !document.getElementById('root').textContent.includes('Loading...')",
+                    "worker dashboard",
+                )
+
+                path = output_dir / f"worker-{i}-dashboard.png"
+                page.screenshot(path=str(path), full_page=True)
+                saved.append(path)
+
+                # Also capture task detail page if there are tasks
+                # Try to get task list from worker
+                try:
+                    tasks_resp = urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{worker_url}/iris.cluster.WorkerService/ListTasks",
+                            data=b"{}",
+                            headers={"Content-Type": "application/json"},
+                        )
+                    )
+                    tasks_data = json.loads(tasks_resp.read())
+                    tasks = tasks_data.get("tasks", [])
+
+                    # Screenshot first running task if any
+                    for task in tasks:
+                        task_id = task.get("taskId", "")
+                        task_state = task.get("state", "")
+                        if task_state == "TASK_STATE_RUNNING" and task_id:
+                            task_url = f"{worker_url}/task/{task_id}"
+                            logger.info("Capturing task detail: %s", task_id)
+                            page.goto(task_url)
+                            page.wait_for_load_state("domcontentloaded")
+                            wait_for_ready(
+                                "() => document.getElementById('root').children.length > 0",
+                                "task detail",
+                            )
+                            path = output_dir / f"worker-{i}-task-running.png"
+                            page.screenshot(path=str(path), full_page=True)
+                            saved.append(path)
+                            break
+                except Exception as e:
+                    logger.debug("Failed to get tasks from worker: %s", e)
+
+            except Exception as e:
+                logger.warning("Failed to capture worker %s dashboard: %s", worker_address, e)
 
         browser.close()
 
@@ -451,8 +557,8 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
 @click.option(
     "--output-dir",
     type=click.Path(path_type=Path),
-    default=None,
-    help="Directory for saved screenshots (optional, skips screenshots if not provided)",
+    required=True,
+    help="Directory for saved screenshots",
 )
 @click.option(
     "--stay-open",
@@ -484,36 +590,40 @@ def main(config: Path, output_dir: Path, stay_open: bool):
         # Brief pause so the running job has time to start
         time.sleep(2.0)
 
-        if output_dir:
-            logger.info("Capturing screenshots to %s", output_dir)
-            saved = capture_screenshots(url, job_ids, output_dir)
-            logger.info("Summary: %d screenshots saved", len(saved))
-            for path in saved:
-                logger.info("  %s", path)
+        logger.info("Capturing controller screenshots to %s", output_dir)
+        saved = capture_screenshots(url, job_ids, output_dir)
+        logger.info("Controller screenshots: %d saved", len(saved))
 
-            # After screenshots, wait for building job to complete
-            # (chaos delay is 30s, should complete shortly after screenshots)
-            building_jid = job_ids.get("building")
-            if building_jid:
-                logger.info("Waiting for building job to complete after chaos delay...")
-                deadline = time.monotonic() + 60.0
-                terminal_states = (
-                    cluster_pb2.JOB_STATE_SUCCEEDED,
-                    cluster_pb2.JOB_STATE_FAILED,
-                    cluster_pb2.JOB_STATE_KILLED,
-                    cluster_pb2.JOB_STATE_WORKER_FAILED,
-                )
-                while time.monotonic() < deadline:
-                    status = client.status(building_jid)
-                    if status.state in terminal_states:
-                        state_name = cluster_pb2.JobState.Name(status.state)
-                        logger.info("  building -> %s", state_name)
-                        break
-                    time.sleep(0.5)
-                else:
-                    logger.warning("  building job did not complete within timeout")
-        else:
-            logger.info("Skipping screenshots (no --output-dir specified)")
+        logger.info("Capturing worker screenshots...")
+        worker_saved = capture_worker_screenshots(url, output_dir)
+        saved.extend(worker_saved)
+        logger.info("Worker screenshots: %d saved", len(worker_saved))
+
+        logger.info("Summary: %d total screenshots saved", len(saved))
+        for path in saved:
+            logger.info("  %s", path)
+
+        # After screenshots, wait for building job to complete
+        # (chaos delay is 30s, should complete shortly after screenshots)
+        building_jid = JobName.from_wire(job_ids["building"]) if job_ids.get("building") else None
+        if building_jid:
+            logger.info("Waiting for building job to complete after chaos delay...")
+            deadline = time.monotonic() + 60.0
+            terminal_states = (
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+                cluster_pb2.JOB_STATE_FAILED,
+                cluster_pb2.JOB_STATE_KILLED,
+                cluster_pb2.JOB_STATE_WORKER_FAILED,
+            )
+            while time.monotonic() < deadline:
+                status = client.status(building_jid)
+                if status.state in terminal_states:
+                    state_name = cluster_pb2.JobState.Name(status.state)
+                    logger.info("  building -> %s", state_name)
+                    break
+                time.sleep(0.5)
+            else:
+                logger.warning("  building job did not complete within timeout")
 
         print(f"\nDashboard URL: {url}")
 
@@ -527,10 +637,11 @@ def main(config: Path, output_dir: Path, stay_open: bool):
                 cluster_pb2.JOB_STATE_WORKER_FAILED,
             )
             for name, jid in job_ids.items():
-                status = client.status(jid)
+                job_id = JobName.from_wire(jid)
+                status = client.status(job_id)
                 if status.state not in terminal_states:
                     logger.info("Terminating remaining job %s (%s)", name, jid)
-                    client.terminate(jid)
+                    client.terminate(job_id)
 
         if stay_open:
             print("Cluster will remain running. Press Ctrl-C to shutdown...")

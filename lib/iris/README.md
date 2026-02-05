@@ -209,13 +209,15 @@ Jobs can include a `bundle_blob` containing workspace files. The controller stor
 **Configuration** (required):
 
 ```yaml
-controller_vm:
+controller:
   bundle_prefix: gs://my-bucket/iris/bundles  # GCS for distributed workers
 ```
 
 The controller will **fail at startup** if `bundle_prefix` is not configured.
 
 ## CLI Reference
+
+**Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml job run ...` or `iris cluster --config cluster.yaml start`).
 
 ### Cluster Commands
 
@@ -256,17 +258,15 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 ### Dashboard & Debugging
 
 ```bash
-# Open SSH tunnel to controller and print dashboard URL
 iris cluster --config=... dashboard
 iris cluster --config=... dashboard --port 8080
+```
 
-# Debug commands (auto-establish SSH tunnel)
+### Debug cluster status
+```bash
 iris cluster --config=... debug discover         # Find controller VM
 iris cluster --config=... debug health           # Health check
 iris cluster --config=... debug autoscaler-status
-iris cluster --config=... debug list-workers
-iris cluster --config=... debug list-jobs
-iris cluster --config=... debug logs --follow    # Controller docker logs
 iris cluster --config=... debug bootstrap-logs   # VM startup logs
 iris cluster --config=... debug show-task-logs JOB_ID
 iris cluster --config=... debug validate         # Run test TPU jobs
@@ -274,13 +274,23 @@ iris cluster --config=... debug cleanup          # Dry-run by default
 iris cluster --config=... debug cleanup --no-dry-run
 ```
 
-### Job Submission
+### Job Management
 
 ```bash
 # Submit a command to the cluster
-iris run --config cluster.yaml -- python train.py
-iris run --config cluster.yaml --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
-iris run --config cluster.yaml --no-wait -- python long_job.py
+iris --config cluster.yaml job run -- python train.py
+iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+iris --config cluster.yaml job run --no-wait -- python long_job.py
+
+# Stream logs for a job (batch-fetches from all tasks in one RPC)
+iris --config cluster.yaml job logs /my-job
+iris --config cluster.yaml job logs /my-job --follow
+iris --config cluster.yaml job logs /my-job --since-seconds 300
+iris --config cluster.yaml job logs /my-job --include-children
+
+# Stop one or more jobs
+iris --config cluster.yaml job stop /my-job
+iris --config cluster.yaml job stop /my-job --no-include-children
 ```
 
 ## Smoke Test
@@ -320,61 +330,77 @@ The smoke test:
 
 ## Configuration
 
-Configuration uses a nested structure with `bootstrap`, `timeouts`, and `ssh` sub-configs:
+Configuration uses platform-first settings with typed defaults:
 
 ```yaml
-# Cluster-level settings
-project_id: my-project
-region: us-central1
-zone: us-central1-a
-
-# Bootstrap config for worker VMs
-bootstrap:
-  docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
-  worker_port: 10001
-  controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
-
-# Timeout settings (VM lifecycle)
-timeouts:
-  boot_timeout_seconds: 300        # Time for VM to become SSH-reachable
-  init_timeout_seconds: 600        # Time for worker to register with controller
-  ssh_poll_interval_seconds: 5     # Interval for health checks
-
-# SSH config (for manual provider)
-ssh:
-  user: ubuntu
-  key_file: ~/.ssh/cluster_key
-  port: 22
-  connect_timeout: 30
-
-# Controller VM (GCP-managed)
-controller_vm:
+platform:
+  label_prefix: iris
   gcp:
-    image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
+    project_id: my-project
+    region: us-central1
+    zone: us-central1-a
+    default_zones: [us-central1-a, us-central1-b]
+
+defaults:
+  timeouts:
+    boot_timeout: { milliseconds: 300000 }
+    init_timeout: { milliseconds: 600000 }
+    ssh_poll_interval: { milliseconds: 5000 }
+  autoscaler:
+    evaluation_interval: { milliseconds: 10000 }
+    requesting_timeout: { milliseconds: 120000 }
+    scale_up_delay: { milliseconds: 60000 }
+    scale_down_delay: { milliseconds: 300000 }
+  ssh:
+    user: ubuntu
+    key_file: ~/.ssh/cluster_key
+    connect_timeout: { milliseconds: 30000 }
+  bootstrap:
+    docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
+    worker_port: 10001
+    controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
+
+controller:
+  image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
+  bundle_prefix: gs://my-bucket/iris/bundles
+  gcp:
     machine_type: n2-standard-4
     port: 10000
 
-# Scale groups define VM pools with autoscaling
 scale_groups:
   tpu_v5e_4:
-    provider:
-      tpu:
-        project_id: my-project
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-4
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 4
+    resources:
+      cpu: 64
+      ram: 64GB
+      disk: 500GB
+      tpu_count: 4
+      gpu_count: 0
     min_slices: 0
     max_slices: 10
     preemptible: true
     zones: [us-central1-a, us-central1-b]
 
-  # Manual hosts example (no cloud provisioning)
   manual_hosts:
-    provider:
-      manual:
-        hosts: [10.0.0.1, 10.0.0.2]
-        ssh_user: ubuntu        # Per-group SSH override
-        ssh_key_file: ~/.ssh/manual_key
+    vm_type: manual_vm
+    accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      tpu_count: 0
+      gpu_count: 0
+    min_slices: 0
+    max_slices: 2
+    manual:
+      hosts: [10.0.0.1, 10.0.0.2]
+      ssh_user: ubuntu
+      ssh_key_file: ~/.ssh/manual_key
 ```
 
 ## Directory Structure

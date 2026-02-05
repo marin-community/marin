@@ -1,23 +1,36 @@
 # Iris production configuration for europe-west4 cluster
-# Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/eu-west4.yaml --scale-group tpu_v5e_16
+# Usage: uv run iris cluster --config=examples/eu-west4.yaml start
 
-project_id: hai-gcp-models
-region: europe-west4
-zone: europe-west4-b
+platform:
+  label_prefix: iris
+  gcp:
+    project_id: hai-gcp-models
+    region: europe-west4
+    zone: europe-west4-b
+    default_zones: [europe-west4-b]
 
-bootstrap:
-  docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
-  worker_port: 10001
+defaults:
+  timeouts:
+    boot_timeout:
+      milliseconds: 300000
+    init_timeout:
+      milliseconds: 600000
+    ssh_poll_interval:
+      milliseconds: 5000
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    requesting_timeout:
+      milliseconds: 120000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+  bootstrap:
+    docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+    worker_port: 10001
 
-timeouts:
-  boot_timeout:
-    milliseconds: 300000
-  init_timeout:
-    milliseconds: 600000
-  ssh_poll_interval:
-    milliseconds: 5000
-
-controller_vm:
+controller:
   image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
   bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
   gcp:
@@ -26,12 +39,17 @@ controller_vm:
 
 scale_groups:
   tpu_v5e_16:
-    provider:
-      tpu:
-        project_id: hai-gcp-models
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 16
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
     max_slices: 2
     zones: [europe-west4-b]

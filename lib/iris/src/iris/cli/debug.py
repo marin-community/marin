@@ -30,6 +30,8 @@ from typing import TypeVar
 import click
 from google.protobuf import json_format
 
+from iris.cli.main import require_controller_url
+from iris.time_utils import Timestamp
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
@@ -106,10 +108,14 @@ def _get_zone_project(ctx: click.Context) -> tuple[str, str]:
     if not config:
         click.echo("Error: --config is required on the cluster group", err=True)
         raise SystemExit(1)
-    zone = config.zone
-    project = config.project_id
+    if config.platform.WhichOneof("platform") != "gcp":
+        click.echo("Error: Debug commands require a GCP platform config", err=True)
+        raise SystemExit(1)
+    platform = config.platform.gcp
+    zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+    project = platform.project_id
     if not zone or not project:
-        click.echo("Error: Config must specify zone and project_id", err=True)
+        click.echo("Error: Config must specify platform.gcp.project_id and zone", err=True)
         raise SystemExit(1)
     return zone, project
 
@@ -457,10 +463,7 @@ def ssh_status(ctx, tail: int):
 @click.pass_context
 def health(ctx):
     """Check controller health endpoint."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
     try:
         client.list_jobs(cluster_pb2.Controller.ListJobsRequest())
@@ -475,10 +478,7 @@ def health(ctx):
 @click.pass_context
 def autoscaler_status(ctx, json_output: bool):
     """Get autoscaler status via RPC."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
     request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
 
@@ -495,7 +495,8 @@ def autoscaler_status(ctx, json_output: bool):
 
     status = response.status
     click.echo("=== Autoscaler Status ===")
-    click.echo(f"Last evaluation: {status.last_evaluation_ms}ms")
+    last_eval_ms = Timestamp.from_proto(status.last_evaluation).epoch_ms()
+    click.echo(f"Last evaluation: {Timestamp.from_ms(last_eval_ms).as_formatted_date()}")
 
     if status.current_demand:
         click.echo()
@@ -515,14 +516,16 @@ def autoscaler_status(ctx, json_output: bool):
             click.echo(f"    Peak demand: {group.peak_demand}")
             if group.consecutive_failures > 0:
                 click.echo(f"    Consecutive failures: {group.consecutive_failures}")
-            if group.backoff_until_ms > 0:
-                click.echo(f"    Backoff until: {group.backoff_until_ms}ms")
+            backoff_ms = Timestamp.from_proto(group.backoff_until).epoch_ms()
+            if backoff_ms > 0:
+                click.echo(f"    Backoff until: {Timestamp.from_ms(backoff_ms).as_formatted_date()}")
 
     if status.recent_actions:
         click.echo()
         click.echo("Recent Actions:")
         for action in status.recent_actions[-10:]:
-            click.echo(f"  [{action.timestamp_ms}] {action.action_type} ({action.scale_group}): {action.reason}")
+            action_ts = Timestamp.from_proto(action.timestamp).as_formatted_date()
+            click.echo(f"  [{action_ts}] {action.action_type} ({action.scale_group}): {action.reason}")
 
 
 @debug.command("list-workers")
@@ -530,10 +533,7 @@ def autoscaler_status(ctx, json_output: bool):
 @click.pass_context
 def list_workers(ctx, json_output: bool):
     """List registered workers."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
     request = cluster_pb2.Controller.ListWorkersRequest()
 
@@ -562,7 +562,8 @@ def list_workers(ctx, json_output: bool):
         click.echo(f"  Running tasks: {len(worker.running_job_ids)}")
         if worker.running_job_ids:
             click.echo(f"    Tasks: {', '.join(worker.running_job_ids)}")
-        click.echo(f"  Last heartbeat: {worker.last_heartbeat_ms}")
+        heartbeat_ms = Timestamp.from_proto(worker.last_heartbeat).epoch_ms()
+        click.echo(f"  Last heartbeat: {Timestamp.from_ms(heartbeat_ms).as_formatted_date()}")
         if worker.consecutive_failures > 0:
             click.echo(f"  Consecutive failures: {worker.consecutive_failures}")
         if worker.metadata.hostname:
@@ -647,10 +648,7 @@ def bootstrap_logs(ctx, tail: int):
 @click.pass_context
 def list_jobs(ctx, json_output: bool):
     """List all jobs."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
     request = cluster_pb2.Controller.ListJobsRequest()
 
@@ -683,65 +681,6 @@ def list_jobs(ctx, json_output: bool):
             click.echo(f"  Error: {job.error}")
 
 
-@debug.command("show-task-logs")
-@click.argument("job_id")
-@click.option("--category", help="Filter logs by category (e.g., 'build')")
-@click.option("--max-entries", default=5000, help="Maximum log entries to fetch")
-@click.pass_context
-def show_task_logs(ctx, job_id: str, category: str | None, max_entries: int):
-    """Show detailed task logs for a job."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
-    client = ControllerServiceClientSync(controller_url)
-
-    try:
-        job_resp = client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id))
-    except Exception as e:
-        click.echo(f"Failed to get job status: {e}", err=True)
-        raise SystemExit(1) from e
-
-    job = job_resp.job
-    click.echo(f"Job: {job.job_id}")
-    click.echo(f"State: {cluster_pb2.JobState.Name(job.state)}")
-    click.echo(f"Tasks: {len(job.tasks)}")
-    if job.error:
-        click.echo(f"Error: {job.error}")
-    click.echo()
-
-    for task in job.tasks:
-        click.echo(f"=== Task: {task.task_id} (index {task.task_index}) ===")
-        click.echo(f"State: {cluster_pb2.TaskState.Name(task.state)}")
-        if task.worker_id:
-            click.echo(f"Worker: {task.worker_id}")
-        if task.error:
-            click.echo(f"Error: {task.error}")
-        click.echo()
-
-        try:
-            logs_resp = client.get_task_logs(
-                cluster_pb2.Controller.GetTaskLogsRequest(
-                    job_id=job.job_id, task_index=task.task_index, start_ms=0, limit=max_entries
-                )
-            )
-        except Exception as e:
-            click.echo(f"Failed to fetch logs for task {task.task_index}: {e}", err=True)
-            continue
-
-        log_entries = logs_resp.logs
-        if category:
-            log_entries = [log for log in log_entries if category.lower() in log.source.lower()]
-
-        if not log_entries:
-            click.echo(f"No logs found{f' for category {category}' if category else ''}.")
-        else:
-            click.echo(f"Logs ({len(log_entries)} entries):")
-            for log in log_entries:
-                click.echo(f"[{log.source}] {log.data}")
-        click.echo()
-
-
 @debug.command()
 @click.option("--workspace", type=click.Path(exists=True, path_type=Path), help="Workspace directory")
 @click.option("--tpu-type", default=DEFAULT_TPU_TYPE, help="TPU type for validation jobs")
@@ -751,10 +690,7 @@ def validate(ctx, workspace: Path | None, tpu_type: str):
 
     Submits TPU test jobs to verify the cluster is functioning correctly.
     """
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     iris_root = Path(__file__).resolve().parents[2]
     ws = workspace or iris_root
 

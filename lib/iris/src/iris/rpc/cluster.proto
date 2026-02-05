@@ -60,9 +60,7 @@ enum TaskState {
 
 // Status of a single task within a job
 message TaskStatus {
-  string task_id = 1;                 // "{job_id}/task-{index}"
-  string job_id = 2;
-  int32 task_index = 3;               // 0-indexed task number
+  string task_id = 1;                 // "/job/full/path/with/task/0"
   TaskState state = 4;
 
   string worker_id = 5;
@@ -134,9 +132,6 @@ message JobStatus {
 
   bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
 
-  // Parent job ID for hierarchical job tracking (empty string if root job)
-  string parent_job_id = 14;
-
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
 
@@ -205,7 +200,6 @@ message ResourceSpecProto {
   DeviceConfig device = 5;
 
   // Scheduling preferences
-  reserved 7;                 // was: preemptible (now handled via constraints)
   repeated string regions = 8; // Preferred cloud regions
 }
 
@@ -352,10 +346,6 @@ message Controller {
     // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
     repeated string ports = 9;
 
-    // Parent job ID for hierarchical job tracking (empty string if root job)
-    // Child job IDs are formed as "{parent_job_id}/{name}"
-    string parent_job_id = 10;
-
     // Job-level failure tolerance
     // A job fails when this many tasks have exhausted their retries (default 0 = fail on first task failure)
     // Preemptions do not count toward this limit
@@ -404,16 +394,47 @@ message Controller {
     string job_id = 1;
   }
 
-  message ListJobsRequest {}
+  // Sort fields for job listing
+  enum JobSortField {
+    JOB_SORT_FIELD_UNSPECIFIED = 0;
+    JOB_SORT_FIELD_DATE = 1;     // submitted_at_ms
+    JOB_SORT_FIELD_NAME = 2;
+    JOB_SORT_FIELD_STATE = 3;
+    JOB_SORT_FIELD_FAILURES = 4;
+    JOB_SORT_FIELD_PREEMPTIONS = 5;
+  }
+
+  enum SortDirection {
+    SORT_DIRECTION_UNSPECIFIED = 0;  // Default to descending for date, ascending for others
+    SORT_DIRECTION_ASC = 1;
+    SORT_DIRECTION_DESC = 2;
+  }
+
+  message ListJobsRequest {
+    // Pagination
+    int32 offset = 1;   // Skip first N jobs (default: 0)
+    int32 limit = 2;    // Max jobs to return (default: 50, max: 500)
+
+    // Sorting (default: date descending)
+    JobSortField sort_field = 3;
+    SortDirection sort_direction = 4;
+
+    // Filtering
+    string name_filter = 5;  // Filter by job name (substring match)
+    string state_filter = 6; // Filter by state (exact match, e.g., "running")
+  }
 
   message ListJobsResponse {
     repeated JobStatus jobs = 1;
+
+    // Pagination info
+    int32 total_count = 2;  // Total jobs matching filters (before pagination)
+    bool has_more = 3;      // More jobs available after this page
   }
 
   // --- Task Operations ---
   message GetTaskStatusRequest {
-    string job_id = 1;
-    int32 task_index = 2;
+    string task_id = 1;
   }
 
   message GetTaskStatusResponse {
@@ -446,8 +467,6 @@ message Controller {
   // Workers report completions for expected_tasks that have reached a terminal state.
   message CompletedTaskEntry {
     string task_id = 1;
-    string job_id = 2;
-    int32 task_index = 3;
     TaskState state = 4;
     int32 exit_code = 5;
     string error = 6;
@@ -563,18 +582,25 @@ message Controller {
     repeated TransactionAction actions = 1;
   }
 
-  // --- Task Logs (proxied to worker) ---
+  // --- Task/Job Logs (batch fetching) ---
   message GetTaskLogsRequest {
-    string job_id = 1;
-    int32 task_index = 2;
-    int64 start_ms = 3;
-    int64 limit = 4;
-    int64 start_line = 5;  // Supports negative indexing: -1000 = last 1000 lines
+    string id = 1;                   // Job ID or Task ID (detected by trailing numeric)
+    bool include_children = 2;       // Include child jobs (only for job IDs)
+    int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
+    int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
+    string regex = 5;                // Regex filter (propagated to workers)
+  }
+
+  message TaskLogBatch {
+    string task_id = 1;
+    repeated Worker.LogEntry logs = 2;
+    string error = 3;                // If fetch failed for this task
   }
 
   message GetTaskLogsResponse {
-    repeated Worker.LogEntry logs = 1;
-    string worker_address = 2;
+    repeated TaskLogBatch task_logs = 1;
+    int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
+    bool truncated = 3;              // True if max_total_lines hit
   }
 
   // --- Process Logs ---
@@ -594,18 +620,16 @@ message Controller {
 
 message Worker {
   message RunTaskRequest {
-    string job_id = 1;              // Parent job ID
-    string task_id = 2;             // Full task ID: "{job_id}/task-{index}"
-    int32 task_index = 3;           // 0-indexed task number
-    int32 num_tasks = 4;            // Total tasks in job (for IRIS_NUM_TASKS)
+    string task_id = 1;             // Full task ID: "/job/full/path/with/task/0"
+    int32 num_tasks = 2;            // Total tasks in job (for IRIS_NUM_TASKS)
 
-    Entrypoint entrypoint = 5;      // Job entrypoint (callable or command)
-    EnvironmentConfig environment = 6;
-    string bundle_gcs_path = 7;
-    ResourceSpecProto resources = 8;
-    iris.time.Duration timeout = 9;
-    repeated string ports = 10;
-    int32 attempt_id = 11;
+    Entrypoint entrypoint = 3;      // Job entrypoint (callable or command)
+    EnvironmentConfig environment = 4;
+    string bundle_gcs_path = 5;
+    ResourceSpecProto resources = 6;
+    iris.time.Duration timeout = 7;
+    repeated string ports = 8;
+    int32 attempt_id = 9;
   }
 
   message GetTaskStatusRequest {

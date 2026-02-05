@@ -31,6 +31,7 @@ from iris.cluster.worker.docker import ContainerRuntime, DockerRuntime
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.types import JobName
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
@@ -49,7 +50,6 @@ class WorkerConfig:
     host: str = "127.0.0.1"
     port: int = 0
     cache_dir: Path | None = None
-    registry: str = "localhost:5000"
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
@@ -90,7 +90,6 @@ class Worker:
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
         self._image_cache = image_provider or ImageCache(
             self._cache_dir,
-            registry=config.registry,
             max_images=50,
         )
         self._runtime = container_runtime or DockerRuntime()
@@ -336,11 +335,12 @@ class Worker:
         if rule := chaos("worker.submit_task"):
             time.sleep(rule.delay_seconds)
             raise RuntimeError("chaos: worker rejecting task")
-        task_id = request.task_id
+        task_id_wire = request.task_id
+        task_id = JobName.from_wire(task_id_wire)
 
         should_kill_existing = False
         with self._lock:
-            existing = self._tasks.get(task_id)
+            existing = self._tasks.get(task_id_wire)
             if existing is not None and existing.status not in self._TERMINAL_STATES:
                 if request.attempt_id <= existing.attempt_id:
                     logger.info(
@@ -349,7 +349,7 @@ class Worker:
                         request.attempt_id,
                         existing.status,
                     )
-                    return task_id
+                    return task_id_wire
                 logger.info(
                     "Superseding task %s: attempt %d -> %d, killing old attempt",
                     task_id,
@@ -359,10 +359,9 @@ class Worker:
                 should_kill_existing = True
 
         if should_kill_existing:
-            self.kill_task(task_id)
+            self.kill_task(task_id_wire)
 
-        job_id = request.job_id
-        task_index = request.task_index
+        task_id.require_task()
         num_tasks = request.num_tasks
         attempt_id = request.attempt_id
 
@@ -372,16 +371,14 @@ class Worker:
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
         # Create task working directory with attempt isolation
-        # Use safe path component for hierarchical task IDs (e.g., "my-exp/task-0" -> "my-exp__task-0")
-        safe_task_id = task_id.replace("/", "__")
+        # Use safe path component for hierarchical task IDs (e.g., "/my-exp/0" -> "__my-exp__0")
+        safe_task_id = task_id.to_safe_token()
         workdir = Path(tempfile.gettempdir()) / "iris-worker" / "tasks" / f"{safe_task_id}_attempt_{attempt_id}"
         workdir.mkdir(parents=True, exist_ok=True)
 
         # Create TaskAttempt to handle the full execution lifecycle
         config = TaskAttemptConfig(
             task_id=task_id,
-            job_id=job_id,
-            task_index=task_index,
             num_tasks=num_tasks,
             attempt_id=attempt_id,
             request=request,
@@ -403,7 +400,7 @@ class Worker:
         )
 
         with self._lock:
-            self._tasks[task_id] = attempt
+            self._tasks[task_id_wire] = attempt
 
         # Start execution in a monitored non-daemon thread. When stop() is called,
         # the on_stop callback kills the container so attempt.run() exits promptly.
@@ -418,10 +415,10 @@ class Worker:
                 except RuntimeError:
                     pass
 
-        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id}", on_stop=_stop_task)
+        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id_wire}", on_stop=_stop_task)
         attempt.thread = mt._thread
 
-        return task_id
+        return task_id_wire
 
     def get_task(self, task_id: str) -> TaskInfo | None:
         """Get a task by ID.
@@ -464,9 +461,6 @@ class Worker:
             except Exception as e:
                 logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-        # Build expected_tasks lookup
-        expected_task_ids = {entry.task_id: entry for entry in request.expected_tasks}
-
         # Terminal states
         terminal_states = {
             cluster_pb2.TASK_STATE_SUCCEEDED,
@@ -489,8 +483,6 @@ class Worker:
                     completed_tasks.append(
                         cluster_pb2.Controller.CompletedTaskEntry(
                             task_id=task_id,
-                            job_id="",  # We don't have this information
-                            task_index=0,
                             state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                             exit_code=0,
                             error="Task not found on worker",
@@ -504,8 +496,6 @@ class Worker:
                     completed_tasks.append(
                         cluster_pb2.Controller.CompletedTaskEntry(
                             task_id=task_proto.task_id,
-                            job_id=task_proto.job_id,
-                            task_index=task_proto.task_index,
                             state=task_proto.state,
                             exit_code=task_proto.exit_code,
                             error=task_proto.error,
@@ -523,16 +513,18 @@ class Worker:
                         )
                     )
 
-            # Report all non-terminal tasks (including unexpected ones)
+            # Kill tasks not in expected_tasks - the controller has decided these
+            # tasks should no longer run (e.g., job was killed, task was reassigned)
+            expected_task_ids = {entry.task_id for entry in request.expected_tasks}
+            tasks_to_kill = []
             for task_id, task in self._tasks.items():
                 if task_id not in expected_task_ids and task.status not in terminal_states:
-                    running_tasks.append(
-                        cluster_pb2.Controller.RunningTaskEntry(
-                            task_id=task_id,
-                            attempt_id=task.to_proto().current_attempt_id,
-                            state=task.status,
-                        )
-                    )
+                    tasks_to_kill.append(task_id)
+
+        # Kill removed tasks outside lock to avoid deadlock
+        for task_id in tasks_to_kill:
+            logger.warning("Killing task %s (no longer in expected_tasks)", task_id)
+            self.kill_task(task_id)
 
         return cluster_pb2.HeartbeatResponse(
             running_tasks=running_tasks,
@@ -584,6 +576,9 @@ class Worker:
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
         """Get logs for a task.
 
+        Logs are streamed into task.logs during execution (single source of truth).
+        Container is removed after task completion to release TPU devices.
+
         Args:
             task_id: ID of the task to get logs for
             start_line: Line offset (supports negative indexing: -1000 = last 1000 lines)
@@ -592,17 +587,8 @@ class Worker:
         if not task:
             return []
 
-        logs: list[cluster_pb2.Worker.LogEntry] = []
-
-        # Add build logs from task.logs (these have proper timestamps)
-        for log_line in task.logs.lines:
-            logs.append(log_line.to_proto())
-
-        # Fetch container stdout/stderr from Docker if container exists
-        if task.container_id:
-            container_logs = self._runtime.get_logs(task.container_id)
-            for log_line in container_logs:
-                logs.append(log_line.to_proto())
+        # All logs (build + container stdout/stderr) are now in task.logs
+        logs = [log_line.to_proto() for log_line in task.logs.lines]
 
         # Sort by timestamp
         logs.sort(key=lambda x: x.timestamp.epoch_ms)

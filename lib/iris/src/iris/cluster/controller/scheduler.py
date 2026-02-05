@@ -24,12 +24,16 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
     ControllerWorker,
+)
+from iris.cluster.types import (
+    AttributeValue,
+    JobName,
+    WorkerId,
     get_device_type,
     get_device_variant,
     get_gpu_count,
-    get_tpu_chip_count,
+    get_tpu_count,
 )
-from iris.cluster.types import AttributeValue, JobId, WorkerId
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -175,7 +179,7 @@ class WorkerCapacity:
         if job_device_type == "gpu" and get_gpu_count(res.device) > self.available_gpus:
             return False
 
-        if job_device_type == "tpu" and get_tpu_chip_count(res.device) > self.available_tpus:
+        if job_device_type == "tpu" and get_tpu_count(res.device) > self.available_tpus:
             return False
 
         return True
@@ -186,7 +190,7 @@ class WorkerCapacity:
         self.available_cpu -= res.cpu
         self.available_memory -= res.memory_bytes
         self.available_gpus -= get_gpu_count(res.device)
-        self.available_tpus -= get_tpu_chip_count(res.device)
+        self.available_tpus -= get_tpu_count(res.device)
 
     def matches_constraints(self, constraints: Sequence[cluster_pb2.Constraint]) -> bool:
         """Check if this worker matches all given constraints."""
@@ -479,7 +483,7 @@ class Scheduler:
         scheduled_task_ids: set[str] = set()
 
         # Group tasks by job for coscheduled handling
-        tasks_by_job: dict[JobId, list[ControllerTask]] = defaultdict(list)
+        tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
         for task in pending_tasks:
             tasks_by_job[task.job_id].append(task)
 

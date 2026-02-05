@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.types import JobName
 from iris.cluster.worker.docker import DockerImageBuilder
 from iris.cluster.worker.worker_types import TaskLogs
 
@@ -63,7 +64,7 @@ class ImageProvider(Protocol):
 class ImageCache:
     """Manages Docker image building with caching.
 
-    Image tag: {registry}/iris-job-{job_id}:{uv_locks_hash[:8]}
+    Image tag: iris-job-{job_id}:{uv_locks_hash[:8]}
     Uses Docker BuildKit cache mounts with explicit global cache ID
     (iris-uv-global) to ensure all workspaces share the same UV cache.
 
@@ -80,14 +81,12 @@ class ImageCache:
     def __init__(
         self,
         cache_dir: Path,
-        registry: str,
         max_images: int = 100,
     ):
         self._cache_dir = cache_dir / "images"
-        self._registry = registry
         self._max_images = max_images
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        self._docker = DockerImageBuilder(registry)
+        self._docker = DockerImageBuilder()
         # Refcount of images currently in use by jobs (should not be evicted)
         self._image_refcounts: dict[str, int] = {}
 
@@ -123,10 +122,8 @@ class ImageCache:
                     h.update(fd.read())
             tag = h.hexdigest()[:tag_len]
 
-        if self._registry:
-            image_tag = f"{self._registry}/iris-job-{job_id}:{tag}"
-        else:
-            image_tag = f"iris-job-{job_id}:{tag}"
+        safe_job_id = JobName.from_wire(job_id).to_safe_token()
+        image_tag = f"iris-job-{safe_job_id}:{tag}"
 
         # Check if image exists locally
         if self._docker.exists(image_tag):
@@ -151,10 +148,7 @@ class ImageCache:
         )
 
     def _evict_old_images(self) -> None:
-        if self._registry:
-            pattern = f"{self._registry}/iris-job-*"
-        else:
-            pattern = "iris-job-*"
+        pattern = "iris-job-*"
         images = self._docker.list_images(pattern)
 
         if len(images) <= self._max_images:

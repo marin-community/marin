@@ -85,7 +85,7 @@ def test_image_caching(tmp_path, docker_bundle, docker_cleanup_scope):
         pytest.skip("Docker not available")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir)
 
     job_id = "cache-test-456"
     base_image = "python:3.11-slim"
@@ -157,7 +157,7 @@ packages = ["src/test_app"]
         pytest.skip("uv not available or failed to create lock file")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir)
 
     # Build with extras
     result = builder.build(
@@ -173,7 +173,7 @@ packages = ["src/test_app"]
 def test_protect_unprotect_refcounting(tmp_path):
     """Test that protect/unprotect correctly manages refcounts."""
     cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir)
 
     tag = "test-image:v1"
 
@@ -205,7 +205,7 @@ def test_cache_eviction_enforces_max_images(tmp_path):
     """Test that cache eviction respects max_images limit."""
     cache_dir = tmp_path / "cache"
     max_images = 3
-    builder = ImageCache(cache_dir, registry="localhost:5000", max_images=max_images)
+    builder = ImageCache(cache_dir, max_images=max_images)
 
     from unittest.mock import MagicMock
     from dataclasses import dataclass
@@ -222,11 +222,11 @@ def test_cache_eviction_enforces_max_images(tmp_path):
 
     # Create mock images (oldest to newest)
     mock_images = [
-        MockImage(tag="localhost:5000/iris-job-old1:abc123", created_at=datetime(2025, 1, 1, 10, 0)),
-        MockImage(tag="localhost:5000/iris-job-old2:def456", created_at=datetime(2025, 1, 1, 11, 0)),
-        MockImage(tag="localhost:5000/iris-job-old3:ghi789", created_at=datetime(2025, 1, 1, 12, 0)),
-        MockImage(tag="localhost:5000/iris-job-new1:jkl012", created_at=datetime(2025, 1, 1, 13, 0)),
-        MockImage(tag="localhost:5000/iris-job-new2:mno345", created_at=datetime(2025, 1, 1, 14, 0)),
+        MockImage(tag="iris-job-old1:abc123", created_at=datetime(2025, 1, 1, 10, 0)),
+        MockImage(tag="iris-job-old2:def456", created_at=datetime(2025, 1, 1, 11, 0)),
+        MockImage(tag="iris-job-old3:ghi789", created_at=datetime(2025, 1, 1, 12, 0)),
+        MockImage(tag="iris-job-new1:jkl012", created_at=datetime(2025, 1, 1, 13, 0)),
+        MockImage(tag="iris-job-new2:mno345", created_at=datetime(2025, 1, 1, 14, 0)),
     ]
 
     builder._docker.list_images = MagicMock(return_value=mock_images)
@@ -239,8 +239,8 @@ def test_cache_eviction_enforces_max_images(tmp_path):
     assert builder._docker.remove.call_count == 2
     removed_tags = {call[0][0] for call in builder._docker.remove.call_args_list}
     assert removed_tags == {
-        "localhost:5000/iris-job-old1:abc123",
-        "localhost:5000/iris-job-old2:def456",
+        "iris-job-old1:abc123",
+        "iris-job-old2:def456",
     }
 
 
@@ -248,7 +248,7 @@ def test_cache_eviction_respects_protected_images(tmp_path):
     """Test that protected images are not evicted even when max_images exceeded."""
     cache_dir = tmp_path / "cache"
     max_images = 2
-    builder = ImageCache(cache_dir, registry="localhost:5000", max_images=max_images)
+    builder = ImageCache(cache_dir, max_images=max_images)
 
     from unittest.mock import MagicMock
     from dataclasses import dataclass
@@ -265,14 +265,14 @@ def test_cache_eviction_respects_protected_images(tmp_path):
     # Create 4 images: 1 protected, 3 unprotected
     # With max_images=2, we should evict 1 unprotected (oldest)
     mock_images = [
-        MockImage(tag="localhost:5000/iris-job-protected:abc123", created_at=datetime(2025, 1, 1, 10, 0)),
-        MockImage(tag="localhost:5000/iris-job-old:def456", created_at=datetime(2025, 1, 1, 11, 0)),
-        MockImage(tag="localhost:5000/iris-job-mid:ghi789", created_at=datetime(2025, 1, 1, 12, 0)),
-        MockImage(tag="localhost:5000/iris-job-new:jkl012", created_at=datetime(2025, 1, 1, 13, 0)),
+        MockImage(tag="iris-job-protected:abc123", created_at=datetime(2025, 1, 1, 10, 0)),
+        MockImage(tag="iris-job-old:def456", created_at=datetime(2025, 1, 1, 11, 0)),
+        MockImage(tag="iris-job-mid:ghi789", created_at=datetime(2025, 1, 1, 12, 0)),
+        MockImage(tag="iris-job-new:jkl012", created_at=datetime(2025, 1, 1, 13, 0)),
     ]
 
     # Protect the oldest image
-    builder.protect("localhost:5000/iris-job-protected:abc123")
+    builder.protect("iris-job-protected:abc123")
 
     builder._docker.list_images = MagicMock(return_value=mock_images)
     builder._docker.remove = MagicMock()
@@ -282,4 +282,4 @@ def test_cache_eviction_respects_protected_images(tmp_path):
 
     # Should only remove the oldest unprotected image
     # 3 evictable images - 2 max_images = 1 to remove
-    builder._docker.remove.assert_called_once_with("localhost:5000/iris-job-old:def456")
+    builder._docker.remove.assert_called_once_with("iris-job-old:def456")

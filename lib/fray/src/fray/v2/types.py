@@ -318,6 +318,10 @@ class ResourceConfig:
     JobRequest.replicas takes precedence. This field exists here so that
     convenience builders like `with_tpu(..., slice_count=4)` can carry the
     replica count alongside the resource spec.
+
+    `max_concurrency` controls how many method calls can run in parallel on
+    the actor (Ray's max_concurrency). Use >1 for actors that need to handle
+    concurrent calls, e.g. coordinators that block while workers call back.
     """
 
     cpu: int = 1
@@ -327,6 +331,7 @@ class ResourceConfig:
     preemptible: bool = True
     regions: Sequence[str] | None = None
     replicas: int = 1
+    max_concurrency: int = 1
 
     def chip_count(self) -> int:
         return self.device.chip_count()
@@ -340,8 +345,20 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str, *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_tpu(tpu_type: str, *, slice_count: int | None = None, **kwargs: Any) -> ResourceConfig:
+        topo = get_tpu_topology(tpu_type)
+        if slice_count is None:
+            slice_count = topo.vm_count
+        elif slice_count != topo.vm_count:
+            raise ValueError(
+                f"slice_count must match TPU slice size ({topo.vm_count}) for {tpu_type}, got {slice_count}"
+            )
+
         device = TpuConfig(variant=tpu_type)
+        kwargs = dict(kwargs)
+        kwargs.setdefault("cpu", 32)
+        kwargs.setdefault("ram", "128g")
+        kwargs.setdefault("disk", "50g")
         return ResourceConfig(device=device, replicas=slice_count, **kwargs)
 
     @staticmethod

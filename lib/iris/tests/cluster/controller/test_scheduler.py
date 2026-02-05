@@ -28,7 +28,7 @@ from iris.cluster.controller.events import (
 )
 from iris.cluster.controller.scheduler import Scheduler, SchedulingResult
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
@@ -71,7 +71,8 @@ def submit_job(
     timestamp_ms: int | None = None,
 ) -> list[ControllerTask]:
     """Submit a job via event and return created tasks."""
-    jid = JobId(job_id)
+    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root(job_id)
+    request.name = jid.to_wire()
     state.handle_event(
         JobSubmittedEvent(
             job_id=jid,
@@ -150,8 +151,9 @@ def job_request():
     ) -> cluster_pb2.Controller.LaunchJobRequest:
         from iris.time_utils import Duration
 
+        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root(name)
         request = cluster_pb2.Controller.LaunchJobRequest(
-            name=name,
+            name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
@@ -175,8 +177,9 @@ def coscheduled_job_request():
         replicas: int = 4,
         group_by: str = "tpu-name",
     ) -> cluster_pb2.Controller.LaunchJobRequest:
+        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root(name)
         req = cluster_pb2.Controller.LaunchJobRequest(
-            name=name,
+            name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
@@ -352,7 +355,7 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
     tasks = submit_job(state, "j1", request)
 
     # Manually set the deadline to 2 seconds ago (using monotonic time)
-    job = state.get_job(JobId("j1"))
+    job = state.get_job(JobName.root("j1"))
     job.scheduling_deadline = Deadline(time.monotonic() - 2.0)
 
     pending_tasks = state.peek_pending_tasks()
@@ -837,7 +840,7 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     submit_job(state, "busy", busy_req)
 
     # Assign the busy job's tasks to wa0 and wa1
-    busy_tasks = state.get_job_tasks(JobId("busy"))
+    busy_tasks = state.get_job_tasks(JobName.root("busy"))
     assign_task_to_worker(state, busy_tasks[0], WorkerId("wa0"))
     assign_task_to_worker(state, busy_tasks[1], WorkerId("wa1"))
     transition_task_to_running(state, busy_tasks[0])
@@ -1156,7 +1159,7 @@ def test_tpu_job_rejected_when_insufficient_chips(scheduler, state):
     assert len(result.assignments) == 0
 
 
-def test_tpu_chips_released_after_task_completion(scheduler, state):
+def test_tpu_count_released_after_task_completion(scheduler, state):
     """TPU chips are released when task completes, allowing new tasks to schedule."""
     # Worker with 4 TPU chips
     meta = cluster_pb2.WorkerMetadata(
@@ -1224,7 +1227,7 @@ def test_tpu_chips_released_after_task_completion(scheduler, state):
         state.get_available_workers(),
     )
     assert len(result.assignments) == 1
-    assert result.assignments[0][0].job_id == JobId("j2")
+    assert result.assignments[0][0].job_id == JobName.root("j2")
 
 
 # =============================================================================
