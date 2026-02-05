@@ -17,6 +17,7 @@
 For the full IrisContext with client/registry/resolver, use iris.client.
 """
 
+import json
 import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -45,6 +46,9 @@ class JobInfo:
 
     ports: dict[str, int] = field(default_factory=dict)
     """Name to port number mapping for this task."""
+
+    env: dict[str, str] = field(default_factory=dict)
+    """Explicit env vars from the job's EnvironmentConfig, for child job inheritance."""
 
     @property
     def job_id(self) -> JobName:
@@ -77,6 +81,9 @@ def get_job_info() -> JobInfo | None:
             task_id.require_task()
         except ValueError:
             return None
+        job_env_json = os.environ.get("IRIS_JOB_ENV", "")
+        job_env = json.loads(job_env_json) if job_env_json else {}
+
         info = JobInfo(
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
@@ -87,6 +94,7 @@ def get_job_info() -> JobInfo | None:
             dockerfile=os.environ.get("IRIS_DOCKERFILE"),
             bundle_gcs_path=os.environ.get("IRIS_BUNDLE_GCS_PATH"),
             ports=_parse_ports_from_env(),
+            env=job_env,
         )
         _job_info.set(info)
         return info

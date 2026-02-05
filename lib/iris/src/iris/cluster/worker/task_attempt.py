@@ -18,6 +18,7 @@ This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
 
+import json
 import logging
 import shutil
 import socket
@@ -128,6 +129,12 @@ def build_iris_env(
     dockerfile = task.request.environment.dockerfile
     if dockerfile:
         env["IRIS_DOCKERFILE"] = dockerfile
+
+    # Serialize the explicit user env vars so child jobs can inherit them
+    # via JobInfo.env without picking up infrastructure vars from os.environ.
+    user_env_vars = dict(task.request.environment.env_vars)
+    if user_env_vars:
+        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
 
     # Inject allocated ports
     for name, port in task.ports.items():
