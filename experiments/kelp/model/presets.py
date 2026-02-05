@@ -18,11 +18,9 @@ Provides pre-configured model sizes targeting different compute environments.
 """
 
 from dataclasses import dataclass
-from typing import Literal
-
-from fray.cluster import ResourceConfig
 
 from experiments.kelp.model.config import TreeDiffusionConfig
+from fray.cluster import ResourceConfig
 
 
 @dataclass(frozen=True)

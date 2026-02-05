@@ -33,8 +33,6 @@ from jax import random
 
 from experiments.kelp.data.toy_dataset import TOY_PROGRAMS
 from experiments.kelp.model.config import TreeDiffusionConfig
-from experiments.kelp.model.model import TreeDiffusionModel, init_parameters, save_model
-from experiments.kelp.model.noise import get_schedule
 from experiments.kelp.training.train import TrainingConfig, train
 
 logging.basicConfig(

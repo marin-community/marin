@@ -21,7 +21,6 @@ approaches like D3PM (Austin et al., 2021) and DiffuSeq (Gong et al., 2022).
 import logging
 from dataclasses import dataclass
 
-import jax
 import jax.numpy as jnp
 from jax import random
 from jaxtyping import Array, Float, Int, PRNGKeyArray
