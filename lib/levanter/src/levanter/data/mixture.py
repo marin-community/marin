@@ -303,6 +303,42 @@ class MixtureDataset(AsyncDataset[T]):
     def _dataset_of_id(self, id):
         return self.datasets[self.dataset_index[id]]
 
+    def cumulative_items_per_dataset(self, total_global_items: int) -> dict[str, int]:
+        """Compute how many items each sub-dataset has contributed up to total_global_items.
+
+        Uses the block-based distribution to compute exact per-dataset counts,
+        accounting for multi-stage weight schedules.
+        """
+        result = np.zeros(len(self.datasets), dtype=np.int64)
+        remaining = total_global_items
+
+        for stage_idx, (start_seq_index, _) in enumerate(self.weight_stages):
+            counts = self._counts_per_block_per_stage[stage_idx]
+
+            if stage_idx < len(self.weight_stages) - 1:
+                next_start = self.weight_stages[stage_idx + 1][0]
+                items_in_stage = next_start - start_seq_index
+            else:
+                items_in_stage = remaining  # last stage: consume all remaining
+
+            items_consumed = min(items_in_stage, remaining)
+            full_blocks = items_consumed // self.block_size
+
+            result += full_blocks * counts
+
+            # Partial block: distribute proportionally
+            remainder = items_consumed % self.block_size
+            if remainder > 0:
+                total_in_block = int(counts.sum())
+                for i in range(len(self.datasets)):
+                    result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+
+            remaining -= items_consumed
+            if remaining <= 0:
+                break
+
+        return {name: int(result[i]) for i, name in enumerate(self.dataset_index)}
+
 
 def _compute_block_assignment(base_ids, index, key):
     rng = jax.random.fold_in(key, index)

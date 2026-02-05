@@ -2415,6 +2415,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
 
         # Pipeline start is deferred until first get_batch() call to support seeking
         self._pipeline_started: bool = False
+        self._resume_items_to_skip: int = 0
 
     def _ensure_data_loaded(self):
         """Initialize dataset in step-based mode (no pre-counting of rows).
@@ -2466,6 +2467,13 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             # NOTE: First shard loading and prefetch thread start are deferred
             # to _start_pipeline(), which is called on the first get_batch() call.
             # This allows computing the correct seek position from the indices.
+
+    def set_resume_item_count(self, count: int):
+        """Set the number of items to skip on resume (per process).
+
+        Must be called BEFORE the first get_batch() call (before pipeline starts).
+        """
+        self._resume_items_to_skip = count
 
     def _start_pipeline(self, items_to_skip: int = 0):
         """Start the data pipeline, optionally seeking to a position first.
@@ -2683,21 +2691,19 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         """Get items from cache (step-based mode).
 
         In step-based mode, we return batch_size items in sequential order from
-        the cache. On the first call, the indices are used to compute how many
-        items to skip (for checkpoint resume support).
+        the cache. On the first call, uses pre-set _resume_items_to_skip for
+        checkpoint resume support (set via set_resume_item_count()).
         """
         self._ensure_data_loaded()
 
-        # Start the pipeline on first call, using indices to compute seek position
+        # Start the pipeline on first call, using pre-computed resume position
         if not self._pipeline_started:
             with self._data_lock:
                 if not self._pipeline_started:
-                    items_to_skip = min(indices) // jax.process_count() if indices else 0
+                    items_to_skip = self._resume_items_to_skip
                     if items_to_skip > 0:
                         logger.info(
-                            f"First get_batch call with min(indices)={min(indices)}, "
-                            f"process_count={jax.process_count()}, "
-                            f"seeking to item {items_to_skip}"
+                            f"Starting pipeline with resume: seeking to item {items_to_skip}"
                         )
                     self._start_pipeline(items_to_skip)
 

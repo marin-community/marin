@@ -153,6 +153,17 @@ class UrlBackedShardedDataSource(ShardedDataSource[T_co], abc.ABC):
     def shard_names(self) -> Sequence[str]:
         return list(self._shard_name_to_url_mapping.keys())
 
+    def shard_num_rows(self, shard_name: str) -> int:
+        url = self._shard_name_to_url_mapping[shard_name]
+        format = _sniff_format_for_dataset(url)
+        if format == ".parquet":
+            import pyarrow.parquet as pq
+
+            with fsspec.open(url, "rb") as f:
+                return pq.ParquetFile(f).metadata.num_rows
+        # Non-parquet: fall back to base class (loads full file)
+        return super().shard_num_rows(shard_name)
+
 
 def datasource_from_hf(id: str, *, split, **kwargs) -> ShardedDataSource[dict]:
     """
@@ -581,6 +592,9 @@ class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
         for doc in self.source.open_shard_at_row(shard_name, row):
             yield self.fn(doc)
 
+    def shard_num_rows(self, shard_name: str) -> int:
+        return self.source.shard_num_rows(shard_name)
+
 
 class _BatchMappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
     def __init__(
@@ -601,6 +615,9 @@ class _BatchMappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
     @property
     def shard_names(self) -> Sequence[str]:
         return self.source.shard_names
+
+    def shard_num_rows(self, shard_name: str) -> int:
+        return self.source.shard_num_rows(shard_name)
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T]:
         warnings.warn("This is not the best way to use batched preprocessing. Use build_cache instead.")

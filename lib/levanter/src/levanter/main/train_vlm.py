@@ -34,7 +34,9 @@ from levanter.data.image import (
     ImageIODatasetConfig,
     ImageMixtureDatasetConfig,
     ImageTextDataset,
+    StreamingImageDataset,
 )
+from levanter.data.mixture import MixtureDataset
 from levanter.models.llava_onevision import LlavaOnevisionConfig, LlavaOnevisionModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -870,6 +872,26 @@ def main(config: TrainVLMConfig):
             )
         else:
             loader_kwargs["batch_size"] = Batch
+
+        # Set resume positions on StreamingImageDatasets when resuming from checkpoint
+        if state.step > 0 and isinstance(train_dataset_mixture, MixtureDataset):
+            total_items = state.step * trainer.config.train_batch_size
+            per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+            num_processes = jax.process_count()
+
+            for name, ds in train_dataset_mixture.datasets.items():
+                actual_ds = ds
+                # Unwrap EpochDataset if present
+                if hasattr(ds, 'dataset'):
+                    actual_ds = ds.dataset
+                if isinstance(actual_ds, StreamingImageDataset):
+                    items_per_process = per_ds_items.get(name, 0) // num_processes
+                    actual_ds.set_resume_item_count(items_per_process)
+                    logger.info(
+                        f"Resume: {name} -> seek to item {items_per_process}/process "
+                        f"(total={per_ds_items[name]}, step={state.step}, "
+                        f"batch_size={trainer.config.train_batch_size})"
+                    )
 
         train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
 
