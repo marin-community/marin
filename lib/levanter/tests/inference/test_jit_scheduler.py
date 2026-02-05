@@ -1,6 +1,8 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -145,3 +147,47 @@ def test_decode_state_stats_tracks_pages():
     assert int(stats.pages_in_use) == 1
     assert int(stats.free_pages) == pt.num_pages - 1
     assert int(stats.max_refcount) == 1
+
+
+def test_decode_state_free_finished_clears_pages_and_flags():
+    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=2, max_pages_per_seq=2)
+    ds = DecodeState.init(pt, max_stop_seqs=0, max_stop_tokens=0, max_queued_tokens=4)
+
+    ds, slot = ds.reserve_slot(0)
+    slot_id = int(slot)
+    slot_ids = hax.named(jnp.array([slot_id], dtype=jnp.int32), axis=("position",))
+    pos_ids = hax.named(jnp.array([0], dtype=jnp.int32), axis=("position",))
+    ds, _ = ds.allocate_for_seq(slot_ids, pos_ids)
+
+    finished = ds.finished.at["seq", slot_id].set(True)
+    ds = dataclasses.replace(ds, finished=finished)
+
+    ds = ds.free_finished()
+
+    assert not bool(ds.sequences.used_mask.array[slot_id])
+    assert int(ds.page_table.page_ref_counts.array.sum()) == 0
+    assert not bool(ds.finished.array[slot_id])
+
+
+def test_decode_state_cleanup_finished_purges_queue():
+    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=2, max_pages_per_seq=2)
+    ds = DecodeState.init(pt, max_stop_seqs=0, max_stop_tokens=0, max_queued_tokens=4)
+
+    ds, _ = ds.reserve_slot(0)
+    ds, _ = ds.reserve_slot(1)
+
+    slot_ids = hax.named(jnp.array([0, 1], dtype=jnp.int32), axis=("position",))
+    pos_ids = hax.named(jnp.array([0, 0], dtype=jnp.int32), axis=("position",))
+    ds, _ = ds.allocate_for_seq(slot_ids, pos_ids)
+
+    tokens = hax.named(jnp.array([111, 222], dtype=jnp.int32), axis=("position",))
+    ds = ds.enqueue_tokens(tokens, slot_ids, pos_ids, num_new_tokens=2)
+
+    finished = ds.finished.at["seq", 1].set(True)
+    ds = dataclasses.replace(ds, finished=finished)
+
+    ds = ds.cleanup_finished()
+
+    assert int(ds.tqueue.num_queued_tokens) == 1
+    assert int((ds.tqueue.queued_slot_ids.array == 1).sum()) == 0
+    assert int(ds.page_table.page_ref_counts.array.sum()) == 1

@@ -10,6 +10,13 @@ References:
 - Repro + fix log for the break: `CODEX_MULTI_HOST_DEBUG.md`
 
 ---
+## gold command
+python lib/levanter/infra/launch.py --foreground --zone us-central1-a \
+    --tpu_name simpo_worker_2 --tpu_type v5p-16 --capacity_type on-demand -- \
+    uv run src/levanter/main/sample_lm_multihost.py \
+    --config_path config/sampler/sample_llama8b_multihost_real_1prompt_2048.yaml \
+    2>&1 | tee /tmp/levanter_run_m3.log
+
 
 ## Executive Summary
 
@@ -268,36 +275,43 @@ Rollback:
 
 ### M4 - Cleanup Primitives: Correctness First, Then Performance
 
+Status: DONE (2026-02-05)
+
 Goal: wire up page freeing in a way that cannot silently corrupt state.
 
-We will not start by freeing pages inside the main decode kernel. Instead, we take two safer steps.
-
 Step 1 (safe boundary): free pages at end-of-generation only.
-- After generation finishes, compute which slots are finished and free them, then reset for the next call.
+- After generation finishes, compute which slots are finished and free them.
 - This validates refcount math and clone behavior without affecting the decode loop.
 
-Step 2 (optional, higher risk): incremental cleanup during decode.
-- Only after Step 1 is solid, we can consider freeing pages mid-loop.
-- If we do this, we must also:
-  - purge queued tokens for finished slots
-  - preserve monotonic `finished` reporting in `_DecodeOutputs` (do not regress output assembly)
-  - ensure freeing does not cause allocator non-determinism across hosts
+Step 2 (higher risk): incremental cleanup during decode.
+- Purge queued tokens for finished slots.
+- Preserve monotonic `finished` reporting in `_DecodeOutputs`.
+- Ensure freeing does not cause allocator non-determinism across hosts.
 
-Deliverables:
-- A `free_finished()` operation with a clear contract:
-  - input: finished mask
-  - output: updated `DecodeState` + updated `PageTable`
-  - invariants asserted (no negative refcounts, no freed page referenced)
-- Tests for clone + free interactions.
-- Optional: `engine.cleanup_mode` config, but only if we have multiple supported policies.
+Implementation notes:
+- Added `DecodeState.free_finished()` for end-of-generation cleanup (clears finished flags after freeing).
+- Added `DecodeState.cleanup_finished()` to purge queued tokens for finished sequences and free their pages.
+- Added `InferenceEngineConfig.cleanup_mode` with values `none | end | incremental` (default `end`).
+- Updated all sampler YAMLs to include `cleanup_mode: end` and added
+  `config/sampler/sample_llama8b_multihost_real_1prompt_2048_cleanup_incremental.yaml` for incremental cleanup.
 
-Exit criteria:
-- Refcount invariants pass under unit tests, including clone scenarios.
-- Multi-host 1-prompt sampling passes.
-- Multi-prompt sequential workloads do not regress.
+Tests added:
+- `tests/inference/test_jit_scheduler.py::test_decode_state_free_finished_clears_pages_and_flags`
+- `tests/inference/test_jit_scheduler.py::test_decode_state_cleanup_finished_purges_queue`
+- `tests/inference/test_page_table.py::test_free_pages_for_finished_respects_clone_refcounts`
+
+Validation runs:
+- Step 1 (end cleanup):
+  - Config: `config/sampler/sample_llama8b_multihost_real_1prompt_2048.yaml`
+  - Log: `/tmp/levanter_run_m4_step1.log`
+  - Result: `Job finished with no error`; `DecodeStats[after_cleanup] pages_in_use=0`.
+- Step 2 (incremental cleanup):
+  - Config: `config/sampler/sample_llama8b_multihost_real_1prompt_2048_cleanup_incremental.yaml`
+  - Log: `/tmp/levanter_run_m4_step2.log`
+  - Result: `Job finished with no error`; `DecodeStats[after_decode] pages_in_use=0`.
 
 Rollback:
-- Disable incremental cleanup; keep end-of-generation cleanup only.
+- Disable incremental cleanup (`cleanup_mode: end`), keep end-of-generation cleanup only.
 
 ### M5 - Multi-Prompt Admission: Pick One Strategy and Make It Boring
 

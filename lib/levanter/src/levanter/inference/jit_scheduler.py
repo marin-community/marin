@@ -699,6 +699,38 @@ class DecodeState(eqx.Module):
         sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask)
         return dataclasses.replace(self, sequences=sequences, page_table=page_table)
 
+    @eqx.filter_jit(donate="all")
+    def free_finished(self) -> "DecodeState":
+        """Free pages for finished sequences and clear finished flags.
+
+        This is intended for end-of-generation cleanup where we want to validate refcount
+        invariants without touching the decode queue.
+        """
+        finished_mask = self.finished
+        sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask.array)
+        cleared_finished = hax.where(finished_mask, False, self.finished)
+        return dataclasses.replace(
+            self,
+            sequences=sequences,
+            page_table=page_table,
+            finished=cleared_finished,
+        )
+
+    @eqx.filter_jit(donate="all")
+    def cleanup_finished(self) -> "DecodeState":
+        """Free pages for finished sequences and purge their queued tokens."""
+        finished_mask = self.finished
+        tqueue = self.tqueue.purge_finished(finished_mask)
+        sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask.array)
+        cleared_finished = hax.where(finished_mask, False, self.finished)
+        return dataclasses.replace(
+            self,
+            sequences=sequences,
+            page_table=page_table,
+            tqueue=tqueue,
+            finished=cleared_finished,
+        )
+
     def bump_seq_len_to_next_page(self, seq_id: int) -> "DecodeState":
         sequences = self.sequences.bump_seq_len_to_next_page(seq_id)
         return dataclasses.replace(self, sequences=sequences)
@@ -1125,6 +1157,32 @@ class TokenQueue(eqx.Module):
             queued_pos_ids=new_pos_ids,
             num_queued_tokens=new_queued,
         )
+
+    def purge_mask(self, mask: ht.bool_[NamedArray, "position"]) -> "TokenQueue":  # type: ignore[name-defined]
+        """
+        Remove all tokens from the queue where ``mask`` is True.
+        Slides remaining tokens to the front of the queue.
+        """
+        new_slot_ids = purge(self.queued_slot_ids, mask)
+        new_tokens = purge(self.queued_tokens, mask)
+        new_pos_ids = purge(self.queued_pos_ids, mask)
+        new_queued = hax.sum(new_slot_ids != INVALID).scalar()
+
+        return dataclasses.replace(
+            self,
+            queued_tokens=new_tokens,
+            queued_slot_ids=new_slot_ids,
+            queued_pos_ids=new_pos_ids,
+            num_queued_tokens=new_queued,
+        )
+
+    def purge_finished(self, finished_mask: ht.bool_[NamedArray, "seq"]) -> "TokenQueue":  # type: ignore[name-defined]
+        """Remove all queued tokens that belong to finished sequences."""
+        valid = is_valid(self.queued_slot_ids)
+        safe_ids = hax.where(valid, self.queued_slot_ids, 0)
+        finished_for_pos = finished_mask["seq", safe_ids]
+        purge_mask = hax.where(valid, finished_for_pos, hax.zeros_like(valid))
+        return self.purge_mask(purge_mask)
 
     def cleared(self) -> "TokenQueue":
         """

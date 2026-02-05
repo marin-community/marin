@@ -19,3 +19,4 @@ engine:
   max_rounds: 32
   debug_stats_every_n: 10
   reset_mode: physical
+  cleanup_mode: end
