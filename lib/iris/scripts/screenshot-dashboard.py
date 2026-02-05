@@ -31,19 +31,20 @@ import time
 from pathlib import Path
 
 import click
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from iris.client.client import IrisClient
 from iris.cluster.types import (
     CoschedulingConfig,
     Constraint,
     ConstraintOp,
+    JobName,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
-from iris.cluster.vm.config import load_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import load_config, make_local_config
 from iris.rpc import cluster_pb2
 
 IRIS_ROOT = Path(__file__).parent.parent
@@ -71,8 +72,13 @@ def _failed_job():
 def _slow_job():
     import time as _time
 
-    _time.sleep(30)
+    _time.sleep(120)
     return "done"
+
+
+def _building_job():
+    """Simple job for testing BUILDING state (used with chaos delay injection)."""
+    return "ok"
 
 
 # =============================================================================
@@ -85,9 +91,25 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
 
     Returns a mapping of logical name -> job_id for later reference.
     """
+    from iris.chaos import enable_chaos
+
     job_ids: dict[str, str] = {}
 
-    # 1. Succeeded job
+    # 1. Building job (with chaos delay)
+    # Enable chaos to inject a 30-second delay during the BUILDING state
+    # max_failures=1 ensures only the first job hits the delay
+    enable_chaos("worker.building_delay", delay_seconds=30.0, max_failures=1)
+
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(_building_job),
+        name="snapshot-building",
+        resources=ResourceSpec(cpu=1, memory="2g"),
+        environment=EnvironmentSpec(),
+    )
+    job_ids["building"] = str(job.job_id)
+    logger.info("Submitted building job (with 30s chaos delay): %s", job.job_id)
+
+    # 2. Succeeded job
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-succeeded",
@@ -97,7 +119,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["succeeded"] = str(job.job_id)
     logger.info("Submitted succeeded job: %s", job.job_id)
 
-    # 2. Failed job
+    # 3. Failed job
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_failed_job),
         name="snapshot-failed",
@@ -107,7 +129,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["failed"] = str(job.job_id)
     logger.info("Submitted failed job: %s", job.job_id)
 
-    # 3. Running/slow job
+    # 4. Running/slow job
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_slow_job),
         name="snapshot-running",
@@ -117,7 +139,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["running"] = str(job.job_id)
     logger.info("Submitted running job: %s", job.job_id)
 
-    # 4. Second running job (more realistic)
+    # 5. Second running job (more realistic)
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_slow_job),
         name="snapshot-running-2",
@@ -127,7 +149,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["running-2"] = str(job.job_id)
     logger.info("Submitted second running job: %s", job.job_id)
 
-    # 5. Pending unschedulable job (constraint for nonexistent TPU)
+    # 6. Pending unschedulable job (constraint for nonexistent TPU)
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-pending-constraint",
@@ -140,21 +162,22 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["pending-constraint"] = str(job.job_id)
     logger.info("Submitted pending/unschedulable job: %s", job.job_id)
 
-    # 6. Coscheduled multi-replica job (also unschedulable)
+    # 7. Coscheduled multi-replica job (also unschedulable)
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-coscheduled",
-        resources=ResourceSpec(cpu=1, memory="2g", replicas=4),
+        resources=ResourceSpec(cpu=1, memory="2g"),
         environment=EnvironmentSpec(),
         constraints=[
             Constraint(key="tpu-name", op=ConstraintOp.EQ, value="nonexistent-tpu-xyz"),
         ],
         coscheduling=CoschedulingConfig(group_by="tpu-name"),
+        replicas=4,
     )
     job_ids["coscheduled"] = str(job.job_id)
     logger.info("Submitted coscheduled job: %s", job.job_id)
 
-    # 7. Job targeting zero-quota scale group (quota exhaustion scenario)
+    # 8. Job targeting zero-quota scale group (quota exhaustion scenario)
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-quota-exhausted",
@@ -167,7 +190,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["quota-exhausted"] = str(job.job_id)
     logger.info("Submitted quota-exhausted job: %s", job.job_id)
 
-    # 8. Job targeting disabled scale group
+    # 9. Job targeting disabled scale group
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-disabled-group",
@@ -180,18 +203,19 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["disabled-group"] = str(job.job_id)
     logger.info("Submitted disabled-group job: %s", job.job_id)
 
-    # 9. Large coscheduled job that needs more workers than available
+    # 10. Large coscheduled job that needs more workers than available
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-insufficient-capacity",
-        resources=ResourceSpec(cpu=1, memory="1g", replicas=100),
+        resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
         coscheduling=CoschedulingConfig(group_by="scale-group"),
+        replicas=100,
     )
     job_ids["insufficient-capacity"] = str(job.job_id)
     logger.info("Submitted insufficient-capacity job: %s", job.job_id)
 
-    # 10. Killed job — submit a slow job, then terminate it
+    # 11. Killed job — submit a slow job, then terminate it
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_slow_job),
         name="snapshot-killed",
@@ -205,7 +229,11 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
 
 
 def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout: float = 60.0):
-    """Wait for the succeeded, failed, and killed jobs to reach terminal states."""
+    """Wait for the succeeded, failed, and killed jobs to reach terminal states.
+
+    Also verifies that the building job shows BUILDING state with appropriate
+    task status message before eventually completing.
+    """
     terminal_states = (
         cluster_pb2.JOB_STATE_SUCCEEDED,
         cluster_pb2.JOB_STATE_FAILED,
@@ -216,7 +244,7 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
     # Wait for succeeded and failed jobs first
     deadline = time.monotonic() + timeout
     for name in ["succeeded", "failed"]:
-        jid = job_ids[name]
+        jid = JobName.from_wire(job_ids[name])
         logger.info("Waiting for %s job (%s) to finish...", name, jid)
         while time.monotonic() < deadline:
             status = client.status(jid)
@@ -228,8 +256,48 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
         else:
             logger.warning("  %s job did not finish within %.0fs", name, timeout)
 
+    # Verify building job is in BUILDING state with appropriate task status
+    # Wait for the building job to enter BUILDING state (may take a few seconds for worker dispatch)
+    building_jid = JobName.from_wire(job_ids["building"]) if job_ids.get("building") else None
+    if building_jid:
+        logger.info("Waiting for building job (%s) to enter BUILDING state...", building_jid)
+        build_state_deadline = time.monotonic() + 10.0
+        while time.monotonic() < build_state_deadline:
+            status = client.status(building_jid)
+            if status.tasks:
+                task_status = status.tasks[0]
+                if task_status.state == cluster_pb2.TASK_STATE_BUILDING:
+                    logger.info("  building task entered BUILDING state")
+                    break
+            time.sleep(0.5)
+        else:
+            status = client.status(building_jid)
+            if status.tasks:
+                task_status = status.tasks[0]
+                task_state_name = cluster_pb2.TaskState.Name(task_status.state)
+                logger.warning("  Building job did not enter BUILDING state within timeout (state: %s)", task_state_name)
+
+    # Wait for running job's task to actually reach RUNNING state (not just ASSIGNED)
+    running_jid = JobName.from_wire(job_ids["running"]) if job_ids.get("running") else None
+    if running_jid:
+        logger.info("Waiting for running job (%s) task to enter RUNNING state...", running_jid)
+        run_deadline = time.monotonic() + 15.0
+        while time.monotonic() < run_deadline:
+            status = client.status(running_jid)
+            if status.tasks and status.tasks[0].state == cluster_pb2.TASK_STATE_RUNNING:
+                logger.info("  running task entered RUNNING state")
+                break
+            time.sleep(0.5)
+        else:
+            status = client.status(running_jid)
+            if status.tasks:
+                task_state_name = cluster_pb2.TaskState.Name(status.tasks[0].state)
+                logger.warning(
+                    "  Running job task did not enter RUNNING state within timeout (state: %s)", task_state_name
+                )
+
     # Kill the "killed" job after a brief delay so it has time to start
-    killed_jid = job_ids.get("killed")
+    killed_jid = JobName.from_wire(job_ids["killed"]) if job_ids.get("killed") else None
     if killed_jid:
         time.sleep(1.0)
         logger.info("Terminating killed job (%s)...", killed_jid)
@@ -259,13 +327,19 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1400, "height": 900})
 
+        def wait_for_ready(expression: str, label: str) -> None:
+            try:
+                page.wait_for_function(expression, timeout=30000)
+            except PlaywrightTimeoutError:
+                logger.warning("Timed out waiting for %s; capturing anyway", label)
+
         # Load dashboard once, wait for Preact to render, then screenshot each tab
         page.goto(f"{dashboard_url}/")
         page.wait_for_load_state("domcontentloaded")
-        page.wait_for_function(
+        wait_for_ready(
             "() => document.getElementById('root').children.length > 0"
             " && !document.getElementById('root').textContent.includes('Loading...')",
-            timeout=10000,
+            "dashboard root",
         )
 
         for tab in DASHBOARD_TABS:
@@ -279,7 +353,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             saved.append(path)
 
         # Screenshot job detail pages
-        for name, label in [("failed", "failed"), ("running", "running")]:
+        for name, label in [("building", "building"), ("failed", "failed"), ("running", "running")]:
             jid = job_ids.get(name)
             if not jid:
                 continue
@@ -287,10 +361,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             logger.info("Capturing job detail: %s (%s)", name, jid)
             page.goto(url)
             page.wait_for_load_state("domcontentloaded")
-            page.wait_for_function(
+            wait_for_ready(
                 "() => document.getElementById('root').children.length > 0"
-                " && !document.getElementById('root').textContent.includes('Loading...')",
-                timeout=10000,
+                " && !document.body.textContent.includes('Loading')",
+                f"job detail {label}",
             )
 
             path = output_dir / f"job-{label}.png"
@@ -306,10 +380,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             logger.info("Capturing %s job detail: %s", label, jid)
             page.goto(url)
             page.wait_for_load_state("domcontentloaded")
-            page.wait_for_function(
+            wait_for_ready(
                 "() => document.getElementById('root').children.length > 0"
-                " && !document.getElementById('root').textContent.includes('Loading...')",
-                timeout=10000,
+                " && !document.body.textContent.includes('Loading')",
+                f"job detail {label}",
             )
             path = output_dir / f"job-{label}.png"
             page.screenshot(path=str(path), full_page=True)
@@ -338,10 +412,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
                             logger.info("Capturing VM detail: %s", vm_id)
                             page.goto(url)
                             page.wait_for_load_state("domcontentloaded")
-                            page.wait_for_function(
+                            wait_for_ready(
                                 "() => document.getElementById('root').children.length > 0"
                                 " && !document.getElementById('root').textContent.includes('Loading...')",
-                                timeout=10000,
+                                "vm detail",
                             )
                             path = output_dir / "vm-detail.png"
                             page.screenshot(path=str(path), full_page=True)
@@ -354,11 +428,11 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
 
         # Screenshot controller logs page
         logger.info("Capturing controller logs page")
-        page.goto(f"{dashboard_url}/logs")
+        page.goto(f"{dashboard_url}#logs")
         page.wait_for_load_state("domcontentloaded")
-        page.wait_for_function(
-            "() => !document.body.textContent.includes('Loading')",
-            timeout=10000,
+        wait_for_ready(
+            "() => document.querySelectorAll('.log-line').length > 0",
+            "controller logs",
         )
         path = output_dir / "controller-logs.png"
         page.screenshot(path=str(path), full_page=True)
@@ -423,10 +497,48 @@ def main(config: Path, output_dir: Path, stay_open: bool):
             logger.info("Summary: %d screenshots saved", len(saved))
             for path in saved:
                 logger.info("  %s", path)
+
+            # After screenshots, wait for building job to complete
+            # (chaos delay is 30s, should complete shortly after screenshots)
+            building_jid = JobName.from_wire(job_ids["building"]) if job_ids.get("building") else None
+            if building_jid:
+                logger.info("Waiting for building job to complete after chaos delay...")
+                deadline = time.monotonic() + 60.0
+                terminal_states = (
+                    cluster_pb2.JOB_STATE_SUCCEEDED,
+                    cluster_pb2.JOB_STATE_FAILED,
+                    cluster_pb2.JOB_STATE_KILLED,
+                    cluster_pb2.JOB_STATE_WORKER_FAILED,
+                )
+                while time.monotonic() < deadline:
+                    status = client.status(building_jid)
+                    if status.state in terminal_states:
+                        state_name = cluster_pb2.JobState.Name(status.state)
+                        logger.info("  building -> %s", state_name)
+                        break
+                    time.sleep(0.5)
+                else:
+                    logger.warning("  building job did not complete within timeout")
         else:
             logger.info("Skipping screenshots (no --output-dir specified)")
 
         print(f"\nDashboard URL: {url}")
+
+        if not stay_open:
+            # Terminate all non-terminal jobs so the controller can shut down cleanly
+            # without waiting for in-flight heartbeat dispatches to long-running workers.
+            terminal_states = (
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+                cluster_pb2.JOB_STATE_FAILED,
+                cluster_pb2.JOB_STATE_KILLED,
+                cluster_pb2.JOB_STATE_WORKER_FAILED,
+            )
+            for name, jid in job_ids.items():
+                job_id = JobName.from_wire(jid)
+                status = client.status(job_id)
+                if status.state not in terminal_states:
+                    logger.info("Terminating remaining job %s (%s)", name, jid)
+                    client.terminate(job_id)
 
         if stay_open:
             print("Cluster will remain running. Press Ctrl-C to shutdown...")

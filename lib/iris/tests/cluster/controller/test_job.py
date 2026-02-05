@@ -17,7 +17,7 @@
 import pytest
 
 from iris.cluster.controller.state import ControllerJob, JobTransitionResult, expand_job_to_tasks
-from iris.cluster.types import JobId
+from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 
 
@@ -38,6 +38,7 @@ def make_job_request():
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
         )
 
     return _make
@@ -56,29 +57,31 @@ def make_job_request():
 )
 def test_job_terminal_transitions(make_job_request, target_state, exit_code, error):
     """Job transitions to terminal states (SUCCEEDED, KILLED, UNSCHEDULABLE) with appropriate metadata."""
-    job = ControllerJob(job_id=JobId("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
     job.mark_dispatched()
 
     result = job.transition(target_state, exit_code=exit_code, error=error)
 
     assert result == JobTransitionResult.COMPLETE
     assert job.state == target_state
-    assert job.finished_at_ms > 0
+    assert job.finished_at is not None and job.finished_at.epoch_ms() > 0
     assert job.is_finished()
 
 
 def test_unschedulable_includes_timeout_in_error(make_job_request):
     """UNSCHEDULABLE state includes scheduling timeout in error message."""
+    from iris.time_utils import Duration
+
     request = make_job_request()
-    request.scheduling_timeout_seconds = 300
-    job = ControllerJob(job_id=JobId("test"), request=request)
+    request.scheduling_timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    job = ControllerJob(job_id=JobName.root("test"), request=request)
 
     result = job.transition(cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
     assert result == JobTransitionResult.COMPLETE
     assert job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
     assert job.error is not None
-    assert "300s" in job.error
+    assert "300" in job.error
 
 
 # --- Job Retry Behavior ---
@@ -87,7 +90,7 @@ def test_unschedulable_includes_timeout_in_error(make_job_request):
 def test_failure_with_retries_available(make_job_request):
     """Job failure returns SHOULD_RETRY when retries available and resets to PENDING."""
     job = ControllerJob(
-        job_id=JobId("test"),
+        job_id=JobName.root("test"),
         request=make_job_request(),
         max_retries_failure=2,
     )
@@ -101,14 +104,14 @@ def test_failure_with_retries_available(make_job_request):
     assert result == JobTransitionResult.SHOULD_RETRY
     assert job.state == cluster_pb2.JOB_STATE_PENDING
     assert job.failure_count == 1
-    assert job.started_at_ms is None
+    assert job.started_at is None
     assert not job.is_finished()
 
 
 def test_failure_exceeds_retry_limit(make_job_request):
     """Job failure returns EXCEEDED_RETRY_LIMIT when retry limit exceeded."""
     job = ControllerJob(
-        job_id=JobId("test"),
+        job_id=JobName.root("test"),
         request=make_job_request(),
         max_retries_failure=1,
     )
@@ -127,14 +130,14 @@ def test_failure_exceeds_retry_limit(make_job_request):
     assert result == JobTransitionResult.EXCEEDED_RETRY_LIMIT
     assert job.state == cluster_pb2.JOB_STATE_FAILED
     assert job.failure_count == 2
-    assert job.finished_at_ms > 0
+    assert job.finished_at is not None and job.finished_at.epoch_ms() > 0
     assert job.is_finished()
 
 
 def test_worker_failure_uses_separate_retry_counter(make_job_request):
     """Worker failure increments preemption_count, not failure_count."""
     job = ControllerJob(
-        job_id=JobId("test"),
+        job_id=JobName.root("test"),
         request=make_job_request(),
         max_retries_preemption=1,
     )
@@ -175,7 +178,7 @@ def test_retry_count_limits(make_job_request, failure_type, max_retries, expecte
     """Job respects retry limits for both failure types."""
     if failure_type == "job_failure":
         job = ControllerJob(
-            job_id=JobId("test"),
+            job_id=JobName.root("test"),
             request=make_job_request(),
             max_retries_failure=max_retries,
         )
@@ -183,7 +186,7 @@ def test_retry_count_limits(make_job_request, failure_type, max_retries, expecte
         is_worker_failure = False
     else:
         job = ControllerJob(
-            job_id=JobId("test"),
+            job_id=JobName.root("test"),
             request=make_job_request(),
             max_retries_preemption=max_retries,
         )
@@ -213,7 +216,7 @@ def test_retry_count_limits(make_job_request, failure_type, max_retries, expecte
 
 def test_job_compute_job_state_all_succeeded(make_job_request):
     """Job state becomes SUCCEEDED when all tasks succeed."""
-    job = ControllerJob(job_id=JobId("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
     job.num_tasks = 2
 
     # Start with pending tasks
@@ -232,7 +235,7 @@ def test_job_compute_job_state_failed(make_job_request):
     """Job state becomes FAILED when task failures exceed threshold."""
     request = make_job_request()
     request.max_task_failures = 0
-    job = ControllerJob(job_id=JobId("test"), request=request)
+    job = ControllerJob(job_id=JobName.root("test"), request=request)
     job.num_tasks = 2
 
     # Start with running tasks
@@ -248,7 +251,7 @@ def test_job_compute_job_state_tolerates_failures(make_job_request):
     """Job state stays RUNNING when failures are within threshold."""
     request = make_job_request()
     request.max_task_failures = 1
-    job = ControllerJob(job_id=JobId("test"), request=request)
+    job = ControllerJob(job_id=JobName.root("test"), request=request)
     job.num_tasks = 3
 
     # Start with running tasks
@@ -266,7 +269,7 @@ def test_job_compute_job_state_tolerates_failures(make_job_request):
 
 def test_job_finished_task_count(make_job_request):
     """finished_task_count returns count of tasks in terminal states."""
-    job = ControllerJob(job_id=JobId("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
     job.num_tasks = 5
 
     # Start with 5 pending tasks
@@ -291,7 +294,7 @@ def test_job_finished_task_count(make_job_request):
 
 def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request):
     """Job state becomes RUNNING when first task starts running."""
-    job = ControllerJob(job_id=JobId("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
     job.num_tasks = 2
     job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 2
 
@@ -299,7 +302,7 @@ def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request)
     new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
 
     assert new_state == cluster_pb2.JOB_STATE_RUNNING
-    assert job.started_at_ms > 0
+    assert job.started_at is not None and job.started_at.epoch_ms() > 0
 
 
 # --- Job Expansion ---
@@ -308,8 +311,8 @@ def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request)
 def test_job_expands_to_correct_number_of_tasks(make_job_request):
     """expand_job_to_tasks creates correct number of tasks based on replicas."""
     request = make_job_request()
-    request.resources.replicas = 3
-    job = ControllerJob(job_id=JobId("test-job"), request=request)
+    request.replicas = 3
+    job = ControllerJob(job_id=JobName.root("test-job"), request=request)
 
     tasks = expand_job_to_tasks(job)
 
@@ -321,7 +324,7 @@ def test_job_expands_to_correct_number_of_tasks(make_job_request):
 
 def test_job_becomes_unschedulable_when_task_unschedulable(make_job_request):
     """Job transitions to UNSCHEDULABLE when any task becomes unschedulable."""
-    job = ControllerJob(job_id=JobId("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
     job.num_tasks = 3
     job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 3
 
@@ -333,7 +336,7 @@ def test_job_becomes_unschedulable_when_task_unschedulable(make_job_request):
 
 def test_job_becomes_killed_when_task_killed(make_job_request):
     """Job transitions to KILLED when any task is killed."""
-    job = ControllerJob(job_id=JobId("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
     job.num_tasks = 3
     job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 3
     job.state = cluster_pb2.JOB_STATE_RUNNING

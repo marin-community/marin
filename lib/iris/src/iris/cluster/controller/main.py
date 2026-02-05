@@ -23,6 +23,7 @@ import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.logging import configure_logging
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,8 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.vm.autoscaler import Autoscaler
-    from iris.cluster.vm.config import create_autoscaler_from_config, load_config
+    from iris.cluster.vm.config import create_autoscaler, load_config
+    from iris.cluster.vm.platform import create_platform
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -76,12 +78,26 @@ def serve(
             raise click.ClickException(f"Failed to load cluster config: {e}") from e
 
         # Extract bundle_prefix from config if not provided via CLI
-        if bundle_prefix is None and cluster_config.controller_vm.bundle_prefix:
-            bundle_prefix = cluster_config.controller_vm.bundle_prefix
+        if bundle_prefix is None and cluster_config.controller.bundle_prefix:
+            bundle_prefix = cluster_config.controller.bundle_prefix
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
 
         try:
-            autoscaler = create_autoscaler_from_config(cluster_config)
+            # Create platform with explicit config sections
+            platform = create_platform(
+                platform_config=cluster_config.platform,
+                bootstrap_config=cluster_config.defaults.bootstrap,
+                timeout_config=cluster_config.defaults.timeouts,
+                ssh_config=cluster_config.defaults.ssh,
+            )
+            logger.info("Platform created")
+
+            # Create autoscaler using platform
+            autoscaler = create_autoscaler(
+                platform=platform,
+                autoscaler_config=cluster_config.defaults.autoscaler,
+                scale_groups=cluster_config.scale_groups,
+            )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
             logger.exception("Failed to create autoscaler from config")
@@ -104,7 +120,7 @@ def serve(
         port=port,
         bundle_prefix=bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
-        worker_timeout_seconds=worker_timeout,
+        worker_timeout=Duration.from_seconds(worker_timeout),
     )
 
     try:

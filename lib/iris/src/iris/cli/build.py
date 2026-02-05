@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Docker image build utilities for Iris.
-
-This module provides shared utilities for building and pushing Docker images
-for both the Iris worker and controller services.
-"""
+"""Image build commands."""
 
 import subprocess
 from pathlib import Path
@@ -24,34 +20,24 @@ from pathlib import Path
 import click
 
 
-def find_iris_root() -> Path:
+def _find_iris_root() -> Path:
     """Find the iris package root directory containing Dockerfiles.
 
-    Searches for the directory containing Dockerfile.worker and Dockerfile.controller
-    in the following order:
-    1. Relative to this file (build.py is at src/iris/build.py, so root is 3 levels up)
+    Searches in order:
+    1. Relative to this file (cli/build.py -> iris root is 4 levels up from src/iris/cli/build.py)
     2. Current working directory
     3. Walking up from cwd until Dockerfile.worker is found
-
-    Returns:
-        Path to the iris root directory.
-
-    Raises:
-        click.ClickException: If the iris root cannot be found.
     """
-    # Try relative to this file first
     build_path = Path(__file__).resolve()
-    # build.py is at src/iris/build.py, so iris root is 3 levels up
-    iris_root = build_path.parent.parent.parent
+    # build.py is at src/iris/cli/build.py, so iris root is 4 levels up
+    iris_root = build_path.parent.parent.parent.parent
     if (iris_root / "Dockerfile.worker").exists() and (iris_root / "Dockerfile.controller").exists():
         return iris_root
 
-    # Try current working directory
     cwd = Path.cwd()
     if (cwd / "Dockerfile.worker").exists():
         return cwd
 
-    # Walk up from cwd looking for Dockerfile.worker
     for parent in cwd.parents:
         if (parent / "Dockerfile.worker").exists():
             return parent
@@ -61,23 +47,14 @@ def find_iris_root() -> Path:
     )
 
 
-def push_to_registries(
+def _push_to_registries(
     source_tag: str,
     regions: tuple[str, ...],
     project: str,
     image_name: str | None = None,
     version: str | None = None,
 ) -> None:
-    """Push a local Docker image to multiple GCP Artifact Registry regions.
-
-    Args:
-        source_tag: Local Docker image tag to push (e.g., "iris-worker:latest")
-        regions: Tuple of GCP Artifact Registry regions (e.g., ("us-central1", "europe-west4"))
-        project: GCP project ID
-        image_name: Image name in registry (derived from source_tag if None)
-        version: Version tag in registry (derived from source_tag if None)
-    """
-    # Derive defaults if not provided
+    """Push a local Docker image to multiple GCP Artifact Registry regions."""
     if not image_name or not version:
         parts = source_tag.split(":")
         if not image_name:
@@ -90,21 +67,23 @@ def push_to_registries(
     for r in regions:
         dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
 
-        # Configure docker for this registry
         click.echo(f"\nConfiguring {r}-docker.pkg.dev...")
-        subprocess.run(
+        result = subprocess.run(
             ["gcloud", "auth", "configure-docker", f"{r}-docker.pkg.dev", "-q"],
-            check=False,
+            capture_output=True,
+            text=True,
         )
+        if result.returncode != 0:
+            click.echo(
+                f"Warning: Failed to configure docker auth for {r}-docker.pkg.dev: {result.stderr.strip()}", err=True
+            )
 
-        # Tag image
         click.echo(f"Tagging as {dest_tag}")
         result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
         if result.returncode != 0:
             click.echo(f"Failed to tag image for {r}", err=True)
             continue
 
-        # Push image
         click.echo(f"Pushing to {r}...")
         result = subprocess.run(["docker", "push", dest_tag], check=False)
         if result.returncode != 0:
@@ -116,7 +95,7 @@ def push_to_registries(
     click.echo("\nDone!")
 
 
-def build_image(
+def _build_image(
     image_type: str,
     tag: str,
     push: bool,
@@ -125,24 +104,11 @@ def build_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
-    no_cache: bool = False,
 ) -> None:
-    """Build a Docker image for Iris (worker or controller).
-
-    Args:
-        image_type: Either "worker" or "controller"
-        tag: Docker image tag (e.g., "iris-worker:latest")
-        push: Whether to push to registry after building
-        dockerfile: Custom Dockerfile path, or None to use default
-        context: Build context directory, or None to use iris root
-        platform: Target platform (e.g., "linux/amd64")
-        region: Tuple of GCP Artifact Registry regions to push to
-        project: GCP project ID for registry
-        no_cache: If True, build without using cache
-    """
+    """Build a Docker image for Iris (worker or controller)."""
     dockerfile_name = f"Dockerfile.{image_type}"
 
-    iris_root = find_iris_root()
+    iris_root = _find_iris_root()
     dockerfile_path = Path(dockerfile) if dockerfile else iris_root / dockerfile_name
     context_path = Path(context) if context else iris_root
 
@@ -152,8 +118,6 @@ def build_image(
     click.echo(f"Using Dockerfile: {dockerfile_path}")
 
     cmd = ["docker", "buildx", "build", "--platform", platform]
-    if no_cache:
-        cmd.append("--no-cache")
     cmd.extend(["-t", tag])
     cmd.extend(["-f", str(dockerfile_path)])
     cmd.extend(["--load"])
@@ -174,7 +138,71 @@ def build_image(
     click.echo(f"Image available locally as: {tag}")
 
     if push:
-        push_to_registries(tag, region, project)
+        _push_to_registries(tag, region, project)
     elif region:
         click.echo()
         click.echo("To push to registries, run again with --push flag")
+
+
+@click.group()
+def build():
+    """Image build commands."""
+
+
+@build.command("worker-image")
+@click.option("--tag", "-t", default="iris-worker:latest", help="Image tag")
+@click.option("--push", is_flag=True, help="Push image to registry after building")
+@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
+@click.option("--context", type=click.Path(exists=True), help="Build context directory")
+@click.option("--platform", default="linux/amd64", help="Target platform")
+@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
+@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+def build_worker_image(
+    tag: str,
+    push: bool,
+    dockerfile: str | None,
+    context: str | None,
+    platform: str,
+    region: tuple[str, ...],
+    project: str,
+):
+    """Build Docker image for Iris worker."""
+    _build_image("worker", tag, push, dockerfile, context, platform, region, project)
+
+
+@build.command("controller-image")
+@click.option("--tag", "-t", default="iris-controller:latest", help="Image tag")
+@click.option("--push", is_flag=True, help="Push image to registry after building")
+@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
+@click.option("--context", type=click.Path(exists=True), help="Build context directory")
+@click.option("--platform", default="linux/amd64", help="Target platform")
+@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
+@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+def build_controller_image(
+    tag: str,
+    push: bool,
+    dockerfile: str | None,
+    context: str | None,
+    platform: str,
+    region: tuple[str, ...],
+    project: str,
+):
+    """Build Docker image for Iris controller."""
+    _build_image("controller", tag, push, dockerfile, context, platform, region, project)
+
+
+@build.command("push")
+@click.argument("source_tag")
+@click.option("--region", "-r", multiple=True, required=True, help="GCP Artifact Registry region")
+@click.option("--project", default="hai-gcp-models", help="GCP project ID")
+@click.option("--image-name", default="iris-worker", help="Image name in registry")
+@click.option("--version", default="latest", help="Version tag")
+def build_push(source_tag: str, region: tuple[str, ...], project: str, image_name: str, version: str):
+    """Push a local Docker image to GCP Artifact Registry."""
+    _push_to_registries(
+        source_tag,
+        region,
+        project,
+        image_name=image_name,
+        version=version,
+    )

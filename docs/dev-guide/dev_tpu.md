@@ -40,6 +40,9 @@ uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml allocate --t
 
 Your TPU will boot up and synchronize your marin directory. The TPU will remain active until you close the allocate terminal (or 8 hours).
 
+By default the TPU name is derived from the config and your username:
+`dev-<cluster_name>-<user>`. You can override it with `--tpu-name` if you want a shorter or shared alias.
+
 4. Connect to the node.
 
 You can connect to the TPU in a few ways:
@@ -51,7 +54,7 @@ You can connect to the TPU in a few ways:
 uv run marin/scripts/ray/dev_tpu.py --tpu-name=$USER-scratch --cluster us-central1 execute -- "cd submodules/levanter && EQX_ON_ERROR=nan WANDB_MODE=offline uv run src/levanter/main/sample_lm.py --config config/sampler/sample_llama8b.yaml --n_generations 10 --n_rounds 4 --profile false"
 ```
 
-- You can also connect to dev-tpu-{username} directly from VSCode/Cursor via Remote-SSH's Connect to Host feature.
+- You can also connect to `dev-tpu-<tpu-name>` directly from VSCode/Cursor via Remote-SSH's Connect to Host feature.
 
 _If connecting directly, remember Dev TPUs are pre-emptible - don't forget to checkpoint your work frequently if you are making changes!_
 

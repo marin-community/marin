@@ -48,7 +48,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 
 # The iris project root (lib/iris/) - used as workspace for the example
@@ -246,11 +247,11 @@ class DemoCluster:
             resources=ResourceSpec(
                 cpu=1,
                 memory="512m",
-                replicas=4,
                 device=tpu_device("v5litepod-16"),
             ),
             environment=EnvironmentSpec(),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            replicas=4,
         )
         status = job.wait()
         results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
@@ -358,6 +359,12 @@ class DemoCluster:
         # Set environment for the kernel (inherited by subprocess)
         os.environ["IRIS_CONTROLLER_ADDRESS"] = self.controller_url
         os.environ["IRIS_WORKSPACE"] = str(self._workspace)
+        pythonpath = os.environ.get("PYTHONPATH")
+        iris_src = str(IRIS_ROOT / "src")
+        if pythonpath:
+            os.environ["PYTHONPATH"] = f"{iris_src}:{pythonpath}"
+        else:
+            os.environ["PYTHONPATH"] = iris_src
 
         # Create executor
         ep = ExecutePreprocessor(
@@ -376,7 +383,6 @@ class DemoCluster:
 
 
 @click.command()
-@click.option("--no-browser", is_flag=True, help="Don't auto-open browser for Jupyter")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 @click.option(
     "--controller-url",
@@ -389,18 +395,17 @@ class DemoCluster:
     help="Workspace directory (default: lib/iris)",
 )
 def main(
-    no_browser: bool,
     verbose: bool,
     controller_url: str | None,
     workspace: Path | None,
 ):
-    """Launch demo cluster with Jupyter notebook.
+    """Launch demo cluster and run notebook test.
 
     Runs in-process (no Docker required), with jobs running in threads.
     Can also connect to a remote controller via SSH tunnel.
 
     Examples:
-        # Launch interactive demo with Jupyter
+        # Run demo with local cluster
         uv run python examples/demo_cluster.py
 
         # Connect to remote controller via SSH tunnel
@@ -450,16 +455,9 @@ def main(
         print("Testing notebook execution...")
         if not demo.run_notebook():
             print("WARNING: Notebook test FAILED!")
+            print("(This may be due to kernel environment issues)")
         else:
             print("Notebook test passed!")
-
-        print()
-        print("Launching Jupyter notebook...")
-        url = demo.launch_jupyter(open_browser=not no_browser)
-        print(f"Notebook: {url}")
-        print()
-        print("Press Ctrl+C to stop.")
-        demo.wait_for_interrupt()
 
     print("Shutting down...")
 

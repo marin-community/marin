@@ -10,24 +10,17 @@ Distributed job orchestration replacing Ray with simpler primitives.
 # Start controller VM (runs autoscaler internally)
 uv run iris cluster --config=examples/eu-west4.yaml start
 
+# Start a local cluster for testing (mimics the config without GCP)
+uv run iris cluster --config=examples/eu-west4.yaml start --local
+
 # Check cluster status
 uv run iris cluster --config=examples/eu-west4.yaml status
 
 # Validate cluster with test jobs (establishes SSH tunnel automatically)
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
+uv run iris cluster --config=examples/eu-west4.yaml debug validate
 
 # Stop cluster (controller + all worker slices)
 uv run iris cluster --config=examples/eu-west4.yaml stop
-```
-
-### Development: Local Controller
-
-```bash
-# Run controller locally with integrated autoscaler
-uv run iris cluster --config=cluster.yaml controller run-local
-
-# Or use the controller daemon directly
-uv run python -m iris.cluster.controller.main serve --config=cluster.yaml
 ```
 
 ### Submit a Job
@@ -128,20 +121,55 @@ Workers communicate with the controller using internal VPC IPs. External clients
 
 ## Worker Lifecycle
 
-### Registration and Reconciliation
+### Registration and Heartbeat
 
-Workers register with the controller via heartbeat (every 10 seconds). The registration
-includes `running_task_ids` - the list of tasks the worker believes it's running.
+Workers register with the controller once at startup via the `Register` RPC.
+After registration, the worker enters a serve loop and waits for controller-
+initiated heartbeats.
 
-The controller performs bidirectional reconciliation:
+The controller sends `Heartbeat` RPCs to all registered workers on each
+scheduler tick (~5s). The heartbeat request carries:
+- `tasks_to_run`: new task assignments for this worker
+- `tasks_to_kill`: task IDs to terminate
 
-1. **Worker claims unknown tasks** (e.g., controller restarted):
-   - Controller sends `should_reset=True`
-   - Worker wipes all containers and re-registers
+The worker responds with:
+- `running_tasks`: tasks currently executing (task_id + attempt_id)
+- `completed_tasks`: tasks that finished since the last heartbeat
 
-2. **Worker missing expected tasks** (e.g., worker restarted):
+The controller reconciles the response:
+
+1. **Worker missing expected tasks** (e.g., worker restarted mid-task):
    - Controller marks missing tasks as `WORKER_FAILED`
-   - Tasks will be retried on another worker
+   - Tasks are retried on another worker
+
+2. **Worker reports unknown tasks** (e.g., controller restarted):
+   - Controller sends kill requests for unknown tasks on next heartbeat
+   - Worker terminates orphaned containers
+
+## Job State Transitions
+
+Jobs progress through the following states:
+
+| State | Description |
+|-------|-------------|
+| **PENDING** | Job submitted, waiting for worker assignment |
+| **BUILDING** | Job bundle being built/transferred (future use) |
+| **RUNNING** | At least one task is actively executing |
+| **SUCCEEDED** | All tasks completed successfully |
+| **FAILED** | Job failed (exceeded max task failures or retry limit) |
+| **KILLED** | Job was cancelled by user |
+| **UNSCHEDULABLE** | Job could not be scheduled (constraint mismatch or timeout) |
+
+### Endpoint Visibility
+
+Job endpoints (registered via `RegisterEndpoint` RPC) are visible for all non-terminal states:
+- **PENDING**: Endpoint visible (tasks may be executing before job state updates)
+- **BUILDING**: Endpoint visible
+- **RUNNING**: Endpoint visible
+- **Terminal states** (SUCCEEDED, FAILED, KILLED): Endpoints **not visible**
+
+This behavior accounts for controller-worker communication delay: a task may start
+executing and register an endpoint before the controller updates the job state to RUNNING.
 
 ### Startup Cleanup
 
@@ -181,55 +209,42 @@ Jobs can include a `bundle_blob` containing workspace files. The controller stor
 **Configuration** (required):
 
 ```yaml
-controller_vm:
+controller:
   bundle_prefix: gs://my-bucket/iris/bundles  # GCS for distributed workers
 ```
 
 The controller will **fail at startup** if `bundle_prefix` is not configured.
 
-For local development:
-```bash
-uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/bundles
-```
-
 ## CLI Reference
+
+**Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml run ...` or `iris cluster --config cluster.yaml start`).
 
 ### Cluster Commands
 
 ```bash
 # Start/stop/restart controller VM (--config on cluster group)
 iris cluster --config=cluster.yaml start
+iris cluster --config=cluster.yaml start --local   # Local cluster for testing
 iris cluster --config=cluster.yaml stop
 iris cluster --config=cluster.yaml restart
+iris cluster --config=cluster.yaml reload           # Rebuild images + redeploy on existing VMs
 iris cluster --config=cluster.yaml status
-
-# Controller subcommands (for GCE-managed controller)
-iris cluster --config=... controller start
-iris cluster --config=... controller stop
-iris cluster --config=... controller restart
-iris cluster --config=... controller status
-iris cluster --config=... controller run-local  # Development mode
 ```
 
-### Slice Management
+### Controller Subcommands
 
 ```bash
-# Create/list/terminate slices
-iris cluster --config=... slice create --scale-group tpu_v5e_4
-iris cluster --config=... slice list
-iris cluster --config=... slice get SLICE_ID
-iris cluster --config=... slice terminate SLICE_ID
-iris cluster --config=... slice terminate --all
+# Controller-specific operations
+iris cluster --config=... controller start          # Boot controller GCE VM
+iris cluster --config=... controller status          # Controller status
 ```
 
-### VM Operations
+### VM Operations (via controller RPC)
 
 ```bash
-# VM status and logs (via config or controller URL)
-iris cluster --config=... vm status
+# VM status and logs (always via controller)
 iris cluster vm --controller-url=http://localhost:10000 status
-iris cluster --config=... vm logs VM_ID
-iris cluster --config=... vm get VM_ID
+iris cluster vm --controller-url=http://localhost:10000 logs VM_ID
 ```
 
 ### Image Builds
@@ -240,23 +255,34 @@ iris build worker-image -t iris-worker:v1 --push --region us-central1
 iris build controller-image -t iris-controller:v1 --push --region us-central1
 ```
 
-### Cluster Tools (Debugging & Validation)
-
-The `scripts/cluster-tools.py` script provides debugging and validation commands:
+### Dashboard & Debugging
 
 ```bash
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models --help
+# Open SSH tunnel to controller and print dashboard URL
+iris cluster --config=... dashboard
+iris cluster --config=... dashboard --port 8080
 
-# Discover and show controller VM status
-discover
-autoscaler-status
-list-workers
-# controller logs
-logs {--follow}
-bootstrap-logs
-validate
-# Cleanup all iris resources (dry-run by default)
-cleanup {--no-dry-run}
+# Debug commands (auto-establish SSH tunnel)
+iris cluster --config=... debug discover         # Find controller VM
+iris cluster --config=... debug health           # Health check
+iris cluster --config=... debug autoscaler-status
+iris cluster --config=... debug list-workers
+iris cluster --config=... debug list-jobs
+iris cluster --config=... debug logs --follow    # Controller docker logs
+iris cluster --config=... debug bootstrap-logs   # VM startup logs
+iris cluster --config=... debug show-task-logs JOB_ID
+iris cluster --config=... debug validate         # Run test TPU jobs
+iris cluster --config=... debug cleanup          # Dry-run by default
+iris cluster --config=... debug cleanup --no-dry-run
+```
+
+### Job Submission
+
+```bash
+# Submit a command to the cluster
+iris --config cluster.yaml run -- python train.py
+iris --config cluster.yaml run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+iris --config cluster.yaml run --no-wait -- python long_job.py
 ```
 
 ## Smoke Test
@@ -296,61 +322,77 @@ The smoke test:
 
 ## Configuration
 
-Configuration uses a nested structure with `bootstrap`, `timeouts`, and `ssh` sub-configs:
+Configuration uses platform-first settings with typed defaults:
 
 ```yaml
-# Cluster-level settings
-project_id: my-project
-region: us-central1
-zone: us-central1-a
-
-# Bootstrap config for worker VMs
-bootstrap:
-  docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
-  worker_port: 10001
-  controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
-
-# Timeout settings (VM lifecycle)
-timeouts:
-  boot_timeout_seconds: 300        # Time for VM to become SSH-reachable
-  init_timeout_seconds: 600        # Time for worker to register with controller
-  ssh_poll_interval_seconds: 5     # Interval for health checks
-
-# SSH config (for manual provider)
-ssh:
-  user: ubuntu
-  key_file: ~/.ssh/cluster_key
-  port: 22
-  connect_timeout: 30
-
-# Controller VM (GCP-managed)
-controller_vm:
+platform:
+  label_prefix: iris
   gcp:
-    image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
+    project_id: my-project
+    region: us-central1
+    zone: us-central1-a
+    default_zones: [us-central1-a, us-central1-b]
+
+defaults:
+  timeouts:
+    boot_timeout: { milliseconds: 300000 }
+    init_timeout: { milliseconds: 600000 }
+    ssh_poll_interval: { milliseconds: 5000 }
+  autoscaler:
+    evaluation_interval: { milliseconds: 10000 }
+    requesting_timeout: { milliseconds: 120000 }
+    scale_up_delay: { milliseconds: 60000 }
+    scale_down_delay: { milliseconds: 300000 }
+  ssh:
+    user: ubuntu
+    key_file: ~/.ssh/cluster_key
+    connect_timeout: { milliseconds: 30000 }
+  bootstrap:
+    docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
+    worker_port: 10001
+    controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
+
+controller:
+  image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
+  bundle_prefix: gs://my-bucket/iris/bundles
+  gcp:
     machine_type: n2-standard-4
     port: 10000
 
-# Scale groups define VM pools with autoscaling
 scale_groups:
   tpu_v5e_4:
-    provider:
-      tpu:
-        project_id: my-project
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-4
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 4
+    resources:
+      cpu: 64
+      ram: 64GB
+      disk: 500GB
+      tpu_count: 4
+      gpu_count: 0
     min_slices: 0
     max_slices: 10
     preemptible: true
     zones: [us-central1-a, us-central1-b]
 
-  # Manual hosts example (no cloud provisioning)
   manual_hosts:
-    provider:
-      manual:
-        hosts: [10.0.0.1, 10.0.0.2]
-        ssh_user: ubuntu        # Per-group SSH override
-        ssh_key_file: ~/.ssh/manual_key
+    vm_type: manual_vm
+    accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      tpu_count: 0
+      gpu_count: 0
+    min_slices: 0
+    max_slices: 2
+    manual:
+      hosts: [10.0.0.1, 10.0.0.2]
+      ssh_user: ubuntu
+      ssh_key_file: ~/.ssh/manual_key
 ```
 
 ## Directory Structure
@@ -371,7 +413,13 @@ src/iris/
 │   ├── worker/              # Worker service
 │   └── vm/                  # VM management + autoscaling
 ├── rpc/                      # Protocol definitions + generated code
-└── cli.py                    # Main CLI entry point
+└── cli/                      # CLI package
+    ├── main.py               # Top-level iris group
+    ├── cluster.py            # Cluster lifecycle, controller, VM ops, dashboard
+    ├── build.py              # Image build commands
+    ├── run.py                # Job submission (command passthrough)
+    ├── rpc.py                # Dynamic RPC CLI
+    └── debug.py              # Debugging & validation
 ```
 
 ## References

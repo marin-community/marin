@@ -1,7 +1,7 @@
 # Agent Tips
 
 * Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate-protos.py to regenerate files after changing the `.proto` files.
+* Use scripts/generate_protos.py to regenerate files after changing the `.proto` files.
 * Prefer _shallow_, _functional_ code which returns control quickly to the user, vs callbacks or inheritance.
 
 ```
@@ -111,9 +111,37 @@ When adding new modules or significant features:
 |------|------|-------------|
 | Architecture | README.md | High-level architecture, CLI reference, quick start |
 | Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
+| Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
 
 ## Key Modules
+
+### Time Utilities
+
+Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
+
+| Class | Purpose |
+|-------|---------|
+| `Timestamp` | Point in time (epoch-based). Use for created_at, timestamps in logs, etc. |
+| `Duration` | Time interval. Use for timeouts, intervals, configuration values. |
+| `Deadline` | Monotonic deadline for timeout checks. Use in polling loops. |
+| `Timer` | Elapsed time measurement. Use for performance tracking. |
+| `ExponentialBackoff` | Retry/polling with backoff. Use `wait_until()` for condition polling. |
+
+Example:
+```python
+from iris.time_utils import Timestamp, Duration, Deadline
+
+created_at = Timestamp.now()
+timeout = Duration.from_seconds(30.0)
+deadline = Deadline.from_now(timeout)
+deadline.wait_for(condition)
+
+while not deadline.expired():
+    if condition():
+        break
+    time.sleep(0.1)
+```
 
 ### Autoscaler and VM Management
 
@@ -121,7 +149,13 @@ The autoscaler runs inside the Controller process and manages cloud VMs based on
 
 ```
 src/iris/
-├── cli.py                       # Main CLI (cluster start/stop/status, slice/vm commands)
+├── cli/                         # CLI package (cluster, build, run, debug commands)
+│   ├── main.py                  # Top-level iris group
+│   ├── cluster.py               # Cluster lifecycle, controller, VM ops, dashboard
+│   ├── build.py                 # Image build commands
+│   ├── debug.py                 # Debugging & validation
+│   ├── run.py                   # Command passthrough job submission
+│   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler

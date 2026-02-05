@@ -706,7 +706,7 @@ class Executor:
         *,
         dry_run: bool = False,
         run_only: list[str] | None = None,
-        force_run_failed: bool = False,
+        force_run_failed: bool = True,
         max_concurrent: int | None = None,
     ):
         """
@@ -777,6 +777,8 @@ class Executor:
 
         ready = [step for step, deps in remaining_deps.items() if not deps]
         running: dict[ExecutorStep, StepRunner | None] = {}
+        failed_steps: set[ExecutorStep] = set()
+        failure_exceptions: list[Exception] = []
 
         while ready or running:
             # Launch ready steps, respecting max_concurrent limit if set
@@ -805,15 +807,31 @@ class Executor:
 
             for finished_step in finished_steps:
                 runner = running[finished_step]
+                step_failed = False
                 if runner is not None:
                     logger.info("Waiting for %s to finish for step %s", runner.job_id, finished_step.name)
-                    runner.wait()
+                    try:
+                        runner.wait()
+                    except Exception as e:
+                        logger.exception("Step %s failed", finished_step.name)
+                        failed_steps.add(finished_step)
+                        failure_exceptions.append(e)
+                        step_failed = True
 
                 running.pop(finished_step)
-                for child in dependents.get(finished_step, []):
-                    remaining_deps[child].remove(finished_step)
-                    if not remaining_deps[child]:
-                        ready.append(child)
+
+                if not step_failed:
+                    for child in dependents.get(finished_step, []):
+                        remaining_deps[child].remove(finished_step)
+                        if not remaining_deps[child]:
+                            ready.append(child)
+
+        if failed_steps:
+            failed_names = sorted(step.name for step in failed_steps)
+            message = f"{len(failed_steps)} step(s) failed: {failed_names}"
+            if failure_exceptions:
+                raise RuntimeError(message) from failure_exceptions[0]
+            raise RuntimeError(message)
 
     def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> StepRunner | None:
         config = self.configs[step]
@@ -1140,7 +1158,7 @@ class PreviousTaskFailedError(Exception):
     pass
 
 
-def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = False) -> bool:
+def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = True) -> bool:
     """Check if the step should run based on lease-based distributed locking.
 
     Uses lease files for distributed locking and status file for final state.
@@ -1226,7 +1244,7 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
-    force_run_failed: bool = False  # Force run failed steps
+    force_run_failed: bool = True  # Force run failed steps
     run_only: list[str] | None = None
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 

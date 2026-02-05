@@ -34,7 +34,144 @@ import humanfriendly
 
 from iris.rpc import cluster_pb2
 
-JobId = NewType("JobId", str)
+
+@dataclass(frozen=True, slots=True)
+class JobName:
+    """Structured hierarchical job name.
+
+    Canonical form: /namespace/parent/child
+    Tasks are job names with numeric suffix: /namespace/parent/child/0
+
+    Job names form a tree rooted at the namespace:
+        /root-job
+        /root-job/child-1
+        /root-job/child-1/grandchild
+        /root-job/0
+    """
+
+    _parts: tuple[str, ...]
+
+    def __post_init__(self):
+        if not self._parts:
+            raise ValueError("JobName cannot be empty")
+        for part in self._parts:
+            if "/" in part:
+                raise ValueError(f"JobName component cannot contain '/': {part}")
+            if not part or not part.strip():
+                raise ValueError("JobName component cannot be empty or whitespace")
+
+    @classmethod
+    def from_string(cls, s: str) -> "JobName":
+        """Parse a job name string like '/root/child/grandchild'.
+
+        Examples:
+            JobName.from_string("/my-job") -> JobName(("my-job",))
+            JobName.from_string("/parent/child") -> JobName(("parent", "child"))
+            JobName.from_string("/job/0") -> JobName(("job", "0"))
+        """
+        if not s:
+            raise ValueError("Job name cannot be empty")
+        if not s.startswith("/"):
+            raise ValueError(f"Job name must start with '/': {s}")
+        parts = tuple(s[1:].split("/"))
+        if any(not part or not part.strip() for part in parts):
+            raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
+        return cls(parts)
+
+    @classmethod
+    def root(cls, name: str) -> "JobName":
+        """Create a root job name (no parent)."""
+        return cls((name,))
+
+    def child(self, name: str) -> "JobName":
+        """Create a child job name."""
+        return JobName((*self._parts, name))
+
+    def task(self, index: int) -> "JobName":
+        """Create a task name for this job.
+
+        Tasks are job names with a numeric suffix.
+
+        Example:
+            JobName.from_string("/my-job").task(0) -> JobName(("my-job", "0"))
+        """
+        return JobName((*self._parts, str(index)))
+
+    @property
+    def parent(self) -> "JobName | None":
+        """Get parent job name, or None if this is a root job."""
+        if len(self._parts) == 1:
+            return None
+        return JobName(self._parts[:-1])
+
+    @property
+    def namespace(self) -> str:
+        """Get the namespace (root component) for actor isolation."""
+        return self._parts[0]
+
+    @property
+    def name(self) -> str:
+        """Get the local name (last component)."""
+        return self._parts[-1]
+
+    @property
+    def is_root(self) -> bool:
+        """True if this is a root job (no parent)."""
+        return len(self._parts) == 1
+
+    @property
+    def task_index(self) -> int | None:
+        """If this is a task (last component is numeric), return the index."""
+        try:
+            return int(self._parts[-1])
+        except ValueError:
+            return None
+
+    @property
+    def is_task(self) -> bool:
+        """True if this is a task (last component is numeric)."""
+        return self.task_index is not None
+
+    def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
+        """True if this job name is an ancestor of another job name."""
+        if include_self and self == other:
+            return True
+        if len(self._parts) >= len(other._parts):
+            return False
+        return other._parts[: len(self._parts)] == self._parts
+
+    def to_safe_token(self) -> str:
+        """Return a filesystem/tag-safe token derived from this name."""
+        return "job__" + "__".join(self._parts)
+
+    def require_task(self) -> tuple["JobName", int]:
+        """Return (parent_job, task_index) for task names.
+
+        Raises:
+            ValueError: If this name is not a task or has no parent.
+        """
+        task_index = self.task_index
+        if task_index is None:
+            raise ValueError(f"JobName is not a task: {self}")
+        if self.parent is None:
+            raise ValueError(f"Task has no parent job: {self}")
+        return (self.parent, task_index)
+
+    def __str__(self) -> str:
+        """Canonical wire format: '/root/child/grandchild'."""
+        return "/" + "/".join(self._parts)
+
+    def __repr__(self) -> str:
+        return f"JobName({str(self)!r})"
+
+    def to_wire(self) -> str:
+        """Serialize to wire format for RPC/env vars."""
+        return str(self)
+
+    @classmethod
+    def from_wire(cls, s: str) -> "JobName":
+        """Parse from wire format. Alias for from_string."""
+        return cls.from_string(s)
 
 
 class DeviceType(Enum):
@@ -45,7 +182,49 @@ class DeviceType(Enum):
     TPU = "tpu"
 
 
-TaskId = NewType("TaskId", str)
+def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
+    """Extract device type as enum from DeviceConfig."""
+    if device.HasField("gpu"):
+        return DeviceType.GPU
+    if device.HasField("tpu"):
+        return DeviceType.TPU
+    return DeviceType.CPU
+
+
+def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
+    """Extract device type from DeviceConfig."""
+    if device.HasField("cpu"):
+        return "cpu"
+    if device.HasField("gpu"):
+        return "gpu"
+    if device.HasField("tpu"):
+        return "tpu"
+    return "cpu"
+
+
+def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
+    """Extract device variant (e.g., GPU model) from DeviceConfig."""
+    if device.HasField("gpu"):
+        return device.gpu.variant if device.gpu.variant else None
+    if device.HasField("tpu"):
+        return device.tpu.variant if device.tpu.variant else None
+    return None
+
+
+def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
+    """Extract GPU count from DeviceConfig."""
+    if device.HasField("gpu"):
+        return device.gpu.count or 1
+    return 0
+
+
+def get_tpu_count(device: cluster_pb2.DeviceConfig) -> int:
+    """Extract TPU count from DeviceConfig."""
+    if device.HasField("tpu"):
+        return device.tpu.count or 0
+    return 0
+
+
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
 
@@ -268,8 +447,6 @@ class ResourceSpec:
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
-    replicas: int = 0
-    preemptible: bool = False
     regions: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
@@ -280,13 +457,75 @@ class ResourceSpec:
             cpu=self.cpu,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            replicas=self.replicas,
-            preemptible=self.preemptible,
             regions=list(self.regions or []),
         )
         if self.device is not None:
             spec.device.CopyFrom(self.device)
         return spec
+
+
+DOCKERFILE_TEMPLATE = """FROM {base_image}
+
+RUN apt-get update && apt-get install -y git curl build-essential && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /usr/local/bin/uv
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:$PATH"
+
+ENV UV_CACHE_DIR=/opt/uv-cache
+ENV UV_LINK_MODE=copy
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+WORKDIR /app
+
+COPY . .
+
+RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
+    --mount=type=cache,id=iris-cargo,sharing=shared,target=/root/.cargo/registry \\
+    --mount=type=cache,id=iris-cargo-git,sharing=shared,target=/root/.cargo/git \\
+    uv sync {extras_flags}
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+RUN uv pip install cloudpickle
+{pip_install_step}"""
+
+
+def generate_dockerfile(
+    python_version: str,
+    extras: list[str] | None = None,
+    pip_packages: list[str] | None = None,
+) -> str:
+    """Generate a Dockerfile for an Iris job container.
+
+    Uses the full Python image when pip_packages are specified (native wheels
+    often depend on system libraries stripped from slim images).
+
+    Extras can be specified in two formats:
+    - "extra_name" -> "--extra extra_name"
+    - "package:extra_name" -> "--package package --extra extra_name"
+    """
+    base_image = f"python:{python_version}" if pip_packages else f"python:{python_version}-slim"
+
+    # Parse extras: support both "extra" and "package:extra" syntax
+    extras_parts = []
+    for e in extras or []:
+        if ":" in e:
+            package, extra = e.split(":", 1)
+            extras_parts.append(f"--package {package} --extra {extra}")
+        else:
+            extras_parts.append(f"--extra {e}")
+    extras_flags = " ".join(extras_parts)
+
+    pip_install_step = ""
+    if pip_packages:
+        packages_str = " ".join(f'"{pkg}"' for pkg in pip_packages)
+        pip_install_step = f"\nRUN uv pip install {packages_str}\n"
+
+    return DOCKERFILE_TEMPLATE.format(
+        base_image=base_image,
+        extras_flags=extras_flags,
+        pip_install_step=pip_install_step,
+    )
 
 
 @dataclass
@@ -305,9 +544,14 @@ class EnvironmentSpec:
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
+    dockerfile: str | None = None
 
     def to_proto(self) -> cluster_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied."""
+        """Convert to wire format with sensible defaults applied.
+
+        Generates the dockerfile on the client side so the worker can use it
+        directly without regenerating (which would lose extras like package:extra).
+        """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -317,11 +561,23 @@ class EnvironmentSpec:
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
+        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+        if self.dockerfile is not None:
+            dockerfile = self.dockerfile
+        else:
+            dockerfile = generate_dockerfile(
+                python_version=py_version,
+                extras=list(self.extras or []),
+                pip_packages=list(self.pip_packages or []),
+            )
+
         return cluster_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
-            python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
+            python_version=py_version,
+            dockerfile=dockerfile,
         )
 
 
@@ -336,23 +592,16 @@ class Namespace(str):
     explicit configuration.
     """
 
-    def __new__(cls, value: str) -> "Namespace":
-        if not value:
-            raise ValueError("Namespace cannot be empty")
-        return super().__new__(cls, value)
-
     def __repr__(self) -> str:
         return f"Namespace({super().__repr__()})"
 
     @classmethod
-    def from_job_id(cls, job_id: str) -> "Namespace":
+    def from_job_id(cls, job_id: JobName) -> "Namespace":
         """Derive namespace from hierarchical job ID.
 
         The namespace is the first component of the job ID hierarchy.
         For example:
-            "abc123" -> Namespace("abc123")
-            "abc123/worker-0" -> Namespace("abc123")
-            "abc123/worker-0/sub-task" -> Namespace("abc123")
+            JobName.from_string("/abc123/worker-0") -> Namespace("abc123")
 
         Args:
             job_id: Hierarchical job ID
@@ -363,9 +612,15 @@ class Namespace(str):
         Raises:
             ValueError: If job_id is empty
         """
-        if not job_id:
-            raise ValueError("Job ID cannot be empty")
-        return cls(job_id.split("/")[0])
+        return cls(job_id.namespace)
+
+
+PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
+
+
+def preemptible_constraint(preemptible: bool = True) -> Constraint:
+    """Constraint requiring workers to be preemptible (or not)."""
+    return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
 
 
 def is_job_finished(state: int) -> bool:
@@ -395,28 +650,6 @@ def is_task_finished(state: int) -> bool:
         }
     )
     return state in terminal_states
-
-
-def job_task_counts(job: cluster_pb2.JobStatus) -> dict[str, int]:
-    """Compute task state counts from tasks[] in JobStatus proto.
-
-    Returns a dict with keys: pending, running, succeeded, failed.
-    """
-    counts = {"pending": 0, "running": 0, "succeeded": 0, "failed": 0}
-    for task in job.tasks:
-        if task.state == cluster_pb2.TASK_STATE_PENDING:
-            counts["pending"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_RUNNING:
-            counts["running"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_SUCCEEDED:
-            counts["succeeded"] += 1
-        elif task.state in (
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-        ):
-            counts["failed"] += 1
-    return counts
 
 
 JobState = cluster_pb2.JobState
@@ -550,6 +783,13 @@ class Entrypoint:
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
         import cloudpickle
+        import sys
+        from pathlib import Path
+
+        module = sys.modules.get(fn.__module__)
+        module_path = Path(module.__file__).parts if module and getattr(module, "__file__", None) else ()
+        if module and (module.__package__ is None or module.__spec__ is None or "tests" in module_path):
+            cloudpickle.register_pickle_by_value(module)
 
         return cls(callable_bytes=cloudpickle.dumps((fn, args, kwargs)))
 

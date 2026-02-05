@@ -15,7 +15,7 @@
 """HTTP dashboard with Connect RPC and web UI.
 
 The dashboard serves:
-- Web UI at / (main dashboard)
+- Web UI at / (main dashboard with tabs: jobs, workers, endpoints, vms, autoscaler, logs)
 - Web UI at /job/{job_id} (job detail page)
 - Web UI at /vm/{vm_id} (VM detail page)
 - Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
@@ -36,7 +36,6 @@ from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 
@@ -57,12 +56,10 @@ class ControllerDashboard:
         service: ControllerServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
-        log_buffer: LogBuffer | None = None,
     ):
         self._service = service
         self._host = host
         self._port = port
-        self._log_buffer = log_buffer
         self._app = self._create_app()
         self._server: uvicorn.Server | None = None
 
@@ -76,10 +73,8 @@ class ControllerDashboard:
 
         routes = [
             Route("/", self._dashboard),
-            Route("/job/{job_id}", self._job_detail_page),
-            Route("/vm/{vm_id}", self._vm_detail_page),
-            Route("/logs", self._logs_page),
-            Route("/api/logs", self._api_logs),
+            Route("/job/{job_id:path}", self._job_detail_page),
+            Route("/vm/{vm_id:path}", self._vm_detail_page),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
@@ -94,25 +89,6 @@ class ControllerDashboard:
 
     def _vm_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("VM Detail", "/static/controller/vm-detail.js"))
-
-    def _logs_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Logs", "/static/shared/log-viewer.js"))
-
-    def _api_logs(self, request: Request) -> JSONResponse:
-        if not self._log_buffer:
-            return JSONResponse([])
-        prefix = request.query_params.get("prefix") or None
-        try:
-            limit = int(request.query_params.get("limit", "200"))
-        except (ValueError, TypeError):
-            limit = 200
-        records = self._log_buffer.query(prefix=prefix, limit=limit)
-        return JSONResponse(
-            [
-                {"timestamp": r.timestamp, "level": r.level, "logger_name": r.logger_name, "message": r.message}
-                for r in records
-            ]
-        )
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""

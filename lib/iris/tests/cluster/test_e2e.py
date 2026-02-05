@@ -30,20 +30,16 @@ import pytest
 
 from iris.client import IrisClient
 from iris.cluster.client import get_job_info
-from iris.cluster.client.local_client import (
-    LocalEnvironmentProvider,
-    _LocalBundleProvider,
-    _LocalContainerRuntime,
-    _LocalImageProvider,
-)
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
+from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
+from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Duration
 
 
 def find_free_port() -> int:
@@ -58,6 +54,47 @@ def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
+def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
+    """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
+
+    Sets up controller.local, bundle_prefix, scale groups with local vm_type,
+    and fast autoscaler evaluation for tests.
+    """
+    config = config_pb2.IrisClusterConfig()
+
+    # Configure local controller
+    config.controller.local.port = 0  # auto-assign
+    config.controller.bundle_prefix = ""  # LocalController will set temp path
+    config.platform.local.SetInParent()
+
+    # Configure scale group with local provider
+    sg = config_pb2.ScaleGroupConfig(
+        name="local-cpu",
+        vm_type=config_pb2.VM_TYPE_LOCAL_VM,
+        min_slices=num_workers,
+        max_slices=num_workers,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        slice_size=1,
+        resources=config_pb2.ScaleGroupResources(
+            cpu=8,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=50 * 1024**3,
+            gpu_count=0,
+            tpu_count=0,
+        ),
+    )
+    config.scale_groups["local-cpu"].CopyFrom(sg)
+
+    # Fast autoscaler evaluation for tests
+    from iris.time_utils import Duration
+
+    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
+    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
+    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
+
+    return config
+
+
 class E2ECluster:
     """Synchronous context manager running a controller + worker cluster.
 
@@ -66,10 +103,11 @@ class E2ECluster:
     """
 
     def __init__(self, num_workers: int = 1, use_docker: bool = False):
-        self._controller_port = find_free_port()
         self._num_workers = num_workers
         self._use_docker = use_docker
-
+        self._manager: ClusterManager | None = None
+        self._controller_port: int | None = None
+        # Docker-specific fields
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._controller: Controller | None = None
         self._workers: list[Worker] = []
@@ -79,6 +117,22 @@ class E2ECluster:
         self._rpc_client: IrisClient | None = None
 
     def __enter__(self):
+        if not self._use_docker:
+            # Use ClusterManager for non-Docker path
+            config = _make_e2e_config(self._num_workers)
+            self._manager = ClusterManager(config)
+            address = self._manager.start()
+            # Extract port from address for controller_client
+            self._controller_port = int(address.rsplit(":", 1)[1])
+            self._controller_client = ControllerServiceClientSync(
+                address=address,
+                timeout_ms=30000,
+            )
+            self._wait_for_workers(timeout=10.0)
+            return self
+
+        # Docker path: manual Controller + Worker setup
+        self._controller_port = find_free_port()
         self._temp_dir = tempfile.TemporaryDirectory(prefix="test_cluster_")
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
@@ -109,18 +163,11 @@ class E2ECluster:
             timeout_ms=30000,
         )
 
-        # Select providers based on use_docker flag
-        if self._use_docker:
-            bundle_provider = BundleCache(cache_path, max_bundles=10)
-            image_provider = ImageCache(cache_path, registry="", max_images=10)
-            container_runtime = DockerRuntime()
-            environment_provider = None  # Use default (probe real system)
-        else:
-            bundle_provider = _LocalBundleProvider(fake_bundle)
-            image_provider = _LocalImageProvider()
-            container_runtime = _LocalContainerRuntime()
-            # 4 CPUs to match test expectations for resource scheduling tests
-            environment_provider = LocalEnvironmentProvider(cpu=4, memory_gb=8)
+        # Docker providers
+        bundle_provider = BundleCache(cache_path, max_bundles=10)
+        image_provider = ImageCache(cache_path, registry="", max_images=10)
+        container_runtime = DockerRuntime()
+        environment_provider = None  # Use default (probe real system)
 
         # Start Workers
         for i in range(self._num_workers):
@@ -132,7 +179,7 @@ class E2ECluster:
                 cache_dir=cache_path,
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
-                poll_interval_seconds=0.1,  # Fast polling for tests
+                poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
             )
             worker = Worker(
                 worker_config,
@@ -167,16 +214,19 @@ class E2ECluster:
 
     def __exit__(self, *args):
         if self._rpc_client:
-            # RpcClusterClient doesn't have close method, just drop reference
             self._rpc_client = None
         if self._controller_client:
             self._controller_client.close()
-        for worker in self._workers:
-            worker.stop()
-        if self._controller:
-            self._controller.stop()
-        if self._temp_dir:
-            self._temp_dir.cleanup()
+        if self._manager:
+            self._manager.stop()
+        else:
+            # Docker path cleanup
+            for worker in self._workers:
+                worker.stop()
+            if self._controller:
+                self._controller.stop()
+            if self._temp_dir:
+                self._temp_dir.cleanup()
 
     def submit(
         self,
@@ -186,7 +236,8 @@ class E2ECluster:
         cpu: int = 1,
         memory: str = "1g",
         ports: list[str] | None = None,
-        scheduling_timeout_seconds: int = 0,
+        scheduling_timeout: Duration | None = None,
+        replicas: int = 1,
         **kwargs,
     ):
         """Submit a job and return a Job handle."""
@@ -199,13 +250,18 @@ class E2ECluster:
             resources=resources,
             environment=environment,
             ports=ports,
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
+            scheduling_timeout=scheduling_timeout,
+            replicas=replicas,
         )
 
     def _to_job_id_str(self, job_or_id) -> str:
         """Convert Job object or string to job_id string."""
         if isinstance(job_or_id, str):
-            return job_or_id
+            return (
+                JobName.from_string(job_or_id).to_wire()
+                if job_or_id.startswith("/")
+                else JobName.root(job_or_id).to_wire()
+            )
         # Assume it's a Job object
         return str(job_or_id.job_id)
 
@@ -224,13 +280,12 @@ class E2ECluster:
     def task_status(self, job_or_id, task_index: int = 0) -> dict:
         """Get status of a specific task within a job."""
         job_id = self._to_job_id_str(job_or_id)
-        request = cluster_pb2.Controller.GetTaskStatusRequest(job_id=job_id, task_index=task_index)
+        task_id = JobName.from_wire(job_id).task(task_index).to_wire()
+        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
         assert self._controller_client is not None
         response = self._controller_client.get_task_status(request)
         return {
             "taskId": response.task.task_id,
-            "jobId": response.task.job_id,
-            "taskIndex": response.task.task_index,
             "state": cluster_pb2.TaskState.Name(response.task.state),
             "workerId": response.task.worker_id,
             "workerAddress": response.task.worker_address,
@@ -274,16 +329,16 @@ class E2ECluster:
 # =============================================================================
 
 
-@pytest.fixture(scope="session")
-def test_cluster(use_docker, docker_cleanup_session):
-    """Provide a running test cluster for E2E tests (session-scoped)."""
+@pytest.fixture
+def test_cluster(use_docker, docker_cleanup_scope):
+    """Provide a running test cluster for E2E tests."""
     with E2ECluster(use_docker=use_docker) as cluster:
         yield cluster
 
 
-@pytest.fixture(scope="session")
-def multi_worker_cluster(use_docker, docker_cleanup_session):
-    """Provide a cluster with multiple workers (session-scoped)."""
+@pytest.fixture
+def multi_worker_cluster(use_docker, docker_cleanup_scope):
+    """Provide a cluster with multiple workers."""
     with E2ECluster(num_workers=3, use_docker=use_docker) as cluster:
         yield cluster
 
@@ -328,13 +383,13 @@ class TestJobLifecycle:
             status = test_cluster.wait(job_id, timeout=30)
             assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_kill_running_job(self, test_cluster):
+    def test_kill_running_job(self, test_cluster, sentinel):
         """Running job can be killed."""
 
-        def long_job():
-            time.sleep(60)
+        def long_job(s):
+            s.wait()
 
-        job_id = test_cluster.submit(long_job, name=unique_name("long-job"))
+        job_id = test_cluster.submit(long_job, sentinel, name=unique_name("long-job"))
 
         # Wait for job to start running
         for _ in range(50):
@@ -344,6 +399,7 @@ class TestJobLifecycle:
             time.sleep(0.1)
 
         test_cluster.kill(job_id)
+        sentinel.signal()
         status = test_cluster.wait(job_id, timeout=10)
         assert status["state"] == "JOB_STATE_KILLED"
 
@@ -368,8 +424,8 @@ class TestResourceScheduling:
 
     def test_small_job_skips_oversized_job(self, test_cluster):
         """Small job scheduled even when large job is waiting."""
-        # Submit job requiring 100 CPUs (won't fit on 4-CPU worker)
-        big_job_id = test_cluster.submit(lambda: None, name=unique_name("big-job"), cpu=100)
+        # Submit job requiring 10000 CPUs (won't fit on worker)
+        big_job_id = test_cluster.submit(lambda: None, name=unique_name("big-job"), cpu=10000)
 
         # Submit small job
         small_job_id = test_cluster.submit(lambda: "done", name=unique_name("small-job"), cpu=1)
@@ -384,12 +440,12 @@ class TestResourceScheduling:
 
     def test_scheduling_timeout(self, test_cluster):
         """Job that can't be scheduled times out."""
-        # Submit job requiring 100 CPUs with 1 second timeout
+        # Submit job requiring 10000 CPUs with 1 second timeout
         job_id = test_cluster.submit(
             lambda: None,
             name=unique_name("impossible-job"),
-            cpu=100,
-            scheduling_timeout_seconds=1,
+            cpu=10000,
+            scheduling_timeout=Duration.from_seconds(1),
         )
 
         # Should become UNSCHEDULABLE
@@ -406,23 +462,39 @@ class TestMultiWorker:
     """Tests requiring multiple workers."""
 
     def test_multi_worker_execution(self, multi_worker_cluster):
-        """Jobs distributed across multiple workers."""
+        """Jobs with multiple tasks distribute across workers.
+
+        Submits a single job with multiple replicas. All tasks are pending
+        simultaneously, triggering the scheduler's capacity-based distribution.
+        Even with large local worker capacity (cpu=1000), the scheduler should
+        distribute tasks when they're batched in one cycle.
+        """
         run_id = uuid.uuid4().hex[:8]
-        job_ids = [multi_worker_cluster.submit(lambda n=n: n * 2, name=f"mw-job-{run_id}-{n}", cpu=2) for n in range(6)]
 
-        # Wait for all to complete
-        for job_id in job_ids:
-            status = multi_worker_cluster.wait(job_id, timeout=30)
-            assert status["state"] == "JOB_STATE_SUCCEEDED"
+        # Submit one job with 6 replicas - all tasks pending simultaneously.
+        # cpu=5 is arbitrary (local test workers have cpu=1000, so capacity
+        # is not the distribution mechanism). The scheduler's round-robin
+        # scheduled_workers set distributes tasks across workers when they're
+        # batched in one cycle.
+        job_id = multi_worker_cluster.submit(
+            lambda: 42,
+            name=f"mw-job-{run_id}",
+            cpu=5,
+            replicas=6,
+        )
 
-        # Verify jobs ran on different workers (via task-level worker info)
+        # Wait for completion
+        status = multi_worker_cluster.wait(job_id, timeout=30)
+        assert status["state"] == "JOB_STATE_SUCCEEDED"
+
+        # Verify tasks ran on different workers
         workers_used = set()
-        for job_id in job_ids:
-            task_status = multi_worker_cluster.task_status(job_id, task_index=0)
+        for task_idx in range(6):
+            task_status = multi_worker_cluster.task_status(job_id, task_index=task_idx)
             if task_status["workerId"]:
                 workers_used.add(task_status["workerId"])
 
-        assert len(workers_used) > 1, "Jobs should run on multiple workers"
+        assert len(workers_used) > 1, f"Tasks should distribute across workers, but all ran on: {workers_used}"
 
 
 # =============================================================================
@@ -470,7 +542,7 @@ class TestJobInfo:
             # Verify JobInfo is available and provides expected context
             if info is None:
                 raise ValueError("JobInfo not available")
-            if info.job_id != expected_job_id:
+            if info.job_id.to_wire() != expected_job_id:
                 raise ValueError(f"JobInfo has wrong job_id: {info.job_id}")
             if info.worker_id is None:
                 raise ValueError("JobInfo missing worker_id")
@@ -478,7 +550,8 @@ class TestJobInfo:
                 raise ValueError("JobInfo missing expected port 'actor'")
             return "success"
 
-        job_id = test_cluster.submit(test_fn, job_name, name=job_name, ports=["actor"])
+        expected_job_id = JobName.root(job_name).to_wire()
+        job_id = test_cluster.submit(test_fn, expected_job_id, name=job_name, ports=["actor"])
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
@@ -516,8 +589,8 @@ class TestJobInfo:
                 raise ValueError("JobInfo not available")
 
             # Verify task context is correct
-            expected_task_id = f"{expected_job_name}/task-0"
-            if info.task_id != expected_task_id:
+            expected_task_id = JobName.root(expected_job_name).task(0).to_wire()
+            if info.task_id.to_wire() != expected_task_id:
                 raise ValueError(f"Expected task_id {expected_task_id}, got {info.task_id}")
             if info.task_index != 0:
                 raise ValueError(f"Expected task_index 0, got {info.task_index}")
@@ -557,7 +630,7 @@ class TestEndpoints:
                 request = cluster_pb2.Controller.RegisterEndpointRequest(
                     name=endpoint_name,
                     address="localhost:5000",
-                    job_id=info.job_id,
+                    job_id=info.job_id.to_wire(),
                     metadata={"type": "actor"},
                 )
                 response = client.register_endpoint(request)
@@ -603,7 +676,7 @@ class TestEndpoints:
                     request = cluster_pb2.Controller.RegisterEndpointRequest(
                         name=name,
                         address=addr,
-                        job_id=info.job_id,
+                        job_id=info.job_id.to_wire(),
                     )
                     client.register_endpoint(request)
 

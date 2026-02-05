@@ -25,31 +25,12 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from iris.cluster.vm.controller import ControllerProtocol, create_controller
-from iris.cluster.vm.debug import controller_tunnel
+from iris.cluster.vm.config import IrisConfig
+from iris.cluster.vm.controller_vm import ControllerProtocol, create_controller_vm
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
-
-
-def make_local_config(
-    base_config: config_pb2.IrisClusterConfig,
-) -> config_pb2.IrisClusterConfig:
-    """Override a GCP/manual config to run locally.
-
-    Replaces the controller oneof with LocalControllerConfig and every
-    scale group's provider oneof with LocalProvider. Everything else
-    (accelerator_type, accelerator_variant, min/max_slices) is preserved.
-    """
-    config = config_pb2.IrisClusterConfig()
-    config.CopyFrom(base_config)
-    config.controller_vm.ClearField("controller")
-    config.controller_vm.local.port = 0  # auto-assign
-    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
-    for sg in config.scale_groups.values():
-        sg.provider.ClearField("provider")
-        sg.provider.local.SetInParent()
-    return config
 
 
 class ClusterManager:
@@ -71,13 +52,18 @@ class ClusterManager:
         manager.stop()
     """
 
-    def __init__(self, config: config_pb2.IrisClusterConfig):
+    def __init__(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        threads: ThreadContainer | None = None,
+    ):
         self._config = config
+        self._threads = threads if threads is not None else get_thread_container()
         self._controller: ControllerProtocol | None = None
 
     @property
     def is_local(self) -> bool:
-        return self._config.controller_vm.WhichOneof("controller") == "local"
+        return self._config.controller.WhichOneof("controller") == "local"
 
     def start(self) -> str:
         """Start the controller. Returns the controller address.
@@ -85,83 +71,47 @@ class ClusterManager:
         For GCP: creates a GCE VM, bootstraps, returns internal IP.
         For local: starts in-process Controller, returns localhost URL.
         """
-        self._controller = create_controller(self._config)
+        self._controller = create_controller_vm(self._config, threads=self._threads)
         address = self._controller.start()
         logger.info("Controller started at %s (local=%s)", address, self.is_local)
         return address
 
     def stop(self) -> None:
-        """Stop the controller and clean up resources."""
+        """Stop the controller and clean up resources.
+
+        Shutdown ordering:
+        1. Stop the controller (which stops its threads and autoscaler)
+        2. Wait on the root ThreadContainer to verify all threads have exited
+        """
         if self._controller:
             self._controller.stop()
             self._controller = None
             logger.info("Controller stopped")
 
+        self._threads.wait()
+
     def reload(self) -> str:
-        """Reload cluster: redeploy containers on existing VMs.
+        """Reload cluster by reloading the controller.
 
-        Reloads controller and all workers by re-running bootstrap scripts
-        without recreating VMs. Much faster than stop/start cycle.
+        The controller will re-bootstrap all worker VMs when it starts,
+        ensuring they run the latest worker image. This is faster than
+        a full stop/start cycle and ensures consistent image versions.
 
-        For GCP: SSHs into existing VMs and pulls new images, restarts containers.
+        For GCP: Reloads controller VM, which then re-bootstraps workers.
         For local: Equivalent to restart (no VMs to preserve).
 
         Returns:
             Controller address
 
         Raises:
-            RuntimeError: If controller or worker VMs don't exist
+            RuntimeError: If controller VM doesn't exist
         """
-        # Reload controller
-        self._controller = create_controller(self._config)
+        # Reload controller - it will re-bootstrap workers on startup
+        self._controller = create_controller_vm(self._config, threads=self._threads)
         address = self._controller.reload()
         logger.info("Controller reloaded at %s", address)
 
-        # Reload workers (GCP only - local workers restart with controller)
-        if not self.is_local:
-            self._reload_workers()
-
         return address
-
-    def _reload_workers(self) -> None:
-        """Reload all worker VMs by discovering and re-running bootstrap."""
-        from iris.cluster.vm.config import _create_manager_from_config
-        from iris.cluster.vm.managed_vm import TrackedVmFactory, VmRegistry
-
-        # Create temporary registry and factory for discovery
-        vm_registry = VmRegistry()
-        vm_factory = TrackedVmFactory(vm_registry)
-
-        logger.info("Reloading workers across %d scale group(s)", len(self._config.scale_groups))
-
-        for group_name in self._config.scale_groups:
-            logger.info("Processing scale group: %s", group_name)
-
-            # Create VmManager for this scale group
-            manager = _create_manager_from_config(
-                group_name=group_name,
-                cluster_config=self._config,
-                vm_factory=vm_factory,
-                dry_run=False,
-            )
-
-            # Discover existing VMs
-            vm_groups = manager.discover_vm_groups()
-
-            if not vm_groups:
-                logger.warning("No existing VMs found for scale group %s", group_name)
-                continue
-
-            logger.info("Found %d VM group(s) in %s", len(vm_groups), group_name)
-
-            # Reload each VM in each group
-            for group in vm_groups:
-                logger.info("Reloading VM group %s", group.group_id)
-                for vm in group.vms():
-                    vm.reload()
-                    logger.info("  ✓ Reloaded VM %s", vm.info.vm_id)
-
-        logger.info("Worker reload complete")
 
     @contextmanager
     def connect(self) -> Iterator[str]:
@@ -172,14 +122,11 @@ class ClusterManager:
         """
         address = self.start()
         try:
-            if self.is_local:
-                yield address
-            else:
-                zone = self._config.zone
-                project = self._config.project_id
-                label_prefix = self._config.label_prefix or "iris"
-                with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
-                    yield tunnel_url
+            # Use Platform.tunnel() for consistent connection handling
+            iris_config = IrisConfig(self._config)
+            platform = iris_config.platform()
+            with platform.tunnel(address) as tunnel_url:
+                yield tunnel_url
         finally:
             self.stop()
 

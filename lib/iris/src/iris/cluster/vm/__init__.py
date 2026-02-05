@@ -36,12 +36,6 @@ from iris.cluster.vm.ssh import (
     wait_for_connection,
 )
 
-# Health checking (from controller module where diagnostics matter)
-from iris.cluster.vm.controller import (
-    HealthCheckResult,
-    check_health,
-)
-
 # Platform protocols and status types
 from iris.cluster.vm.vm_platform import (
     MAX_RECONCILE_WORKERS,
@@ -87,11 +81,11 @@ from iris.cluster.vm.scaling_group import (
 # Autoscaler
 from iris.cluster.vm.autoscaler import (
     Autoscaler,
-    AutoscalerConfig,
     DemandEntry,
-    RoutingResult,
+    RoutingDecision,
     ScalingAction,
     ScalingDecision,
+    UnmetDemand,
     route_demand,
 )
 
@@ -99,11 +93,18 @@ from iris.cluster.vm.autoscaler import (
 from iris.cluster.vm.config import (
     ScaleGroupSpec,
     config_to_dict,
-    create_autoscaler_from_config,
+    create_autoscaler,
     create_autoscaler_from_specs,
     create_manual_autoscaler,
     get_ssh_config,
     load_config,
+)
+
+# Platform abstraction
+from iris.cluster.vm.platform import (
+    Platform,
+    PlatformOps,
+    create_platform,
 )
 
 # Debug utilities
@@ -119,7 +120,6 @@ __all__ = [
     "MAX_RECONCILE_WORKERS",
     "PARTIAL_SLICE_GRACE_MS",
     "Autoscaler",
-    "AutoscalerConfig",
     "AvailabilityState",
     "BootstrapError",
     "DemandEntry",
@@ -127,13 +127,14 @@ __all__ = [
     "GceSshConnection",
     "GcloudSshConnection",
     "GroupAvailability",
-    "HealthCheckResult",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
+    "Platform",
+    "PlatformOps",
     "PoolExhaustedError",
     "QuotaExceededError",
-    "RoutingResult",
+    "RoutingDecision",
     "ScaleGroupSpec",
     "ScalingAction",
     "ScalingDecision",
@@ -143,19 +144,20 @@ __all__ = [
     "TpuVmGroup",
     "TpuVmManager",
     "TrackedVmFactory",
+    "UnmetDemand",
     "VmFactory",
     "VmGroupProtocol",
     "VmGroupStatus",
     "VmManagerProtocol",
     "VmRegistry",
     "VmSnapshot",
-    "check_health",
     "cleanup_iris_resources",
     "config_to_dict",
     "connection_available",
-    "create_autoscaler_from_config",
+    "create_autoscaler",
     "create_autoscaler_from_specs",
     "create_manual_autoscaler",
+    "create_platform",
     "discover_controller_vm",
     "get_ssh_config",
     "list_docker_containers",

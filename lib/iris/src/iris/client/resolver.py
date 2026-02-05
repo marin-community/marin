@@ -75,6 +75,8 @@ class ClusterResolver:
         ctx = get_iris_ctx()
         if ctx is None:
             raise RuntimeError("No IrisContext - provide explicit namespace or call from within a job")
+        if ctx.job_id is None:
+            raise RuntimeError("No job id available - ensure IrisContext is initialized from a job")
         return str(Namespace.from_job_id(ctx.job_id))
 
     def resolve(self, name: str) -> ResolveResult:

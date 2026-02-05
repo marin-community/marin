@@ -24,6 +24,7 @@ This module provides:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import subprocess
 import threading
@@ -32,7 +33,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class SshConnection(Protocol):
     run_streaming() for commands with streaming output.
     """
 
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
         """Run command synchronously and wait for completion."""
         ...
 
@@ -115,8 +116,8 @@ class GcloudSshConnection:
             command,
         ]
 
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout)
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
 
     def run_streaming(self, command: str) -> subprocess.Popen:
         return subprocess.Popen(
@@ -157,8 +158,8 @@ class GceSshConnection:
             command,
         ]
 
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout)
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
 
     def run_streaming(self, command: str) -> subprocess.Popen:
         return subprocess.Popen(
@@ -181,7 +182,7 @@ class DirectSshConnection:
     user: str = "root"
     port: int = 22
     key_file: str | None = None
-    connect_timeout: int = 30
+    connect_timeout: Duration = dataclasses.field(default_factory=lambda: Duration.from_seconds(30))
 
     @property
     def address(self) -> str:
@@ -202,7 +203,7 @@ class DirectSshConnection:
                 "-o",
                 "UserKnownHostsFile=/dev/null",
                 "-o",
-                f"ConnectTimeout={self.connect_timeout}",
+                f"ConnectTimeout={int(self.connect_timeout.to_seconds())}",
                 "-o",
                 "BatchMode=yes",
                 "-p",
@@ -213,8 +214,8 @@ class DirectSshConnection:
         )
         return cmd
 
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout + 5)
+    def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds() + 5)
 
     def run_streaming(self, command: str) -> subprocess.Popen:
         return subprocess.Popen(
@@ -230,7 +231,7 @@ class DirectSshConnection:
 # ============================================================================
 
 
-def connection_available(conn: SshConnection, timeout: int = 30) -> bool:
+def connection_available(conn: SshConnection, timeout: Duration = Duration.from_seconds(30)) -> bool:
     """Check if remote connection works by running a simple echo command.
 
     Returns True if connection succeeds, False otherwise. Logs errors prominently
@@ -245,7 +246,7 @@ def connection_available(conn: SshConnection, timeout: int = 30) -> bool:
         logger.warning("SSH connection check failed to %s: %s", conn.address, error_msg)
         return False
     except subprocess.TimeoutExpired:
-        logger.warning("SSH connection check timed out to %s after %ds", conn.address, timeout)
+        logger.warning("SSH connection check timed out to %s after %s", conn.address, timeout)
         return False
     except OSError as e:
         logger.warning("SSH connection check failed to %s: %s", conn.address, e)
@@ -254,8 +255,8 @@ def connection_available(conn: SshConnection, timeout: int = 30) -> bool:
 
 def wait_for_connection(
     conn: SshConnection,
-    timeout_seconds: int,
-    poll_interval: int = 5,
+    timeout: Duration,
+    poll_interval: Duration,
     stop_event: threading.Event | None = None,
 ) -> bool:
     """Wait for remote connection to become available.
@@ -264,6 +265,7 @@ def wait_for_connection(
     or the timeout expires. Logs prominently on first failure and
     periodically during the wait to help diagnose connection issues.
     """
+    timeout_seconds = timeout.to_seconds()
     deadline = time.time() + timeout_seconds
     start_time = deadline - timeout_seconds
     attempt = 0
@@ -291,7 +293,7 @@ def wait_for_connection(
             remaining = timeout_seconds - elapsed
             logger.info("SSH: Still waiting for %s (%ds elapsed, %ds remaining)", conn.address, elapsed, remaining)
 
-        time.sleep(poll_interval)
+        time.sleep(poll_interval.to_seconds())
 
     logger.error("SSH: Connection timeout after %ds to %s (%d attempts)", timeout_seconds, conn.address, attempt)
     return False
