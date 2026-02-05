@@ -240,6 +240,7 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+.chainlink
 .beads
 
 .worktrees
