@@ -155,15 +155,21 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     # Clear JAX_PLATFORMS so TPU devices are detected correctly
-    runtime_env = {"env_vars": {"JAX_PLATFORMS": ""}}
+    runtime_env = {"env_vars": {"JAX_PLATFORMS": "tpu"}}
 
-    # Request TPU resources directly without placement groups.
-    # For TPU nodes (e.g., v5p-8), all chips are co-located on the same node,
-    # so requesting TPU: N will naturally land on a node with N chips.
-    # This is compatible with Ray autoscaling.
-    tpu_count = config.tensor_parallel_size if config.tensor_parallel_size > 1 else 1
+    # Request TPU resources - use the tensor_parallel_size from config
+    # which should match the number of TPU chips needed
+    resources: dict[str, float] = {"TPU": config.tensor_parallel_size}
+
+    # Also request the specific TPU type resource to ensure scheduling on the correct node type.
+    # The cluster config defines resources like "TPU-v5p-8-head: 1" for each TPU type.
+    if config.resource_config and config.resource_config.device:
+        tpu_variant = config.resource_config.device.variant
+        tpu_head_resource = f"TPU-{tpu_variant}-head"
+        resources[tpu_head_resource] = 1
+
     return {
-        "resources": {"TPU": tpu_count},
+        "resources": resources,
         "max_restarts": -1,
         "runtime_env": runtime_env,
     }
