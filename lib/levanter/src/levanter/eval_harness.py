@@ -1055,6 +1055,19 @@ class LmEvalHarnessConfig:
     These can be overridden on a per-request basis by the evaluation harness.
     """
 
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets.
+
+    When set, datasets will be synced from this GCS path to the local HuggingFace
+    datasets cache before loading tasks. This avoids HuggingFace API rate limiting
+    when multiple concurrent jobs all try to download the same evaluation datasets.
+
+    Use marin.evaluation.eval_dataset_cache.create_cache_eval_datasets_step() to
+    pre-cache datasets before training.
+    """
+
+
     @property
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""
@@ -1069,6 +1082,33 @@ class LmEvalHarnessConfig:
         """
         return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
 
+    def _sync_datasets_from_gcs(self) -> bool:
+        """
+        Sync evaluation datasets from GCS to local HuggingFace cache.
+
+        This method is called before loading tasks to ensure datasets are available
+        locally, avoiding HuggingFace API rate limiting.
+
+        Returns:
+            True if sync was successful or not configured, False if sync failed.
+        """
+        if not self.eval_datasets_cache_path:
+            return True
+
+        try:
+            from marin.evaluation.eval_dataset_cache import load_eval_datasets_from_gcs
+
+            return load_eval_datasets_from_gcs(
+                gcs_path=self.eval_datasets_cache_path,
+                log=logger,
+            )
+        except ImportError:
+            logger.warning(
+                "marin.evaluation.eval_dataset_cache not available. " "Skipping eval datasets sync from GCS."
+            )
+            return False
+
+
     def to_task_dict(self) -> dict:
         """
         Convert the task spec to a dictionary that the LM Eval Harness expects.
@@ -1080,6 +1120,9 @@ class LmEvalHarnessConfig:
         Uses retry logic with exponential backoff to handle HuggingFace rate limits when
         downloading evaluation datasets.
         """
+        # Sync datasets from GCS cache if configured
+        self._sync_datasets_from_gcs()
+
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
 
