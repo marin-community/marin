@@ -118,9 +118,9 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402
-from iris.cli.run import run  # noqa: E402
+from iris.cli.job import job  # noqa: E402
 
 iris.add_command(cluster)
 iris.add_command(build)
-iris.add_command(run)
+iris.add_command(job)
 register_rpc_commands(iris)

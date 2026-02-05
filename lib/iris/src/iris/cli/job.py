@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Job submission via command passthrough (replaces ``iris-run``).
+"""Job management via command passthrough (replaces ``iris-run``).
 
 Usage:
-    iris --config cluster.yaml run -- python train.py --epochs 10
-    iris --config cluster.yaml run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+    iris --config cluster.yaml job run -- python train.py --epochs 10
+    iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
 import getpass
@@ -27,13 +27,14 @@ import time
 from pathlib import Path
 
 import click
+from connectrpc.errors import ConnectError
 import yaml
 
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +231,12 @@ def _submit_and_wait_job(
         return 0
 
 
-@click.command(
+@click.group("job")
+def job() -> None:
+    """Manage Iris jobs."""
+
+
+@job.command(
     "run",
     context_settings={"ignore_unknown_options": True},
     help="""Submit jobs to Iris clusters.
@@ -239,16 +245,16 @@ Examples:
 
   \b
   # Simple CPU job
-  iris --config cluster.yaml run -- python script.py
+  iris --config cluster.yaml job run -- python script.py
 
   \b
   # TPU job with environment variables
-  iris --config cluster.yaml run --tpu v5litepod-16 \\
+  iris --config cluster.yaml job run --tpu v5litepod-16 \\
     -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 
   \b
   # Submit and detach
-  iris --config cluster.yaml run --no-wait -- python long_job.py
+  iris --config cluster.yaml job run --no-wait -- python long_job.py
 """,
 )
 @click.option(
@@ -323,3 +329,110 @@ def run(
         include_children_logs=include_children_logs,
     )
     sys.exit(exit_code)
+
+
+@job.command("stop")
+@click.argument("job_id", nargs=-1, required=True)
+@click.option(
+    "--include-children/--no-include-children",
+    default=True,
+    help="Terminate child jobs under the given job ID prefix (default: include).",
+)
+@click.pass_context
+def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
+    """Terminate one or more jobs."""
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+
+    terminated = []
+    for raw in job_id:
+        name = JobName.from_wire(raw)
+        if include_children:
+            terminated.extend(client.terminate_prefix(name, exclude_finished=True))
+        else:
+            client.terminate(name)
+            terminated.append(name)
+
+    if terminated:
+        click.echo("Terminated jobs:")
+        for job_name in terminated:
+            click.echo(f"  {job_name}")
+    else:
+        click.echo("No running jobs matched.")
+
+
+@job.command("logs")
+@click.argument("job_id")
+@click.option("--since-ms", type=int, default=None, help="Only show logs after this epoch millisecond timestamp.")
+@click.option(
+    "--since-seconds",
+    type=int,
+    default=None,
+    help="Only show logs from the last N seconds.",
+)
+@click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
+@click.option(
+    "--include-children/--no-include-children",
+    default=False,
+    help="Include logs from child jobs (nested submissions).",
+)
+@click.pass_context
+def logs(
+    ctx,
+    job_id: str,
+    since_ms: int | None,
+    since_seconds: int | None,
+    follow: bool,
+    include_children: bool,
+) -> None:
+    """Stream task logs for a job."""
+    if since_ms is not None and since_seconds is not None:
+        raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
+
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+
+    if since_seconds is not None:
+        since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
+
+    start_ms = since_ms or 0
+    job_name = JobName.from_wire(job_id)
+
+    def _list_jobs() -> list[cluster_pb2.JobStatus]:
+        if include_children:
+            return client.list_jobs(prefix=job_name)
+        return [client.status(job_name)]
+
+    last_seen: dict[JobName, int | None] = {}
+
+    while True:
+        jobs = _list_jobs()
+        task_ids: list[JobName] = []
+        for job_status in jobs:
+            if job_status.tasks:
+                task_ids.extend(JobName.from_wire(t.task_id) for t in job_status.tasks)
+            else:
+                task_ids.extend(
+                    JobName.from_wire(task.task_id) for task in client.list_tasks(JobName.from_wire(job_status.job_id))
+                )
+
+        for task_id in task_ids:
+            cursor = last_seen.get(task_id)
+            if cursor is None:
+                start = Timestamp.from_ms(start_ms)
+            else:
+                start = Timestamp.from_ms(cursor + 1)
+            try:
+                entries = client.fetch_task_logs(task_id, start=start, max_lines=0)
+            except ConnectError as exc:
+                if "Task has no assigned worker" in str(exc):
+                    continue
+                raise
+            for entry in entries:
+                ts = entry.timestamp.as_short_time()
+                click.echo(f"[{ts}] {task_id} {entry.data}")
+                last_seen[task_id] = entry.timestamp.epoch_ms()
+
+        if not follow:
+            break
+        time.sleep(1.0)

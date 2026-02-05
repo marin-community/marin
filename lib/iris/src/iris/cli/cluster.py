@@ -378,8 +378,9 @@ def vm_status(ctx, scale_group):
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
         click.echo(f"    Failed: {counts.get('failed', 0)}")
         click.echo(f"  Demand: {group.current_demand} (peak: {group.peak_demand})")
-        if group.backoff_until_ms > 0:
-            click.echo(f"  Backoff until: {_format_timestamp(group.backoff_until_ms)}")
+        backoff_ms = Timestamp.from_proto(group.backoff_until).epoch_ms()
+        if backoff_ms > 0:
+            click.echo(f"  Backoff until: {_format_timestamp(backoff_ms)}")
             click.echo(f"  Consecutive failures: {group.consecutive_failures}")
         if group.slices:
             click.echo("  Slices:")
@@ -390,7 +391,8 @@ def vm_status(ctx, scale_group):
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
                     if vi.init_error:
                         click.echo(f"        Error: {vi.init_error}")
-    click.echo(f"\nLast evaluation: {_format_timestamp(as_status.last_evaluation_ms)}")
+    last_eval_ms = Timestamp.from_proto(as_status.last_evaluation).epoch_ms()
+    click.echo(f"\nLast evaluation: {_format_timestamp(last_eval_ms)}")
 
 
 @vm.command("logs")
