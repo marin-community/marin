@@ -258,17 +258,15 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 ### Dashboard & Debugging
 
 ```bash
-# Open SSH tunnel to controller and print dashboard URL
 iris cluster --config=... dashboard
 iris cluster --config=... dashboard --port 8080
+```
 
-# Debug commands (auto-establish SSH tunnel)
+### Debug cluster status
+```bash
 iris cluster --config=... debug discover         # Find controller VM
 iris cluster --config=... debug health           # Health check
 iris cluster --config=... debug autoscaler-status
-iris cluster --config=... debug list-workers
-iris cluster --config=... debug list-jobs
-iris cluster --config=... debug logs --follow    # Controller docker logs
 iris cluster --config=... debug bootstrap-logs   # VM startup logs
 iris cluster --config=... debug show-task-logs JOB_ID
 iris cluster --config=... debug validate         # Run test TPU jobs
@@ -276,13 +274,23 @@ iris cluster --config=... debug cleanup          # Dry-run by default
 iris cluster --config=... debug cleanup --no-dry-run
 ```
 
-### Job Submission
+### Job Management
 
 ```bash
 # Submit a command to the cluster
 iris --config cluster.yaml job run -- python train.py
 iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
+
+# Stream logs for a job (batch-fetches from all tasks in one RPC)
+iris --config cluster.yaml job logs /my-job
+iris --config cluster.yaml job logs /my-job --follow
+iris --config cluster.yaml job logs /my-job --since-seconds 300
+iris --config cluster.yaml job logs /my-job --include-children
+
+# Stop one or more jobs
+iris --config cluster.yaml job stop /my-job
+iris --config cluster.yaml job stop /my-job --no-include-children
 ```
 
 ## Smoke Test
