@@ -603,6 +603,29 @@ class IrisClient:
         else:
             job_id = JobName.root(name)
 
+        # If running inside a job, inherit from the parent:
+        #   1. Explicit env vars from JobInfo.env (populated from IRIS_JOB_ENV)
+        #   2. Dockerfile (from IRIS_DOCKERFILE) — unless child specifies its own
+        #      build deps (extras/pip_packages), which generate a new dockerfile.
+        if parent_job_id:
+            job_info = get_job_info()
+            inherited = dict(job_info.env) if job_info else {}
+            child_env = {**inherited, **(environment.env_vars or {})} if environment else inherited
+
+            inherited_dockerfile = job_info.dockerfile if job_info else None
+            if environment:
+                dockerfile = environment.dockerfile
+                if not dockerfile and not environment.extras and not environment.pip_packages:
+                    dockerfile = inherited_dockerfile
+                environment = EnvironmentSpec(
+                    pip_packages=environment.pip_packages,
+                    env_vars=child_env,
+                    extras=environment.extras,
+                    dockerfile=dockerfile,
+                )
+            else:
+                environment = EnvironmentSpec(env_vars=child_env, dockerfile=inherited_dockerfile)
+
         # Convert to wire format
         resources_proto = resources.to_proto()
         environment_proto = environment.to_proto() if environment else None

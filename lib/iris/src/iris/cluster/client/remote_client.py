@@ -14,7 +14,6 @@
 
 """RPC-based cluster client implementation."""
 
-import os
 import sys
 import time
 
@@ -85,12 +84,6 @@ class RemoteClusterClient:
                 dockerfile = generate_dockerfile(python_version=f"{sys.version_info.major}.{sys.version_info.minor}")
 
         env_vars = dict(environment.env_vars) if environment else {}
-        job_info = get_job_info()
-        if job_info is not None:
-            for key, value in os.environ.items():
-                if key.startswith("IRIS_"):
-                    continue
-                env_vars.setdefault(key, value)
 
         env_config = cluster_pb2.EnvironmentConfig(
             pip_packages=list(environment.pip_packages) if environment else [],
