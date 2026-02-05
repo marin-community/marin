@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import IrisConfig
+from iris.cluster.platform.cluster_manager import ClusterManager
+from iris.config import IrisConfig
 from iris.rpc import config_pb2
 
 
@@ -43,7 +43,7 @@ def demo_client() -> IrisClient:
     manager = ClusterManager(_make_demo_config())
     manager.start()
     try:
-        controller_url = manager.controller.discover()
+        controller_url = manager.discover_controller()
         assert controller_url is not None
 
         client = IrisClient.remote(

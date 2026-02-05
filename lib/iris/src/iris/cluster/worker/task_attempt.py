@@ -32,7 +32,7 @@ from iris.cluster.types import Entrypoint, JobName, is_task_finished
 from iris.cluster.worker.builder import ImageProvider
 from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime
-from iris.cluster.worker.env_probe import collect_workdir_size_mb
+from iris.cluster.platform.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker_types import TaskLogs
 from iris.rpc import cluster_pb2

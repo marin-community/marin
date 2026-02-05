@@ -430,7 +430,12 @@ def test_get_process_logs():
     # Add some test log records
     log_buffer.append(BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1"))
     log_buffer.append(
-        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log")
+        BufferedLogRecord(
+            timestamp=1001.0,
+            level="DEBUG",
+            logger_name="iris.cluster.controller.autoscaler",
+            message="Autoscaler log",
+        )
     )
     log_buffer.append(BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2"))
 
@@ -442,12 +447,12 @@ def test_get_process_logs():
     response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
     assert len(response.records) == 3
     assert response.records[0].message == "Test log 1"
-    assert response.records[1].logger_name == "iris.cluster.vm"
+    assert response.records[1].logger_name == "iris.cluster.controller.autoscaler"
     assert response.records[2].level == "ERROR"
 
     # Test: Filter by prefix
     response = service.get_process_logs(
-        cluster_pb2.Controller.GetProcessLogsRequest(prefix="iris.cluster.vm", limit=0), None
+        cluster_pb2.Controller.GetProcessLogsRequest(prefix="iris.cluster.controller.autoscaler", limit=0), None
     )
     assert len(response.records) == 1
     assert response.records[0].message == "Autoscaler log"

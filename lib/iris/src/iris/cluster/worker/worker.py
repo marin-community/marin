@@ -28,7 +28,7 @@ from iris.cluster.worker.builder import ImageCache, ImageProvider
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.docker import ContainerRuntime, DockerRuntime
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
+from iris.cluster.platform.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.types import JobName
@@ -257,7 +257,7 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Get VM address from probe (injected by ManagedVm bootstrap via IRIS_VM_ADDRESS)
+        # Get VM address from probe (injected by WorkerVm bootstrap via IRIS_VM_ADDRESS)
         # For non-cloud workers, use host:port as both worker_id and vm_address
         vm_address = metadata.vm_address
         if not vm_address:

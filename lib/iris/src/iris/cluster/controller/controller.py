@@ -50,7 +50,7 @@ from iris.cluster.types import (
     get_device_type_enum,
     get_device_variant,
 )
-from iris.cluster.vm.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -85,7 +85,7 @@ def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint
 
 def compute_demand_entries(state: ControllerState) -> list:
     """Compute demand entries from controller state."""
-    from iris.cluster.vm.autoscaler import DemandEntry
+    from iris.cluster.controller.autoscaler import DemandEntry
     from iris.cluster.types import DeviceType
 
     demand_entries: list[DemandEntry] = []
@@ -685,7 +685,7 @@ class Controller:
         """Build a map of VM address to worker status for autoscaler.
 
         The autoscaler needs to look up worker status by VM address (not worker_id)
-        because ManagedVm only knows the VM's IP address, not the worker's self-assigned ID.
+        because WorkerVm only knows the VM's IP address, not the worker's self-assigned ID.
         Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
         """
         result: VmWorkerStatusMap = {}

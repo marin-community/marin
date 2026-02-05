@@ -53,7 +53,7 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
 
     # Load config if provided
     if config_file:
-        from iris.cluster.vm.config import IrisConfig
+        from iris.config import IrisConfig
 
         iris_config = IrisConfig.load(config_file)
         ctx.obj["config"] = iris_config.proto
@@ -68,7 +68,7 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
         platform = iris_config.platform()
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.vm.cluster_manager import ClusterManager
+            from iris.cluster.platform.cluster_manager import ClusterManager
 
             manager = ClusterManager(iris_config.proto)
             controller_address = manager.start()

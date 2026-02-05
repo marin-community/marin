@@ -38,8 +38,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
-from iris.cluster.vm.managed_vm import VmRegistry
-from iris.cluster.vm.scaling_group import GroupAvailability, ScalingGroup
+from iris.cluster.controller.worker_vm import VmRegistry
+from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -108,6 +108,7 @@ class RoutingDecision:
     routed_entries: dict[str, list[DemandEntry]]
     unmet_entries: list[UnmetDemand]
     group_reasons: dict[str, str]
+    group_zones: dict[str, str]
 
 
 def route_demand(
@@ -124,6 +125,7 @@ def route_demand(
     routed: dict[str, list[DemandEntry]] = {}
     unmet: list[UnmetDemand] = []
     group_reasons: dict[str, str] = {}
+    group_zones = {group.name: group.config.zones[0] if group.config.zones else "" for group in sorted_groups}
 
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
@@ -230,6 +232,7 @@ def route_demand(
         routed_entries=routed,
         unmet_entries=unmet,
         group_reasons=group_reasons,
+        group_zones=group_zones,
     )
 
 
@@ -331,7 +334,7 @@ class Autoscaler:
 
         # Step 2: Stop all VM bootstrap threads
         for group in self._groups.values():
-            for vm_group in group.vm_groups():
+            for vm_group in group.slices():
                 for vm in vm_group.vms():
                     vm.stop()
 
@@ -341,7 +344,7 @@ class Autoscaler:
 
         # Step 4: Stop VM managers (cleanup local platform threads if present)
         for group in self._groups.values():
-            group._vm_manager.stop()
+            group.stop()
 
     def __enter__(self) -> Autoscaler:
         return self
@@ -358,7 +361,7 @@ class Autoscaler:
         for group in self._groups.values():
             group.reconcile()
             # Track creation times for discovered slices
-            for slice_obj in group.vm_groups():
+            for slice_obj in group.slices():
                 self._slice_created_at[slice_obj.slice_id] = slice_obj.created_at_ms
 
     def _log_action(
@@ -543,7 +546,7 @@ class Autoscaler:
         Returns:
             True if scale-up succeeded, False otherwise.
         """
-        from iris.cluster.vm.managed_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
 
         # Log action as pending BEFORE execution
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
@@ -699,6 +702,7 @@ class Autoscaler:
             group_reasons=decision.group_reasons,
             routed_entries=routed_entries,
             unmet_entries=unmet_entries,
+            group_zones=decision.group_zones,
         )
 
     def get_group(self, name: str) -> ScalingGroup | None:
@@ -757,7 +761,7 @@ class Autoscaler:
     def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
         """Find the slice and group containing a worker by VM address."""
         for group in self._groups.values():
-            for slice_obj in group.vm_groups():
+            for slice_obj in group.slices():
                 for vm in slice_obj.vms():
                     if vm.info.address == vm_address:
                         return slice_obj.slice_id, group

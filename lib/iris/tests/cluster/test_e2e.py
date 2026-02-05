@@ -32,7 +32,7 @@ from iris.client import IrisClient
 from iris.cluster.client import get_job_info
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.platform.cluster_manager import ClusterManager
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime

@@ -1,7 +1,7 @@
 # Iris demo configuration
 # Multiple scale groups for realistic testing with diverse scenarios
 # Uses env var for controller address (external controller)
-# Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_16
+# Usage: uv run python -m iris.cluster.platform.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_16
 
 platform:
   label_prefix: iris

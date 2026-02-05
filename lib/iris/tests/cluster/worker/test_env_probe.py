@@ -16,7 +16,7 @@
 
 import pytest
 
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, _get_extra_attributes
+from iris.cluster.platform.env_probe import DefaultEnvironmentProvider, _get_extra_attributes
 
 
 @pytest.mark.parametrize(

@@ -21,8 +21,8 @@ import pytest
 import yaml
 
 from iris.client import IrisClient
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import IrisConfig, make_local_config, load_config
+from iris.cluster.platform.cluster_manager import ClusterManager
+from iris.config import IrisConfig, make_local_config, load_config
 from iris.cli.run import (
     build_resources,
     load_env_vars,
