@@ -312,7 +312,7 @@ class FilterConfig:
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def filter_valid_generations(config: FilterConfig):
     """
-    Filter out rows where generated_text doesn't pass static checks.
+    Filter samples from all_samples that pass static checks, then explode into separate rows.
 
     For instruction-tuned models:
         - Must have <think>...</think> format
@@ -321,6 +321,9 @@ def filter_valid_generations(config: FilterConfig):
     For base models:
         - Must have \\boxed{}
         - Must not have non-English characters
+
+    This creates one row per valid sample, with sample_idx to track which sample it was.
+    The UQ validation will run on all valid samples, then we select the first passing one.
     """
     import re
     import ray.data
@@ -345,13 +348,44 @@ def filter_valid_generations(config: FilterConfig):
             has_non_english = any(ch.isalpha() and ord(ch) > 127 for ch in text)
             return has_boxed and not has_non_english
 
+    is_instruct = config.is_instruction_tuned
+
+    def explode_valid_samples(row):
+        """
+        For each sample in all_samples that passes static check,
+        yield a separate row with sample_idx and generated_text set to that sample.
+        """
+        all_samples = row.get("all_samples", [])
+        ms_id = row.get("ms_id", "")
+        instruction_seed = row.get("instruction_seed", "")
+
+        valid_rows = []
+        for idx, sample in enumerate(all_samples):
+            if passes_static_check(sample, is_instruct):
+                new_row = {
+                    "ms_id": ms_id,
+                    "instruction_seed": instruction_seed,
+                    "generated_text": sample,
+                    "sample_idx": idx,
+                    # Create unique ID for checkpointing in UQ steps
+                    "ms_id_sample": f"{ms_id}_sample{idx}",
+                }
+                valid_rows.append(new_row)
+
+        return valid_rows
+
     ds = ray.data.read_parquet(config.input_path)
 
-    # Filter based on model type
-    is_instruct = config.is_instruction_tuned
-    ds = ds.filter(lambda x: passes_static_check(x.get("generated_text", ""), is_instruct))
+    # Explode: each valid sample becomes its own row
+    ds = ds.flat_map(explode_valid_samples)
 
-    print(f"Rows after filtering (is_instruction_tuned={is_instruct}): {ds.count()}")
+    total_rows = ds.count()
+    # Count unique ms_ids to see how many original samples have at least one valid
+    unique_ms_ids = ds.unique("ms_id")
+    num_unique = len(unique_ms_ids)
+
+    print(f"Exploded to {total_rows} rows from {num_unique} unique samples (is_instruction_tuned={is_instruct})")
+    print(f"Average valid samples per original: {total_rows / num_unique:.2f}" if num_unique > 0 else "No valid samples")
 
     ds.write_parquet(config.output_path)
 
@@ -522,8 +556,8 @@ cycle_gen_questions = ExecutorStep(
         # Output column - save all 3 inferred questions as list
         generated_text_column_name="inferred_questions",
 
-        # Checkpointing
-        checkpoint_id_column="ms_id",
+        # Checkpointing - use ms_id_sample since we have multiple rows per original ms_id
+        checkpoint_id_column="ms_id_sample",
 
         # Save samples as list for later comparison
         save_samples_as_list=True,
@@ -671,7 +705,7 @@ cycle_compare = ExecutorStep(
         generated_text_column_name="cycle_results",
 
         # Checkpointing
-        checkpoint_id_column="ms_id",
+        checkpoint_id_column="ms_id_sample",
 
         # Save samples as list for unanimous voting
         save_samples_as_list=True,
@@ -732,7 +766,7 @@ factual_check = ExecutorStep(
         generated_text_column_name="factual_results",
 
         # Checkpointing
-        checkpoint_id_column="ms_id",
+        checkpoint_id_column="ms_id_sample",
 
         # Save samples as list for unanimous voting
         save_samples_as_list=True,
@@ -793,7 +827,7 @@ correctness_check = ExecutorStep(
         generated_text_column_name="correctness_results",
 
         # Checkpointing
-        checkpoint_id_column="ms_id",
+        checkpoint_id_column="ms_id_sample",
 
         # Save samples as list for unanimous voting
         save_samples_as_list=True,
@@ -820,7 +854,14 @@ class FilterValidationConfig:
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def filter_and_format_output(config: FilterValidationConfig):
-    """Filter based on unanimous validation and format final output."""
+    """
+    Filter based on unanimous validation and select first passing sample per original ms_id.
+
+    Since we exploded rows (one per valid sample), we now need to:
+    1. Check which samples passed all UQ validation
+    2. For each original ms_id, pick the first sample (lowest sample_idx) that passed
+    3. Format the final output
+    """
     import re
     import ray.data
     from experiments.self_instill.prompts import REASONING_INSTRUCTION
@@ -919,19 +960,41 @@ def filter_and_format_output(config: FilterValidationConfig):
         return row
 
     ds = ray.data.read_parquet(config.input_path)
+
+    # First, check validation for all rows
     ds = ds.map(check_validation_and_format)
 
-    # Log stats before filtering
+    # Log stats before selection
     total = ds.count()
+    ds_passed = ds.filter(lambda x: x.get("all_validation_passed", False))
+    passed_count = ds_passed.count()
 
-    # Filter to only validated rows
-    ds_valid = ds.filter(lambda x: x.get("all_validation_passed", False))
-    valid_count = ds_valid.count()
+    print(f"Validation results: {passed_count}/{total} sample-rows passed all validation")
 
-    pct = 100 * valid_count / total if total > 0 else 0.0
-    print(f"Validation results: {valid_count}/{total} rows passed all validation ({pct:.1f}%)")
+    # Collect to pandas for global groupby (data size is manageable at ~100k rows max)
+    import pandas as pd
+    df_passed = ds_passed.to_pandas()
 
-    ds_valid.write_parquet(config.output_path)
+    if len(df_passed) == 0:
+        print("No samples passed all validation!")
+        # Write empty dataset
+        ds_passed.write_parquet(config.output_path)
+        return
+
+    # Count unique ms_ids that have at least one passing sample
+    unique_passed = df_passed["ms_id"].nunique()
+    print(f"Unique original samples with at least one passing: {unique_passed}")
+
+    # Sort by ms_id and sample_idx, then take first per ms_id
+    # This selects the first sample (lowest sample_idx) that passed for each original input
+    df_passed = df_passed.sort_values(["ms_id", "sample_idx"])
+    df_selected = df_passed.groupby("ms_id").first().reset_index()
+
+    final_count = len(df_selected)
+    print(f"Final output: {final_count} rows (one per original sample that had a passing generation)")
+
+    # Write back to parquet
+    ray.data.from_pandas(df_selected).write_parquet(config.output_path)
 
 
 filter_validation = ExecutorStep(
