@@ -228,6 +228,7 @@ class Job:
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
+        include_children: bool = False,
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
 
@@ -247,7 +248,7 @@ class Job:
         if not stream_logs:
             status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
         else:
-            status = self._wait_with_multi_task_streaming(timeout, poll_interval)
+            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children)
 
         if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
             raise JobFailedError(self._job_id, status)
@@ -258,6 +259,7 @@ class Job:
         self,
         timeout: float,
         poll_interval: float,
+        include_children: bool,
     ) -> cluster_pb2.JobStatus:
         """Wait while streaming logs from all tasks.
 
@@ -273,9 +275,24 @@ class Job:
         while True:
             status = self._client._cluster_client.get_job_status(self._job_id)
 
+            job_statuses = [status]
+            if include_children:
+                try:
+                    job_statuses = self._client.list_jobs(prefix=self._job_id)
+                except Exception as e:
+                    logger.debug("Failed to list child jobs for %s: %s", self._job_id, e)
+
             # Initialize log pollers when we learn num_tasks
-            if status.tasks:
-                for task_status in status.tasks:
+            for job_status in job_statuses:
+                task_statuses = job_status.tasks
+                if not task_statuses:
+                    try:
+                        job_id = JobName.from_wire(job_status.job_id)
+                        task_statuses = self._client._cluster_client.list_tasks(job_id)
+                    except Exception as e:
+                        logger.debug("Failed to list tasks for job %s: %s", job_status.job_id, e)
+                        task_statuses = []
+                for task_status in task_statuses:
                     task_id = JobName.from_wire(task_status.task_id)
                     log_states.setdefault(task_id, _TaskLogState(task_id))
 

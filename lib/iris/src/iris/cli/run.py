@@ -143,6 +143,7 @@ def run_iris_job(
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
+    include_children_logs: bool = False,
 ) -> int:
     """Core job submission logic.
 
@@ -175,6 +176,7 @@ def run_iris_job(
         timeout=timeout,
         wait=wait,
         extras=extras,
+        include_children_logs=include_children_logs,
     )
 
 
@@ -189,6 +191,7 @@ def _submit_and_wait_job(
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
+    include_children_logs: bool = False,
 ) -> int:
     """Submit job and optionally wait for completion."""
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
@@ -212,7 +215,7 @@ def _submit_and_wait_job(
             from iris.client.client import JobFailedError
 
             try:
-                status = job.wait(stream_logs=True, timeout=float("inf"))
+                status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
                 logger.info(f"Job completed with state: {status.state}")
                 return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
             except JobFailedError as e:
@@ -265,6 +268,11 @@ Examples:
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, help="Job timeout in seconds (default: 0 = no timeout)")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
+@click.option(
+    "--include-children-logs/--no-include-children-logs",
+    default=False,
+    help="Stream logs from child jobs (nested submissions).",
+)
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
 def run(
@@ -280,6 +288,7 @@ def run(
     max_retries: int,
     timeout: int,
     extra: tuple[str, ...],
+    include_children_logs: bool,
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
@@ -314,5 +323,6 @@ def run(
         max_retries=max_retries,
         timeout=timeout,
         extras=list(extra),
+        include_children_logs=include_children_logs,
     )
     sys.exit(exit_code)

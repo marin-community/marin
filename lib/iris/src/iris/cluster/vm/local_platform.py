@@ -113,6 +113,12 @@ class _LocalContainer:
             cmd = [sys.executable, *cmd[1:]]
 
         try:
+            logger.info(
+                "Starting local container (task_id=%s, job_id=%s, cmd=%s)",
+                self.config.task_id,
+                self.config.job_id,
+                cmd,
+            )
             env = dict(self.config.env)
             iris_root = Path(__file__).resolve().parents[4]
             extra_paths = [str(iris_root / "src"), str(iris_root)]

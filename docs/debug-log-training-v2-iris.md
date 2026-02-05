@@ -44,7 +44,49 @@ Retried again with `ZEPHYR_NUM_WORKERS=1`. Zephyr worker/coordinator jobs still
 cycled with retries and were repeatedly relaunched. I terminated the run to
 avoid a runaway controller.
 
-Next: investigate Zephyr actor timeouts on Iris local (likely too aggressive
-RPC timeout or worker lifecycle churn). Consider testing tokenization with a
-smaller dataset or pre-tokenized cache to reduce Zephyr load. Then attempt TPU
-tutorial on a TPU-capable Iris config with `--tpu v4-8` and `--extra marin:tpu`.
+Next: add targeted logging in Iris task lifecycle and local container startup to
+understand why local CPU runs churn. Remove ad-hoc timeout overrides and rely
+on Iris job metadata.
+
+## Changes to make
+
+- Add lifecycle logging in `lib/iris/src/iris/cluster/worker/task_attempt.py`
+  to see bundle, build, container, and exit timing.
+- Add local container startup logging in
+  `lib/iris/src/iris/cluster/vm/local_platform.py`.
+- Remove ad-hoc actor timeout overrides.
+
+## Results
+
+Logging added to Iris task attempts and local VM container start.
+Ad-hoc actor timeout overrides removed.
+
+Rerun local CPU tutorial:
+
+- Command: `uv run iris --config lib/iris/examples/local.yaml run --extra marin:cpu -e MARIN_PREFIX /tmp/marin-prefix -e ZEPHYR_NUM_WORKERS 1 -- python -m experiments.tutorials.train_tiny_model_cpu`
+- Iris controller registered worker and launched job quickly (<1s).
+- Executor submitted nested `/train_lm` job to Iris (as expected for fray v2).
+- No training logs observed in parent stream.
+- Checkpoints directory created at `/tmp/marin-prefix/checkpoints/marin-nano-tinystories-4da1fc` with executor metadata files only.
+
+Next: improve visibility into nested Iris jobs (child log streaming) to determine whether training is stalled or logs are simply not visible in the parent log stream.
+
+## Changes to make
+
+- Add child log streaming support in Iris client wait loop.
+- Add CLI flag to include child logs during `iris run`.
+
+## Results
+
+Added `--include-children-logs` to `iris run` and child-log streaming in `Job.wait()`.
+
+Rerun local CPU tutorial with fresh checkpoint path:
+
+- Removed `/tmp/marin-prefix/checkpoints/marin-nano-tinystories-4da1fc` to force rerun.
+- Command: `uv run iris --config lib/iris/examples/local.yaml run --include-children-logs --extra marin:cpu -e MARIN_PREFIX /tmp/marin-prefix -e ZEPHYR_NUM_WORKERS 1 -- python -m experiments.tutorials.train_tiny_model_cpu`
+- Nested `/train_lm` job logs visible (wandb init, training progress, eval, checkpoint save).
+- Training completed successfully (100 steps, eval loss ~10.029, HF checkpoint saved to `/tmp/marin-prefix/checkpoints/marin-nano-tinystories-4da1fc/hf/step-99`).
+- Top-level Iris job completed successfully.
+- One warning observed: `iris.managed_thread` reported `on_stop callback for task-/.../train_lm/0 did not complete` after task exit.
+
+Next: decide whether to address the on_stop callback warning or treat as benign; proceed to TPU job once desired.
