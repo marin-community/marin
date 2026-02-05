@@ -24,7 +24,7 @@ from iris.cluster.platform.bootstrap import (
     build_controller_bootstrap_script,
     build_worker_bootstrap_script,
 )
-from iris.cluster.platform.controller_vm import ControllerVm
+from iris.cluster.platform.cluster_manager import ClusterManager
 from iris.rpc import vm_pb2
 from iris.config import config_to_dict, load_config
 from iris.rpc import config_pb2
@@ -76,7 +76,7 @@ def test_controller_vm_start_requires_image(manual_controller_config: config_pb2
     config.CopyFrom(manual_controller_config)
     config.controller.image = ""
 
-    controller = ControllerVm(_FakePlatform(), config)
+    controller = ClusterManager(config, platform=_FakePlatform())
     with pytest.raises(RuntimeError, match=r"controller.image is required"):
         controller.start()
 

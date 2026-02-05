@@ -43,7 +43,7 @@ def demo_client() -> IrisClient:
     manager = ClusterManager(_make_demo_config())
     manager.start()
     try:
-        controller_url = manager.controller.discover()
+        controller_url = manager.discover_controller()
         assert controller_url is not None
 
         client = IrisClient.remote(

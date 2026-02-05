@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import pytest
 
 from iris.rpc import vm_pb2
-from iris.cluster.platform.controller_vm import ControllerVm
+from iris.cluster.platform.cluster_manager import ClusterManager
 from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
 
@@ -71,7 +71,7 @@ def test_controller_vm_start_uses_platform():
         created_at=Timestamp.now().to_proto(),
     )
     platform = _FakePlatform(list_result=[], start_result=[vm])
-    runtime = ControllerVm(platform=platform, config=_manual_config())
+    runtime = ClusterManager(platform=platform, config=_manual_config())
 
     address = runtime.start()
 
@@ -89,10 +89,10 @@ def test_controller_vm_reuses_existing(monkeypatch: pytest.MonkeyPatch):
         created_at=Timestamp.now().to_proto(),
     )
     platform = _FakePlatform(list_result=[vm], start_result=[vm])
-    runtime = ControllerVm(platform=platform, config=_manual_config())
+    runtime = ClusterManager(platform=platform, config=_manual_config())
 
     monkeypatch.setattr(
-        "iris.cluster.platform.controller_vm._check_health_rpc",
+        "iris.cluster.platform.cluster_manager._check_health_rpc",
         lambda _address: True,
     )
 
@@ -112,8 +112,8 @@ def test_controller_vm_stop_uses_platform():
         created_at=Timestamp.now().to_proto(),
     )
     platform = _FakePlatform(list_result=[vm], start_result=[vm])
-    runtime = ControllerVm(platform=platform, config=_manual_config())
+    runtime = ClusterManager(platform=platform, config=_manual_config())
 
-    runtime.stop()
+    runtime.stop_controller()
 
     assert platform.stopped == ["controller-1"]

@@ -31,8 +31,7 @@ flowchart LR
   VmManager --> ManagedVm["ManagedVm + bootstrap\n`cluster/vm/managed_vm.py`"]
   ManagedVm --> SSH["SSH\n`cluster/vm/ssh.py`"]
 
-  ClusterManager["ClusterManager\n`cluster/vm/cluster_manager.py`"] --> ControllerVm["Controller VM\n`cluster/vm/controller_vm.py`"]
-  ControllerVm --> Controller
+  ClusterManager["ClusterManager\n`cluster/vm/cluster_manager.py`"] --> Controller
 ```
 
 ## Implemented Layout (Current)
@@ -55,7 +54,6 @@ lib/iris/src/iris/
       local.py               # local in-process platform
       ssh.py                 # SSH + tunneling helpers
       env_probe.py           # environment discovery (worker)
-      controller_vm.py       # controller lifecycle wrapper + LocalController
       cluster_manager.py     # cluster lifecycle wrapper (controller + tunnel)
 ```
 
@@ -77,7 +75,7 @@ Platform owns VMs and slices. Controller owns scaling groups, autoscaler policy,
 | `SliceFactoryProtocol` | Create/discover controller slices | `cluster/controller/slice_lifecycle.py` | Implemented by platform-backed factories. |
 | `ScalingGroup` | Demand/scale logic + slice ownership | `cluster/controller/scaling_group.py` | Owns per-group slice state. |
 | `Autoscaler` | Policy evaluation + group coordination | `cluster/controller/autoscaler.py` | Coordinates multiple groups. |
-| `ControllerVm` | Controller VM lifecycle wrapper | `cluster/platform/controller_vm.py` | Uses `Platform` for infra actions. |
+| `ClusterManager` | Controller lifecycle wrapper | `cluster/platform/cluster_manager.py` | Owns internal controller wrapper. |
 
 Design rules:
 
@@ -92,8 +90,8 @@ Design rules:
 flowchart LR
   CLI["iris CLI\n`cli/main.py`"] --> IrisConfig["IrisConfig\n`iris/config.py`"]
   IrisConfig --> Platform["Platform\n`cluster/platform/__init__.py`"]
-  Platform --> ControllerVm["ControllerVm\n`cluster/platform/controller_vm.py`"]
-  ControllerVm --> Controller["Controller\n`cluster/controller/controller.py`"]
+  Platform --> ClusterManager["ClusterManager\n`cluster/platform/cluster_manager.py`"]
+  ClusterManager --> Controller["Controller\n`cluster/controller/controller.py`"]
   Platform -->|"tunnel()"| Tunnel["Controller URL"]
 
   Controller --> Autoscaler["Autoscaler\n`cluster/controller/autoscaler.py`"]
@@ -115,10 +113,10 @@ flowchart LR
 
 ## Options Considered
 
-1) Controller runtime wrapper vs controller VM wrapper
+1) Controller runtime wrapper vs controller wrapper inside ClusterManager
 - Separate runtime wrapper adds an extra indirection layer but duplicates lifecycle logic.
-- Consolidating into `ControllerVm` keeps bootstrap + platform wiring in one place and removes an extra API surface.
-- **Chosen:** `ControllerVm` (no separate runtime wrapper).
+- Consolidating into `ClusterManager` keeps bootstrap + platform wiring in one place and removes an extra API surface.
+- **Chosen:** internal wrapper inside `ClusterManager` (no separate runtime wrapper).
 
 2) Global `list_slices()` vs zone-scoped `list_slices()`
 - Global sweeps are surprising and hard to reason about when zones expand.
@@ -135,7 +133,7 @@ flowchart LR
 - Consolidated platform code under `cluster/platform/` with a single platform factory in `cluster/platform/__init__.py`.
 - Introduced `bootstrap.py` to own controller/worker bootstrap scripts and health checks.
 - Renamed platform implementations to `gcp.py`, `manual.py`, `local.py`.
-- Added `ControllerVm` wrapper that drives controller lifecycle via platform APIs.
+- Updated `ClusterManager` to own the controller lifecycle wrapper internally.
 - Moved worker VM lifecycle to `cluster/controller/worker_vm.py`.
 - Added controller-owned slice lifecycle in `cluster/controller/slice_lifecycle.py`.
 - Updated CLI, cluster manager, tests, and docs to match new module structure.
@@ -151,7 +149,7 @@ Stage 1: Shared types + bootstrap
 Stage 2: Platform layout + controller wrapper
 - Rename platform modules to `gcp.py`, `manual.py`, `local.py`.
 - Add platform factory + `Platform` protocol in `cluster/platform/__init__.py`.
-- Implement `ControllerVm` wrapper and remove controller runtime indirection.
+- Implement controller wrapper inside `ClusterManager` and remove controller runtime indirection.
 
 Stage 3: Controller lifecycle ownership
 - Move worker VM lifecycle to `cluster/controller/worker_vm.py`.
