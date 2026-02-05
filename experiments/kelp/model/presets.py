@@ -66,10 +66,34 @@ def toy_preset() -> ModelPreset:
             max_seq_len=128,
             num_diffusion_steps=10,
         ),
-        resource=ResourceConfig.with_cpu(cores=2),
+        resource=ResourceConfig.with_cpu(cpu=2),
         batch_size=2,
         learning_rate=1e-3,
         description="Toy model for testing infrastructure",
+    )
+
+
+def overnight_cpu_preset() -> ModelPreset:
+    """Preset optimized for overnight CPU training (~10M params).
+
+    Designed to complete ~30k+ steps in 8 hours on a laptop CPU.
+    """
+    return ModelPreset(
+        name="overnight_cpu",
+        config=TreeDiffusionConfig(
+            vocab_size=256,  # Byte-level tokenizer for faster training
+            hidden_dim=256,
+            intermediate_dim=1024,
+            num_layers=4,
+            num_heads=4,
+            num_kv_heads=4,
+            max_seq_len=512,
+            num_diffusion_steps=50,
+        ),
+        resource=ResourceConfig.with_cpu(cpu=8),
+        batch_size=16,
+        learning_rate=1e-3,
+        description="For overnight CPU training runs",
     )
 
 
@@ -87,7 +111,7 @@ def laptop_preset() -> ModelPreset:
             max_seq_len=1024,
             num_diffusion_steps=100,
         ),
-        resource=ResourceConfig.with_cpu(cores=8),
+        resource=ResourceConfig.with_cpu(cpu=8),
         batch_size=4,
         learning_rate=3e-4,
         description="For CPU/laptop iteration",
@@ -159,6 +183,7 @@ def tpu_v5p_8_preset() -> ModelPreset:
 
 PRESETS = {
     "toy": toy_preset,
+    "overnight_cpu": overnight_cpu_preset,
     "laptop": laptop_preset,
     "single_gpu": single_gpu_preset,
     "tpu_v4_8": tpu_v4_8_preset,
