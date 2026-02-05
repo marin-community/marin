@@ -24,7 +24,7 @@ from levanter.data.text import DNALmDatasetFormat, TextLmDatasetFormat
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_50m
-from experiments.qwen3 import qwen3_0_6b_hd128, qwen3_1_7b
+from experiments.qwen3 import qwen3_0_6b_hd128, qwen3_1_7b, qwen3_4b_hd128
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep
 
@@ -55,6 +55,8 @@ PROMOTERS_MRNA_NCRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-int
 dna_qwen3_0_6b_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=DNA_SEQ_LEN_V1)
 dna_qwen3_0_6b_256_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=256)
 dna_qwen3_1_7b_v1 = dataclasses.replace(qwen3_1_7b, max_seq_len=DNA_SEQ_LEN_V1)
+dna_qwen3_1_7b_256_v1 = dataclasses.replace(qwen3_1_7b, max_seq_len=256)
+dna_qwen3_4b_256_v1 = dataclasses.replace(qwen3_4b_hd128, max_seq_len=256)
 dna_llama_50m_v1 = dataclasses.replace(llama_50m, max_seq_len=DNA_SEQ_LEN_V1)
 dna_llama_50m_256_v1 = dataclasses.replace(llama_50m, max_seq_len=256)
 
