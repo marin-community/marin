@@ -625,7 +625,6 @@ def real_worker(cache_dir, docker_cleanup_scope):
     config = WorkerConfig(
         port=0,
         cache_dir=cache_dir,
-        registry="localhost:5000",
         port_range=(40000, 40100),
         poll_interval=Duration.from_seconds(0.5),  # Faster polling for tests
     )

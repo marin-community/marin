@@ -571,8 +571,8 @@ except Exception:
 class DockerImageBuilder:
     """Build Docker images using Docker CLI with BuildKit."""
 
-    def __init__(self, registry: str):
-        self._registry = registry
+    def __init__(self) -> None:
+        pass
 
     def build(
         self,

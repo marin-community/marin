@@ -165,7 +165,7 @@ class E2ECluster:
 
         # Docker providers
         bundle_provider = BundleCache(cache_path, max_bundles=10)
-        image_provider = ImageCache(cache_path, registry="", max_images=10)
+        image_provider = ImageCache(cache_path, max_images=10)
         container_runtime = DockerRuntime()
         environment_provider = None  # Use default (probe real system)
 

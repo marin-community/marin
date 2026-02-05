@@ -43,6 +43,12 @@ from iris.time_utils import Deadline, Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
+class TaskCancelled(Exception):
+    """Raised when a task is cancelled during execution."""
+
+    pass
+
+
 @dataclass
 class TaskAttemptConfig:
     """Immutable configuration for a task attempt, derived from the RPC request."""
@@ -287,13 +293,23 @@ class TaskAttempt:
 
         return proto
 
+    def _check_cancelled(self) -> None:
+        """Check if task has been cancelled and raise if so."""
+        if self.should_stop:
+            raise TaskCancelled("Task was cancelled")
+
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread."""
         try:
+            self._check_cancelled()
             self._download_bundle()
+            self._check_cancelled()
             self._build_image()
+            self._check_cancelled()
             container_id = self._start_container()
             self._monitor(container_id)
+        except TaskCancelled:
+            self.transition_to(cluster_pb2.TASK_STATE_KILLED)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             self.logs.add("error", f"Task failed:\n{error_msg}")
@@ -489,6 +505,7 @@ class TaskAttempt:
 
             # Check if we should stop
             if self.should_stop:
+                self._runtime.kill(container_id, force=True)
                 self.transition_to(cluster_pb2.TASK_STATE_KILLED)
                 break
 
