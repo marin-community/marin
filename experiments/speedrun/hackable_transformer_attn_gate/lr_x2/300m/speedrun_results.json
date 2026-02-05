@@ -7,13 +7,12 @@
           "name": "Calvin Xu",
           "url": "https://pinlinxu.com"
         },
-        "description": "Hackable Transformer (300m); Gated Attention (Splash); LR sweep multiplier=2",
+        "description": "Hackable Transformer (300m); Gated Attention Sep (Splash); LR multiplier=2",
         "device_flops": 459000000000000.0,
-        "eval/paloma/c4_en/bpb": 1.0551481246948242,
+        "eval/paloma/c4_en/bpb": 1.0543352365493774,
         "model_config": {
           "activation_function": "silu",
           "attn_backend": null,
-          "cross_entropy_block_size": null,
           "flash_attention_block_size": null,
           "gradient_checkpointing": true,
           "head_dim": null,
@@ -32,11 +31,12 @@
             "factor": 1.0,
             "theta": 10000
           },
+          "seq_len": 4096,
           "tie_word_embeddings": false,
           "tokenizer": null,
           "upcast_attn": false,
           "use_bias": false,
-          "use_gated_attention": true,
+          "use_gated_attention": "elementwise",
           "use_layer_norm_weight": true
         },
         "model_flops": 1.021384111077458e+19,
@@ -47,8 +47,9 @@
         "resources": {
           "cpu": 1,
           "device": {
+            "kind": "tpu",
             "topology": null,
-            "type": "v5p-32"
+            "variant": "v5p-32"
           },
           "disk": "1g",
           "preemptible": true,
@@ -56,7 +57,7 @@
           "regions": null,
           "replicas": 1
         },
-        "run_completion_timestamp": "2025-12-09 12:26:21 UTC",
+        "run_completion_timestamp": "2026-02-03 05:08:00 UTC",
         "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
         "total_tokens": 6134169600,
         "train_config": {
@@ -68,6 +69,7 @@
           "decay": null,
           "ema_beta": null,
           "epsilon": null,
+          "explicit_mesh_axes": false,
           "initialize_from_checkpoint_path": null,
           "initialize_from_hf": null,
           "int8": false,
@@ -83,6 +85,7 @@
             "backend_steps": 5,
             "beta1": 0.8,
             "beta2": 0.98,
+            "coefficient_type": "quintic",
             "cooldown": null,
             "cycle_length": null,
             "cycles": null,
@@ -106,7 +109,7 @@
           },
           "per_device_eval_parallelism": null,
           "profiler": false,
-          "profiler_num_steps": 100,
+          "profiler_num_steps": 25,
           "profiler_start_step": 5,
           "reset_data_loader_on_init": true,
           "rewarmup": null,
@@ -132,9 +135,9 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 5.0833465300533e+19,
-        "training_time": 6921.768150944036,
-        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_300m_attngate_4096_splash_lr_sweep_lr_x2-03a06d"
+        "training_hardware_flops": 4.817257888698038e+19,
+        "training_time": 6559.447016201032,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_300m_attngate_sep_4096_splash_lr_x2-4af1df"
       }
     }
   ]

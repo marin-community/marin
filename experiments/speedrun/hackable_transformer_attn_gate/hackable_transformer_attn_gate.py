@@ -371,6 +371,7 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
 
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
+        seq_len=4096,  # match existing baselines (Standard Attn, Attn Sink)
         max_seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
         attn_backend=None,
@@ -526,11 +527,11 @@ def build_run(
     )
 
     lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
-    run_name = f"hacktx_{size}_{'attngate' if use_gate else 'stdattn'}_{seq_len}_splash_lr_{lr_tag}_separate"
+    run_name = f"hacktx_{size}_attngate_sep_{seq_len}_splash{lr_tag}"
     desc = (
         f"Hackable Transformer ({size}); "
-        f"{'Gated Attention' if use_gate else 'Std Attention'} (Splash); "
-        f"LR sweep multiplier={lr_multiplier if lr_multiplier is not None else 1.0:g}"
+        f"Gated Attention Sep (Splash); "
+        f"LR multiplier={lr_multiplier if lr_multiplier is not None else 1.0:g}"
     )
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
@@ -552,13 +553,14 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
-    sizes = ["130m", "300m", "520m", "1_2b"]
+    sizes = ["1_2b"]  # Only 1.2B models remaining (130m, 300m, 520m already completed)
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     use_gate = "elementwise"
     steps = []
-    lr_mults = _lr_multipliers(start=1.0, stop=4.0, step=0.5)
+    # Only run LR x2 and x2.5 for the separate gate attention sweep
+    lr_mults = [2.0, 2.5]
     for s in sizes:
         for m in lr_mults:
             name, cfg = build_run(s, use_gate, use_gpu=use_gpu, lr_multiplier=m)
             steps.extend(default_speedrun(name, cfg))
-    executor_main(steps=steps, description="Hackable transformer gated-attention LR sweep")
+    executor_main(steps=steps, description="Gated Attention Sep sweep 1.2B only (LR x2, x2.5) with seq_len=4096")

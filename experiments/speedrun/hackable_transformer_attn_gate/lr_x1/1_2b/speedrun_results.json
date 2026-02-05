@@ -7,9 +7,9 @@
           "name": "Calvin Xu",
           "url": "https://pinlinxu.com"
         },
-        "description": "Hackable Transformer (1_2b); Gated Attention (Splash); LR sweep multiplier=1",
+        "description": "Hackable Transformer (1_2b); Gated Attention (Splash)",
         "device_flops": 459000000000000.0,
-        "eval/paloma/c4_en/bpb": 0.9160435795783997,
+        "eval/paloma/c4_en/bpb": 0.9263789653778076,
         "model_config": {
           "activation_function": "silu",
           "attn_backend": null,
@@ -22,7 +22,6 @@
           "input_embedding_norm": false,
           "intermediate_dim": 7168,
           "layer_norm_epsilon": 1e-05,
-          "max_seq_len": 4096,
           "num_heads": 16,
           "num_kv_heads": 8,
           "num_layers": 16,
@@ -32,15 +31,15 @@
             "factor": 1.0,
             "theta": 10000
           },
-          "seq_len": 2048,
+          "seq_len": 4096,
           "tie_word_embeddings": false,
           "tokenizer": null,
           "upcast_attn": false,
           "use_bias": false,
-          "use_gated_attention": "elementwise",
+          "use_gated_attention": true,
           "use_layer_norm_weight": true
         },
-        "model_flops": 5.1738353514618185e+20,
+        "model_flops": 2.5869176757309093e+20,
         "model_flops_per_token": 2877292544.0,
         "model_size": 1498482688,
         "num_chips": 16,
@@ -48,9 +47,8 @@
         "resources": {
           "cpu": 1,
           "device": {
-            "kind": "tpu",
             "topology": null,
-            "variant": "v5p-32"
+            "type": "v5p-32"
           },
           "disk": "1g",
           "preemptible": true,
@@ -58,9 +56,9 @@
           "regions": null,
           "replicas": 1
         },
-        "run_completion_timestamp": "2026-01-07 23:16:03 UTC",
+        "run_completion_timestamp": "2025-12-07 15:35:49 UTC",
         "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
-        "total_tokens": 59938701312,
+        "total_tokens": 29969350656,
         "train_config": {
           "allow_partial_checkpoint": false,
           "beta1": null,
@@ -70,7 +68,6 @@
           "decay": null,
           "ema_beta": null,
           "epsilon": null,
-          "explicit_mesh_axes": false,
           "initialize_from_checkpoint_path": null,
           "initialize_from_hf": null,
           "int8": false,
@@ -79,7 +76,7 @@
           "max_eval_batches": null,
           "max_grad_norm": null,
           "min_lr_ratio": null,
-          "num_train_steps": 57162,
+          "num_train_steps": 28581,
           "optimizer_config": {
             "adam_lr": 0.0012,
             "adam_weight_decay": null,
@@ -119,7 +116,6 @@
           "steps_per_hf_export": -1,
           "steps_per_task_eval": null,
           "train_batch_size": 256,
-          "train_seq_len": null,
           "warmup": null,
           "watch": {
             "include_histograms": false,
@@ -135,9 +131,9 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 1.1808594941354136e+21,
-        "training_time": 160792.41477878726,
-        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_1_2b_attngate_2048_splash_lr_sweep_lr_x1_v5p32-ec656c"
+        "training_hardware_flops": 5.928678262278687e+20,
+        "training_time": 80728.18984584269,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_1_2b_attngate_4096_splash-1544b5"
       }
     }
   ]

@@ -7,9 +7,9 @@
           "name": "Calvin Xu",
           "url": "https://pinlinxu.com"
         },
-        "description": "Hackable Transformer (520m); Gated Attention (Splash); LR sweep multiplier=1",
+        "description": "Hackable Transformer (520m); Gated Attention (Splash)",
         "device_flops": 459000000000000.0,
-        "eval/paloma/c4_en/bpb": 0.9799903035163879,
+        "eval/paloma/c4_en/bpb": 0.9801320433616638,
         "model_config": {
           "activation_function": "silu",
           "attn_backend": null,
@@ -22,7 +22,6 @@
           "input_embedding_norm": false,
           "intermediate_dim": 3584,
           "layer_norm_epsilon": 1e-05,
-          "max_seq_len": 4096,
           "num_heads": 16,
           "num_kv_heads": 8,
           "num_layers": 24,
@@ -32,6 +31,7 @@
             "factor": 1.0,
             "theta": 10000
           },
+          "seq_len": 4096,
           "tie_word_embeddings": false,
           "tokenizer": null,
           "upcast_attn": false,
@@ -56,7 +56,7 @@
           "regions": null,
           "replicas": 1
         },
-        "run_completion_timestamp": "2025-12-09 19:07:36 UTC",
+        "run_completion_timestamp": "2025-12-07 01:18:57 UTC",
         "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
         "total_tokens": 12551979008,
         "train_config": {
@@ -116,7 +116,6 @@
           "steps_per_hf_export": -1,
           "steps_per_task_eval": null,
           "train_batch_size": 128,
-          "train_seq_len": null,
           "warmup": null,
           "watch": {
             "include_histograms": false,
@@ -132,9 +131,9 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 2.2386170836914753e+20,
-        "training_time": 30482.258764862137,
-        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_520m_attngate_4096_splash_lr_sweep_lr_x1-bca683"
+        "training_hardware_flops": 2.2878030460560127e+20,
+        "training_time": 31152.002261111284,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_520m_attngate_4096_splash-5794f3"
       }
     }
   ]
