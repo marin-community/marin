@@ -1103,7 +1103,11 @@ class InferenceEngine:
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
+        if self.config.debug_stats_every_n:
+            logger.info("Generate reset: start")
         self.reset()
+        if self.config.debug_stats_every_n:
+            logger.info("Generate reset: done")
         self._log_decode_stats("after_reset")
 
         # Track outputs and finished flags using self.results for only this call's requests
@@ -1237,32 +1241,49 @@ class InferenceEngine:
             self._free_finished()
             self._log_decode_stats("after_cleanup")
 
+        if self.config.debug_stats_every_n:
+            logger.info("Assembling outputs: start")
         # Assemble outputs in the order of the requests for this call
-        outputs_list: list[list[int]] = []
-        logprobs_list: list[list[float]] = []
-        total_prompt_tokens = 0
-        for r in requests:
-            rid = int(r.request_id)
-            total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
-            # Initialize result buckets for this rid if not present
-            kid_map = self.results.get(rid, {})
-            for k in range(int(r.n_generations)):
-                dr = kid_map.get(k)
-                if dr is None:
-                    # Ensure a placeholder exists to avoid KeyErrors
-                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
-                    dr = kid_map[k]
-                outputs_list.append(dr.token_list)
-                logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
-            self.results[rid] = kid_map
+        try:
+            outputs_list: list[list[int]] = []
+            logprobs_list: list[list[float]] = []
+            total_prompt_tokens = 0
+            for r in requests:
+                rid = int(r.request_id)
+                total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
+                # Initialize result buckets for this rid if not present
+                kid_map = self.results.get(rid, {})
+                for k in range(int(r.n_generations)):
+                    dr = kid_map.get(k)
+                    if dr is None:
+                        # Ensure a placeholder exists to avoid KeyErrors
+                        kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
+                        dr = kid_map[k]
+                    outputs_list.append(dr.token_list)
+                    logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
+                self.results[rid] = kid_map
+            if self.config.debug_stats_every_n:
+                logger.info(
+                    "Assembling outputs: prompts=%d expected=%d total_prompt_tokens=%d",
+                    len(requests),
+                    len(outputs_list),
+                    total_prompt_tokens,
+                )
+        except Exception:
+            logger.exception("Output assembly failed before totals computation")
+            raise
         total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
         total_time = time.time() - time_in
         tps_overall = (total_generated / total_time) if total_time > 0 else 0.0
         logger.debug(f"Batch generated in {total_time:.2f}s, {total_generated} tokens, {tps_overall:.2f} tok/s")
+        if self.config.debug_stats_every_n:
+            logger.info("Assembling outputs: total_generated=%d", total_generated)
         # Clear results for these requests now that we've assembled outputs
         for rid in call_rids:
             if rid in self.results:
                 self.results.pop(rid, None)
+        if self.config.debug_stats_every_n:
+            logger.info("Assembling outputs: done (cleared %d requests)", len(call_rids))
         return GenerationResult(tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated)
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):

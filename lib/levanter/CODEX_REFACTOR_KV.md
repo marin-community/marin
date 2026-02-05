@@ -372,11 +372,61 @@ Progress so far:
     - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (01:08:21).
     - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:08:22).
     - `Job finished with no error`.
+- Two-round diagnostic run:
+  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2.yaml`
+  - Log: `/tmp/levanter_run_m5_5prompts_round2.log`
+  - Log evidence (2026-02-05):
+    - After reset: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:25:35).
+    - After prefill: `active=5 pages_in_use=5 free=235 max_refcount=1` (01:26:16).
+    - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (01:30:23).
+    - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:30:24).
+    - `launch.py` reports `Command execution on worker {0,1} failed with exit status 1` immediately after cleanup.
+- Two-round run with round-boundary diagnostics:
+  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2.yaml`
+  - Log: `/tmp/levanter_run_m5_5prompts_round2_with_roundstats.log`
+  - Result: failed before any `RoundStats[...]` logs. The last visible activity is model shard reads
+    (`model-00003-of-00004.safetensors`), followed by `Command execution on worker {0,1} failed with exit status 1`.
+- RoundStats instrumentation fix (all-host stats call, leader-only logging):
+  - Change: `_log_decode_stats` now calls `jax.device_get(engine.gen_state.decode_state.stats())` on **all hosts**
+    and only the leader logs the values.
+  - Log: `/tmp/levanter_run_m3_after_only_allhosts_run2.log`
+  - Run id: `7rkia52d`
+  - W&B run name: `sparkling-bush-218`
+  - Result: **success**, `Job finished with no error.` This removes the leader-only stats call crash/hang.
+- Two-round run after fixing RoundStats logging:
+  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2.yaml`
+  - Log: `/tmp/levanter_run_m5_5prompts_round2_roundstats_allhosts.log`
+  - Run id: `rc47ssbz`
+  - W&B run name: `deep-hill-219`
+  - Log evidence (2026-02-05):
+    - After reset: `active=0 pages_in_use=0 free=240 max_refcount=0` (06:36:33).
+    - After prefill: `active=5 pages_in_use=5 free=235 max_refcount=1` (06:37:11).
+    - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (06:41:18).
+    - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (06:41:19).
+    - **Immediate failure after cleanup**: `Command execution on worker {0,1} failed with exit status 1`.
+
+Guardrail: Multi-host logging safety (from `CODEX_REFACTOR_KV_M5_DEBUG.md`)
+- Never call `jax.device_get(...)` on a **globally sharded** array from a single host only.
+  - Failure modes observed: **immediate exit status 1** or **hang after cleanup**.
+  - Safe pattern: run the `device_get` on **all hosts**, and log only on the leader.
+  - If you need leader-only stats, use an all-host gather (e.g., `multihost_utils.process_allgather`) or
+    compute locally per-host and reduce, but do not single-host `device_get` a sharded array.
+
+Latest update (2026-02-05):
+- We are now consistently getting into inference; failure happens **between rounds**, during engine reset.
+- Evidence: logs with reset markers show `Generate reset: start` for round 1 on **both** hosts, but **no** `Generate reset: done`.
+  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2_cleanup_none_noop.yaml`
+  - Log: `/tmp/levanter_run_m5_5prompts_round2_cleanup_none_noop_resetlog.log`
+  - Interpretation: crash/hang is inside `InferenceEngine.reset()` → `GenState.reset_physical()` → `PageCache.zero()`
+    (i.e., the **physical reset path**, not prompt batching or logging).
+- This is the current pinpoint: **second call** to physical reset in multihost is failing deterministically.
+  We need to make physical reset safe (or switch to logical reset) before multi-prompt multi-round is stable.
 
 Next steps for M5:
-- Run `n_rounds: 2` to confirm the failure is tied to >1 round (or a different issue).
-- Add explicit per-round logging/diagnostics in `sample_lm_multihost.py` (log round index + reset stats) to pinpoint where exit happens.
-- If failure only appears on round >1, add a post-round reset assertion helper (used mask + refcounts) and consider forcing a fresh engine reset between rounds as a diagnostic.
+- Re-run `n_rounds: 2` with the added model/engine boundary logging to see whether the failure happens
+  during model load, engine creation, or between rounds.
+- If the failure is strictly after round 1, add a post-round reset assertion helper (used mask + refcounts)
+  and consider forcing a fresh engine reset between rounds as a diagnostic.
 
 ### M6 - Performance Work: Reference Attention and KV Update
 

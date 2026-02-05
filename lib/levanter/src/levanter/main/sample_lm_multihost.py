@@ -204,6 +204,22 @@ def _broadcast_prompt_payload(
     return prompt_ids, stop_ids, int(base_seed_value)
 
 
+def _log_decode_stats(engine: InferenceEngine, stage: str, *, is_leader: bool) -> None:
+    """Log decode-state stats from the leader for round boundary diagnostics."""
+
+    stats = jax.device_get(engine.gen_state.decode_state.stats())
+    if not is_leader:
+        return
+    logger.info(
+        "RoundStats[%s]: active=%d pages_in_use=%d free=%d max_refcount=%d",
+        stage,
+        int(stats.active_seqs),
+        int(stats.pages_in_use),
+        int(stats.free_pages),
+        int(stats.max_refcount),
+    )
+
+
 def main(config: SampleLmMultihostConfig):
     """Run multi-host sampling with a globally sharded model."""
 
@@ -263,12 +279,28 @@ def main(config: SampleLmMultihostConfig):
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         vocab_size = len(tokenizer)
         vocab_axis = round_axis_for_partitioning(Axis("vocab", vocab_size), config.trainer.compute_axis_mapping)
-        model = _load_model(config, vocab_axis, tokenizer, key=key)
+        if is_leader:
+            logger.info("Model load starting (processes=%d)", jax.process_count())
+        try:
+            model = _load_model(config, vocab_axis, tokenizer, key=key)
+        except Exception:
+            logger.exception("Model load failed")
+            raise
+        if is_leader:
+            logger.info("Model load completed")
 
         memory_device = jax.local_devices()[0] if jax.local_devices() else None
         hbm_free_before_engine = estimated_free_device_memory(memory_device)
         engine_start_time = time.perf_counter()
-        engine = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+        if is_leader:
+            logger.info("Engine creation starting")
+        try:
+            engine = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+        except Exception:
+            logger.exception("Engine creation failed")
+            raise
+        if is_leader:
+            logger.info("Engine creation completed")
         engine_creation_time = time.perf_counter() - engine_start_time
         hbm_free_after_engine = estimated_free_device_memory(memory_device)
 
@@ -299,15 +331,31 @@ def main(config: SampleLmMultihostConfig):
         total_expected = len(prompt_ids) * int(config.n_generations)
         try:
             for round_index in range(int(config.n_rounds)):
+                if is_leader:
+                    logger.info(
+                        "Round %d starting: %d prompts x %d generations",
+                        round_index,
+                        len(prompts),
+                        int(config.n_generations),
+                    )
+                if config.engine.debug_stats_every_n:
+                    logger.warning("Round %d: generate start", round_index)
                 start_time = time.time()
                 result = engine.generate(requests)
                 duration = time.time() - start_time
+                if config.engine.debug_stats_every_n:
+                    logger.warning("Round %d: generate done", round_index)
 
                 if len(result.tokens) != total_expected:
                     raise RuntimeError(
                         f"Expected {total_expected} sequences but got {len(result.tokens)}. "
                         "Check engine.max_seqs/max_seqs_in_prefill/max_prefill_size."
                     )
+                if config.engine.debug_stats_every_n:
+                    logger.warning("Round %d: decode stats start", round_index)
+                _log_decode_stats(engine, f"round{round_index}_after_generate", is_leader=is_leader)
+                if config.engine.debug_stats_every_n:
+                    logger.warning("Round %d: decode stats done", round_index)
 
                 hbm_free_after_gen = estimated_free_device_memory(memory_device)
                 tokens_per_second = result.total_generated / duration if duration > 0 else 0.0
@@ -339,7 +387,11 @@ def main(config: SampleLmMultihostConfig):
                             metrics["sample/hbm_used_by_engine_gib"] = hbm_free_before_engine - hbm_free_after_engine
                     if hbm_free_after_gen is not None:
                         metrics["sample/hbm_free_after_gen_gib"] = hbm_free_after_gen
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: metrics log start", round_index)
                     levanter.tracker.log(metrics, step=round_index)
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: metrics log done", round_index)
 
                     samples_rows: list[tuple[int, int, int, str, str, int]] = []
                     for sequence_index, sequence_tokens in enumerate(result.tokens):
@@ -364,6 +416,8 @@ def main(config: SampleLmMultihostConfig):
                     try:
                         import wandb
 
+                        if config.engine.debug_stats_every_n:
+                            logger.warning("Round %d: samples table start", round_index)
                         samples_table = wandb.Table(
                             columns=[
                                 "round",
@@ -377,8 +431,16 @@ def main(config: SampleLmMultihostConfig):
                         for row in samples_rows:
                             samples_table.add_data(*row)
                         levanter.tracker.log({"sample/samples": samples_table}, step=round_index)
+                        if config.engine.debug_stats_every_n:
+                            logger.warning("Round %d: samples table done", round_index)
                     except ImportError:
+                        if config.engine.debug_stats_every_n:
+                            logger.warning("Round %d: samples rows log start", round_index)
                         levanter.tracker.log({"sample/samples": samples_rows}, step=round_index)
+                        if config.engine.debug_stats_every_n:
+                            logger.warning("Round %d: samples rows log done", round_index)
+                if is_multihost:
+                    barrier_sync_with_tag(f"sample_lm_multihost_round_{round_index}")
         finally:
             if is_multihost:
                 barrier_sync_with_tag("sample_lm_multihost_done")
