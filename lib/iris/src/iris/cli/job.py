@@ -20,6 +20,7 @@ Usage:
 """
 
 import getpass
+import json
 import logging
 import os
 import sys
@@ -28,7 +29,9 @@ from pathlib import Path
 
 import click
 import yaml
+from google.protobuf import json_format
 
+from iris.client.client import JobFailedError
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import LogEntry
@@ -37,6 +40,46 @@ from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+_STATE_MAP: dict[str, cluster_pb2.JobState] = {
+    "pending": cluster_pb2.JOB_STATE_PENDING,
+    "building": cluster_pb2.JOB_STATE_BUILDING,
+    "running": cluster_pb2.JOB_STATE_RUNNING,
+    "succeeded": cluster_pb2.JOB_STATE_SUCCEEDED,
+    "failed": cluster_pb2.JOB_STATE_FAILED,
+    "killed": cluster_pb2.JOB_STATE_KILLED,
+    "worker_failed": cluster_pb2.JOB_STATE_WORKER_FAILED,
+    "unschedulable": cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+}
+
+
+def _job_state_name(state: cluster_pb2.JobState) -> str:
+    return cluster_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
+
+
+def _terminate_jobs(
+    client: IrisClient,
+    job_ids: tuple[str, ...],
+    include_children: bool,
+) -> list[JobName]:
+    terminated: list[JobName] = []
+    for raw in job_ids:
+        name = JobName.from_wire(raw)
+        if include_children:
+            terminated.extend(client.terminate_prefix(name, exclude_finished=True))
+        else:
+            client.terminate(name)
+            terminated.append(name)
+    return terminated
+
+
+def _print_terminated(terminated: list[JobName]) -> None:
+    if terminated:
+        click.echo("Terminated jobs:")
+        for job_name in terminated:
+            click.echo(f"  {job_name}")
+    else:
+        click.echo("No running jobs matched.")
 
 
 def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[str, str]:
@@ -146,11 +189,14 @@ def run_iris_job(
     timeout: int = 0,
     extras: list[str] | None = None,
     include_children_logs: bool = False,
+    terminate_on_exit: bool = True,
 ) -> int:
     """Core job submission logic.
 
     Args:
         controller_url: Controller URL (from parent context tunnel).
+        terminate_on_exit: If True, terminate the job on any non-normal exit
+            (KeyboardInterrupt, unexpected exceptions). Normal completion is unaffected.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -179,6 +225,7 @@ def run_iris_job(
         wait=wait,
         extras=extras,
         include_children_logs=include_children_logs,
+        terminate_on_exit=terminate_on_exit,
     )
 
 
@@ -194,8 +241,14 @@ def _submit_and_wait_job(
     wait: bool,
     extras: list[str] | None = None,
     include_children_logs: bool = False,
+    terminate_on_exit: bool = True,
 ) -> int:
-    """Submit job and optionally wait for completion."""
+    """Submit job and optionally wait for completion.
+
+    When terminate_on_exit is True, the job (and its children) are killed on
+    any non-normal exit: KeyboardInterrupt, unexpected exceptions, etc.
+    Normal completion (success or JobFailedError) does not trigger termination.
+    """
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
     entrypoint = Entrypoint.from_command(*command)
 
@@ -211,24 +264,28 @@ def _submit_and_wait_job(
 
     logger.info(f"Job submitted: {job.job_id}")
 
-    if wait:
-        logger.info("Streaming logs (Ctrl+C to detach)...")
-        try:
-            from iris.client.client import JobFailedError
-
-            try:
-                status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
-                logger.info(f"Job completed with state: {status.state}")
-                return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
-            except JobFailedError as e:
-                logger.info(f"Job failed with state: {e.status.state}")
-                return 1
-        except KeyboardInterrupt:
-            logger.info("Detached from job (job continues running)")
-            return 0
-    else:
+    if not wait:
         logger.info("Job submitted (not waiting for completion)")
         return 0
+
+    logger.info("Streaming logs (Ctrl+C to kill)...")
+    try:
+        try:
+            status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
+            logger.info(f"Job completed with state: {status.state}")
+            return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
+        except JobFailedError as e:
+            logger.info(f"Job failed with state: {e.status.state}")
+            return 1
+    except BaseException:
+        if terminate_on_exit:
+            logger.info(f"Terminating job {job.job_id}...")
+            terminated = _terminate_jobs(client, (str(job.job_id),), include_children=True)
+            for t in terminated:
+                logger.info(f"  Terminated: {t}")
+        if isinstance(sys.exc_info()[1], KeyboardInterrupt):
+            return 130
+        raise
 
 
 @click.group("job")
@@ -280,6 +337,11 @@ Examples:
     default=False,
     help="Stream logs from child jobs (nested submissions).",
 )
+@click.option(
+    "--terminate-on-exit/--no-terminate-on-exit",
+    default=True,
+    help="Terminate the job if an unexpected error occurs (default: terminate).",
+)
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
 def run(
@@ -296,6 +358,7 @@ def run(
     timeout: int,
     extra: tuple[str, ...],
     include_children_logs: bool,
+    terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
@@ -303,7 +366,6 @@ def run(
 
     configure_logging(level=logging.INFO)
 
-    # Get controller_url from parent context (established by main group)
     controller_url = require_controller_url(ctx)
 
     command = list(cmd)
@@ -327,6 +389,7 @@ def run(
         timeout=timeout,
         extras=list(extra),
         include_children_logs=include_children_logs,
+        terminate_on_exit=terminate_on_exit,
     )
     sys.exit(exit_code)
 
@@ -343,22 +406,74 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs."""
     controller_url = require_controller_url(ctx)
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    terminated = _terminate_jobs(client, job_id, include_children)
+    _print_terminated(terminated)
 
-    terminated = []
-    for raw in job_id:
-        name = JobName.from_wire(raw)
-        if include_children:
-            terminated.extend(client.terminate_prefix(name, exclude_finished=True))
-        else:
-            client.terminate(name)
-            terminated.append(name)
 
-    if terminated:
-        click.echo("Terminated jobs:")
-        for job_name in terminated:
-            click.echo(f"  {job_name}")
-    else:
-        click.echo("No running jobs matched.")
+@job.command("kill")
+@click.argument("job_id", nargs=-1, required=True)
+@click.option(
+    "--include-children/--no-include-children",
+    default=True,
+    help="Terminate child jobs under the given job ID prefix (default: include).",
+)
+@click.pass_context
+def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
+    """Terminate one or more jobs (alias for stop)."""
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    terminated = _terminate_jobs(client, job_id, include_children)
+    _print_terminated(terminated)
+
+
+@job.command("list")
+@click.option("--state", type=str, default=None, help="Filter by state (e.g., running, pending, failed)")
+@click.option("--prefix", type=str, default=None, help="Filter by job name prefix")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
+    """List jobs with optional filtering."""
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+
+    states: list[cluster_pb2.JobState] | None = None
+    if state is not None:
+        state_lower = state.lower()
+        if state_lower not in _STATE_MAP:
+            valid = ", ".join(sorted(_STATE_MAP.keys()))
+            raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
+        states = [_STATE_MAP[state_lower]]
+
+    prefix_name = JobName.from_wire(prefix) if prefix else None
+    jobs = client.list_jobs(states=states, prefix=prefix_name)
+
+    # Sort by submitted_at descending (most recent first)
+    jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
+
+    if json_output:
+        serialized = [json_format.MessageToDict(j, preserving_proto_field_name=True) for j in jobs]
+        click.echo(json.dumps(serialized, indent=2))
+        return
+
+    if not jobs:
+        click.echo("No jobs found.")
+        return
+
+    # Compute column widths for aligned output
+    rows: list[tuple[str, str, str]] = []
+    for j in jobs:
+        job_id = j.job_id
+        state_name = _job_state_name(j.state)
+        submitted = Timestamp.from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
+        rows.append((job_id, state_name, submitted))
+
+    id_width = max(len("JOB ID"), max(len(r[0]) for r in rows))
+    state_width = max(len("STATE"), max(len(r[1]) for r in rows))
+
+    header = f"{'JOB ID':<{id_width}}  {'STATE':<{state_width}}  SUBMITTED"
+    click.echo(header)
+    for job_id, state_name, submitted in rows:
+        click.echo(f"{job_id:<{id_width}}  {state_name:<{state_width}}  {submitted}")
 
 
 @job.command("logs")
