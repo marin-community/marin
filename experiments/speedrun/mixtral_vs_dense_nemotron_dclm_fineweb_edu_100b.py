@@ -366,9 +366,7 @@ def main() -> None:
 
     llama_cfg = dataclasses.replace(llama_13b, max_seq_len=args.seq_len)
     mixtral_ce_impl = (
-        None
-        if args.mixtral_cross_entropy_implementation == "auto"
-        else args.mixtral_cross_entropy_implementation
+        None if args.mixtral_cross_entropy_implementation == "auto" else args.mixtral_cross_entropy_implementation
     )
     mixtral_cfg = _build_mixtral_8x7b_config(
         seq_len=args.seq_len,

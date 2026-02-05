@@ -114,9 +114,9 @@ class LayerNorm(LayerNormBase):
         out = out.astype(dtype)
 
         if self.weight is not None:
-            out = self.weight * out
+            out = hax.auto_sharded(self.weight) * out
         if self.bias is not None:
-            out = out + self.bias
+            out = out + hax.auto_sharded(self.bias)
         return out
 
 
@@ -134,9 +134,9 @@ class RmsNorm(LayerNormBase):
         out = out.astype(in_dtype)
 
         if self.weight is not None:
-            out = self.weight * out
+            out = hax.auto_sharded(self.weight) * out
         if self.bias is not None:
-            out = out + self.bias
+            out = out + hax.auto_sharded(self.bias)
         return out
 
 

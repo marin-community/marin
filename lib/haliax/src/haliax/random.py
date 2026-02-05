@@ -5,7 +5,13 @@
 
 """Wrappers around jax.random functions."""
 
+from math import prod
+
+import jax
+import jax.numpy as jnp
 import jax.random as jrandom
+from jax.experimental.shard_map import shard_map as jax_shard_map
+from jax.sharding import PartitionSpec, get_abstract_mesh
 
 import haliax
 from haliax.core import NamedArray, NamedOrNumeric, broadcast_to
@@ -21,6 +27,9 @@ from .axis import (
     to_jax_shape,
 )
 from .jax_utils import named_call
+from .partitioning import current_thread_local_mapping, pspec_for_axis
+
+_SHARDED_TRUNCATED_NORMAL_MIN_BYTES = 1 * 1024**3  # 1GiB
 
 
 @named_call
@@ -125,9 +134,79 @@ def logistic(key, shape: AxisSpec, dtype=float):
 @named_call
 def truncated_normal(key, shape: AxisSpec, lower: NamedOrNumeric, upper: NamedOrNumeric, dtype=float):
     shape = axis_spec_to_shape_dict(shape)
+    jax_shape = to_jax_shape(shape)
+
+    # Fast path: generate sharded random values directly for large arrays. This avoids TPU HBM OOM during
+    # initialization for very large parameter tensors (e.g. Mixtral expert weights), where an unsharded
+    # truncated_normal can materialize huge temporaries before sharding is applied.
+    mapping = current_thread_local_mapping()
+    mesh = get_abstract_mesh()
+
+    if (
+        mapping is not None
+        and mesh is not None
+        and not mesh.empty
+        and isinstance(lower, (int, float))
+        and isinstance(upper, (int, float))
+    ):
+        pspec = pspec_for_axis(shape, mapping)
+        # Only use shard_map when we actually partition some dimension.
+        partitions = any(entry not in (None, PartitionSpec.UNCONSTRAINED) for entry in pspec)
+        dtype_size = jnp.dtype(dtype).itemsize
+        est_bytes = prod(jax_shape) * dtype_size
+
+        if partitions and est_bytes >= _SHARDED_TRUNCATED_NORMAL_MIN_BYTES:
+            mesh_shape = mesh.shape
+
+            def _local_dim(dim: int, entry) -> int:
+                if entry is None or entry is PartitionSpec.UNCONSTRAINED:
+                    return dim
+                if isinstance(entry, str):
+                    divisor = mesh_shape[entry]
+                else:
+                    divisor = 1
+                    for ax in entry:
+                        if ax is None or ax is PartitionSpec.UNCONSTRAINED:
+                            continue
+                        divisor *= mesh_shape[ax]
+                if dim % divisor != 0:
+                    raise ValueError(
+                        f"Axis size {dim} not divisible by sharding factor {divisor} for PartitionSpec entry {entry}."
+                    )
+                return dim // divisor
+
+            local_shape = tuple(_local_dim(dim, entry) for dim, entry in zip(jax_shape, pspec, strict=True))
+
+            mesh_axes: list[str] = []
+            for entry in pspec:
+                if entry is None or entry is PartitionSpec.UNCONSTRAINED:
+                    continue
+                if isinstance(entry, str):
+                    mesh_axes.append(entry)
+                else:
+                    for ax in entry:
+                        if ax is None or ax is PartitionSpec.UNCONSTRAINED:
+                            continue
+                        mesh_axes.append(ax)
+            # Stable fold-in order for determinism.
+            mesh_axes = sorted(set(mesh_axes))
+
+            def per_shard(k):
+                for ax in mesh_axes:
+                    k = jrandom.fold_in(k, jax.lax.axis_index(ax))
+                return jrandom.truncated_normal(k, lower=lower, upper=upper, shape=local_shape, dtype=dtype)
+
+            sharded = jax_shard_map(
+                per_shard,
+                mesh=mesh,
+                in_specs=PartitionSpec(),
+                out_specs=pspec,
+                check_rep=False,
+            )(key)
+            return NamedArray(sharded, shape)
+
     lower = broadcast_to(lower, shape).array
     upper = broadcast_to(upper, shape).array
-    jax_shape = to_jax_shape(shape)
     jax_array = jrandom.truncated_normal(key=key, lower=lower, upper=upper, shape=jax_shape, dtype=dtype)
     return haliax.auto_sharded(NamedArray(jax_array, shape))
 
