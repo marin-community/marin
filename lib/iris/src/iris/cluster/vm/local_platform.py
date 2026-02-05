@@ -119,7 +119,7 @@ class _LocalContainer:
                 self.config.job_id,
                 cmd,
             )
-            env = dict(self.config.env)
+            env = {**os.environ, **self.config.env}
             iris_root = Path(__file__).resolve().parents[4]
             extra_paths = [str(iris_root / "src"), str(iris_root)]
             existing = env.get("PYTHONPATH", "")
@@ -180,11 +180,13 @@ attempt_id={env.get("IRIS_ATTEMPT_ID", "0")},
 worker_id={env.get("IRIS_WORKER_ID")!r},
 controller_address={env.get("IRIS_CONTROLLER_ADDRESS")!r},
 bundle_gcs_path={env.get("IRIS_BUNDLE_GCS_PATH")!r},
+dockerfile={env.get("IRIS_DOCKERFILE")!r},
 """
 
         thunk = f"""
 import cloudpickle
 import base64
+import json
 import sys
 import traceback
 
@@ -192,12 +194,16 @@ import traceback
 try:
     from iris.cluster.client.job_info import JobInfo, set_job_info, _parse_ports_from_env
     from iris.cluster.types import JobName
+    _env = {env!r}
     task_id_str = {task_id_str!r}
     if task_id_str:
+        _job_env_json = _env.get("IRIS_JOB_ENV", "")
+        _job_env = json.loads(_job_env_json) if _job_env_json else {{}}
         job_info = JobInfo(
             task_id=JobName.from_wire(task_id_str),
             {job_info_setup}
-            ports=_parse_ports_from_env({env!r}),
+            ports=_parse_ports_from_env(_env),
+            env=_job_env,
         )
         set_job_info(job_info)
 except Exception:
