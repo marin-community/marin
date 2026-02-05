@@ -50,7 +50,7 @@ class WorkerConfig:
     host: str = "127.0.0.1"
     port: int = 0
     cache_dir: Path | None = None
-    registry: str = "localhost:5000"
+    registry: str = ""
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
@@ -528,6 +528,16 @@ class Worker:
                             state=task.status,
                         )
                     )
+
+            # Clean up terminal tasks that are no longer expected by controller
+            tasks_to_remove = [
+                task_id
+                for task_id, task in self._tasks.items()
+                if task_id not in expected_task_ids and task.status in terminal_states
+            ]
+            for task_id in tasks_to_remove:
+                logger.info("Removing terminal task no longer expected by controller: %s", task_id)
+                del self._tasks[task_id]
 
         return cluster_pb2.HeartbeatResponse(
             running_tasks=running_tasks,
