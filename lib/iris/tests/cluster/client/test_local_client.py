@@ -21,6 +21,15 @@ from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2
 
 
+def extract_log_text(response: cluster_pb2.Controller.GetTaskLogsResponse) -> str:
+    """Extract log text from a batch log response."""
+    lines = []
+    for batch in response.task_logs:
+        for entry in batch.logs:
+            lines.append(entry.data)
+    return "\n".join(lines)
+
+
 @pytest.fixture
 def client():
     """Create a local cluster client for testing."""
@@ -46,8 +55,8 @@ def test_command_entrypoint_preserves_env_vars(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the job ID
-    logs = client.fetch_task_logs(job_id.task(0))
-    log_text = "\n".join(entry.data for entry in logs)
+    response = client.fetch_task_logs(job_id.task(0))
+    log_text = extract_log_text(response)
     assert f"IRIS_JOB_ID={job_id.to_wire()}" in log_text
 
 
@@ -68,8 +77,8 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the output
-    logs = client.fetch_task_logs(job_id.task(0))
-    log_text = "\n".join(entry.data for entry in logs)
+    response = client.fetch_task_logs(job_id.task(0))
+    log_text = extract_log_text(response)
     assert "output without newline" in log_text
 
 
@@ -116,6 +125,6 @@ def test_command_entrypoint_with_custom_env_var(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the custom env var
-    logs = client.fetch_task_logs(job_id.task(0))
-    log_text = "\n".join(entry.data for entry in logs)
+    response = client.fetch_task_logs(job_id.task(0))
+    log_text = extract_log_text(response)
     assert "CUSTOM_VAR=custom_value" in log_text

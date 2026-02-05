@@ -582,17 +582,25 @@ message Controller {
     repeated TransactionAction actions = 1;
   }
 
-  // --- Task Logs (proxied to worker) ---
+  // --- Task/Job Logs (batch fetching) ---
   message GetTaskLogsRequest {
+    string id = 1;                   // Job ID or Task ID (detected by trailing numeric)
+    bool include_children = 2;       // Include child jobs (only for job IDs)
+    int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
+    int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
+    string regex = 5;                // Regex filter (propagated to workers)
+  }
+
+  message TaskLogBatch {
     string task_id = 1;
-    int64 start_ms = 3;
-    int64 limit = 4;
-    int64 start_line = 5;  // Supports negative indexing: -1000 = last 1000 lines
+    repeated Worker.LogEntry logs = 2;
+    string error = 3;                // If fetch failed for this task
   }
 
   message GetTaskLogsResponse {
-    repeated Worker.LogEntry logs = 1;
-    string worker_address = 2;
+    repeated TaskLogBatch task_logs = 1;
+    int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
+    bool truncated = 3;              // True if max_total_lines hit
   }
 
   // --- Process Logs ---

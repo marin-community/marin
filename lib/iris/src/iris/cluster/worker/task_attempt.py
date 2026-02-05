@@ -540,8 +540,7 @@ class TaskAttempt:
             # Check if we should stop
             if self.should_stop:
                 self._runtime.kill(container_id, force=True)
-                logger.info("Task %s requested stop; killing container %s",
-                            self.task_id, container_id)
+                logger.info("Task %s requested stop; killing container %s", self.task_id, container_id)
                 self.transition_to(cluster_pb2.TASK_STATE_KILLED)
                 break
 

@@ -27,11 +27,11 @@ import time
 from pathlib import Path
 
 import click
-from connectrpc.errors import ConnectError
 import yaml
 
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
+from iris.client.client import LogEntry
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -385,7 +385,7 @@ def logs(
     follow: bool,
     include_children: bool,
 ) -> None:
-    """Stream task logs for a job."""
+    """Stream task logs for a job using batch log fetching."""
     if since_ms is not None and since_seconds is not None:
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
@@ -395,43 +395,25 @@ def logs(
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
 
-    start_ms = since_ms or 0
+    cursor_ms = since_ms or 0
     job_name = JobName.from_wire(job_id)
 
-    def _list_jobs() -> list[cluster_pb2.JobStatus]:
-        if include_children:
-            return client.list_jobs(prefix=job_name)
-        return [client.status(job_name)]
-
-    last_seen: dict[JobName, int | None] = {}
-
     while True:
-        jobs = _list_jobs()
-        task_ids: list[JobName] = []
-        for job_status in jobs:
-            if job_status.tasks:
-                task_ids.extend(JobName.from_wire(t.task_id) for t in job_status.tasks)
-            else:
-                task_ids.extend(
-                    JobName.from_wire(task.task_id) for task in client.list_tasks(JobName.from_wire(job_status.job_id))
-                )
+        response = client._cluster_client.fetch_task_logs(
+            job_name,
+            include_children=include_children,
+            since_ms=cursor_ms,
+        )
 
-        for task_id in task_ids:
-            cursor = last_seen.get(task_id)
-            if cursor is None:
-                start = Timestamp.from_ms(start_ms)
-            else:
-                start = Timestamp.from_ms(cursor + 1)
-            try:
-                entries = client.fetch_task_logs(task_id, start=start, max_lines=0)
-            except ConnectError as exc:
-                if "Task has no assigned worker" in str(exc):
-                    continue
-                raise
-            for entry in entries:
+        for batch in response.task_logs:
+            task_id = JobName.from_wire(batch.task_id)
+            for proto in batch.logs:
+                entry = LogEntry.from_proto(proto)
                 ts = entry.timestamp.as_short_time()
                 click.echo(f"[{ts}] {task_id} {entry.data}")
-                last_seen[task_id] = entry.timestamp.epoch_ms()
+
+        if response.last_timestamp_ms > cursor_ms:
+            cursor_ms = response.last_timestamp_ms
 
         if not follow:
             break
