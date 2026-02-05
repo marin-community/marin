@@ -419,51 +419,25 @@ def _pick_free_port(host: str) -> int:
 
 
 def _detect_tpu_environment() -> bool:
-    """Return True when running on TPU hardware.
+    """Detect whether we are running in a TPU environment.
 
-    Ray TPU pods do not consistently set `TPU_NAME`, so we also detect the
-    presence of TPU device nodes and other TPU-related environment variables.
+    Uses only environment variables to avoid initializing the TPU runtime
+    (which acquires /tmp/libtpu_lockfile and blocks Docker sidecars).
     """
-
     if os.environ.get("TPU_NAME"):
         return True
-
-    # GKE TPU device plugin exposes /dev/accel* device nodes.
-    if glob.glob("/dev/accel*"):
+    if os.environ.get("TPU_WORKER_ID"):
         return True
-
-    # Heuristic fallbacks for TPU pods / libtpu environments.
-    for key in (
-        "TPU_ACCELERATOR_TYPE",
-        "TPU_WORKER_ID",
-        "TPU_WORKER_HOSTNAMES",
-        "TPU_MESH_CONTROLLER_ADDRESS",
-        "TPU_VISIBLE_DEVICES",
-    ):
-        if os.environ.get(key):
+    if os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS"):
+        return True
+    jax_platforms = os.environ.get("JAX_PLATFORMS", "")
+    if jax_platforms:
+        platforms = [platform.strip().lower() for platform in jax_platforms.split(",") if platform.strip()]
+        if "tpu" in platforms:
             return True
-
-    # Ray TPU workers may not expose TPU env vars/device nodes to the driver
-    # container, but Ray's TPUAcceleratorManager can still report topology.
-    try:
-        from ray._private.accelerators import TPUAcceleratorManager
-
-        pod_type = None
-        if hasattr(TPUAcceleratorManager, "_get_current_node_tpu_pod_type"):
-            pod_type = TPUAcceleratorManager._get_current_node_tpu_pod_type()
-        elif hasattr(TPUAcceleratorManager, "get_current_node_tpu_pod_type"):
-            pod_type = TPUAcceleratorManager.get_current_node_tpu_pod_type()
-        if pod_type:
-            return True
-
-        tpu_name = None
-        if hasattr(TPUAcceleratorManager, "get_current_node_tpu_name"):
-            tpu_name = TPUAcceleratorManager.get_current_node_tpu_name()
-        if tpu_name:
-            return True
-    except Exception:
-        pass
-
+    pjrt_device = os.environ.get("PJRT_DEVICE")
+    if pjrt_device and pjrt_device.strip().lower() == "tpu":
+        return True
     return False
 
 

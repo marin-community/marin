@@ -61,13 +61,11 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
-
         try:
             model_name_or_path: str = self.model_name_or_path(model)
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
-            logger.info(f"WandB Run Name: {name}")
-            logger.info(f"Running eval harness on model: {model_name_or_path}")
-            print("after wandb log")
+            logger.info("WandB Run Name: %s", name)
+            logger.info("Running eval harness on model: %s", model_name_or_path)
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
@@ -76,21 +74,18 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),
             )
-            print("after trainer?")
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
-            logger.info(f"Tasks: {tasks}")
+            logger.info("Tasks: %s", tasks)
 
             model_path = model_name_or_path
+            logger.info("Model path: %s", model_path)
+            logger.info("Model name: %s", model.name)
+            logger.info("model_name_or_path: %s", model_name_or_path)
 
-            logger.info(f"Model path: {model_path}")
-            logger.info(f"Model name: {model.name}")
-            logger.info(f"model_name_or_path: {model_name_or_path}")
-
-            print("starting harness")
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(
                     task_spec=tasks,
@@ -109,32 +104,27 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             )
 
             results = eval_harness.run_eval_harness_main(eval_config)
-            print("finished harness")
+            if results is None:
+                raise RuntimeError("Eval harness returned no results.")
 
-            try:
-                # add a results.json to output path
-                output_path = os.path.join(output_path, "results.json")
-
-                logger.info(f"Uploading results to GCS: {output_path}")
-
-                # write output JSON directly to output_path on GCS
-                fs = fsspec.filesystem("gcs")
-                with fs.open(output_path, "w") as f:
-                    json.dump(results, f, indent=2, default=_json_default)
-
-                levanter.tracker.current_tracker().finish()
-                logger.info("Upload completed successfully.")
-
-            except Exception as upload_error:
-                logger.info(f"Failed to upload results to GCS: {upload_error}")
-
-        except Exception as e:
-            logger.error(f"Error running eval harness: {e}")
-            raise e
-
+            results_path = os.path.join(output_path, "results.json")
+            logger.info("Writing results to %s", results_path)
+            with fsspec.open(results_path, "w") as f:
+                json.dump(results, f, indent=2, default=_json_default)
+            logger.info("Results saved.")
+        except Exception:
+            logger.exception("Error running eval harness")
+            raise
         finally:
-            # Clean up resources
             self.cleanup(model)
+
+    def cleanup(self, model: ModelConfig) -> None:
+        """Clean up evaluator resources and local artifacts."""
+        del model
+        levanter.tracker.current_tracker().finish()
+        artifact_path = "lm_eval_harness_results.json"
+        if os.path.exists(artifact_path):
+            os.remove(artifact_path)
 
 
 def _json_default(value):
