@@ -18,8 +18,8 @@ Follows the grugformer pattern of simple, explicit training code.
 """
 
 import logging
-from dataclasses import dataclass, replace
-from typing import Iterator
+from dataclasses import dataclass
+from collections.abc import Callable, Iterator
 
 import jax
 import jax.numpy as jnp
@@ -136,7 +136,7 @@ def make_train_step(
     def train_step(state: TrainingState, batch: dict[str, Array]) -> tuple[TrainingState, dict]:
         key, step_key = jax.random.split(state.key)
 
-        (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+        (_loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
             state.params,
             batch["tokens"],
             batch["prefix_len"],
@@ -161,10 +161,14 @@ def make_train_step(
     return jax.jit(train_step)
 
 
+LogCallback = Callable[[int, dict], None]
+
+
 def train(
     config: TrainingConfig,
     data_iter: Iterator[dict[str, Array]],
     initial_params: TreeDiffusionModelParams | None = None,
+    log_callback: LogCallback | None = None,
 ) -> TreeDiffusionModel:
     """Train a tree diffusion model.
 
@@ -172,6 +176,8 @@ def train(
         config: Training configuration.
         data_iter: Iterator yielding batches with 'tokens' and 'prefix_len'.
         initial_params: Optional initial parameters (for transfer learning).
+        log_callback: Optional callback for logging metrics (e.g., to wandb).
+            Called with (step, metrics_dict) at each log_interval.
 
     Returns:
         Trained TreeDiffusionModel.
@@ -199,6 +205,8 @@ def train(
 
         if step % config.log_interval == 0:
             log_metrics(step, metrics)
+            if log_callback is not None:
+                log_callback(step, metrics)
 
         if step > 0 and step % config.checkpoint_interval == 0:
             save_checkpoint(state, config, schedule)
