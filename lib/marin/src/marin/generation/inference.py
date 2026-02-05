@@ -154,8 +154,9 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
-    # Clear JAX_PLATFORMS so TPU devices are detected correctly
-    runtime_env = {"env_vars": {"JAX_PLATFORMS": "tpu"}}
+    # Empty JAX_PLATFORMS allows auto-detection of all backends (CPU + TPU)
+    # tpu_inference needs CPU backend for weight loading before transfer to TPU
+    runtime_env = {"env_vars": {"JAX_PLATFORMS": ""}}
 
     # Request TPU resources - use the tensor_parallel_size from config
     # which should match the number of TPU chips needed
