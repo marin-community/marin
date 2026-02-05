@@ -32,7 +32,7 @@ from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.platform.cluster_manager import ClusterManager
 from iris.cluster.platform.controller_vm import ControllerVm
 from iris.config import make_local_config
-from iris.cluster.platform.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.cluster.controller.slice_lifecycle import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, config_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -240,14 +240,15 @@ def cluster_stop(ctx, zone: str | None):
     iris_config = IrisConfig(config)
     config = iris_config.proto
     platform = iris_config.platform()
-    ops = platform.vm_ops()
+    ops = platform
     slice_ids_by_group: dict[str, dict[str | None, list[str]]] = {}
 
     # Discover slices via platform ops (more reliable than RPC since controller may be down)
     click.echo("Discovering existing slices via platform ops...")
     for name, group_config in config.scale_groups.items():
         for zone_name in _resolve_group_zones(group_config, config.platform, zone):
-            slice_ids = ops.list_slices(group_config, zone=zone_name)
+            slices = ops.list_slices(group_config, zone=zone_name)
+            slice_ids = [s.slice_id for s in slices]
             if slice_ids:
                 slice_ids_by_group.setdefault(name, {}).setdefault(zone_name, []).extend(slice_ids)
             zone_label = zone_name or "default"

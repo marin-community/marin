@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from iris.cluster.types import VmWorkerStatus
-from iris.cluster.platform.vm_platform import VmGroupStatus, VmSnapshot
+from iris.cluster.controller.slice_lifecycle import VmGroupStatus, VmSnapshot
 from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.rpc import time_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -84,10 +84,9 @@ def make_mock_vm_group(
     vm_states: list[vm_pb2.VmState] | None = None,
     created_at_ms: int = 1000000,
 ) -> MagicMock:
-    """Create a mock VmGroupProtocol for testing."""
+    """Create a mock SliceGroupProtocol for testing."""
     mock = MagicMock()
-    mock.group_id = slice_id
-    mock.slice_id = slice_id  # Backward compat alias
+    mock.slice_id = slice_id
     mock.scale_group = scale_group
     mock.created_at_ms = created_at_ms
 
@@ -135,18 +134,18 @@ def make_mock_vm_group(
 
 
 def make_mock_vm_manager(vm_groups_to_discover: list[MagicMock] | None = None) -> MagicMock:
-    """Create a mock VmManagerProtocol."""
+    """Create a mock SliceFactoryProtocol."""
     manager = MagicMock()
-    manager.discover_vm_groups.return_value = vm_groups_to_discover or []
+    manager.discover_slices.return_value = vm_groups_to_discover or []
 
-    def create_vm_group_side_effect(tags: dict[str, str] | None = None) -> MagicMock:
+    def create_slice_side_effect(tags: dict[str, str] | None = None) -> MagicMock:
         # Generate a unique slice ID based on call count
-        slice_id = f"new-slice-{len(manager.create_vm_group.call_args_list)}"
+        slice_id = f"new-slice-{len(manager.create_slice.call_args_list)}"
         mock = make_mock_vm_group(slice_id)
         mock.tags = tags  # Store tags so tests can verify if needed
         return mock
 
-    manager.create_vm_group.side_effect = create_vm_group_side_effect
+    manager.create_slice.side_effect = create_slice_side_effect
     return manager
 
 
@@ -175,9 +174,9 @@ class TestScalingGroupVmGroupOwnership:
 
         new_vm_group = group.scale_up()
 
-        manager.create_vm_group.assert_called_once()
+        manager.create_slice.assert_called_once()
         assert group.slice_count() == 1
-        assert new_vm_group in group.vm_groups()
+        assert new_vm_group in group.slices()
 
     def test_scale_up_passes_tags_to_manager(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """scale_up() passes tags to the VmManager."""
@@ -186,7 +185,7 @@ class TestScalingGroupVmGroupOwnership:
 
         group.scale_up(tags={"env": "prod", "team": "ml"})
 
-        manager.create_vm_group.assert_called_once_with({"env": "prod", "team": "ml"})
+        manager.create_slice.assert_called_once_with({"env": "prod", "team": "ml"})
 
     def test_scale_down_terminates_and_removes_vm_group(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """scale_down() terminates the VM group and removes it from tracking."""
@@ -413,7 +412,7 @@ class TestScalingGroupIdleTracking:
         manager = make_mock_vm_manager()
         group = ScalingGroup(unbounded_config, manager, idle_threshold=Duration.from_ms(60_000))
         group.scale_up()  # Creates a slice
-        slice_id = next(iter(group.vm_groups())).slice_id
+        slice_id = next(iter(group.slices())).slice_id
 
         # Never had activity tracked -> eligible
         assert group.is_slice_eligible_for_scaledown(slice_id, Timestamp.from_ms(1000))
@@ -758,11 +757,11 @@ class TestScalingGroupAvailability:
 
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
-        manager.create_vm_group.side_effect = QuotaExceededError("TPU quota exhausted")
+        manager.create_slice.side_effect = QuotaExceededError("TPU quota exhausted")
 
         group = ScalingGroup(unbounded_config, manager, quota_timeout=Duration.from_ms(60_000))
 
@@ -779,10 +778,10 @@ class TestScalingGroupAvailability:
 
     def test_successful_scale_up_clears_quota_state(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Successful scale-up clears any quota exceeded state."""
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
 
         manager = make_mock_vm_manager()
-        manager.create_vm_group.side_effect = [
+        manager.create_slice.side_effect = [
             QuotaExceededError("TPU quota exhausted"),
             make_mock_vm_group("slice-1"),
         ]
@@ -799,11 +798,11 @@ class TestScalingGroupAvailability:
 
     def test_quota_exceeded_takes_precedence_over_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded has higher precedence than backoff."""
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
-        manager.create_vm_group.side_effect = QuotaExceededError("Quota exhausted")
+        manager.create_slice.side_effect = QuotaExceededError("Quota exhausted")
 
         group = ScalingGroup(unbounded_config, manager, quota_timeout=Duration.from_ms(60_000))
 

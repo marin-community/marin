@@ -67,7 +67,7 @@ class QuotaExceededError(Exception):
 
 @dataclass
 class SshConfig:
-    """SSH configuration for ManualVmManager."""
+    """SSH configuration for manual slice workers."""
 
     user: str = "root"
     key_file: str | None = None

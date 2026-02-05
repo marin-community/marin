@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Local platform: in-process VmManager for testing without GCP.
+"""Local platform: in-process workers for testing without GCP.
 
-Provides LocalVmManager (VmManagerProtocol) and LocalVmGroup (VmGroupProtocol)
+Provides LocalVmManager (slice factory) and LocalVmGroup (slice group)
 that create real Worker instances running in-process with subprocess-based execution
 instead of Docker containers.
 
@@ -47,9 +47,9 @@ from pathlib import Path
 from typing import Any
 
 from iris.cluster.types import get_tpu_topology, tpu_device
-from iris.cluster.platform.base import VmBootstrapSpec, VmInfo, VmState
-from iris.cluster.platform.worker_vm import TrackedVmFactory, WorkerVm, VmRegistry
-from iris.cluster.platform.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot, VmManagerProtocol
+from iris.cluster.platform.base import SliceHandle, VmBootstrapSpec
+from iris.cluster.controller.worker_vm import WorkerVm, VmRegistry
+from iris.cluster.controller.slice_lifecycle import SliceGroupProtocol, SliceFactoryProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
@@ -437,7 +437,7 @@ def find_free_port() -> int:
 class _StubWorkerVm(WorkerVm):
     """Minimal WorkerVm stub that holds VmInfo without lifecycle management.
 
-    Used by LocalVmGroup to satisfy the VmGroupProtocol interface without
+    Used by LocalVmGroup to satisfy the SliceGroupProtocol interface without
     running actual bootstrap threads.
     """
 
@@ -459,7 +459,7 @@ class _StubWorkerVm(WorkerVm):
         return True
 
 
-class LocalVmGroup(VmGroupProtocol):
+class LocalVmGroup(SliceGroupProtocol):
     """In-process VM group that wraps Worker instances.
 
     For the demo, each VM group represents a "slice" that contains one or more
@@ -569,8 +569,8 @@ class LocalVmGroup(VmGroupProtocol):
         )
 
 
-class LocalVmManager:
-    """VmManager for in-process demo workers.
+class LocalVmManager(SliceFactoryProtocol):
+    """Slice factory for in-process demo workers.
 
     Creates LocalVmGroup instances containing in-process Worker instances.
     Workers are created with appropriate attributes based on the scale group
@@ -596,8 +596,8 @@ class LocalVmManager:
         self._slice_counter = 0
         self._threads = threads if threads is not None else get_thread_container()
 
-    def create_vm_group(self, tags: dict[str, str] | None = None) -> VmGroupProtocol:
-        """Create a new VM group with workers."""
+    def create_slice(self, tags: dict[str, str] | None = None) -> SliceGroupProtocol:
+        """Create a new slice with workers."""
         slice_id = f"{self._config.name}-slice-{self._slice_counter}"
         self._slice_counter += 1
 
@@ -669,7 +669,7 @@ class LocalVmManager:
             worker_ports.append(worker_port)
 
         logger.info(
-            "LocalVmManager created VM group %s with %d workers for scale group %s",
+            "LocalVmManager created slice %s with %d workers for scale group %s",
             slice_id,
             len(workers),
             self._config.name,
@@ -684,7 +684,7 @@ class LocalVmManager:
             vm_registry=self._vm_registry,
         )
 
-    def discover_vm_groups(self) -> list[VmGroupProtocol]:
+    def discover_slices(self) -> list[SliceGroupProtocol]:
         """Return empty list - no recovery for local demo."""
         return []
 
@@ -693,34 +693,8 @@ class LocalVmManager:
         self._threads.stop(timeout=Duration.from_seconds(5.0))
 
 
-class _LocalPlatformOps:
-    def list_slices(self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None) -> list[str]:
-        return []
-
-    def delete_slice(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        slice_id: str,
-        *,
-        zone: str | None = None,
-    ) -> None:
-        return None
-
-
 class LocalPlatform:
     """Platform for local testing (no cloud resources)."""
-
-    def vm_ops(self) -> _LocalPlatformOps:
-        return _LocalPlatformOps()
-
-    def vm_manager(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        vm_factory: TrackedVmFactory,
-        *,
-        dry_run: bool = False,
-    ) -> VmManagerProtocol:
-        raise NotImplementedError("Local platform uses LocalController autoscaler")
 
     def tunnel(
         self,
@@ -732,11 +706,39 @@ class LocalPlatform:
         """Return direct connection for local platform (no tunnel needed)."""
         return nullcontext(controller_address)
 
-    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[VmInfo]:
+    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[vm_pb2.VmInfo]:
         return []
 
-    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[VmInfo]:
+    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[vm_pb2.VmInfo]:
         raise NotImplementedError("Local platform uses in-process controller runtime")
 
     def stop_vms(self, ids: list[str], *, zone: str | None = None) -> None:
+        return None
+
+    def list_slices(
+        self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None
+    ) -> list[vm_pb2.SliceInfo]:
+        return []
+
+    def create_slice(
+        self,
+        group_config: config_pb2.ScaleGroupConfig,
+        *,
+        tags: dict[str, str] | None = None,
+        zone: str | None = None,
+    ) -> SliceHandle:
+        raise NotImplementedError("Local platform slices are managed by LocalController autoscaler")
+
+    def discover_slices(
+        self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None
+    ) -> list[SliceHandle]:
+        return []
+
+    def delete_slice(
+        self,
+        group_config: config_pb2.ScaleGroupConfig,
+        slice_id: str,
+        *,
+        zone: str | None = None,
+    ) -> None:
         return None

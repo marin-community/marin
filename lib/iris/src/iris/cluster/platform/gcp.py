@@ -24,7 +24,7 @@ import time
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 
-from iris.cluster.platform.base import VmBootstrapSpec, VmInfo, VmState
+from iris.cluster.platform.base import SliceHandle, SliceVmTarget, VmBootstrapSpec
 from iris.cluster.platform.bootstrap import (
     DEFAULT_BOOT_DISK_SIZE_GB,
     DEFAULT_CONTROLLER_PORT,
@@ -32,8 +32,6 @@ from iris.cluster.platform.bootstrap import (
     wait_healthy_via_ssh,
 )
 from iris.cluster.platform.ssh import GceSshConnection, GcloudSshConnection, run_streaming_with_retry
-from iris.cluster.platform.vm_platform import VmGroupStatus, VmManagerProtocol, VmSnapshot
-from iris.cluster.platform.worker_vm import TrackedVmFactory, WorkerVm, VmFactory, VmRegistry
 from iris.cluster.types import get_tpu_topology
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Timestamp
@@ -51,85 +49,99 @@ def controller_address_metadata_key(label_prefix: str) -> str:
     return f"iris-controller-address-{label_prefix}"
 
 
-class TpuVmGroup:
-    """A TPU VM group with lifecycle management.
-
-    Represents a TPU pod (potentially multi-host) that can be managed
-    as an atomic unit. The group owns its WorkerVm instances and
-    coordinates their lifecycle.
-    """
+class TpuSliceHandle:
+    """Provider slice handle for a TPU pod."""
 
     def __init__(
         self,
-        group_id: str,
+        slice_id: str,
         scale_group: str,
         zone: str,
         project_id: str,
-        vms: list[WorkerVm],
-        vm_registry: VmRegistry,
+        accelerator_variant: str,
+        labels: dict[str, str],
+        discovery_preamble: str,
+        addresses: list[str] | None = None,
         created_at: Timestamp | None = None,
     ):
-        self._group_id = group_id
+        self._slice_id = slice_id
         self._scale_group = scale_group
         self._zone = zone
         self._project_id = project_id
-        self._vms = vms
-        self._vm_registry = vm_registry
+        self._accelerator_variant = accelerator_variant
+        self._labels = labels
+        self._discovery_preamble = discovery_preamble
+        self._addresses = addresses or []
         self._created_at = created_at if created_at is not None else Timestamp.now()
 
     @property
-    def group_id(self) -> str:
-        return self._group_id
-
-    @property
     def slice_id(self) -> str:
-        return self._group_id
+        return self._slice_id
 
     @property
     def scale_group(self) -> str:
         return self._scale_group
 
     @property
-    def created_at_ms(self) -> int:
-        """Timestamp when this VM group was created (milliseconds since epoch)."""
-        return self._created_at.epoch_ms()
+    def labels(self) -> Mapping[str, str]:
+        return self._labels
 
-    def status(self) -> VmGroupStatus:
-        """Compute status from current VM states."""
-        snapshots = [
-            VmSnapshot(
-                vm_id=vm.info.vm_id,
-                state=vm.info.state,
-                address=vm.info.address,
-                init_phase=vm.info.init_phase,
-                init_error=vm.info.init_error,
+    @property
+    def discovery_preamble(self) -> str:
+        return self._discovery_preamble
+
+    def vm_targets(self) -> list[SliceVmTarget]:
+        vm_count = get_tpu_topology(self._accelerator_variant).vm_count
+        targets: list[SliceVmTarget] = []
+        for i in range(vm_count):
+            conn = GcloudSshConnection(
+                project_id=self._project_id,
+                _zone=self._zone,
+                vm_id=self._slice_id,
+                worker_index=i,
             )
-            for vm in self._vms
-        ]
-        return VmGroupStatus(vms=snapshots)
+            address = self._addresses[i] if i < len(self._addresses) else None
+            targets.append(
+                SliceVmTarget(
+                    vm_id=f"{self._slice_id}-worker-{i}",
+                    zone=self._zone,
+                    conn=conn,
+                    address=address,
+                )
+            )
+        return targets
 
-    def vms(self) -> list[WorkerVm]:
-        return list(self._vms)
+    def describe(self) -> vm_pb2.SliceInfo:
+        vms = []
+        for i in range(get_tpu_topology(self._accelerator_variant).vm_count):
+            address = self._addresses[i] if i < len(self._addresses) else ""
+            vms.append(
+                vm_pb2.VmInfo(
+                    vm_id=f"{self._slice_id}-worker-{i}",
+                    slice_id=self._slice_id,
+                    scale_group=self._scale_group,
+                    state=vm_pb2.VM_STATE_BOOTING,
+                    address=address,
+                    zone=self._zone,
+                    created_at=self._created_at.to_proto(),
+                    labels=dict(self._labels),
+                )
+            )
+        return vm_pb2.SliceInfo(
+            slice_id=self._slice_id,
+            scale_group=self._scale_group,
+            created_at=self._created_at.to_proto(),
+            vms=vms,
+        )
 
     def terminate(self) -> None:
-        """Terminate this VM group and unregister VMs.
-
-        Performs three steps:
-        1. Stop all VM lifecycle threads
-        2. Unregister VMs from the registry
-        3. Delete TPU via gcloud command
-        """
-        for vm in self._vms:
-            vm.stop()
-            self._vm_registry.unregister(vm.info.vm_id)
-
         cmd = [
             "gcloud",
             "compute",
             "tpus",
             "tpu-vm",
             "delete",
-            self._group_id,
+            self._slice_id,
             f"--zone={self._zone}",
             f"--project={self._project_id}",
             "--quiet",
@@ -137,271 +149,7 @@ class TpuVmGroup:
         logger.info("Terminating TPU: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            logger.error("Failed to delete TPU %s: %s", self._group_id, result.stderr.strip())
-
-    def to_proto(self) -> vm_pb2.SliceInfo:
-        """Convert to proto for RPC APIs."""
-
-        return vm_pb2.SliceInfo(
-            slice_id=self._group_id,
-            scale_group=self._scale_group,
-            created_at=self._created_at.to_proto(),
-            vms=[vm.info for vm in self._vms],
-        )
-
-
-class TpuVmManager:
-    """Creates TPU VM groups via gcloud compute tpus tpu-vm.
-
-    One instance per scale group. This is a factory - it creates VM groups
-    but doesn't track them (the ScalingGroup tracks groups).
-
-    Multi-host TPUs (e.g., v5p-16, v5p-32) create a single TPU pod with
-    multiple workers, each accessed via a different worker index.
-    """
-
-    def __init__(
-        self,
-        project_id: str,
-        config: config_pb2.ScaleGroupConfig,
-        bootstrap_config: config_pb2.BootstrapConfig,
-        timeouts: config_pb2.TimeoutConfig,
-        vm_factory: VmFactory,
-        label_prefix: str = "iris",
-        dry_run: bool = False,
-    ):
-        self._project_id = project_id
-        self._config = config
-        self._zone = config.zones[0] if config.zones else "us-central1-a"
-        self._bootstrap_config = bootstrap_config
-        self._timeouts = timeouts
-        self._vm_factory = vm_factory
-        self._label_prefix = label_prefix
-        self._dry_run = dry_run
-
-    def create_vm_group(self, tags: dict[str, str] | None = None) -> TpuVmGroup:
-        """Create a new TPU VM group.
-
-        Creates the TPU pod via gcloud, then creates WorkerVm instances
-        for each worker in the pod.
-        """
-        group_id = f"{self._label_prefix}-{self._config.name}-{Timestamp.now().epoch_ms()}"
-
-        labels = {
-            f"{self._label_prefix}-managed": "true",
-            f"{self._label_prefix}-scale-group": self._config.name,
-            f"{self._label_prefix}-slice-id": group_id,
-        }
-        labels.update(tags or {})
-
-        logger.info(
-            "Creating TPU VM group %s (type=%s, zone=%s, dry_run=%s)",
-            group_id,
-            self._config.accelerator_variant,
-            self._zone,
-            self._dry_run,
-        )
-
-        if self._dry_run:
-            logger.info("[DRY-RUN] Would create TPU: %s", group_id)
-        else:
-            self._gcloud_create_tpu(group_id, labels)
-
-        return self._make_vm_group(group_id, labels, addresses=None)
-
-    def discover_vm_groups(self) -> list[TpuVmGroup]:
-        """Find existing TPU VM groups for this scale group.
-
-        Queries GCP for TPUs with the scale group label, then creates
-        TpuVmGroup objects for each discovered TPU.
-        """
-        groups = []
-        label_filter = f"labels.{self._label_prefix}-scale-group={self._config.name}"
-
-        for zone in self._config.zones or [self._zone]:
-            for tpu_data in self._gcloud_list_tpus(zone, label_filter):
-                state = tpu_data.get("state", "UNKNOWN")
-                if state not in ("READY", "CREATING"):
-                    logger.info(
-                        "Skipping TPU %s in state %s (not adoptable)",
-                        tpu_data["name"],
-                        state,
-                    )
-                    continue
-
-                addresses = [ep.get("ipAddress") for ep in tpu_data.get("networkEndpoints", [])]
-                vm_group = self._make_vm_group(
-                    group_id=tpu_data["name"],
-                    labels=tpu_data.get("labels", {}),
-                    addresses=addresses,
-                    zone=zone,
-                )
-                groups.append(vm_group)
-                logger.info("Discovered TPU VM group %s in zone %s", tpu_data["name"], zone)
-
-        return groups
-
-    def _get_discovery_preamble(self) -> str:
-        """Generate GCP metadata-based discovery script for worker bootstrap.
-
-        Workers query GCP instance metadata to find a running controller.
-        Uses prefix-scoped metadata keys to ensure workers connect to the correct
-        controller when multiple controllers exist with different prefixes.
-        """
-        meta_key = controller_metadata_key(self._label_prefix)
-        addr_key = controller_address_metadata_key(self._label_prefix)
-        return f"""
-# Discover controller from GCP instance metadata (prefix: {self._label_prefix})
-CONTROLLER_ADDRESS=$(gcloud compute instances list \\
-    --project={self._project_id} \\
-    --filter="metadata.items.{meta_key}=true AND status=RUNNING" \\
-    --format="value(metadata.items.filter(key:{addr_key}).firstof(value))" \\
-    --limit=1)
-
-if [ -z "$CONTROLLER_ADDRESS" ]; then
-    echo "[iris-init] ERROR: Could not discover controller via GCP metadata (prefix: {self._label_prefix})"
-    exit 1
-fi
-echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"
-"""
-
-    def _make_vm_group(
-        self,
-        group_id: str,
-        labels: dict[str, str],
-        addresses: list[str] | None,
-        zone: str | None = None,
-    ) -> TpuVmGroup:
-        """Create a TpuVmGroup with WorkerVm instances for each worker."""
-        zone = zone or self._zone
-        vm_count = get_tpu_topology(self._config.accelerator_variant).vm_count
-
-        # GCP workers discover controller via GCP instance metadata
-        discovery_preamble = self._get_discovery_preamble()
-
-        vms: list[WorkerVm] = []
-        for i in range(vm_count):
-            conn = GcloudSshConnection(
-                project_id=self._project_id,
-                _zone=zone,
-                vm_id=group_id,
-                worker_index=i,
-            )
-            address = addresses[i] if addresses and i < len(addresses) else None
-
-            vm = self._vm_factory.create_vm(
-                vm_id=f"{group_id}-worker-{i}",
-                slice_id=group_id,
-                scale_group=self._config.name,
-                zone=zone,
-                conn=conn,
-                bootstrap_config=self._bootstrap_config,
-                timeouts=self._timeouts,
-                labels=labels,
-                address=address,
-                discovery_preamble=discovery_preamble,
-            )
-            vms.append(vm)
-
-        return TpuVmGroup(
-            group_id=group_id,
-            scale_group=self._config.name,
-            zone=zone,
-            project_id=self._project_id,
-            vms=vms,
-            vm_registry=self._vm_factory.registry,
-        )
-
-    def _gcloud_create_tpu(self, group_id: str, labels: dict[str, str]) -> None:
-        """Create a TPU VM via gcloud."""
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "create",
-            group_id,
-            f"--zone={self._zone}",
-            f"--project={self._project_id}",
-            f"--accelerator-type={self._config.accelerator_variant}",
-            f"--version={self._config.runtime_version}",
-            "--labels",
-            ",".join(f"{k}={v}" for k, v in labels.items()),
-        ]
-        if self._config.preemptible:
-            cmd.append("--preemptible")
-
-        logger.info("Running: %s", " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to create TPU: {result.stderr}")
-
-    def _gcloud_list_tpus(self, zone: str, label_filter: str) -> list[dict]:
-        """List TPU VMs in a zone matching a label filter."""
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "list",
-            f"--zone={zone}",
-            f"--project={self._project_id}",
-            "--format=json",
-            f"--filter={label_filter}",
-        ]
-        logger.debug("Running: %s", " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.warning("Failed to list TPUs in zone %s: %s", zone, result.stderr.strip())
-            return []
-        if not result.stdout.strip():
-            return []
-        tpus = json.loads(result.stdout)
-        for tpu in tpus:
-            tpu["name"] = self._extract_node_name(tpu.get("name", ""))
-        return tpus
-
-    def _extract_node_name(self, resource_name: str) -> str:
-        """Extract node name from GCP resource path.
-
-        GCP returns 'projects/proj/locations/zone/nodes/my-tpu'
-        but gcloud delete expects just 'my-tpu'.
-        """
-        if "/" in resource_name:
-            return resource_name.split("/")[-1]
-        return resource_name
-
-    def stop(self) -> None:
-        """No-op: TpuVmManager has no background threads to stop."""
-        pass
-
-
-class _GcpPlatformOps:
-    def __init__(self, platform: config_pb2.GcpPlatformConfig, label_prefix: str):
-        self._platform = platform
-        self._label_prefix = label_prefix
-
-    def list_slices(self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None) -> list[str]:
-        resolved_zone = _resolve_zone(group_config, self._platform, zone)
-        label_filter = f"labels.{self._label_prefix}-scale-group={group_config.name}"
-        slices: list[str] = []
-        for tpu in _gcloud_list_tpus(self._platform.project_id, resolved_zone, label_filter):
-            state = tpu.get("state", "UNKNOWN")
-            if state not in ("READY", "CREATING", "REPAIRING"):
-                continue
-            slices.append(_extract_node_name(tpu.get("name", "")))
-        return slices
-
-    def delete_slice(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        slice_id: str,
-        *,
-        zone: str | None = None,
-    ) -> None:
-        resolved_zone = _resolve_zone(group_config, self._platform, zone)
-        if not _gcloud_delete_tpu(self._platform.project_id, resolved_zone, slice_id):
-            raise RuntimeError(f"Failed to delete TPU slice {slice_id} in zone {resolved_zone}")
+            logger.error("Failed to delete TPU %s: %s", self._slice_id, result.stderr.strip())
 
 
 class GcpPlatform:
@@ -417,9 +165,6 @@ class GcpPlatform:
         self._label_prefix = label_prefix
         self._bootstrap = bootstrap_config
         self._timeouts = timeout_config
-
-    def vm_ops(self) -> _GcpPlatformOps:
-        return _GcpPlatformOps(self._platform, self._label_prefix)
 
     def tunnel(
         self,
@@ -445,32 +190,7 @@ class GcpPlatform:
             kwargs["tunnel_logger"] = tunnel_logger
         return controller_tunnel(**kwargs)
 
-    def vm_manager(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        vm_factory: TrackedVmFactory,
-        *,
-        dry_run: bool = False,
-    ) -> VmManagerProtocol:
-        if group_config.vm_type == config_pb2.VM_TYPE_TPU_VM:
-            config_copy = config_pb2.ScaleGroupConfig()
-            config_copy.CopyFrom(group_config)
-            if not config_copy.zones:
-                config_copy.zones.extend(_resolve_zones(group_config, self._platform))
-            return TpuVmManager(  # type: ignore[return-value]
-                project_id=self._platform.project_id,
-                config=config_copy,
-                bootstrap_config=self._bootstrap,
-                timeouts=self._timeouts,
-                vm_factory=vm_factory,
-                label_prefix=self._label_prefix,
-                dry_run=dry_run,
-            )
-        if group_config.vm_type == config_pb2.VM_TYPE_GCE_VM:
-            raise NotImplementedError("VM_TYPE_GCE_VM is not implemented yet")
-        raise ValueError(f"Unsupported vm_type for GCP platform: {group_config.vm_type}")
-
-    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[VmInfo]:
+    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[vm_pb2.VmInfo]:
         resolved_zone = zone or _resolve_controller_zone(self._platform)
         if not resolved_zone:
             return []
@@ -486,7 +206,7 @@ class GcpPlatform:
         addr_key = controller_address_metadata_key(self._label_prefix)
         return [_instance_to_vminfo(instance, addr_key=addr_key, default_port=None) for instance in instances]
 
-    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[VmInfo]:
+    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[vm_pb2.VmInfo]:
         if spec.role != "controller":
             raise NotImplementedError("GcpPlatform.start_vms currently supports controller role only")
 
@@ -538,13 +258,13 @@ class GcpPlatform:
         _gcloud_add_metadata(self._platform.project_id, resolved_zone, vm_name, {addr_key: address})
 
         return [
-            VmInfo(
+            vm_pb2.VmInfo(
                 vm_id=vm_name,
                 address=address,
                 zone=resolved_zone,
                 labels=dict(spec.labels),
-                state=VmState.RUNNING,
-                created_at_ms=Timestamp.now().epoch_ms(),
+                state=vm_pb2.VM_STATE_READY,
+                created_at=Timestamp.now().to_proto(),
             )
         ]
 
@@ -554,6 +274,111 @@ class GcpPlatform:
             raise RuntimeError("platform.gcp.zone or platform.gcp.default_zones is required")
         for vm_id in ids:
             _gcloud_delete_instance(self._platform.project_id, resolved_zone, vm_id)
+
+    def list_slices(
+        self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None
+    ) -> list[vm_pb2.SliceInfo]:
+        handles = self.discover_slices(group_config, zone=zone)
+        return [handle.describe() for handle in handles]
+
+    def create_slice(
+        self,
+        group_config: config_pb2.ScaleGroupConfig,
+        *,
+        tags: dict[str, str] | None = None,
+        zone: str | None = None,
+    ) -> SliceHandle:
+        if group_config.vm_type != config_pb2.VM_TYPE_TPU_VM:
+            raise ValueError(f"Unsupported vm_type for GCP platform: {group_config.vm_type}")
+
+        resolved_zone = _resolve_zone(group_config, self._platform, zone)
+        slice_id = f"{self._label_prefix}-{group_config.name}-{Timestamp.now().epoch_ms()}"
+
+        labels = {
+            f"{self._label_prefix}-managed": "true",
+            f"{self._label_prefix}-scale-group": group_config.name,
+            f"{self._label_prefix}-slice-id": slice_id,
+        }
+        labels.update(tags or {})
+
+        _gcloud_create_tpu(
+            project_id=self._platform.project_id,
+            zone=resolved_zone,
+            name=slice_id,
+            accelerator_type=group_config.accelerator_variant,
+            runtime_version=group_config.runtime_version,
+            labels=labels,
+            preemptible=group_config.preemptible,
+        )
+
+        return TpuSliceHandle(
+            slice_id=slice_id,
+            scale_group=group_config.name,
+            zone=resolved_zone,
+            project_id=self._platform.project_id,
+            accelerator_variant=group_config.accelerator_variant,
+            labels=labels,
+            discovery_preamble=self._discovery_preamble(),
+            addresses=None,
+        )
+
+    def discover_slices(
+        self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None
+    ) -> list[SliceHandle]:
+        if group_config.vm_type != config_pb2.VM_TYPE_TPU_VM:
+            raise ValueError(f"Unsupported vm_type for GCP platform: {group_config.vm_type}")
+
+        zones = [zone] if zone else _resolve_zones(group_config, self._platform)
+        label_filter = f"labels.{self._label_prefix}-scale-group={group_config.name}"
+        handles: list[SliceHandle] = []
+        for zone_name in zones:
+            for tpu_data in _gcloud_list_tpus(self._platform.project_id, zone_name, label_filter):
+                state = tpu_data.get("state", "UNKNOWN")
+                if state not in ("READY", "CREATING"):
+                    continue
+                addresses = [ep.get("ipAddress") for ep in tpu_data.get("networkEndpoints", [])]
+                handles.append(
+                    TpuSliceHandle(
+                        slice_id=tpu_data["name"],
+                        scale_group=group_config.name,
+                        zone=zone_name,
+                        project_id=self._platform.project_id,
+                        accelerator_variant=group_config.accelerator_variant,
+                        labels=tpu_data.get("labels", {}),
+                        discovery_preamble=self._discovery_preamble(),
+                        addresses=addresses,
+                    )
+                )
+        return handles
+
+    def delete_slice(
+        self,
+        group_config: config_pb2.ScaleGroupConfig,
+        slice_id: str,
+        *,
+        zone: str | None = None,
+    ) -> None:
+        resolved_zone = _resolve_zone(group_config, self._platform, zone)
+        if not _gcloud_delete_tpu(self._platform.project_id, resolved_zone, slice_id):
+            raise RuntimeError(f"Failed to delete TPU slice {slice_id} in zone {resolved_zone}")
+
+    def _discovery_preamble(self) -> str:
+        meta_key = controller_metadata_key(self._label_prefix)
+        addr_key = controller_address_metadata_key(self._label_prefix)
+        return f"""
+# Discover controller from GCP instance metadata (prefix: {self._label_prefix})
+CONTROLLER_ADDRESS=$(gcloud compute instances list \\
+    --project={self._platform.project_id} \\
+    --filter=\"metadata.items.{meta_key}=true AND status=RUNNING\" \\
+    --format=\"value(metadata.items.filter(key:{addr_key}).firstof(value))\" \\
+    --limit=1)
+
+if [ -z \"$CONTROLLER_ADDRESS\" ]; then
+    echo \"[iris-init] ERROR: Could not discover controller via GCP metadata (prefix: {self._label_prefix})\"
+    exit 1
+fi
+echo \"[iris-init] Discovered controller at $CONTROLLER_ADDRESS\"
+"""
 
 
 def _resolve_zones(
@@ -617,6 +442,38 @@ def _gcloud_list_tpus(project_id: str, zone: str, label_filter: str) -> list[dic
     for tpu in tpus:
         tpu["name"] = _extract_node_name(tpu.get("name", ""))
     return tpus
+
+
+def _gcloud_create_tpu(
+    project_id: str,
+    zone: str,
+    name: str,
+    accelerator_type: str,
+    runtime_version: str,
+    labels: Mapping[str, str],
+    preemptible: bool,
+) -> None:
+    cmd = [
+        "gcloud",
+        "compute",
+        "tpus",
+        "tpu-vm",
+        "create",
+        name,
+        f"--zone={zone}",
+        f"--project={project_id}",
+        f"--accelerator-type={accelerator_type}",
+        f"--version={runtime_version}",
+        "--labels",
+        ",".join(f"{k}={v}" for k, v in labels.items()),
+    ]
+    if preemptible:
+        cmd.append("--preemptible")
+
+    logger.info("Running: %s", " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to create TPU: {result.stderr}")
 
 
 def _gcloud_delete_tpu(project_id: str, zone: str, name: str) -> bool:
@@ -794,7 +651,7 @@ def _gcloud_delete_instance(project_id: str, zone: str, vm_name: str) -> None:
             logger.warning("Failed to delete VM %s: %s", vm_name, error)
 
 
-def _instance_to_vminfo(instance: dict, *, addr_key: str | None, default_port: int | None) -> VmInfo:
+def _instance_to_vminfo(instance: dict, *, addr_key: str | None, default_port: int | None) -> vm_pb2.VmInfo:
     address = ""
     if addr_key:
         for item in instance.get("metadata", {}).get("items", []):
@@ -814,21 +671,21 @@ def _instance_to_vminfo(instance: dict, *, addr_key: str | None, default_port: i
     status = instance.get("status", "")
     state = _map_instance_status(status)
 
-    return VmInfo(
+    return vm_pb2.VmInfo(
         vm_id=instance.get("name", ""),
         address=address,
         zone=instance.get("zone"),
         labels=instance.get("labels", {}),
         state=state,
-        created_at_ms=Timestamp.now().epoch_ms(),
+        created_at=Timestamp.now().to_proto(),
     )
 
 
-def _map_instance_status(status: str) -> VmState:
+def _map_instance_status(status: str) -> vm_pb2.VmState:
     if status in ("PROVISIONING", "STAGING", "STARTING"):
-        return VmState.BOOTING
+        return vm_pb2.VM_STATE_BOOTING
     if status == "RUNNING":
-        return VmState.RUNNING
+        return vm_pb2.VM_STATE_READY
     if status in ("STOPPING", "TERMINATED"):
-        return VmState.TERMINATED
-    return VmState.FAILED
+        return vm_pb2.VM_STATE_TERMINATED
+    return vm_pb2.VM_STATE_FAILED

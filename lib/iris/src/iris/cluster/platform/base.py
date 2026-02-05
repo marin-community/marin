@@ -20,31 +20,14 @@ provider-specific details into controller code.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Literal
+import logging
+from typing import Literal, Protocol
 from collections.abc import Mapping
 
-
-class VmState(Enum):
-    """Platform-agnostic VM lifecycle states."""
-
-    BOOTING = "booting"
-    RUNNING = "running"
-    TERMINATED = "terminated"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True)
-class VmInfo:
-    """Minimal VM identity + connectivity info."""
-
-    vm_id: str
-    address: str
-    zone: str | None
-    labels: Mapping[str, str]
-    state: VmState
-    created_at_ms: int
+from iris.cluster.platform.ssh import SshConnection
+from iris.rpc import config_pb2, vm_pb2
 
 
 @dataclass(frozen=True)
@@ -67,3 +50,93 @@ class VmBootstrapSpec:
     labels: Mapping[str, str]
     bootstrap_script: str | None = None
     provider_overrides: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SliceVmTarget:
+    """Connection target for a VM within a slice."""
+
+    vm_id: str
+    zone: str
+    conn: SshConnection
+    address: str | None = None
+
+
+class SliceHandle(Protocol):
+    """Handle for a provider slice (atomic group of VMs)."""
+
+    @property
+    def slice_id(self) -> str: ...
+
+    @property
+    def scale_group(self) -> str: ...
+
+    @property
+    def labels(self) -> Mapping[str, str]: ...
+
+    @property
+    def discovery_preamble(self) -> str: ...
+
+    def vm_targets(self) -> list[SliceVmTarget]: ...
+
+    def describe(self) -> vm_pb2.SliceInfo: ...
+
+    def terminate(self) -> None: ...
+
+
+class Platform(Protocol):
+    """Factory for provider-specific VM managers and ops."""
+
+    def tunnel(
+        self,
+        controller_address: str,
+        local_port: int | None = None,
+        timeout: float | None = None,
+        tunnel_logger: logging.Logger | None = None,
+    ) -> AbstractContextManager[str]:
+        """Create tunnel to controller if needed."""
+        ...
+
+    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[vm_pb2.VmInfo]:
+        """List VMs for the platform."""
+        ...
+
+    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[vm_pb2.VmInfo]:
+        """Start VMs using the bootstrap spec."""
+        ...
+
+    def stop_vms(self, ids: list[str], *, zone: str | None = None) -> None:
+        """Stop VMs by id."""
+        ...
+
+    def list_slices(
+        self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None
+    ) -> list[vm_pb2.SliceInfo]:
+        """List slices for the scale group."""
+        ...
+
+    def create_slice(
+        self,
+        group_config: config_pb2.ScaleGroupConfig,
+        *,
+        tags: dict[str, str] | None = None,
+        zone: str | None = None,
+    ) -> SliceHandle:
+        """Create a new slice and return a handle."""
+        ...
+
+    def discover_slices(
+        self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None
+    ) -> list[SliceHandle]:
+        """Discover existing slices and return handles."""
+        ...
+
+    def delete_slice(
+        self,
+        group_config: config_pb2.ScaleGroupConfig,
+        slice_id: str,
+        *,
+        zone: str | None = None,
+    ) -> None:
+        """Delete a slice by id."""
+        ...

@@ -30,7 +30,7 @@ from iris.cluster.controller.controller import (
     RpcWorkerStubFactory,
 )
 from iris.cluster.platform import Platform
-from iris.cluster.platform.base import ContainerSpec, VmBootstrapSpec, VmInfo
+from iris.cluster.platform.base import ContainerSpec, VmBootstrapSpec
 from iris.cluster.platform.bootstrap import (
     DEFAULT_BOOT_DISK_SIZE_GB,
     DEFAULT_CONTROLLER_PORT,
@@ -40,7 +40,7 @@ from iris.cluster.platform.bootstrap import (
 from iris.cluster.platform.local import find_free_port
 from iris.config import config_to_dict, create_local_autoscaler
 from iris.managed_thread import ThreadContainer
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from typing import Protocol
 
@@ -173,7 +173,7 @@ class ControllerVm:
         self._config = config
         self._threads = threads
         self._local_controller: LocalController | None = None
-        self._last_vm: VmInfo | None = None
+        self._last_vm: vm_pb2.VmInfo | None = None
         self._label_prefix = config.platform.label_prefix or "iris"
 
     def start(self) -> str:
@@ -247,7 +247,7 @@ class ControllerVm:
             self._local_controller = LocalController(self._config, threads=self._threads)
         return self._local_controller.start()
 
-    def _discover(self) -> VmInfo | None:
+    def _discover(self) -> vm_pb2.VmInfo | None:
         tag = f"{self._label_prefix}-controller"
         candidates = self._platform.list_vms(tag=tag)
         return candidates[0] if candidates else None

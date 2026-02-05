@@ -96,6 +96,8 @@ def serve(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
+                bootstrap_config=cluster_config.defaults.bootstrap,
+                timeouts=cluster_config.defaults.timeouts,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.cluster.platform.vm_platform import VmGroupProtocol, VmManagerProtocol
+from iris.cluster.controller.slice_lifecycle import SliceFactoryProtocol, SliceGroupProtocol
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -62,12 +62,12 @@ DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
 
 
 class ScalingGroup:
-    """Owns VM groups for a single scale group.
+    """Owns slices for a single scale group.
 
     Merges the old ScaleGroupState (stats tracking) with VM group ownership.
     Each ScalingGroup:
-    - Has its own VmManager for creating/discovering VM groups
-    - Tracks VM groups it owns
+    - Has its own SliceFactory for creating/discovering slices
+    - Tracks slices it owns
     - Maintains scaling stats (per-slice idle tracking, backoff, cooldowns)
     - Provides scaling policy helpers (can_scale_up, can_scale_down)
     - Owns scale-down logic via per-slice idle timeout tracking
@@ -76,7 +76,7 @@ class ScalingGroup:
     def __init__(
         self,
         config: config_pb2.ScaleGroupConfig,
-        vm_manager: VmManagerProtocol,
+        slice_factory: SliceFactoryProtocol,
         scale_up_cooldown: Duration = DEFAULT_SCALE_UP_COOLDOWN,
         scale_down_cooldown: Duration = DEFAULT_SCALE_DOWN_COOLDOWN,
         backoff_initial: Duration = DEFAULT_BACKOFF_INITIAL,
@@ -86,9 +86,9 @@ class ScalingGroup:
         quota_timeout: Duration = DEFAULT_QUOTA_TIMEOUT,
     ):
         self._config = config
-        self._vm_manager = vm_manager
-        self._vm_groups: dict[str, VmGroupProtocol] = {}
-        self._vm_groups_lock = threading.Lock()
+        self._slice_factory = slice_factory
+        self._slices: dict[str, SliceGroupProtocol] = {}
+        self._slices_lock = threading.Lock()
 
         # Demand tracking (simple current/peak, no history)
         self._current_demand: int = 0
@@ -199,11 +199,11 @@ class ScalingGroup:
 
         Called once at startup to recover state from a previous controller.
         """
-        with self._vm_groups_lock:
-            for vm_group in self._vm_manager.discover_vm_groups():
-                self._vm_groups[vm_group.group_id] = vm_group
+        with self._slices_lock:
+            for vm_group in self._slice_factory.discover_slices():
+                self._slices[vm_group.slice_id] = vm_group
 
-    def scale_up(self, tags: dict[str, str] | None = None, timestamp: Timestamp | None = None) -> VmGroupProtocol:
+    def scale_up(self, tags: dict[str, str] | None = None, timestamp: Timestamp | None = None) -> SliceGroupProtocol:
         """Create a new VM group.
 
         Args:
@@ -217,16 +217,16 @@ class ScalingGroup:
             QuotaExceededError: When quota is exceeded (quota state is set internally)
         """
         from iris.chaos import chaos_raise
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
 
         timestamp = timestamp or Timestamp.now()
 
         try:
             # Chaos injection for VM creation failures
             chaos_raise("vm.create")
-            vm_group = self._vm_manager.create_vm_group(tags)
-            with self._vm_groups_lock:
-                self._vm_groups[vm_group.group_id] = vm_group
+            vm_group = self._slice_factory.create_slice(tags)
+            with self._slices_lock:
+                self._slices[vm_group.slice_id] = vm_group
             self._last_scale_up = timestamp
             self._consecutive_failures = 0
             self._backoff_until = Timestamp.from_ms(0)
@@ -246,28 +246,28 @@ class ScalingGroup:
             timestamp: Optional timestamp (for testing)
         """
         timestamp = timestamp or Timestamp.now()
-        with self._vm_groups_lock:
-            vm_group = self._vm_groups.pop(group_id, None)
+        with self._slices_lock:
+            vm_group = self._slices.pop(group_id, None)
         if vm_group:
             vm_group.terminate()
             self._last_scale_down = timestamp
             self._slice_last_active.pop(group_id, None)  # Clean up tracking
 
-    def cleanup_failed_slices(self, timestamp: Timestamp | None = None) -> list[VmGroupProtocol]:
+    def cleanup_failed_slices(self, timestamp: Timestamp | None = None) -> list[SliceGroupProtocol]:
         """Find and terminate all failed slices, triggering backoff once.
 
         Does NOT respect scale_down_cooldown - failed slices are always cleaned immediately.
         """
         timestamp = timestamp or Timestamp.now()
-        cleaned: list[VmGroupProtocol] = []
+        cleaned: list[SliceGroupProtocol] = []
 
-        with self._vm_groups_lock:
-            snapshot = dict(self._vm_groups)
+        with self._slices_lock:
+            snapshot = dict(self._slices)
         failed_slice_ids = [slice_id for slice_id, slice_obj in snapshot.items() if slice_obj.status().any_failed]
 
         for slice_id in failed_slice_ids:
-            with self._vm_groups_lock:
-                slice_obj = self._vm_groups.pop(slice_id, None)
+            with self._slices_lock:
+                slice_obj = self._slices.pop(slice_id, None)
             if slice_obj:
                 logger.info("Cleaning up failed slice %s in group %s", slice_id, self.name)
                 slice_obj.terminate()
@@ -280,26 +280,26 @@ class ScalingGroup:
 
         return cleaned
 
-    def vm_groups(self) -> list[VmGroupProtocol]:
-        """All VM groups in this scale group."""
-        with self._vm_groups_lock:
-            return list(self._vm_groups.values())
+    def slices(self) -> list[SliceGroupProtocol]:
+        """All slices in this scale group."""
+        with self._slices_lock:
+            return list(self._slices.values())
 
     def slice_count(self) -> int:
-        """Total number of VM groups (regardless of state)."""
-        with self._vm_groups_lock:
-            return len(self._vm_groups)
+        """Total number of slices (regardless of state)."""
+        with self._slices_lock:
+            return len(self._slices)
 
     def ready_slice_count(self) -> int:
-        """Count of VM groups where all VMs are ready."""
-        with self._vm_groups_lock:
-            snapshot = list(self._vm_groups.values())
+        """Count of slices where all VMs are ready."""
+        with self._slices_lock:
+            snapshot = list(self._slices.values())
         return sum(1 for g in snapshot if g.status().all_ready)
 
-    def get_slice(self, group_id: str) -> VmGroupProtocol | None:
-        """Get a specific VM group by ID."""
-        with self._vm_groups_lock:
-            return self._vm_groups.get(group_id)
+    def get_slice(self, group_id: str) -> SliceGroupProtocol | None:
+        """Get a specific slice by ID."""
+        with self._slices_lock:
+            return self._slices.get(group_id)
 
     def update_demand(self, demand: int) -> None:
         """Update current demand."""
@@ -334,13 +334,13 @@ class ScalingGroup:
 
         For each slice, if any worker has running tasks, update its last_active timestamp.
         """
-        with self._vm_groups_lock:
-            snapshot = dict(self._vm_groups)
+        with self._slices_lock:
+            snapshot = dict(self._slices)
         for slice_id, slice_obj in snapshot.items():
             if self._slice_has_active_workers(slice_obj, vm_status_map):
                 self._slice_last_active[slice_id] = timestamp
 
-    def _slice_has_active_workers(self, slice_obj: VmGroupProtocol, vm_status_map: VmWorkerStatusMap) -> bool:
+    def _slice_has_active_workers(self, slice_obj: SliceGroupProtocol, vm_status_map: VmWorkerStatusMap) -> bool:
         """Check if any worker in a slice has running tasks (lookup by VM address)."""
         for vm in slice_obj.vms():
             vm_address = vm.info.address
@@ -350,6 +350,10 @@ class ScalingGroup:
             if status is not None and not status.is_idle:
                 return True
         return False
+
+    def stop(self) -> None:
+        """Stop any background threads owned by the slice factory."""
+        self._slice_factory.stop()
 
     def is_slice_eligible_for_scaledown(self, slice_id: str, timestamp: Timestamp) -> bool:
         """Check if a specific slice has been idle long enough to scale down.
@@ -364,10 +368,10 @@ class ScalingGroup:
         idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
         return idle_duration >= self._idle_threshold
 
-    def get_idle_slices(self, timestamp: Timestamp) -> list[VmGroupProtocol]:
+    def get_idle_slices(self, timestamp: Timestamp) -> list[SliceGroupProtocol]:
         """Get all slices that are eligible for scaledown, sorted by idle time (longest first)."""
-        with self._vm_groups_lock:
-            snapshot = dict(self._vm_groups)
+        with self._slices_lock:
+            snapshot = dict(self._slices)
         eligible = []
         for slice_id, slice_obj in snapshot.items():
             if slice_obj.status().all_ready and self.is_slice_eligible_for_scaledown(slice_id, timestamp):
@@ -382,7 +386,7 @@ class ScalingGroup:
         vm_status_map: VmWorkerStatusMap,
         target_capacity: int,
         timestamp: Timestamp,
-    ) -> VmGroupProtocol | None:
+    ) -> SliceGroupProtocol | None:
         """Scale down one idle slice if we're over target capacity.
 
         This method handles the complete scale-down decision and execution:
@@ -438,7 +442,7 @@ class ScalingGroup:
 
         return None
 
-    def _verify_slice_idle(self, slice_obj: VmGroupProtocol, vm_status_map: VmWorkerStatusMap) -> bool:
+    def _verify_slice_idle(self, slice_obj: SliceGroupProtocol, vm_status_map: VmWorkerStatusMap) -> bool:
         """Verify all workers in a slice are still idle before termination (lookup by VM address)."""
         for vm in slice_obj.vms():
             vm_address = vm.info.address
@@ -466,8 +470,8 @@ class ScalingGroup:
         cooldown_end = self._last_scale_up.add(self._scale_up_cooldown)
         if self._last_scale_up.epoch_ms() > 0 and timestamp.before(cooldown_end):
             return False
-        with self._vm_groups_lock:
-            vm_group_count = len(self._vm_groups)
+        with self._slices_lock:
+            vm_group_count = len(self._slices)
         if vm_group_count >= self._config.max_slices:
             return False
         return True
@@ -483,8 +487,8 @@ class ScalingGroup:
         cooldown_end = self._last_scale_down.add(self._scale_down_cooldown)
         if self._last_scale_down.epoch_ms() > 0 and timestamp.before(cooldown_end):
             return False
-        with self._vm_groups_lock:
-            vm_group_count = len(self._vm_groups)
+        with self._slices_lock:
+            vm_group_count = len(self._slices)
         if vm_group_count <= self._config.min_slices:
             return False
         return True
@@ -518,8 +522,8 @@ class ScalingGroup:
         Returns dict with keys: "booting", "initializing", "ready", "failed"
         """
         counts = {"booting": 0, "initializing": 0, "ready": 0, "failed": 0}
-        with self._vm_groups_lock:
-            snapshot = list(self._vm_groups.values())
+        with self._slices_lock:
+            snapshot = list(self._slices.values())
         for g in snapshot:
             status = g.status()
             vms = status.vms
@@ -601,8 +605,8 @@ class ScalingGroup:
             )
 
         # At capacity
-        with self._vm_groups_lock:
-            vm_group_count = len(self._vm_groups)
+        with self._slices_lock:
+            vm_group_count = len(self._slices)
         if vm_group_count >= self._config.max_slices:
             return AvailabilityState(GroupAvailability.AT_CAPACITY)
 
@@ -614,16 +618,16 @@ class ScalingGroup:
 
     def terminate_all(self) -> None:
         """Terminate all VM groups in this scale group."""
-        with self._vm_groups_lock:
-            snapshot = list(self._vm_groups.values())
-            self._vm_groups.clear()
+        with self._slices_lock:
+            snapshot = list(self._slices.values())
+            self._slices.clear()
         for vm_group in snapshot:
             vm_group.terminate()
 
     def to_status(self) -> vm_pb2.ScaleGroupStatus:
         """Build a ScaleGroupStatus proto for the status API."""
-        with self._vm_groups_lock:
-            snapshot = list(self._vm_groups.values())
+        with self._slices_lock:
+            snapshot = list(self._slices.values())
         return vm_pb2.ScaleGroupStatus(
             name=self.name,
             config=self._config,

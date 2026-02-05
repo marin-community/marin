@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
-from iris.cluster.platform.worker_vm import VmRegistry
+from iris.cluster.controller.worker_vm import VmRegistry
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
@@ -334,7 +334,7 @@ class Autoscaler:
 
         # Step 2: Stop all VM bootstrap threads
         for group in self._groups.values():
-            for vm_group in group.vm_groups():
+            for vm_group in group.slices():
                 for vm in vm_group.vms():
                     vm.stop()
 
@@ -344,7 +344,7 @@ class Autoscaler:
 
         # Step 4: Stop VM managers (cleanup local platform threads if present)
         for group in self._groups.values():
-            group._vm_manager.stop()
+            group.stop()
 
     def __enter__(self) -> Autoscaler:
         return self
@@ -361,7 +361,7 @@ class Autoscaler:
         for group in self._groups.values():
             group.reconcile()
             # Track creation times for discovered slices
-            for slice_obj in group.vm_groups():
+            for slice_obj in group.slices():
                 self._slice_created_at[slice_obj.slice_id] = slice_obj.created_at_ms
 
     def _log_action(
@@ -546,7 +546,7 @@ class Autoscaler:
         Returns:
             True if scale-up succeeded, False otherwise.
         """
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
 
         # Log action as pending BEFORE execution
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
@@ -761,7 +761,7 @@ class Autoscaler:
     def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
         """Find the slice and group containing a worker by VM address."""
         for group in self._groups.values():
-            for slice_obj in group.vm_groups():
+            for slice_obj in group.slices():
                 for vm in slice_obj.vms():
                     if vm.info.address == vm_address:
                         return slice_obj.slice_id, group

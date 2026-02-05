@@ -31,8 +31,8 @@ from iris.cluster.controller.autoscaler import (
     ScalingDecision,
     route_demand,
 )
-from iris.cluster.platform.worker_vm import VmRegistry
-from iris.cluster.platform.vm_platform import VmGroupStatus, VmSnapshot
+from iris.cluster.controller.worker_vm import VmRegistry
+from iris.cluster.controller.slice_lifecycle import VmGroupStatus, VmSnapshot
 from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -99,7 +99,7 @@ def make_mock_slice(
     created_at_ms: int = 1000000,
     worker_ids: list[str] | None = None,
 ) -> MagicMock:
-    """Create a mock VmGroupProtocol for testing.
+    """Create a mock SliceGroupProtocol for testing.
 
     Note: all_ready and any_failed are mutually exclusive. Set only one to True.
     If neither is set, creates a booting slice.
@@ -159,17 +159,17 @@ def make_mock_slice(
 
 
 def make_mock_vm_manager(slices_to_discover: list[MagicMock] | None = None) -> MagicMock:
-    """Create a mock VmManagerProtocol."""
+    """Create a mock SliceFactoryProtocol."""
     manager = MagicMock()
-    manager.discover_vm_groups.return_value = slices_to_discover or []
+    manager.discover_slices.return_value = slices_to_discover or []
     manager._create_count = 0
 
-    def create_vm_group_side_effect(_tags: dict[str, str] | None = None) -> MagicMock:
+    def create_slice_side_effect(_tags: dict[str, str] | None = None) -> MagicMock:
         manager._create_count += 1
         slice_id = f"new-slice-{manager._create_count}"
         return make_mock_slice(slice_id)
 
-    manager.create_vm_group.side_effect = create_vm_group_side_effect
+    manager.create_slice.side_effect = create_slice_side_effect
     return manager
 
 
@@ -583,7 +583,7 @@ class TestAutoscalerExecution:
     def test_execute_records_failure_on_scale_up_error(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """execute() records failure when scale-up fails."""
         manager = make_mock_vm_manager()
-        manager.create_vm_group.side_effect = RuntimeError("TPU unavailable")
+        manager.create_slice.side_effect = RuntimeError("TPU unavailable")
         backoff = Duration.from_seconds(5.0)
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0), backoff_initial=backoff)
         autoscaler = make_autoscaler({"test-group": group})
@@ -1495,11 +1495,11 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_exceeded_sets_group_unavailable(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QuotaExceededError sets group to QUOTA_EXCEEDED state."""
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
-        manager.create_vm_group.side_effect = QuotaExceededError("Quota exceeded")
+        manager.create_slice.side_effect = QuotaExceededError("Quota exceeded")
         group = ScalingGroup(
             scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0), quota_timeout=Duration.from_ms(60_000)
         )
@@ -1518,7 +1518,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_exceeded_routes_to_fallback_group(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """When primary group has quota exceeded, demand routes to fallback."""
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
 
         config_primary = make_scale_group_config(
             name="primary",
@@ -1536,7 +1536,7 @@ class TestAutoscalerQuotaHandling:
         )
 
         manager_primary = make_mock_vm_manager()
-        manager_primary.create_vm_group.side_effect = QuotaExceededError("Quota exceeded")
+        manager_primary.create_slice.side_effect = QuotaExceededError("Quota exceeded")
         manager_fallback = make_mock_vm_manager()
 
         group_primary = ScalingGroup(
@@ -1564,11 +1564,11 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_state_expires_after_timeout(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QUOTA_EXCEEDED state expires after timeout."""
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
-        manager.create_vm_group.side_effect = QuotaExceededError("Quota exceeded")
+        manager.create_slice.side_effect = QuotaExceededError("Quota exceeded")
         group = ScalingGroup(
             scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0), quota_timeout=Duration.from_ms(1000)
         )
@@ -1588,7 +1588,7 @@ class TestAutoscalerQuotaHandling:
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
-        manager.create_vm_group.side_effect = RuntimeError("TPU unavailable")
+        manager.create_slice.side_effect = RuntimeError("TPU unavailable")
 
         backoff = Duration.from_seconds(5.0)
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0), backoff_initial=backoff)
@@ -1645,10 +1645,10 @@ class TestAutoscalerActionLogging:
 
     def test_action_log_records_quota_exceeded(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Verify quota exceeded events are logged."""
-        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.worker_vm import QuotaExceededError
 
         manager = make_mock_vm_manager()
-        manager.create_vm_group.side_effect = QuotaExceededError("Quota exceeded in zone")
+        manager.create_slice.side_effect = QuotaExceededError("Quota exceeded in zone")
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -1864,13 +1864,13 @@ class TestAutoscalerAsyncScaleUp:
 
         # Create a manager with slow scale-up
         manager = make_mock_vm_manager()
-        original_create = manager.create_vm_group.side_effect
+        original_create = manager.create_slice.side_effect
 
         def slow_create(tags=None):
             time.sleep(0.5)  # Simulate slow VM creation
             return original_create(tags)
 
-        manager.create_vm_group.side_effect = slow_create
+        manager.create_slice.side_effect = slow_create
 
         group = ScalingGroup(config, manager, scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
@@ -1905,13 +1905,13 @@ class TestAutoscalerAsyncScaleUp:
         )
         # Create a manager with slow scale-up
         manager = make_mock_vm_manager()
-        original_create = manager.create_vm_group.side_effect
+        original_create = manager.create_slice.side_effect
 
         def slow_create(tags=None):
             time.sleep(0.2)  # Simulate slow VM creation
             return original_create(tags)
 
-        manager.create_vm_group.side_effect = slow_create
+        manager.create_slice.side_effect = slow_create
 
         group = ScalingGroup(config, manager, scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
@@ -1950,7 +1950,7 @@ class TestAutoscalerAsyncScaleUp:
 
         # Create a manager with slow scale-up
         manager = make_mock_vm_manager()
-        original_create = manager.create_vm_group.side_effect
+        original_create = manager.create_slice.side_effect
         create_completed = []
 
         def slow_create(tags=None):
@@ -1959,7 +1959,7 @@ class TestAutoscalerAsyncScaleUp:
             create_completed.append(True)
             return result
 
-        manager.create_vm_group.side_effect = slow_create
+        manager.create_slice.side_effect = slow_create
 
         group = ScalingGroup(config, manager, scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
@@ -1998,7 +1998,7 @@ class TestAutoscalerAsyncScaleUp:
 
         # Track stop() calls on VMs
         stop_called = []
-        for vm_group in group.vm_groups():
+        for vm_group in group.slices():
             for vm in vm_group.vms():
                 original_stop = vm.stop
 

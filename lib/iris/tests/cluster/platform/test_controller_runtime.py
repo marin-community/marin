@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from iris.cluster.platform.base import VmInfo, VmState
+from iris.rpc import vm_pb2
 from iris.cluster.platform.controller_vm import ControllerVm
 from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
@@ -28,8 +28,8 @@ from iris.time_utils import Timestamp
 
 @dataclass
 class _FakePlatform:
-    list_result: list[VmInfo]
-    start_result: list[VmInfo]
+    list_result: list[vm_pb2.VmInfo]
+    start_result: list[vm_pb2.VmInfo]
     started: int = 0
     stopped: list[str] | None = None
 
@@ -62,13 +62,13 @@ def _manual_config() -> config_pb2.IrisClusterConfig:
 
 
 def test_controller_vm_start_uses_platform():
-    vm = VmInfo(
+    vm = vm_pb2.VmInfo(
         vm_id="controller-1",
         address="http://10.0.0.10:10000",
         zone=None,
         labels={},
-        state=VmState.RUNNING,
-        created_at_ms=Timestamp.now().epoch_ms(),
+        state=vm_pb2.VM_STATE_READY,
+        created_at=Timestamp.now().to_proto(),
     )
     platform = _FakePlatform(list_result=[], start_result=[vm])
     runtime = ControllerVm(platform=platform, config=_manual_config())
@@ -80,13 +80,13 @@ def test_controller_vm_start_uses_platform():
 
 
 def test_controller_vm_reuses_existing(monkeypatch: pytest.MonkeyPatch):
-    vm = VmInfo(
+    vm = vm_pb2.VmInfo(
         vm_id="controller-1",
         address="http://10.0.0.10:10000",
         zone=None,
         labels={},
-        state=VmState.RUNNING,
-        created_at_ms=Timestamp.now().epoch_ms(),
+        state=vm_pb2.VM_STATE_READY,
+        created_at=Timestamp.now().to_proto(),
     )
     platform = _FakePlatform(list_result=[vm], start_result=[vm])
     runtime = ControllerVm(platform=platform, config=_manual_config())
@@ -103,13 +103,13 @@ def test_controller_vm_reuses_existing(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_controller_vm_stop_uses_platform():
-    vm = VmInfo(
+    vm = vm_pb2.VmInfo(
         vm_id="controller-1",
         address="http://10.0.0.10:10000",
         zone=None,
         labels={},
-        state=VmState.RUNNING,
-        created_at_ms=Timestamp.now().epoch_ms(),
+        state=vm_pb2.VM_STATE_READY,
+        created_at=Timestamp.now().to_proto(),
     )
     platform = _FakePlatform(list_result=[vm], start_result=[vm])
     runtime = ControllerVm(platform=platform, config=_manual_config())

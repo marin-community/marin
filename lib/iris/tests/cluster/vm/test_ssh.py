@@ -229,7 +229,7 @@ def test_direct_ssh_connection_accepts_duration_connect_timeout():
 
 def test_ssh_config_duration_flows_to_direct_ssh_connection():
     """SshConfig.connect_timeout (Duration) flows correctly to DirectSshConnection."""
-    from iris.cluster.platform.worker_vm import SshConfig
+    from iris.cluster.controller.worker_vm import SshConfig
     from iris.cluster.platform.ssh import DirectSshConnection
 
     ssh_config = SshConfig(connect_timeout=Duration.from_seconds(20))

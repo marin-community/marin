@@ -32,11 +32,12 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.types import parse_memory_string
-from iris.cluster.platform.gcp import TpuVmManager
-from iris.cluster.platform.worker_vm import SshConfig, TrackedVmFactory, VmRegistry
-from iris.cluster.platform.manual import ManualVmManager
+from iris.cluster.platform.gcp import GcpPlatform
+from iris.cluster.controller.worker_vm import SshConfig, TrackedVmFactory, VmRegistry
+from iris.cluster.platform.manual import ManualPlatform
+from iris.cluster.platform.local import LocalVmManager
 from iris.cluster.controller.scaling_group import ScalingGroup
-from iris.cluster.platform.vm_platform import VmManagerProtocol
+from iris.cluster.controller.slice_lifecycle import PlatformSliceFactory, SliceFactoryProtocol
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
@@ -592,14 +593,18 @@ def create_autoscaler(
     platform,  # type: Platform (avoiding circular import)
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeouts: config_pb2.TimeoutConfig,
     dry_run: bool = False,
 ):
     """Create autoscaler from platform and explicit config.
 
     Args:
-        platform: Platform instance for creating VM managers
+        platform: Platform instance for creating slices
         autoscaler_config: Autoscaler settings (already resolved with defaults)
         scale_groups: Map of scale group name to config
+        bootstrap_config: Worker bootstrap config
+        timeouts: Worker timeouts
         dry_run: If True, don't actually provision VMs
 
     Returns:
@@ -625,11 +630,18 @@ def create_autoscaler(
     # Create scale groups using provided platform
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
-        vm_manager = platform.vm_manager(group_config, vm_factory=vm_factory, dry_run=dry_run)
+        slice_factory = PlatformSliceFactory(
+            platform=platform,
+            group_config=group_config,
+            bootstrap_config=bootstrap_config,
+            timeouts=timeouts,
+            vm_factory=vm_factory,
+            dry_run=dry_run,
+        )
 
         scaling_groups[name] = ScalingGroup(
             config=group_config,
-            vm_manager=vm_manager,
+            slice_factory=slice_factory,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
         )
@@ -690,7 +702,7 @@ def create_autoscaler_from_specs(
     scale_groups: dict[str, ScalingGroup] = {}
 
     for name, spec in specs.items():
-        manager = _create_manager(
+        manager = _create_slice_factory(
             provider=spec.provider,
             config=spec.config,
             bootstrap_config=bootstrap_config,
@@ -705,7 +717,7 @@ def create_autoscaler_from_specs(
 
         scale_groups[name] = ScalingGroup(
             config=spec.config,
-            vm_manager=manager,
+            slice_factory=manager,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
         )
@@ -733,7 +745,7 @@ def create_manual_autoscaler(
     resources: config_pb2.ScaleGroupResources | None = None,
     slice_size: int = 1,
 ):
-    """Create a ManualVmManager-based Autoscaler directly from CLI flags.
+    """Create a manual slice autoscaler directly from CLI flags.
 
     This is the quick path for initializing hosts without a config file.
     Builds appropriate spec objects and delegates to create_autoscaler_from_specs.
@@ -786,7 +798,7 @@ def create_local_autoscaler(
     controller_address: str,
     threads: ThreadContainer | None = None,
 ):
-    """Create Autoscaler with LocalVmManagers for all scale groups.
+    """Create Autoscaler with local slice factories for all scale groups.
 
     Creates its own temp directories for worker cache and bundles.
     The temp directory is stored as autoscaler._temp_dir for cleanup.
@@ -828,7 +840,7 @@ def create_local_autoscaler(
         )
         scale_groups[name] = ScalingGroup(
             config=sg_config,
-            vm_manager=manager,
+            slice_factory=manager,
             scale_up_cooldown=Duration.from_proto(config.defaults.autoscaler.scale_up_delay),
             scale_down_cooldown=Duration.from_proto(config.defaults.autoscaler.scale_down_delay),
         )
@@ -844,7 +856,7 @@ def create_local_autoscaler(
     return autoscaler
 
 
-def _create_manager(
+def _create_slice_factory(
     provider: str,
     config: config_pb2.ScaleGroupConfig,
     bootstrap_config: config_pb2.BootstrapConfig,
@@ -856,8 +868,8 @@ def _create_manager(
     ssh_config: SshConfig | None = None,
     label_prefix: str = "iris",
     dry_run: bool = False,
-) -> VmManagerProtocol:
-    """Create the appropriate VmManager based on provider type.
+) -> SliceFactoryProtocol:
+    """Create the appropriate slice factory based on provider type.
 
     This is the lower-level factory used by create_autoscaler_from_specs
     when the caller provides explicit bootstrap/timeout/ssh configs rather
@@ -866,28 +878,54 @@ def _create_manager(
     if provider == "tpu":
         if not project_id:
             raise ValueError(f"project_id required for TPU scale group {config.name}")
-        return TpuVmManager(  # type: ignore[return-value]
-            project_id=project_id,
-            config=config,
+        gcp_config = config_pb2.GcpPlatformConfig(project_id=project_id)
+        if config.zones:
+            gcp_config.default_zones.extend(list(config.zones))
+        platform = GcpPlatform(
+            gcp_config=gcp_config,
+            label_prefix=label_prefix,
+            bootstrap_config=bootstrap_config,
+            timeout_config=timeouts,
+        )
+        return PlatformSliceFactory(
+            platform=platform,
+            group_config=config,
             bootstrap_config=bootstrap_config,
             timeouts=timeouts,
             vm_factory=vm_factory,
-            label_prefix=label_prefix,
             dry_run=dry_run,
         )
 
     if provider == "manual":
         if not hosts:
             raise ValueError(f"hosts required for manual scale group {config.name}")
-        return ManualVmManager(
-            hosts=hosts,
-            config=config,
+        config.manual.hosts[:] = hosts
+        platform = ManualPlatform(
+            label_prefix=label_prefix,
+            bootstrap_config=bootstrap_config,
+            timeout_config=timeouts,
+            ssh_config=ssh_config or config_pb2.SshConfig(),
+        )
+        return PlatformSliceFactory(
+            platform=platform,
+            group_config=config,
             bootstrap_config=bootstrap_config,
             timeouts=timeouts,
             vm_factory=vm_factory,
-            ssh_config=ssh_config,
-            label_prefix=label_prefix,
             dry_run=dry_run,
+        )
+
+    if provider == "local":
+        from iris.cluster.worker.worker import PortAllocator
+
+        port_allocator = PortAllocator(port_range=(30000, 40000))
+        return LocalVmManager(
+            scale_group_config=config,
+            controller_address=bootstrap_config.controller_address,
+            cache_path=Path(bootstrap_config.cache_dir or "/tmp/iris-cache"),
+            fake_bundle=Path(bootstrap_config.cache_dir or "/tmp/iris-bundle"),
+            vm_registry=vm_factory.registry,
+            port_allocator=port_allocator,
         )
 
     raise ValueError(f"Unknown provider: {provider}")

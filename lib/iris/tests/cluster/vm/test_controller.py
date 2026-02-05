@@ -25,7 +25,7 @@ from iris.cluster.platform.bootstrap import (
     build_worker_bootstrap_script,
 )
 from iris.cluster.platform.controller_vm import ControllerVm
-from iris.cluster.platform.base import VmInfo, VmState
+from iris.rpc import vm_pb2
 from iris.config import config_to_dict, load_config
 from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
@@ -35,19 +35,19 @@ class _FakePlatform:
     def __init__(self) -> None:
         self.started = 0
 
-    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[VmInfo]:
+    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[vm_pb2.VmInfo]:
         return []
 
-    def start_vms(self, spec, *, zone: str | None = None) -> list[VmInfo]:
+    def start_vms(self, spec, *, zone: str | None = None) -> list[vm_pb2.VmInfo]:
         self.started += 1
         return [
-            VmInfo(
+            vm_pb2.VmInfo(
                 vm_id="controller-1",
                 address="http://10.0.0.10:10000",
                 zone=zone,
                 labels=dict(spec.labels),
-                state=VmState.RUNNING,
-                created_at_ms=Timestamp.now().epoch_ms(),
+                state=vm_pb2.VM_STATE_READY,
+                created_at=Timestamp.now().to_proto(),
             )
         ]
 

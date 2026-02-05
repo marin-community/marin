@@ -6,10 +6,10 @@ Historically, controller-owned autoscaler logic lived under `cluster/vm/`, which
 
 ## Goals
 
-- Move controller-owned functionality (autoscaler, scaling group logic, demand routing) into `cluster/controller/`.
+- Move controller-owned functionality (autoscaler, scaling group logic, demand routing, worker lifecycle) into `cluster/controller/`.
 - Consolidate platform responsibilities under `cluster/platform/`.
-- Provide platform-generic VM lifecycle APIs for controller bootstrap and CLI cleanup.
-- Keep platform-specific details contained to platform modules and opaque overrides.
+- Separate platform concepts (VMs vs slices) while keeping provider-specific details inside platform modules.
+- Keep data objects serializable via `vm.proto` (no duplicate dataclasses for VM/slice info).
 - Preserve runtime behavior and RPCs while updating paths.
 
 Non-goals:
@@ -21,28 +21,17 @@ Non-goals:
 
 ```mermaid
 flowchart LR
-  CLI["iris CLI
-`cli/main.py`"] --> IrisConfig["IrisConfig
-`cluster/vm/config.py`"]
-  IrisConfig --> Platform["Platform
-`cluster/vm/platform.py`"]
+  CLI["iris CLI\n`cli/main.py`"] --> IrisConfig["IrisConfig\n`cluster/vm/config.py`"]
+  IrisConfig --> Platform["Platform\n`cluster/vm/platform.py`"]
   Platform -->|"tunnel()"| Tunnel["Controller URL"]
 
-  Controller["Controller
-`cluster/controller/controller.py`"] --> Autoscaler["Autoscaler
-`cluster/vm/autoscaler.py`"]
-  Autoscaler --> ScalingGroup["ScalingGroup
-`cluster/vm/scaling_group.py`"]
-  ScalingGroup --> VmManager["VmManager
-`cluster/vm/*_platform.py`"]
-  VmManager --> ManagedVm["ManagedVm + bootstrap
-`cluster/vm/managed_vm.py`"]
-  ManagedVm --> SSH["SSH
-`cluster/vm/ssh.py`"]
+  Controller["Controller\n`cluster/controller/controller.py`"] --> Autoscaler["Autoscaler\n`cluster/vm/autoscaler.py`"]
+  Autoscaler --> ScalingGroup["ScalingGroup\n`cluster/vm/scaling_group.py`"]
+  ScalingGroup --> VmManager["VmManager\n`cluster/vm/*_platform.py`"]
+  VmManager --> ManagedVm["ManagedVm + bootstrap\n`cluster/vm/managed_vm.py`"]
+  ManagedVm --> SSH["SSH\n`cluster/vm/ssh.py`"]
 
-  ClusterManager["ClusterManager
-`cluster/vm/cluster_manager.py`"] --> ControllerVm["Controller VM
-`cluster/vm/controller_vm.py`"]
+  ClusterManager["ClusterManager\n`cluster/vm/cluster_manager.py`"] --> ControllerVm["Controller VM\n`cluster/vm/controller_vm.py`"]
   ControllerVm --> Controller
 ```
 
@@ -56,65 +45,66 @@ lib/iris/src/iris/
       controller.py
       autoscaler.py
       scaling_group.py
+      worker_vm.py           # worker VM lifecycle + registry
+      slice_lifecycle.py     # slice factory + controller-owned slice wrapper
     platform/
-      base.py                # shared VM lifecycle types
+      base.py                # shared platform types + protocols
       bootstrap.py           # controller/worker bootstrap scripts + health checks
       gcp.py                 # GCP TPU + controller VM management
       manual.py              # manual hosts
       local.py               # local in-process platform
       ssh.py                 # SSH + tunneling helpers
       env_probe.py           # environment discovery (worker)
-      worker_vm.py           # WorkerVm + registry + lifecycle
       controller_vm.py       # controller lifecycle wrapper + LocalController
-      vm_platform.py         # VM group protocols/status helpers
+      cluster_manager.py     # cluster lifecycle wrapper (controller + tunnel)
 ```
 
-## Shared Types (Avoiding Leakage)
+## Key Types and Ownership
 
-Shared types live in `cluster/platform/base.py` and are intentionally minimal:
+Platform owns VMs and slices. Controller owns scaling groups, autoscaler policy, and worker lifecycle.
 
-```python
-@dataclass(frozen=True)
-class VmInfo:
-    vm_id: str
-    address: str
-    zone: str | None
-    labels: Mapping[str, str]
-    state: VmState
-    created_at_ms: int
-
-@dataclass(frozen=True)
-class ContainerSpec:
-    image: str
-    entrypoint: list[str]
-    env: Mapping[str, str]
-    ports: Mapping[str, int]
-    health_port: int | None = None
-
-@dataclass(frozen=True)
-class VmBootstrapSpec:
-    role: Literal["controller", "worker"]
-    container: ContainerSpec
-    labels: Mapping[str, str]
-    bootstrap_script: str | None = None
-    provider_overrides: Mapping[str, object] = field(default_factory=dict)
-```
+| Type | Purpose | Location | Notes |
+| --- | --- | --- | --- |
+| `vm_pb2.VmInfo` | VM state + identity | `iris/rpc/vm.proto` | Serialized RPC data only. |
+| `vm_pb2.VmState` | VM state enum | `iris/rpc/vm.proto` | Single source of truth. |
+| `vm_pb2.SliceInfo` | Slice state + VM membership | `iris/rpc/vm.proto` | Serialized RPC data only. |
+| `ContainerSpec` | Container launch spec | `cluster/platform/base.py` | Platform-agnostic input. |
+| `VmBootstrapSpec` | VM bootstrap spec | `cluster/platform/base.py` | Provider overrides live in `provider_overrides`. |
+| `SliceVmTarget` | SSH target for VM in a slice | `cluster/platform/base.py` | Platform-provided connection targets. |
+| `SliceHandle` | Platform handle for a slice | `cluster/platform/base.py` | `describe()` returns `vm_pb2.SliceInfo`. |
+| `WorkerVm` | Worker lifecycle + bootstrap | `cluster/controller/worker_vm.py` | Controller-owned, platform-agnostic. |
+| `WorkerSlice` | Controller-owned slice wrapper | `cluster/controller/slice_lifecycle.py` | Wraps a `SliceHandle` + `WorkerVm`s. |
+| `SliceFactoryProtocol` | Create/discover controller slices | `cluster/controller/slice_lifecycle.py` | Implemented by platform-backed factories. |
+| `ScalingGroup` | Demand/scale logic + slice ownership | `cluster/controller/scaling_group.py` | Owns per-group slice state. |
+| `Autoscaler` | Policy evaluation + group coordination | `cluster/controller/autoscaler.py` | Coordinates multiple groups. |
+| `ControllerVm` | Controller VM lifecycle wrapper | `cluster/platform/controller_vm.py` | Uses `Platform` for infra actions. |
 
 Design rules:
 
-- `VmInfo` contains only identity + connectivity. Provider-specific metadata stays in platform-specific code.
-- `VmBootstrapSpec` describes *what to run*. Provisioning details live in `provider_overrides` and are interpreted only by the platform implementation.
-- `VmState` is platform-agnostic (booting/running/terminated/failed) and is mapped to platform-specific states in each provider module.
+- **Data objects live in proto** (`VmInfo`, `VmState`, `SliceInfo`), not in Python dataclasses.
+- **Platform owns infra** (VMs/slices, SSH, bootstrapping scripts).
+- **Controller owns policy + lifecycle** (Worker VM orchestration, scaling group state, autoscaler decisions).
+- `SliceHandle.describe()` returns `vm_pb2.SliceInfo` and is the only platform-to-controller slice summary API.
 
-## Controller Lifecycle Wrapper
+## Current Control Flow
 
-`cluster/platform/controller_vm.py` is a thin wrapper that composes platform VM APIs with the controller bootstrap recipe:
+```mermaid
+flowchart LR
+  CLI["iris CLI\n`cli/main.py`"] --> IrisConfig["IrisConfig\n`iris/config.py`"]
+  IrisConfig --> Platform["Platform\n`cluster/platform/__init__.py`"]
+  Platform --> ControllerVm["ControllerVm\n`cluster/platform/controller_vm.py`"]
+  ControllerVm --> Controller["Controller\n`cluster/controller/controller.py`"]
+  Platform -->|"tunnel()"| Tunnel["Controller URL"]
 
-- Uses `Platform.list_vms/start_vms/stop_vms` for GCP/manual controller VMs.
-- Uses `LocalController` for local mode.
-- Pulls bootstrap scripts and health checks from `cluster/platform/bootstrap.py`.
-
-This keeps controller ownership intact while letting platform implementations manage infrastructure.
+  Controller --> Autoscaler["Autoscaler\n`cluster/controller/autoscaler.py`"]
+  Autoscaler --> ScalingGroup["ScalingGroup\n`cluster/controller/scaling_group.py`"]
+  ScalingGroup --> SliceFactory["SliceFactory\n`cluster/controller/slice_lifecycle.py`"]
+  SliceFactory --> Platform
+  SliceFactory --> WorkerSlice["WorkerSlice\n`cluster/controller/slice_lifecycle.py`"]
+  WorkerSlice --> WorkerVm["WorkerVm\n`cluster/controller/worker_vm.py`"]
+  Platform --> Bootstrap["Bootstrap\n`cluster/platform/bootstrap.py`"]
+  Platform --> SSH["SSH\n`cluster/platform/ssh.py`"]
+```
 
 ## Zone Handling Decisions
 
@@ -123,39 +113,10 @@ This keeps controller ownership intact while letting platform implementations ma
 - CLI commands that need global behavior (e.g. `cluster stop`) iterate all configured zones by default. `--zone` is an override.
 - We currently support **single-zone** operation; if multiple zones are configured, platform helpers require the caller to pass `zone` explicitly.
 
-## Current Control Flow
-
-```mermaid
-flowchart LR
-  CLI["iris CLI
-`cli/main.py`"] --> IrisConfig["IrisConfig
-`iris/config.py`"]
-  IrisConfig --> Platform["Platform
-`cluster/platform/__init__.py`"]
-  Platform --> ControllerVm["ControllerVm
-`cluster/platform/controller_vm.py`"]
-  ControllerVm --> Controller["Controller
-`cluster/controller/controller.py`"]
-  Platform -->|"tunnel()"| Tunnel["Controller URL"]
-
-  Controller --> Autoscaler["Autoscaler
-`cluster/controller/autoscaler.py`"]
-  Autoscaler --> ScalingGroup["ScalingGroup
-`cluster/controller/scaling_group.py`"]
-  ScalingGroup --> VmManager["VmManager
-`cluster/platform/vm_platform.py`"]
-  VmManager --> WorkerVm["WorkerVm
-`cluster/platform/worker_vm.py`"]
-  WorkerVm --> Bootstrap["Bootstrap
-`cluster/platform/bootstrap.py`"]
-  WorkerVm --> SSH["SSH
-`cluster/platform/ssh.py`"]
-```
-
 ## Options Considered
 
-1) Separate `ControllerRuntime` module vs `ControllerVm`
-- Separate runtime wrapper adds an extra indirection layer but duplicates controller lifecycle logic.
+1) Controller runtime wrapper vs controller VM wrapper
+- Separate runtime wrapper adds an extra indirection layer but duplicates lifecycle logic.
 - Consolidating into `ControllerVm` keeps bootstrap + platform wiring in one place and removes an extra API surface.
 - **Chosen:** `ControllerVm` (no separate runtime wrapper).
 
@@ -164,10 +125,10 @@ flowchart LR
 - Zone-scoped calls are explicit; the CLI can still iterate zones for global behavior.
 - **Chosen:** zone-scoped APIs with CLI-driven iteration.
 
-3) Bootstrap logic in `controller_vm.py` vs separate module
-- Keeping scripts in `controller_vm.py` co-locates controller lifecycle and shell templates.
-- Extracting to `bootstrap.py` makes both worker + controller bootstrap reusable and testable.
-- **Chosen:** `cluster/platform/bootstrap.py`.
+3) Platform slice handles vs VM group protocol in platform
+- Platform owns slices/VMs and should expose handles only.
+- Controller owns slice groups and uses `SliceHandle` to construct `WorkerSlice` instances.
+- **Chosen:** platform exposes `SliceHandle` + proto data; controller owns `SliceGroupProtocol`.
 
 ## Change List (Implemented)
 
@@ -175,23 +136,29 @@ flowchart LR
 - Introduced `bootstrap.py` to own controller/worker bootstrap scripts and health checks.
 - Renamed platform implementations to `gcp.py`, `manual.py`, `local.py`.
 - Added `ControllerVm` wrapper that drives controller lifecycle via platform APIs.
-- Moved environment probing to `cluster/platform/env_probe.py`.
-- Updated CLI and cluster manager to use `ControllerVm` and platform APIs.
-- Preserved shared type boundaries via `VmInfo`, `VmBootstrapSpec`, and `ContainerSpec`.
+- Moved worker VM lifecycle to `cluster/controller/worker_vm.py`.
+- Added controller-owned slice lifecycle in `cluster/controller/slice_lifecycle.py`.
+- Updated CLI, cluster manager, tests, and docs to match new module structure.
+- Kept all data objects in `vm.proto` (no duplicate dataclasses).
 
 ## Spiral Plan (Executed)
 
 Stage 1: Shared types + bootstrap
-- Move shared VM lifecycle types to `cluster/platform/base.py`.
+- Move platform-agnostic types to `cluster/platform/base.py`.
 - Extract controller + worker bootstrap scripts into `cluster/platform/bootstrap.py`.
-- Update WorkerVm to use shared bootstrap helpers.
+- Update `WorkerVm` to use shared bootstrap helpers.
 
 Stage 2: Platform layout + controller wrapper
 - Rename platform modules to `gcp.py`, `manual.py`, `local.py`.
 - Add platform factory + `Platform` protocol in `cluster/platform/__init__.py`.
 - Implement `ControllerVm` wrapper and remove controller runtime indirection.
 
-Stage 3: Wire-up + cleanup
+Stage 3: Controller lifecycle ownership
+- Move worker VM lifecycle to `cluster/controller/worker_vm.py`.
+- Add controller-owned slice lifecycle (`SliceHandle` -> `WorkerSlice`).
+- Update autoscaler/scaling group to use controller slice factory.
+
+Stage 4: Wire-up + cleanup
 - Update CLI and cluster manager imports to new platform layout.
 - Update tests and documentation to match new module structure.
 - Confirm zone handling is explicit and single-zone-safe.

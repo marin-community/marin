@@ -44,7 +44,7 @@ def test_quota_exceeded_retry():
 
     # First attempt should fail with quota error
     try:
-        manager.create_vm_group()
+        manager.create_slice()
         pytest.fail("should have raised QuotaExceededError")
     except Exception as e:
         # Verify it's a quota error
@@ -52,7 +52,7 @@ def test_quota_exceeded_retry():
 
     # Clear failure mode and retry
     manager.set_failure_mode(FailureMode.NONE)
-    group = manager.create_vm_group()
+    group = manager.create_slice()
 
     # Tick to advance VM state transitions
     manager.tick(Timestamp.now().epoch_ms())
@@ -76,7 +76,7 @@ def test_vm_init_stuck():
     )
     # Set init_delay_ms to a huge value so VMs never complete initialization
     manager = FakeVmManager(FakeVmManagerConfig(config=config, init_delay_ms=999_999_999))
-    group = manager.create_vm_group()
+    group = manager.create_slice()
 
     # Tick to complete boot phase
     manager.tick(Timestamp.now().epoch_ms())
@@ -107,7 +107,7 @@ def test_vm_preempted():
         zones=["us-central1-a"],
     )
     manager = FakeVmManager(FakeVmManagerConfig(config=config))
-    group = manager.create_vm_group()
+    group = manager.create_slice()
 
     # Tick to advance VMs to READY state
     manager.tick(Timestamp.now().epoch_ms())

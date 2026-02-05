@@ -16,64 +16,8 @@
 
 from __future__ import annotations
 
-import logging
-from contextlib import AbstractContextManager
-from typing import Protocol
-
-from iris.cluster.platform.base import VmBootstrapSpec, VmInfo
-from iris.cluster.platform.vm_platform import VmManagerProtocol
-from iris.cluster.platform.worker_vm import TrackedVmFactory
+from iris.cluster.platform.base import Platform
 from iris.rpc import config_pb2
-
-
-class PlatformOps(Protocol):
-    """Direct, non-lifecycle VM operations used by CLI cleanup."""
-
-    def list_slices(self, group_config: config_pb2.ScaleGroupConfig, *, zone: str | None = None) -> list[str]: ...
-
-    def delete_slice(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        slice_id: str,
-        *,
-        zone: str | None = None,
-    ) -> None: ...
-
-
-class Platform(Protocol):
-    """Factory for provider-specific VM managers and ops."""
-
-    def vm_ops(self) -> PlatformOps: ...
-
-    def vm_manager(
-        self,
-        group_config: config_pb2.ScaleGroupConfig,
-        vm_factory: TrackedVmFactory,
-        *,
-        dry_run: bool = False,
-    ) -> VmManagerProtocol: ...
-
-    def tunnel(
-        self,
-        controller_address: str,
-        local_port: int | None = None,
-        timeout: float | None = None,
-        tunnel_logger: logging.Logger | None = None,
-    ) -> AbstractContextManager[str]:
-        """Create tunnel to controller if needed."""
-        ...
-
-    def list_vms(self, *, tag: str | None = None, zone: str | None = None) -> list[VmInfo]:
-        """List VMs for the platform."""
-        ...
-
-    def start_vms(self, spec: VmBootstrapSpec, *, zone: str | None = None) -> list[VmInfo]:
-        """Start VMs using the bootstrap spec."""
-        ...
-
-    def stop_vms(self, ids: list[str], *, zone: str | None = None) -> None:
-        """Stop VMs by id."""
-        ...
 
 
 def create_platform(
@@ -120,6 +64,5 @@ def create_platform(
 
 __all__ = [
     "Platform",
-    "PlatformOps",
     "create_platform",
 ]

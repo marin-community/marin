@@ -14,7 +14,7 @@
 
 """Fake implementations for testing the autoscaler.
 
-Provides in-memory implementations of VmGroupProtocol and VmManagerProtocol
+Provides in-memory implementations of SliceGroupProtocol and SliceFactoryProtocol
 that simulate VM lifecycle with configurable delays and failure injection.
 
 Usage:
@@ -23,7 +23,7 @@ Usage:
     manager = FakeVmManager(FakeVmManagerConfig(config=config))
 
     # Create VM groups (they start in BOOTING state)
-    vm_group = manager.create_vm_group()
+    vm_group = manager.create_slice()
     assert vm_group.status().vms[0].state == vm_pb2.VM_STATE_BOOTING
 
     # Advance time to trigger state transitions (BOOTING -> INITIALIZING -> READY)
@@ -32,7 +32,7 @@ Usage:
 
     # Inject failures at the manager level
     manager.set_failure_mode(FailureMode.QUOTA_EXCEEDED)
-    manager.create_vm_group()  # raises QuotaExceededError
+    manager.create_slice()  # raises QuotaExceededError
 
 Key concepts:
     - tick(ts): Advances VM state transitions based on elapsed time.
@@ -49,8 +49,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from iris.cluster.types import get_tpu_topology
-from iris.cluster.platform.worker_vm import QuotaExceededError
-from iris.cluster.platform.vm_platform import VmGroupStatus, VmSnapshot
+from iris.cluster.controller.worker_vm import QuotaExceededError
+from iris.cluster.controller.slice_lifecycle import VmGroupStatus, VmSnapshot
 from iris.rpc import time_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
@@ -206,7 +206,7 @@ class FakeVmManagerConfig:
         config: Scale group configuration
         boot_delay_ms: Time in ms for VM to transition from BOOTING to INITIALIZING
         init_delay_ms: Time in ms for VM to transition from INITIALIZING to READY
-        failure_mode: Failure injection mode for create_vm_group
+        failure_mode: Failure injection mode for create_slice
     """
 
     config: config_pb2.ScaleGroupConfig
@@ -218,7 +218,7 @@ class FakeVmManagerConfig:
 class FakeVmManager:
     """In-memory VmManager for testing.
 
-    Implements VmManagerProtocol for the new architecture. Creates FakeVmGroup
+    Implements SliceFactoryProtocol for the new architecture. Creates FakeVmGroup
     instances with FakeVm that transition states during tick() calls.
 
     Thread-safe for use in concurrent tests.
@@ -230,7 +230,7 @@ class FakeVmManager:
         self._slices: dict[str, FakeVmGroup] = {}
         self._slice_counter = 0
 
-    def create_vm_group(self, tags: dict[str, str] | None = None) -> FakeVmGroup:
+    def create_slice(self, tags: dict[str, str] | None = None) -> FakeVmGroup:
         """Create a new fake VM group."""
         del tags  # Unused
         if self._config.failure_mode == FailureMode.QUOTA_EXCEEDED:
@@ -273,7 +273,7 @@ class FakeVmManager:
             logger.debug("Created fake VM group %s with %d VMs", slice_id, vm_count)
             return fake_vm_group
 
-    def discover_vm_groups(self) -> list[FakeVmGroup]:
+    def discover_slices(self) -> list[FakeVmGroup]:
         """No-op for fake - returns empty list."""
         return []
 

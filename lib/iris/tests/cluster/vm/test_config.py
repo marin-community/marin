@@ -393,6 +393,8 @@ scale_groups:
             platform=platform,
             autoscaler_config=config.defaults.autoscaler,
             scale_groups=config.scale_groups,
+            bootstrap_config=config.defaults.bootstrap,
+            timeouts=config.defaults.timeouts,
             dry_run=True,
         )
 
@@ -442,6 +444,8 @@ scale_groups:
             platform=platform,
             autoscaler_config=config.defaults.autoscaler,
             scale_groups=config.scale_groups,
+            bootstrap_config=config.defaults.bootstrap,
+            timeouts=config.defaults.timeouts,
             dry_run=True,
         )
 
@@ -502,6 +506,8 @@ scale_groups:
             platform=platform,
             autoscaler_config=loaded_config.defaults.autoscaler,
             scale_groups=loaded_config.scale_groups,
+            bootstrap_config=loaded_config.defaults.bootstrap,
+            timeouts=loaded_config.defaults.timeouts,
             dry_run=True,
         )
 
