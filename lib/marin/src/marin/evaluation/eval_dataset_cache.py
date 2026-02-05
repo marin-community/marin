@@ -35,7 +35,7 @@ Usage as ExecutorStep:
     )
 """
 
-import hashlib
+import json
 import logging
 import os
 import tempfile
@@ -80,7 +80,10 @@ def extract_datasets_from_tasks(
 
     for task in eval_tasks:
         try:
-            # Get the task configuration from lm-eval's YAML files
+            # Get the task configuration from lm-eval's YAML files.
+            # NOTE: _get_config is a private API. There's no public alternative for
+            # extracting dataset info from task configs. This may break if lm-eval
+            # changes its internals.
             config = task_manager._get_config(task.name)
 
             dataset_path = config.get("dataset_path")
@@ -99,22 +102,37 @@ def extract_datasets_from_tasks(
     return datasets_needed
 
 
-def compute_cache_key(eval_tasks: Sequence[EvalTaskConfig]) -> str:
-    """
-    Compute a stable hash key for a set of evaluation tasks.
+@dataclass
+class CacheManifest:
+    """Manifest tracking which datasets were successfully cached."""
 
-    This is used to create unique GCS paths for different sets of eval tasks.
+    task_names: list[str]
+    """List of task names that were requested to be cached."""
 
-    Args:
-        eval_tasks: List of EvalTaskConfig objects.
+    cached_datasets: list[tuple[str, str | None]]
+    """List of (dataset_path, dataset_name) tuples that were successfully cached."""
 
-    Returns:
-        A short hash string identifying this set of tasks.
-    """
-    # Sort tasks by name for stable ordering
-    task_names = sorted(task.name for task in eval_tasks)
-    content = "|".join(task_names)
-    return hashlib.sha256(content.encode()).hexdigest()[:12]
+    failed_datasets: list[tuple[str, str | None, str]]
+    """List of (dataset_path, dataset_name, error_message) tuples that failed to cache."""
+
+    def to_dict(self) -> dict:
+        return {
+            "task_names": self.task_names,
+            "cached_datasets": [[d[0], d[1]] for d in self.cached_datasets],
+            "failed_datasets": [[d[0], d[1], d[2]] for d in self.failed_datasets],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CacheManifest":
+        return cls(
+            task_names=data["task_names"],
+            cached_datasets=[(d[0], d[1]) for d in data["cached_datasets"]],
+            failed_datasets=[(d[0], d[1], d[2]) for d in data["failed_datasets"]],
+        )
+
+    def is_complete(self) -> bool:
+        """Return True if all requested datasets were successfully cached."""
+        return len(self.failed_datasets) == 0
 
 
 def save_eval_datasets_to_gcs(
@@ -141,17 +159,31 @@ def save_eval_datasets_to_gcs(
 
     Returns:
         The GCS path where datasets were saved.
+
+    Raises:
+        RuntimeError: If any datasets failed to download.
     """
     import datasets
 
     log_obj = log or logger
     kwargs = dataset_kwargs or {}
 
-    # Check if already cached in GCS
-    marker_path = os.path.join(gcs_path, ".eval_datasets_cached")
-    if fsspec_exists(marker_path):
-        log_obj.info(f"Eval datasets already cached at {gcs_path}")
-        return gcs_path
+    # Check if already cached in GCS with a complete manifest
+    manifest_path = os.path.join(gcs_path, ".eval_datasets_manifest.json")
+    if fsspec_exists(manifest_path):
+        try:
+            with fsspec.open(manifest_path, "r") as f:
+                manifest = CacheManifest.from_dict(json.load(f))
+            if manifest.is_complete():
+                log_obj.info(f"Eval datasets already cached at {gcs_path} (complete)")
+                return gcs_path
+            else:
+                log_obj.info(
+                    f"Found incomplete cache at {gcs_path} "
+                    f"({len(manifest.failed_datasets)} failed). Re-downloading..."
+                )
+        except Exception as e:
+            log_obj.warning(f"Could not read manifest at {manifest_path}: {e}. Re-downloading...")
 
     # Extract datasets needed
     datasets_needed = extract_datasets_from_tasks(eval_tasks, log=log_obj)
@@ -171,6 +203,9 @@ def save_eval_datasets_to_gcs(
     try:
         # Download all datasets to local cache
         log_obj.info(f"Downloading {len(datasets_needed)} datasets to {cache_dir}")
+        cached_datasets: list[tuple[str, str | None]] = []
+        failed_datasets: list[tuple[str, str | None, str]] = []
+
         for dataset_path, dataset_name in datasets_needed:
             log_obj.info(f"Downloading dataset: {dataset_path} (config: {dataset_name})")
             try:
@@ -185,22 +220,36 @@ def save_eval_datasets_to_gcs(
                     context=f"download dataset {dataset_path}",
                     logger=log_obj,
                 )
+                cached_datasets.append((dataset_path, dataset_name))
             except Exception as e:
-                log_obj.warning(f"Failed to download dataset {dataset_path}: {e}")
-                # Continue with other datasets
+                error_msg = str(e)
+                log_obj.warning(f"Failed to download dataset {dataset_path}: {error_msg}")
+                failed_datasets.append((dataset_path, dataset_name, error_msg))
+
+        # Create manifest
+        manifest = CacheManifest(
+            task_names=sorted(task.name for task in eval_tasks),
+            cached_datasets=cached_datasets,
+            failed_datasets=failed_datasets,
+        )
 
         # Upload cache directory to GCS
         log_obj.info(f"Uploading datasets to {gcs_path}")
         fs = fsspec.core.url_to_fs(gcs_path)[0]
         fs.put(cache_dir, gcs_path, recursive=True)
 
-        # Write marker file
-        task_names = sorted(task.name for task in eval_tasks)
-        marker_content = "\n".join(task_names)
-        with fsspec.open(marker_path, "w") as f:
-            f.write(marker_content)  # type: ignore[union-attr]
+        # Write manifest file
+        with fsspec.open(manifest_path, "w") as f:
+            json.dump(manifest.to_dict(), f, indent=2)
 
-        log_obj.info(f"Eval datasets cached to {gcs_path}")
+        if failed_datasets:
+            failed_names = [f"{d[0]}:{d[1]}" for d in failed_datasets]
+            raise RuntimeError(
+                f"Failed to download {len(failed_datasets)} datasets: {failed_names}. "
+                f"Successfully cached {len(cached_datasets)} datasets to {gcs_path}."
+            )
+
+        log_obj.info(f"Successfully cached {len(cached_datasets)} eval datasets to {gcs_path}")
         return gcs_path
 
     finally:
@@ -210,7 +259,7 @@ def save_eval_datasets_to_gcs(
 
 def load_eval_datasets_from_gcs(
     gcs_path: str,
-    local_cache_dir: str,
+    local_cache_dir: str | None = None,
     *,
     log: logging.Logger | None = None,
 ) -> bool:
@@ -223,7 +272,8 @@ def load_eval_datasets_from_gcs(
 
     Args:
         gcs_path: GCS path where datasets are cached.
-        local_cache_dir: Local cache directory to sync to (typically HF_DATASETS_CACHE).
+        local_cache_dir: Local cache directory to sync to. If None, uses the
+            default HuggingFace datasets cache directory.
         log: Optional logger instance.
 
     Returns:
@@ -232,10 +282,28 @@ def load_eval_datasets_from_gcs(
     log_obj = log or logger
 
     # Check if GCS cache exists
-    marker_path = os.path.join(gcs_path, ".eval_datasets_cached")
-    if not fsspec_exists(marker_path):
+    manifest_path = os.path.join(gcs_path, ".eval_datasets_manifest.json")
+    if not fsspec_exists(manifest_path):
         log_obj.info(f"No eval datasets cache found at {gcs_path}")
         return False
+
+    # Read manifest to check completeness
+    try:
+        with fsspec.open(manifest_path, "r") as f:
+            manifest = CacheManifest.from_dict(json.load(f))
+        if not manifest.is_complete():
+            log_obj.warning(
+                f"Eval datasets cache at {gcs_path} is incomplete "
+                f"({len(manifest.failed_datasets)} failed). Proceeding with available datasets."
+            )
+    except Exception as e:
+        log_obj.warning(f"Could not read manifest: {e}. Proceeding anyway.")
+
+    # Determine local cache directory
+    if local_cache_dir is None:
+        local_cache_dir = os.environ.get("HF_DATASETS_CACHE")
+        if local_cache_dir is None:
+            local_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "datasets")
 
     # Ensure local cache directory exists
     os.makedirs(local_cache_dir, exist_ok=True)
@@ -250,49 +318,6 @@ def load_eval_datasets_from_gcs(
     except Exception as e:
         log_obj.warning(f"Failed to sync eval datasets from GCS: {e}")
         return False
-
-
-def ensure_eval_datasets_cached(
-    eval_tasks: Sequence[EvalTaskConfig],
-    cache_base_path: str,
-    *,
-    local_cache_dir: str | None = None,
-    log: logging.Logger | None = None,
-) -> str:
-    """
-    Ensure evaluation datasets are cached in GCS, downloading if necessary.
-
-    This is the main entry point for the eval dataset caching system.
-    It computes a cache key for the set of tasks, checks if they're already
-    cached in GCS, and downloads them if not.
-
-    Args:
-        eval_tasks: List of EvalTaskConfig objects specifying the evaluation tasks.
-        cache_base_path: Base GCS path for caching (e.g., "gs://bucket/.eval-datasets").
-        local_cache_dir: Optional local cache directory for intermediate storage.
-        log: Optional logger instance.
-
-    Returns:
-        The GCS path where datasets are cached.
-    """
-    log_obj = log or logger
-
-    if not eval_tasks:
-        log_obj.warning("No eval tasks provided, nothing to cache")
-        return cache_base_path
-
-    # Compute cache key and full path
-    cache_key = compute_cache_key(eval_tasks)
-    gcs_path = os.path.join(cache_base_path, cache_key)
-
-    log_obj.info(f"Ensuring eval datasets are cached at {gcs_path}")
-
-    return save_eval_datasets_to_gcs(
-        eval_tasks,
-        gcs_path,
-        local_cache_dir=local_cache_dir,
-        log=log_obj,
-    )
 
 
 # ============================================================================

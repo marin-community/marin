@@ -1062,6 +1062,9 @@ class LmEvalHarnessConfig:
     When set, datasets will be synced from this GCS path to the local HuggingFace
     datasets cache before loading tasks. This avoids HuggingFace API rate limiting
     when multiple concurrent jobs all try to download the same evaluation datasets.
+
+    Use marin.evaluation.eval_dataset_cache.create_cache_eval_datasets_step() to
+    pre-cache datasets before training.
     """
 
     @property
@@ -1086,43 +1089,22 @@ class LmEvalHarnessConfig:
         locally, avoiding HuggingFace API rate limiting.
 
         Returns:
-            True if sync was successful, False otherwise.
+            True if sync was successful or not configured, False if sync failed.
         """
-        import os
-        import fsspec
-
         if not self.eval_datasets_cache_path:
-            return False
-
-        # Check if GCS cache exists
-        marker_path = os.path.join(self.eval_datasets_cache_path, ".eval_datasets_cached")
-        fs = fsspec.core.url_to_fs(self.eval_datasets_cache_path)[0]
-        if not fs.exists(marker_path):
-            logger.info(f"No eval datasets cache found at {self.eval_datasets_cache_path}")
-            return False
-
-        # Get local HF datasets cache directory
-        local_cache_dir = os.environ.get("HF_DATASETS_CACHE")
-        if local_cache_dir is None:
-            local_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "datasets")
-
-        # Ensure local cache directory exists
-        os.makedirs(local_cache_dir, exist_ok=True)
-
-        # Sync from GCS to local
-        logger.info(f"Syncing eval datasets from {self.eval_datasets_cache_path} to {local_cache_dir}")
-        try:
-            fs.get(self.eval_datasets_cache_path, local_cache_dir, recursive=True)
-            logger.info(f"Successfully synced eval datasets to {local_cache_dir}")
-
-            # Set offline mode to prevent any HuggingFace API calls
-            # This is critical to avoid rate limiting when multiple jobs run concurrently
-            os.environ["HF_DATASETS_OFFLINE"] = "1"
-            logger.info("Set HF_DATASETS_OFFLINE=1 to use cached datasets only")
-
             return True
-        except Exception as e:
-            logger.warning(f"Failed to sync eval datasets from GCS: {e}")
+
+        try:
+            from marin.evaluation.eval_dataset_cache import load_eval_datasets_from_gcs
+
+            return load_eval_datasets_from_gcs(
+                gcs_path=self.eval_datasets_cache_path,
+                log=logger,
+            )
+        except ImportError:
+            logger.warning(
+                "marin.evaluation.eval_dataset_cache not available. " "Skipping eval datasets sync from GCS."
+            )
             return False
 
     def to_task_dict(self) -> dict:
@@ -1137,8 +1119,7 @@ class LmEvalHarnessConfig:
         downloading evaluation datasets.
         """
         # Sync datasets from GCS cache if configured
-        if self.eval_datasets_cache_path:
-            self._sync_datasets_from_gcs()
+        self._sync_datasets_from_gcs()
 
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
