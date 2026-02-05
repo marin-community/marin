@@ -242,7 +242,6 @@ class IrisActorHandle:
                     "IrisActorHandle._resolve() requires IrisContext. "
                     "Call from within an Iris job or set context via iris_ctx_scope()."
                 )
-            # ActorClient handles resolution internally with retries
             self._client = ActorClient(ctx.resolver, self._endpoint_name)
         return self._client
 

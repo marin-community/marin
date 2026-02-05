@@ -373,7 +373,7 @@ class ManagedVm:
             # The controller re-bootstraps all VMs on startup to pull the latest worker image.
             # Wait for connection
             logger.info("VM %s: Waiting for connection (timeout=%.1fs)", vm_id, boot_timeout.to_seconds())
-            if not wait_for_connection(self._conn, boot_timeout, poll_interval, self._stop):
+            if not wait_for_connection(self._conn, boot_timeout, poll_interval, stop_event):
                 self.info.init_error = f"Boot timeout after {boot_timeout.to_seconds():.1f}s"
                 logger.error("VM %s: Boot timeout after %.1fs", vm_id, boot_timeout.to_seconds())
                 self._transition(vm_pb2.VM_STATE_FAILED)

@@ -46,6 +46,7 @@ from iris.time_utils import Timestamp
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
+DEFAULT_MAX_TOTAL_LINES = 10000
 
 
 class AutoscalerProtocol(Protocol):
@@ -711,42 +712,94 @@ class ControllerServiceImpl:
             state=vm_info.state,
         )
 
-    # --- Task Logs (proxied to worker) ---
+    # --- Task/Job Logs (batch fetching) ---
 
     def get_task_logs(
         self,
         request: cluster_pb2.Controller.GetTaskLogsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Get task logs by proxying the request to the worker that owns the task."""
-        task_id = JobName.from_wire(request.task_id)
-        task_id.require_task()
-        task = self._state.get_task(task_id)
-        if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
+        """Get logs for a task or all tasks in a job.
 
-        if not task.worker_id:
-            raise ConnectError(Code.FAILED_PRECONDITION, "Task has no assigned worker")
+        If request.id ends in a numeric index, treat as single task.
+        Otherwise treat as job ID and fetch logs from all tasks.
+        """
+        job_name = JobName.from_wire(request.id)
+        max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
 
-        worker = self._state.get_worker(task.worker_id)
-        if not worker:
-            raise ConnectError(Code.NOT_FOUND, f"Worker {task.worker_id} not found")
+        # Detect if this is a task ID (ends in /N) or job ID and collect tasks
+        if job_name.is_task:
+            task = self._state.get_task(job_name)
+            tasks = [task] if task else []
+        else:
+            tasks: list[ControllerTask] = []
+            prefix = job_name.to_wire()
+            if request.include_children:
+                for job in self._state.list_all_jobs():
+                    job_wire = job.job_id.to_wire()
+                    if job_wire == prefix or job_wire.startswith(prefix + "/"):
+                        tasks.extend(self._state.get_job_tasks(job.job_id))
+            else:
+                tasks.extend(self._state.get_job_tasks(job_name))
 
-        log_filter = cluster_pb2.Worker.FetchLogsFilter(
-            start_line=request.start_line,
-            start_ms=request.start_ms,
-            max_lines=request.limit,
-        )
-        worker_client = WorkerServiceClientSync(f"http://{worker.address}")
-        worker_resp = worker_client.fetch_task_logs(
-            cluster_pb2.Worker.FetchTaskLogsRequest(
-                task_id=task.task_id.to_wire(),
-                filter=log_filter,
-            )
-        )
+        # Fetch logs from workers
+        task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
+        total_lines = 0
+        truncated = False
+        last_timestamp_ms = request.since_ms
+
+        for task in tasks:
+            if truncated:
+                break
+
+            task_id_wire = task.task_id.to_wire()
+            batch = cluster_pb2.Controller.TaskLogBatch(task_id=task_id_wire)
+
+            if not task.worker_id:
+                batch.error = "Task has no assigned worker"
+                task_logs.append(batch)
+                continue
+
+            worker = self._state.get_worker(task.worker_id)
+            if not worker:
+                batch.error = f"Worker {task.worker_id} not found"
+                task_logs.append(batch)
+                continue
+
+            try:
+                log_filter = cluster_pb2.Worker.FetchLogsFilter(
+                    start_ms=request.since_ms,
+                    max_lines=max_lines - total_lines,
+                    regex=request.regex,
+                )
+                worker_client = WorkerServiceClientSync(f"http://{worker.address}")
+                worker_resp = worker_client.fetch_task_logs(
+                    cluster_pb2.Worker.FetchTaskLogsRequest(
+                        task_id=task_id_wire,
+                        filter=log_filter,
+                    )
+                )
+
+                logs = list(worker_resp.logs)
+                batch.logs.extend(logs)
+                total_lines += len(logs)
+
+                # Track max timestamp for response cursor
+                for log in logs:
+                    if log.timestamp.epoch_ms > last_timestamp_ms:
+                        last_timestamp_ms = log.timestamp.epoch_ms
+
+                if total_lines >= max_lines:
+                    truncated = True
+            except Exception as e:
+                batch.error = str(e)
+
+            task_logs.append(batch)
+
         return cluster_pb2.Controller.GetTaskLogsResponse(
-            logs=list(worker_resp.logs),
-            worker_address=worker.address,
+            task_logs=task_logs,
+            last_timestamp_ms=last_timestamp_ms,
+            truncated=truncated,
         )
 
     # --- Transactions ---

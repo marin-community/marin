@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import subprocess
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -581,12 +582,13 @@ class DockerImageBuilder:
         tag: str,
         task_logs: TaskLogs | None = None,
     ) -> None:
-        dockerfile_path = context / "Dockerfile.iris"
+        dockerfile_path = context / f"Dockerfile.iris.{uuid.uuid4().hex}"
         dockerfile_path.write_text(dockerfile_content)
 
         try:
             if task_logs:
                 task_logs.add("build", f"Starting build for image: {tag}")
+                task_logs.add("build", f"Using dockerfile: {dockerfile_path.name}")
 
             cmd = [
                 "docker",
