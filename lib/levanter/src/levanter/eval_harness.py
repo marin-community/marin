@@ -1067,7 +1067,6 @@ class LmEvalHarnessConfig:
     pre-cache datasets before training.
     """
 
-
     @property
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""
@@ -1107,7 +1106,6 @@ class LmEvalHarnessConfig:
                 "marin.evaluation.eval_dataset_cache not available. " "Skipping eval datasets sync from GCS."
             )
             return False
-
 
     def to_task_dict(self) -> dict:
         """
