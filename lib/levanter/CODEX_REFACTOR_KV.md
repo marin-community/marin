@@ -4,10 +4,17 @@ This is a gradual refactor plan for Levanter's inference-time KV caching and rel
 
 The immediate trigger for this doc is the `simpo` multi-host inference break that was "fixed" by restoring the known-good stack from `multihost_inference_work` and removing stale YAML keys (see `CODEX_MULTI_HOST_DEBUG.md`). The root cause was a correctness regression: **`InferenceEngine.reset()` was skipped on multihost**, creating host/device state divergence and leading to TPU/XLA-level crashes with no Python traceback. This plan is designed so that kind of regression is hard to introduce.
 
+TOP-LEVEL REMINDER (DO NOT REMOVE):
+- If I work for >1 hour, add a dated timestamp + short summary of progress to this doc.
+
 References:
 - KV cache mental model and current dataflow: `KV_CACHING_RESTRUCTURE.MD`
 - Prior plan (contains good ideas but also introduced subtle, high-risk changes): `CLAUDE_REFACTOR_KV.md`
 - Repro + fix log for the break: `CODEX_MULTI_HOST_DEBUG.md`
+
+## Work Log
+- 2026-02-05 00:46 PST: M5 multi-round debugging. Tested multiple configs (5 prompts/2048, 1 prompt/256) across physical/logical reset, engine reinit, per-round request rebuild, skip barrier, skip samples table. All still fail after round 0 when n_rounds>1. With TPU debug env enabled, failures show **TPU slice/runtime halt** (`program continuator has halted unexpectedly`, slice health check failed). Documented in `CODEX_REFACTOR_KV_M5_DEBUG.md`; likely runtime issue, not Python exception.
+- 2026-02-05 01:18 PST: M5 batched-rounds workaround validated. Updated engine sizing validation to scale `max_seqs`, `max_seqs_in_prefill`, and `max_prefill_size` by `n_rounds` when rounds are batched. `n_rounds=2` batched run (1 prompt/256 tokens) succeeded. Initial 5 prompts/2048 batched run failed with `Out of free pages during allocation` at `max_pages=240`; increasing `max_pages` to 336 fixed it (job finished, `pages_in_use=330 free=6`). Logs recorded in `CODEX_REFACTOR_KV_M5_DEBUG.md`.
 
 ---
 ## gold command
@@ -404,6 +411,16 @@ Progress so far:
     - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (06:41:18).
     - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (06:41:19).
     - **Immediate failure after cleanup**: `Command execution on worker {0,1} failed with exit status 1`.
+- Multi-round failure is **not reset-mode dependent** (physical/logical) and happens even with 1 prompt / 256 tokens:
+  - 5 prompts, physical reset: `/tmp/levanter_run_m5_5prompts_round2_cleanup_none_noop_zero_mul.log`
+  - 5 prompts, logical reset: `/tmp/levanter_run_m5_5prompts_round2_cleanup_none_noop_reset_logical.log`
+  - 1 prompt, 256 tokens: `/tmp/levanter_run_m5_1prompt_256_round2.log` (fast repro)
+  - All cases: **Round 0 completes, process dies before Round 1** (no Python traceback).
+- TPU debug logs (extra env `TPU_STDERR_LOG_LEVEL=0`, `TPU_MIN_LOG_LEVEL=0`, `JAX_ASYNC_ERROR_CHECKING=1`)
+  show a TPU runtime failure:
+  - Log: `/tmp/levanter_run_m5_1prompt_256_round2_debuglogs.log`
+  - Errors include: `program continuator has halted unexpectedly`, slice health check failed, slice failure/core dump.
+  - This points to a TPU runtime/slice failure rather than a Python-level bug.
 
 Guardrail: Multi-host logging safety (from `CODEX_REFACTOR_KV_M5_DEBUG.md`)
 - Never call `jax.device_get(...)` on a **globally sharded** array from a single host only.
@@ -413,20 +430,58 @@ Guardrail: Multi-host logging safety (from `CODEX_REFACTOR_KV_M5_DEBUG.md`)
     compute locally per-host and reduce, but do not single-host `device_get` a sharded array.
 
 Latest update (2026-02-05):
-- We are now consistently getting into inference; failure happens **between rounds**, during engine reset.
-- Evidence: logs with reset markers show `Generate reset: start` for round 1 on **both** hosts, but **no** `Generate reset: done`.
-  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2_cleanup_none_noop.yaml`
-  - Log: `/tmp/levanter_run_m5_5prompts_round2_cleanup_none_noop_resetlog.log`
-  - Interpretation: crash/hang is inside `InferenceEngine.reset()` → `GenState.reset_physical()` → `PageCache.zero()`
-    (i.e., the **physical reset path**, not prompt batching or logging).
-- This is the current pinpoint: **second call** to physical reset in multihost is failing deterministically.
-  We need to make physical reset safe (or switch to logical reset) before multi-prompt multi-round is stable.
+- Batched-rounds workaround is now the **current stable path** for `n_rounds > 1`:
+  - `sample_lm_multihost.py` batches all rounds into a single `engine.generate()` when `n_rounds > 1`.
+  - `_validate_engine_config` now scales `max_seqs`, `max_seqs_in_prefill`, and `max_prefill_size`
+    by `n_rounds` for the batched path.
+  - 1 prompt / 256 tokens, `n_rounds=2`: **success**.
+    - Config: `config/sampler/sample_llama8b_multihost_real_1prompt_256_round2.yaml`
+    - Log: `/tmp/levanter_run_m5_1prompt_256_round2_batched3.log`
+  - 5 prompts / 2048 tokens, `n_rounds=2`: **success after increasing page budget**.
+    - First attempt failed with `Out of free pages during allocation` at `max_pages=240`.
+      - Log: `/tmp/levanter_run_m5_5prompts_2048_round2_batched1.log`
+    - Fixed by `max_pages=336` (required pages ≈ 330 for 10 sequences @ `page_size=64`).
+      - Log: `/tmp/levanter_run_m5_5prompts_2048_round2_batched2.log`
+      - `DecodeStats[after_decode]: pages_in_use=330 free=6`.
+- Multi-round **per-round reset** path is still failing (TPU slice/runtime halt). For now, treat
+  batched rounds as the supported multi-round workflow; deeper reset fixes remain a follow-up.
+- We are **forgoing multi-round per-call resets** for now because they reliably trigger TPU slice/runtime
+  failures between rounds on v5p-16 (no Python traceback). The only supported options are:
+  - Batched rounds in a single `engine.generate()` call (with correct `max_pages` sizing).
+  - Separate jobs per round if batched capacity is too large.
+- Clarification (2026-02-05):
+  - `n_rounds > 1` **only works** when all rounds are **batched into a single** `engine.generate()` call.
+    The per-round reset loop (multiple generate calls in one job) is still unstable on TPU.
+  - If you only want **one response per prompt**, use `n_rounds=1`.
+  - Very large prompt sets (e.g., 100k prompts) **cannot** fit in a single call; they require batching.
+    Today the safe option is **separate jobs per batch** until the reset path is fixed.
+
+Note: We are committing **partial M5 progress** with the batched-rounds workaround + hard `max_pages`
+validation; the per-round reset instability remains an open follow-up.
+
+M5 failure modes and strategies (clarified):
+1. **Multi-round reset failure (TPU slice halt).**
+   - Symptom: `n_rounds > 1` in a single job crashes between rounds with TPU runtime errors
+     (no Python traceback; slice health check failure).
+   - Strategy A: **Per-round reset** (legacy loop). Currently unstable on TPU.
+   - Strategy B: **Batched rounds** (current workaround). Combine all rounds into a single
+     `engine.generate()` call and avoid repeated resets inside one job.
+   - Strategy C: **External orchestration**. Run one round per job (no multi-rounds inside a job).
+
+2. **Out-of-free-pages failure (KV capacity).**
+   - Symptom: `Out of free pages during allocation` during batched rounds.
+   - Cause: `engine.max_pages` too small for the total sequences and tokens.
+   - Strategy A: **Increase `max_pages`** using the estimate (now enforced as a hard error):
+     `required_pages ≈ ceil((max_prompt_len + max_new_tokens) / page_size) * (num_prompts * n_rounds * n_generations)`.
+   - Strategy B: **Reduce load** by lowering `n_rounds`, `num_prompts`, or `max_new_tokens`,
+     or by splitting into multiple jobs.
 
 Next steps for M5:
-- Re-run `n_rounds: 2` with the added model/engine boundary logging to see whether the failure happens
-  during model load, engine creation, or between rounds.
-- If the failure is strictly after round 1, add a post-round reset assertion helper (used mask + refcounts)
-  and consider forcing a fresh engine reset between rounds as a diagnostic.
+- Decide whether the new `max_pages` **warning** (estimated required pages) should be promoted
+  to a hard error for batched rounds. The warning now prevents the silent `Out of free pages during allocation`
+  failure seen with `max_pages=240`.
+- Decide whether we want to keep the batched-rounds mode as the **official** path for `n_rounds > 1`,
+  or keep investigating the per-round reset TPU slice failure as a deeper runtime issue.
 
 ### M6 - Performance Work: Reference Attention and KV Update
 

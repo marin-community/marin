@@ -4,7 +4,7 @@ profile: true
 trainer:
   tracker:
     type: wandb
-    project: levanter-inference-bench
+    project: levanter-multihost-sampling
   ray:
     auto_start_cluster: false
   mp: p=bfloat16,c=bfloat16

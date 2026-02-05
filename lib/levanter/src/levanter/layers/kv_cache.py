@@ -67,7 +67,9 @@ class KvPageCache(PageCache):
 
     def zero(self) -> "KvPageCache":
         """Return a version of this cache with KV pages zeroed."""
-        reset_pages = jnp.zeros_like(self.kv_pages.array)
+        # Use a multiply-by-zero to let XLA reuse the input buffer when donation is enabled,
+        # avoiding a full extra allocation for large KV caches.
+        reset_pages = self.kv_pages.array * jnp.array(0, dtype=self.kv_pages.array.dtype)
         return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
 
     @named_call

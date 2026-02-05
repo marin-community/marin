@@ -19,15 +19,15 @@ model:
   use_tpu_ragged_paged_attention: false
 engine:
   max_seq_len: 2560
-  max_pages: 240
+  max_pages: 336
   page_size: 64
-  max_seqs: 5
-  max_seqs_in_prefill: 5
-  max_prefill_size: 512
+  max_seqs: 10
+  max_seqs_in_prefill: 10
+  max_prefill_size: 1024
   max_queued_tokens: 64
   max_rounds: 32
   debug_stats_every_n: 10
-  reset_mode: physical
+  reset_mode: logical
   cleanup_mode: none
   max_stop_seqs: 1
   max_stop_tokens: 8

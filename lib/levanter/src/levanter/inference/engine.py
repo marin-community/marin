@@ -349,6 +349,16 @@ class GenState(eqx.Module):
         return new_state, child_local_id  # type: ignore
 
 
+@functools.partial(eqx.filter_jit, donate="all")
+def _reset_gen_state_logical(gen_state: GenState) -> GenState:
+    return gen_state.reset_logical()
+
+
+@functools.partial(eqx.filter_jit, donate="all")
+def _reset_gen_state_physical(gen_state: GenState) -> GenState:
+    return gen_state.reset_physical()
+
+
 @functools.partial(jax.jit, donate_argnums=0)
 def _clone_sequence(
     state,
@@ -883,10 +893,9 @@ class InferenceEngine:
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
         if self.config.reset_mode == "logical":
-            reset_fn = self.gen_state.reset_logical
+            self.gen_state = _reset_gen_state_logical(self.gen_state)
         else:
-            reset_fn = self.gen_state.reset_physical
-        self.gen_state = eqx.filter_jit(reset_fn, donate="all")()
+            self.gen_state = _reset_gen_state_physical(self.gen_state)
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
