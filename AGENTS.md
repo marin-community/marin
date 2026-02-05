@@ -383,4 +383,31 @@ Bilinear experts, BS=64 (same group automatically):
 GROUP="olmoe_sizes_v5p32_b64_$(git rev-parse --short HEAD)" && SUFFIX="t$(date +%Y%m%d_%H%M%S)_$$" && source .venv/bin/activate && TMPDIR=/tmp uv run python -m marin.run.ray_run --cluster "infra/marin-us-central1.yaml" --extra tpu --no_wait --env_vars WANDB_MODE online --env_vars WANDB_API_KEY "${WANDB_API_KEY:-}" --env_vars WANDB_ENTITY "${WANDB_ENTITY:-}" --env_vars WANDB_PROJECT "${WANDB_PROJECT:-}" --env_vars HF_TOKEN "${HF_TOKEN:-}" --env_vars PIP_NO_CACHE_DIR 1 --env_vars PIP_IGNORE_INSTALLED 1 --env_vars TMPDIR /tmp --env_vars JAX_COMPILATION_CACHE_DIR gs://marin-us-central1/jax-cache/olmoe_sizes_bilinear_b64 --env_vars JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS 0 --env_vars JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES -1 --env_vars JAX_RAGGED_DOT_USE_RAGGED_DOT_INSTRUCTION 1 -- python -m experiments.speedrun.olmoe_1b7b_size_speedrun_sweep --dataset nemotron_dclm_fineweb_10b --tpu-type v5p-32 --seq-len 4096 --global-batch-size 64 --eval-suite core --eval-suite-mode both --steps-per-task-eval 500 --bilinear-mlp --wandb-group "$GROUP" --run-suffix "bilinear_${SUFFIX}" --sizes olmoe_1b7b
 ```
 
+### Mixtral 8x7B vs Llama 13B (100B Nemotron+DCLM+FineWeb‑Edu)
+
+- Script: `python -m experiments.speedrun.mixtral_vs_dense_nemotron_dclm_fineweb_edu_100b`
+- W&B: `WANDB_PROJECT=mixtral_vs_dense`, group like `mixtral_vs_dense_100b_v5p32_<gitsha>`
+- **From scratch**: pass a fresh `--run-suffix` each submission (the script requires it to avoid accidental resume).
+- Checkpoints: `gs://marin-us-central1/checkpoints/mixtral_vs_dense/{llama_13b,mixtral_8x7b}/<run_suffix>-<hash>/checkpoints/`
+
+Command (v5p-32, `seq=4096`, `global_bs=192`, `token_target=100B`, core eval suite during+post, feistel shuffle):
+
+```bash
+GROUP="mixtral_vs_dense_100b_v5p32_$(git rev-parse --short HEAD)" && \
+SUFFIX="v5p32_b192_s4096_100b_core_feistel_pdp1_$(git rev-parse --short HEAD)_t$(date +%Y%m%d_%H%M%S)_$$" && \
+source .venv/bin/activate && \
+TMPDIR=/tmp RAY_TMPDIR=/tmp uv run python -m marin.run.ray_run \
+  --cluster "infra/marin-us-central1.yaml" --extra tpu --no_wait \
+  --env_vars WANDB_MODE online --env_vars WANDB_ENTITY "${WANDB_ENTITY:-marin-community}" \
+  --env_vars PIP_NO_CACHE_DIR 1 --env_vars PIP_IGNORE_INSTALLED 1 --env_vars TMPDIR /tmp --env_vars RAY_TMPDIR /tmp \
+  --env_vars JAX_COMPILATION_CACHE_DIR "gs://marin-us-central1/jax-cache/mixtral_vs_dense_v5p32" \
+  --env_vars JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS 0 --env_vars JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES -1 \
+  --env_vars JAX_RAGGED_DOT_USE_RAGGED_DOT_INSTRUCTION 1 \
+  -- python -m experiments.speedrun.mixtral_vs_dense_nemotron_dclm_fineweb_edu_100b \
+    --tpu-type v5p-32 --seq-len 4096 --global-batch-size 192 --token-target 100000000000 \
+    --per-device-parallelism 1 --permutation-type feistel --dataset-tokenizer stanford-crfm/marin-tokenizer \
+    --eval-suite core --eval-suite-mode both --steps-per-task-eval 5000 \
+    --wandb-project mixtral_vs_dense --wandb-group "$GROUP" --run-suffix "$SUFFIX"
+```
+
 > This file will be expanded as agent workflows and best practices evolve.
