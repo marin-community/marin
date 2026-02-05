@@ -27,6 +27,25 @@ from iris.logging import configure_logging as _configure_logging
 logger = _logging_module.getLogger(__name__)
 
 
+def require_controller_url(ctx: click.Context) -> str:
+    """Get controller_url from context or raise a descriptive error.
+
+    Use this in commands that require a connection to the controller.
+    Provides clear error messages based on whether --config was provided.
+    """
+    controller_url = ctx.obj.get("controller_url") if ctx.obj else None
+    if controller_url:
+        return controller_url
+
+    config_file = ctx.obj.get("config_file") if ctx.obj else None
+    if config_file:
+        raise click.ClickException(
+            f"Could not connect to controller (config: {config_file}). "
+            "Check that the controller is running and reachable."
+        )
+    raise click.ClickException("Either --controller-url or --config is required")
+
+
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")

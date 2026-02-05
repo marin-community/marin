@@ -30,6 +30,7 @@ from typing import TypeVar
 import click
 from google.protobuf import json_format
 
+from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
@@ -461,10 +462,7 @@ def ssh_status(ctx, tail: int):
 @click.pass_context
 def health(ctx):
     """Check controller health endpoint."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
     try:
         client.list_jobs(cluster_pb2.Controller.ListJobsRequest())
@@ -479,10 +477,7 @@ def health(ctx):
 @click.pass_context
 def autoscaler_status(ctx, json_output: bool):
     """Get autoscaler status via RPC."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
     request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
 
@@ -534,10 +529,7 @@ def autoscaler_status(ctx, json_output: bool):
 @click.pass_context
 def list_workers(ctx, json_output: bool):
     """List registered workers."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
     request = cluster_pb2.Controller.ListWorkersRequest()
 
@@ -651,10 +643,7 @@ def bootstrap_logs(ctx, tail: int):
 @click.pass_context
 def list_jobs(ctx, json_output: bool):
     """List all jobs."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
     request = cluster_pb2.Controller.ListJobsRequest()
 
@@ -694,10 +683,7 @@ def list_jobs(ctx, json_output: bool):
 @click.pass_context
 def show_task_logs(ctx, job_id: str, category: str | None, max_entries: int):
     """Show detailed task logs for a job."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url)
 
     try:
@@ -753,10 +739,7 @@ def validate(ctx, workspace: Path | None, tpu_type: str):
 
     Submits TPU test jobs to verify the cluster is functioning correctly.
     """
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
-
+    controller_url = require_controller_url(ctx)
     iris_root = Path(__file__).resolve().parents[2]
     ws = workspace or iris_root
 

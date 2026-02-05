@@ -39,6 +39,7 @@ from iris.time_utils import Timestamp
 
 from iris.cli.build import _build_image, _push_to_registries
 from iris.cli.debug import debug
+from iris.cli.main import require_controller_url
 
 # =============================================================================
 # Helpers
@@ -283,10 +284,7 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
         raise SystemExit(1) from e
     if validate:
         click.echo("\nValidating cluster health...")
-        controller_url = ctx.obj.get("controller_url")
-        if not controller_url:
-            click.echo("Controller URL not available in context", err=True)
-            raise SystemExit(1)
+        controller_url = require_controller_url(ctx)
         try:
             _validate_cluster_health(controller_url)
             click.echo("Cluster validation passed.")
@@ -299,10 +297,7 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
 @click.pass_context
 def cluster_status_cmd(ctx):
     """Show cluster status including controller and autoscaler."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("--config or --controller-url required")
-
+    controller_url = require_controller_url(ctx)
     click.echo("Checking controller status...")
     try:
         as_status = _get_autoscaler_status(controller_url)
@@ -328,10 +323,7 @@ def cluster_dashboard(ctx):
 
     Uses the tunnel established by the iris group. Blocks until Ctrl+C.
     """
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("--config or --controller-url required on iris group")
-
+    controller_url = require_controller_url(ctx)
     stop = threading.Event()
 
     def on_signal(sig, frame):
@@ -364,9 +356,7 @@ def vm(ctx):
 @click.pass_context
 def vm_status(ctx, scale_group):
     """Show VM and slice status from the controller."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
+    controller_url = require_controller_url(ctx)
     try:
         as_status = _get_autoscaler_status(controller_url)
     except Exception as e:
@@ -409,9 +399,7 @@ def vm_status(ctx, scale_group):
 @click.pass_context
 def vm_logs(ctx, vm_id, tail):
     """Show VM initialization logs."""
-    controller_url = ctx.obj.get("controller_url")
-    if not controller_url:
-        raise click.ClickException("Either --controller-url or --config is required")
+    controller_url = require_controller_url(ctx)
     try:
         log_content, returned_vm_id, state = _get_vm_logs(controller_url, vm_id, tail)
     except ConnectError as e:

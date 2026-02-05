@@ -28,6 +28,7 @@ from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
+from iris.cli.main import require_controller_url
 from iris.rpc import actor_connect, cluster_connect
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
@@ -295,9 +296,7 @@ class ServiceCommands(click.MultiCommand):
 
         @click.pass_context
         def callback(ctx: click.Context, json_str: str | None, **kwargs):
-            controller_url = ctx.obj.get("controller_url")
-            if not controller_url:
-                raise click.ClickException("Either --controller-url or --config is required for RPC commands")
+            controller_url = require_controller_url(ctx)
             field_values = {k: v for k, v in kwargs.items() if v is not None}
             request = build_request(method, json_str, field_values)
             response = call_rpc(service_name, method.name, controller_url, request)

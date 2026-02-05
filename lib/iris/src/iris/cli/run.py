@@ -29,6 +29,7 @@ from pathlib import Path
 import click
 import yaml
 
+from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
@@ -297,11 +298,7 @@ def run(
     configure_logging(level=logging.INFO)
 
     # Get controller_url from parent context (established by main group)
-    controller_url = ctx.obj.get("controller_url") if ctx.obj else None
-    if not controller_url:
-        raise click.ClickException(
-            "Controller URL not available. Ensure --config or --controller-url is provided to the iris group."
-        )
+    controller_url = require_controller_url(ctx)
 
     command = list(cmd)
     if not command:
