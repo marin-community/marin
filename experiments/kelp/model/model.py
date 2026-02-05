@@ -22,26 +22,21 @@ Key differences from AR models:
 """
 
 import logging
-from dataclasses import dataclass, replace
-from functools import partial
-from typing import Callable
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
 from einops import rearrange
 from jax import random
-from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from experiments.kelp.model.config import TreeDiffusionConfig
 from experiments.kelp.model.noise import (
     NoiseSchedule,
-    corrupt_tokens,
     create_initial_tokens,
     get_schedule,
     sample_iterative,
-    sample_timesteps,
 )
 
 logger = logging.getLogger(__name__)

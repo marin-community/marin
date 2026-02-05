@@ -32,13 +32,11 @@ For ExecutorStep-based training, use the executor_main entry point.
 import argparse
 import logging
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-
-from experiments.kelp.model.config import TreeDiffusionConfig
-from experiments.kelp.model.presets import PRESETS, ModelPreset, get_preset
+from experiments.kelp.model.presets import PRESETS, get_preset
 from experiments.kelp.training.train import TrainingConfig
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,7 +92,6 @@ def run_kelp_training(config: KelpTrainingConfig) -> dict:
     Returns:
         Dictionary with training results.
     """
-    import jax
     from jax import random
 
     preset = get_preset(config.preset)
