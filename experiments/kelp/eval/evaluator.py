@@ -76,6 +76,39 @@ class EvaluationResults:
         return result
 
 
+class SimpleTokenizer:
+    """Simple byte-level tokenizer for evaluation."""
+
+    def __init__(self, vocab_size: int = 256):
+        self.vocab_size = vocab_size
+        self.pad_token_id = 0
+        self.mask_token_id = vocab_size - 1
+        self.unk_token_id = 1
+
+    def encode(self, text: str) -> list[int]:
+        """Encode text to token IDs."""
+        ids = []
+        for c in text:
+            code = ord(c)
+            if code < self.vocab_size - 2:
+                ids.append(code + 2)
+            else:
+                ids.append(self.unk_token_id)
+        return ids
+
+    def decode(self, ids: list[int]) -> str:
+        """Decode token IDs to text."""
+        chars = []
+        for i in ids:
+            if i == self.pad_token_id or i == self.mask_token_id:
+                continue
+            if i == self.unk_token_id:
+                chars.append("?")
+            elif i >= 2:
+                chars.append(chr(i - 2))
+        return "".join(chars)
+
+
 class TreeDiffusionEvaluator:
     """Evaluator for tree diffusion program synthesis models."""
 
@@ -86,6 +119,7 @@ class TreeDiffusionEvaluator:
     ):
         self.model = model
         self.config = config
+        self.tokenizer = SimpleTokenizer(vocab_size=model.config.vocab_size)
 
     def generate(
         self,
@@ -107,7 +141,9 @@ class TreeDiffusionEvaluator:
             results[i][j] = j-th sample for i-th prompt.
         """
         all_samples = []
-        for prompt in prompts:
+        for i, prompt in enumerate(prompts):
+            if (i + 1) % 5 == 0 or i == 0:
+                logger.info(f"  Generating samples for prompt {i + 1}/{len(prompts)}")
             samples = []
             for _ in range(num_samples):
                 code = self.model.sample(
@@ -115,6 +151,7 @@ class TreeDiffusionEvaluator:
                     max_iterations=max_iterations or self.model.config.num_diffusion_steps,
                     temperature=temperature,
                     use_grammar_constraints=self.config.use_grammar_constraints,
+                    tokenizer=self.tokenizer,
                 )
                 samples.append(code)
             all_samples.append(samples)
@@ -139,6 +176,13 @@ class TreeDiffusionEvaluator:
         logger.info(f"Evaluating syntactic validity on {len(prompts)} prompts")
         samples = self.generate(prompts, num_samples=1, max_iterations=num_iterations)
         generated_codes = [s[0] for s in samples]
+
+        # Log sample outputs for debugging
+        for i, (prompt, code) in enumerate(zip(prompts[:3], generated_codes[:3])):
+            logger.info(f"--- Sample {i + 1} ---")
+            logger.info(f"Prompt: {prompt[:60]}...")
+            logger.info(f"Generated ({len(code)} chars): {code[:200]}...")
+
         return compute_validity_rate(generated_codes, return_details=True)  # type: ignore
 
     def evaluate_pass_at_k(
