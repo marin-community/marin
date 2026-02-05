@@ -61,7 +61,7 @@ from marin.execution.executor import executor_main
 # =============================================================================
 # Model Configuration
 # =============================================================================
-MODEL_NAME_OR_GCS_PATH = "Qwen/Qwen3-4B"
+MODEL_NAME_OR_GCS_PATH = "gs://marin-us-central1/checkpoints/exp_instilloracle_sft_qwen3_4b_mixtureofthoughts_math-263ee5/hf/step-500"
 
 # Whether to auto-discover the latest checkpoint in a training run directory.
 # Set to True when MODEL_NAME_OR_GCS_PATH points to a training output directory
@@ -83,11 +83,11 @@ SEEDS = [42]  # Single seed for quick testing
 # -----------------------------------------------------------------------------
 
 # === Math Benchmarks ===
-EVAL_TASKS = [AIME25]
+# EVAL_TASKS = [AIME25]
 # EVAL_TASKS = [AIME24]  # AIME 2024 (30 problems)
 # EVAL_TASKS = [AIME25]  # AIME 2025 (30 problems)
 # EVAL_TASKS = [AMC23]  # AMC 2023
-# EVAL_TASKS = [MATH500]  # MATH dataset (500 problems)
+EVAL_TASKS = [MATH500]  # MATH dataset (500 problems)
 # EVAL_TASKS = [HMMT]  # Harvard-MIT Math Tournament
 
 # === Code Benchmarks ===
