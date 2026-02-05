@@ -227,3 +227,7 @@ scr/*
 .marin.yaml
 
 /scratch
+
+
+.chainlink
+.claude/hooks/
