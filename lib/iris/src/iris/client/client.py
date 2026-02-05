@@ -273,6 +273,7 @@ class Job:
             status = self._client._cluster_client.get_job_status(self._job_id)
 
             try:
+                logger.info("Fetching: job_id=%s include_children=%s since=%s", self._job_id, include_children, since_ms)
                 response = self._client._cluster_client.fetch_task_logs(
                     self._job_id,
                     include_children=include_children,
@@ -288,7 +289,7 @@ class Job:
                 if response.last_timestamp_ms > since_ms:
                     since_ms = response.last_timestamp_ms
             except Exception as e:
-                logger.debug("Failed to fetch job logs: %s", e)
+                logger.warning("Failed to fetch job logs: %s", e)
 
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
@@ -303,8 +304,8 @@ class Job:
                         for proto in batch.logs:
                             entry = LogEntry.from_proto(proto)
                             logger.info("Task %s log: %s", task_id, entry.data)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to fetch final job logs: %s", e)
                 return status
 
             deadline.raise_if_expired(f"Job {self._job_id} did not complete in {timeout}s")

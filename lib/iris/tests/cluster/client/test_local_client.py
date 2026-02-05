@@ -14,8 +14,11 @@
 
 """Tests for local cluster client functionality."""
 
+import logging
+
 import pytest
 
+from iris.client.client import IrisClient, Job
 from iris.cluster.client.local_client import LocalClusterClient
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2
@@ -128,3 +131,30 @@ def test_command_entrypoint_with_custom_env_var(client):
     response = client.fetch_task_logs(job_id.task(0))
     log_text = extract_log_text(response)
     assert "CUSTOM_VAR=custom_value" in log_text
+
+
+def test_job_wait_with_stream_logs(client, caplog):
+    """Verify Job.wait(stream_logs=True) fetches and streams logs."""
+    iris = IrisClient(client)
+    job_id = JobName.root("test-stream-logs")
+
+    entrypoint = Entrypoint.from_command("sh", "-c", "echo 'hello from streaming'")
+    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+
+    client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
+    job = Job(iris, job_id)
+
+    with caplog.at_level(logging.INFO, logger="iris.client.client"):
+        status = job.wait(stream_logs=True, timeout=10.0)
+
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    log_messages = [r.message for r in caplog.records]
+    assert any(
+        "hello from streaming" in msg for msg in log_messages
+    ), f"Expected streamed log output, got: {log_messages}"
+
+    # Verify no fetch failures occurred during streaming — this catches bugs
+    # like typos or API mismatches that get silently swallowed.
+    fetch_failures = [r.message for r in caplog.records if "Failed to fetch" in r.message]
+    assert not fetch_failures, f"Log fetching failed during streaming: {fetch_failures}"
