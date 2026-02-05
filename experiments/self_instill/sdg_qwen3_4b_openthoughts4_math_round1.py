@@ -301,35 +301,36 @@ generate_with_selection = ExecutorStep(
 
 
 # =============================================================================
-# STEP 1.5: FILTER - Remove rows where no sample passed static check
+# STEP 1.5: FILTER - Collect valid samples as ordered list (don't explode)
 # =============================================================================
 # For instruction-tuned models: check for <think>...</think> format AND \boxed{}
 # This ensures the model output is in the expected reasoning format.
+#
+# NEW DESIGN: Keep all valid samples together in one row as an ordered list.
+# This enables iterative UQ checking - try sample 0 first, if fails try sample 1, etc.
 
 
 @dataclass
-class FilterConfig:
-    """Configuration for filtering rows."""
+class FilterCollectConfig:
+    """Configuration for filtering and collecting valid samples."""
     input_path: str
     output_path: str
-    is_instruction_tuned: bool = True  # Whether this is an instruction-tuned model
+    is_instruction_tuned: bool = True
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def filter_valid_generations(config: FilterConfig):
+def filter_collect_valid_samples(config: FilterCollectConfig):
     """
-    Filter samples from all_samples that pass static checks, then explode into separate rows.
+    Collect samples that pass static checks into an ordered list per row.
 
     For instruction-tuned models:
         - Must have <think>...</think> format
         - Must have \\boxed{} for final answer
 
-    For base models:
-        - Must have \\boxed{}
-        - Must not have non-English characters
-
-    This creates one row per valid sample, with sample_idx to track which sample it was.
-    The UQ validation will run on all valid samples, then we select the first passing one.
+    Output row contains:
+        - valid_samples: list of samples that passed static check (in original order)
+        - valid_indices: list of original indices (0-3) for each valid sample
+        - num_valid_samples: count of valid samples
     """
     import re
     import ray.data
@@ -346,66 +347,242 @@ def filter_valid_generations(config: FilterConfig):
         has_boxed = bool(BOXED_PATTERN.search(text))
 
         if is_instruction_tuned:
-            # Instruction-tuned: must have <think>...</think> AND \boxed{}
             has_think_format = bool(THINK_PATTERN.search(text))
             return has_think_format and has_boxed
         else:
-            # Base model: must have \boxed{} and no non-English characters
             has_non_english = any(ch.isalpha() and ord(ch) > 127 for ch in text)
             return has_boxed and not has_non_english
 
     is_instruct = config.is_instruction_tuned
 
-    def explode_valid_samples(row):
-        """
-        For each sample in all_samples that passes static check,
-        yield a separate row with sample_idx and generated_text set to that sample.
-        """
+    def collect_valid_samples(row):
+        """Collect all valid samples into ordered lists."""
         all_samples = row.get("all_samples", [])
-        ms_id = row.get("ms_id", "")
-        instruction_seed = row.get("instruction_seed", "")
 
-        valid_rows = []
+        valid_samples = []
+        valid_indices = []
         for idx, sample in enumerate(all_samples):
             if passes_static_check(sample, is_instruct):
-                new_row = {
-                    "ms_id": ms_id,
-                    "instruction_seed": instruction_seed,
-                    "generated_text": sample,
-                    "sample_idx": idx,
-                    # Create unique ID for checkpointing in UQ steps
-                    "ms_id_sample": f"{ms_id}_sample{idx}",
-                }
-                valid_rows.append(new_row)
+                valid_samples.append(sample)
+                valid_indices.append(idx)
 
-        return valid_rows
+        # Keep only essential columns plus the new ones
+        return {
+            "ms_id": row.get("ms_id", ""),
+            "instruction_seed": row.get("instruction_seed", ""),
+            "valid_samples": valid_samples,
+            "valid_indices": valid_indices,
+            "num_valid_samples": len(valid_samples),
+        }
 
     ds = ray.data.read_parquet(config.input_path)
+    ds = ds.map(collect_valid_samples)
 
-    # Explode: each valid sample becomes its own row
-    ds = ds.flat_map(explode_valid_samples)
+    # Filter out rows with no valid samples
+    ds = ds.filter(lambda x: x.get("num_valid_samples", 0) > 0)
 
     total_rows = ds.count()
-    # Count unique ms_ids to see how many original samples have at least one valid
-    unique_ms_ids = ds.unique("ms_id")
-    num_unique = len(unique_ms_ids)
-
-    print(f"Exploded to {total_rows} rows from {num_unique} unique samples (is_instruction_tuned={is_instruct})")
-    print(f"Average valid samples per original: {total_rows / num_unique:.2f}" if num_unique > 0 else "No valid samples")
+    print(f"Rows with at least one valid sample: {total_rows} (is_instruction_tuned={is_instruct})")
 
     ds.write_parquet(config.output_path)
 
 
-filter_valid = ExecutorStep(
-    name=f"{BASE_PATH}/filtered",
-    fn=filter_valid_generations,
-    config=FilterConfig(
+filter_collect = ExecutorStep(
+    name=f"{BASE_PATH}/filtered-collected",
+    fn=filter_collect_valid_samples,
+    config=FilterCollectConfig(
         input_path=generate_with_selection,
         output_path=this_output_path(),
         is_instruction_tuned=IS_INSTRUCTION_TUNED,
     ),
     pip_dependency_groups=["vllm"],
 )
+
+
+# =============================================================================
+# ITERATIVE UQ PROCESSING HELPERS
+# =============================================================================
+# These functions support the iterative approach:
+# - Round 0: Try first valid sample for all rows
+# - Round 1: For rows that failed Round 0, try second valid sample
+# - Continue until a sample passes or no more samples
+
+
+@dataclass
+class ExtractSampleConfig:
+    """Configuration for extracting a specific sample for UQ testing."""
+    input_path: str
+    output_path: str
+    sample_round: int  # Which sample to extract (0 = first valid, 1 = second valid, etc.)
+
+
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
+def extract_sample_for_round(config: ExtractSampleConfig):
+    """
+    Extract the sample at the given round index for UQ testing.
+
+    For round N, extracts valid_samples[N] if it exists.
+    Rows without a sample at index N are filtered out.
+    """
+    import ray.data
+
+    round_idx = config.sample_round
+
+    def extract_sample(row):
+        valid_samples = row.get("valid_samples", [])
+        valid_indices = row.get("valid_indices", [])
+
+        if round_idx >= len(valid_samples):
+            return None  # No sample at this round index
+
+        return {
+            "ms_id": row.get("ms_id", ""),
+            "instruction_seed": row.get("instruction_seed", ""),
+            "current_sample": valid_samples[round_idx],
+            "current_sample_idx": valid_indices[round_idx],
+            "valid_samples": valid_samples,  # Keep for potential next round
+            "valid_indices": valid_indices,
+            "num_valid_samples": row.get("num_valid_samples", 0),
+            "current_round": round_idx,
+        }
+
+    ds = ray.data.read_parquet(config.input_path)
+    ds = ds.map(extract_sample)
+
+    # Filter out None rows (no sample at this round index)
+    ds = ds.filter(lambda x: x is not None)
+
+    count = ds.count()
+    print(f"Round {round_idx}: {count} rows have a sample at index {round_idx}")
+
+    ds.write_parquet(config.output_path)
+
+
+@dataclass
+class CheckUQResultsConfig:
+    """Configuration for checking UQ results and splitting passed/failed."""
+    input_path: str
+    passed_output_path: str
+    failed_output_path: str
+
+
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
+def check_uq_and_split(config: CheckUQResultsConfig):
+    """
+    Check UQ results and split into passed/failed rows.
+
+    A row passes if ALL of:
+    - cycle_results: unanimous [[Y]]
+    - factual_results: unanimous [[Y]]
+    - correctness_results: unanimous [[Y]]
+
+    Passed rows get their final output formatted.
+    Failed rows continue to the next round (if more samples available).
+    """
+    import re
+    import ray.data
+    from experiments.self_instill.prompts import REASONING_INSTRUCTION
+
+    _DECISION_RE = re.compile(r"\[\[\s*([YN])\s*\]\]", re.IGNORECASE)
+
+    def extract_decision_robust(text: str) -> bool:
+        if not text:
+            return False
+        matches = list(_DECISION_RE.finditer(text))
+        if matches:
+            return matches[-1].group(1).upper() == "Y"
+        yn_tokens = re.findall(r"(?<![A-Za-z])([YN])(?![A-Za-z])", text.strip(), flags=re.IGNORECASE)
+        if yn_tokens:
+            return yn_tokens[-1].upper() == "Y"
+        yesno = re.findall(r"\b(YES|NO)\b", text.strip(), flags=re.IGNORECASE)
+        if yesno:
+            return yesno[-1].upper() == "YES"
+        return False
+
+    def check_unanimous(samples: list) -> bool:
+        if not samples or not isinstance(samples, list):
+            return False
+        decisions = [extract_decision_robust(s) for s in samples]
+        return all(decisions) if decisions else False
+
+    def check_and_format(row):
+        cycle_samples = row.get("cycle_results", [])
+        factual_samples = row.get("factual_results", [])
+        correctness_samples = row.get("correctness_results", [])
+
+        cycle_pass = check_unanimous(cycle_samples)
+        factual_pass = check_unanimous(factual_samples)
+        correctness_pass = check_unanimous(correctness_samples)
+
+        row["cycle_passed"] = cycle_pass
+        row["factual_passed"] = factual_pass
+        row["correctness_passed"] = correctness_pass
+        row["all_passed"] = cycle_pass and factual_pass and correctness_pass
+
+        if row["all_passed"]:
+            # Format final output
+            current_sample = row.get("current_sample", "")
+            instruction_seed = row.get("instruction_seed", "")
+            user_prompt = instruction_seed.strip() + "\n" + REASONING_INSTRUCTION + "\n"
+            row["user_content"] = user_prompt
+            row["assistant_content"] = current_sample
+            row["final_sample_idx"] = row.get("current_sample_idx", 0)
+
+        return row
+
+    ds = ray.data.read_parquet(config.input_path)
+    ds = ds.map(check_and_format)
+
+    total = ds.count()
+    ds_passed = ds.filter(lambda x: x.get("all_passed", False))
+    ds_failed = ds.filter(lambda x: not x.get("all_passed", False))
+
+    passed_count = ds_passed.count()
+    failed_count = ds_failed.count()
+
+    print(f"UQ Results: {passed_count} passed, {failed_count} failed out of {total}")
+
+    ds_passed.write_parquet(config.passed_output_path)
+    ds_failed.write_parquet(config.failed_output_path)
+
+
+@dataclass
+class CombinePassedConfig:
+    """Configuration for combining passed rows from all rounds."""
+    input_paths: list  # List of paths to passed rows from each round
+    output_path: str
+
+
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
+def combine_passed_rows(config: CombinePassedConfig):
+    """Combine passed rows from all rounds into final output."""
+    import ray.data
+
+    datasets = []
+    for path in config.input_paths:
+        try:
+            ds = ray.data.read_parquet(path)
+            if ds.count() > 0:
+                datasets.append(ds)
+                print(f"Loaded {ds.count()} rows from {path}")
+        except Exception as e:
+            print(f"Could not read {path}: {e}")
+
+    if not datasets:
+        print("No passed rows from any round!")
+        # Write empty dataset
+        ray.data.from_items([]).write_parquet(config.output_path)
+        return
+
+    # Union all datasets
+    combined = datasets[0]
+    for ds in datasets[1:]:
+        combined = combined.union(ds)
+
+    final_count = combined.count()
+    print(f"Combined {final_count} total passed rows from {len(datasets)} rounds")
+
+    combined.write_parquet(config.output_path)
 
 
 # =============================================================================
@@ -468,13 +645,14 @@ def prep_validation_prompts(config: PrepValidationConfig):
             del row["conversations"]
 
         question = row.get("instruction_seed")
-        answer = row.get("generated_text")
+        # Use current_sample (from iterative extraction) or fall back to generated_text
+        answer = row.get("current_sample") or row.get("generated_text")
 
         # Fail explicitly if required fields are missing
         if not question or not isinstance(question, str):
             raise ValueError(f"Missing or invalid instruction_seed: {question}")
         if not answer or not isinstance(answer, str):
-            raise ValueError(f"Missing or invalid generated_text: {answer}")
+            raise ValueError(f"Missing or invalid current_sample/generated_text: {answer}")
 
         question = question.strip()
         answer = answer.strip()
@@ -509,77 +687,8 @@ def prep_validation_prompts(config: PrepValidationConfig):
     ds.write_parquet(config.output_path)
 
 
-prep_validation = ExecutorStep(
-    name=f"{BASE_PATH}/prep-validation",
-    fn=prep_validation_prompts,
-    config=PrepValidationConfig(
-        input_path=filter_valid,  # Skip summarization for instruction-tuned models
-        output_path=this_output_path(),
-        is_instruction_tuned=IS_INSTRUCTION_TUNED,
-    ),
-    pip_dependency_groups=["vllm"],
-)
-
-
-# =============================================================================
-# STEP 4: CYCLE CONSISTENCY - Generate inferred questions
-# =============================================================================
-
-cycle_gen_questions = ExecutorStep(
-    name=f"{BASE_PATH}/cycle-gen",
-    fn=run_generation_inference,
-    config=TextGenerationInferenceConfig(
-        # IO
-        input_path=prep_validation,
-        output_path=this_output_path(),
-
-        # Model
-        model_name=QWEN3_4B_HF_ID,
-        engine_kwargs={
-            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
-            "max_model_len": 32768,
-        },
-        generation_kwargs={
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "max_tokens": 32768,
-            "n": 3,  # Generate 3 inferred questions for voting
-        },
-
-        # Prompting
-        template="{example}",
-        prompt_column="cycle_gen_prompt",
-        apply_chat_template=True,
-        save_templated_prompt=False,
-        max_doc_tokens=32768,
-
-        # Ray Data
-        num_instances=(1, 256),
-        batch_size=BATCH_SIZE,
-        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-        preserve_order=False,
-
-        # File
-        filetype="parquet",
-        output_filetype_override="parquet",
-
-        # Hardware
-        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-
-        # Output column - save all 3 inferred questions as list
-        generated_text_column_name="inferred_questions",
-
-        # Checkpointing - use ms_id_sample since we have multiple rows per original ms_id
-        checkpoint_id_column="ms_id_sample",
-
-        # Save samples as list for later comparison
-        save_samples_as_list=True,
-
-        # Retry settings
-        max_task_retries=10,
-    ),
-    pip_dependency_groups=["vllm"],
-)
+# NOTE: prep_validation and cycle_gen_questions ExecutorSteps are created dynamically
+# in the main execution loop (see ITERATIVE UQ PROCESSING section below)
 
 
 # =============================================================================
@@ -657,199 +766,12 @@ def prep_cycle_compare_prompts(config: PrepCycleCompareConfig):
     ds.write_parquet(config.output_path)
 
 
-prep_cycle_compare = ExecutorStep(
-    name=f"{BASE_PATH}/prep-cycle-compare",
-    fn=prep_cycle_compare_prompts,
-    config=PrepCycleCompareConfig(
-        input_path=cycle_gen_questions,
-        output_path=this_output_path(),
-        is_instruction_tuned=IS_INSTRUCTION_TUNED,
-    ),
-    pip_dependency_groups=["vllm"],
-)
+# NOTE: prep_cycle_compare and cycle_compare ExecutorSteps are created dynamically
+# in the main execution loop (see ITERATIVE UQ PROCESSING section below)
 
 
-# =============================================================================
-# STEP 6: CYCLE CONSISTENCY - Compare prompts
-# =============================================================================
-
-cycle_compare = ExecutorStep(
-    name=f"{BASE_PATH}/cycle-compare",
-    fn=run_generation_inference,
-    config=TextGenerationInferenceConfig(
-        # IO
-        input_path=prep_cycle_compare,
-        output_path=this_output_path(),
-
-        # Model
-        model_name=QWEN3_4B_HF_ID,
-        engine_kwargs={
-            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
-            "max_model_len": 32768,
-        },
-        generation_kwargs={
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "max_tokens": 32768,
-            "n": 3,  # 3 samples for unanimous voting
-        },
-
-        # Prompting
-        template="{example}",
-        prompt_column="cycle_compare_prompt",
-        apply_chat_template=True,
-        save_templated_prompt=False,
-        max_doc_tokens=32768,
-
-        # Ray Data
-        num_instances=(1, 256),
-        batch_size=BATCH_SIZE,
-        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-        preserve_order=False,
-
-        # File
-        filetype="parquet",
-        output_filetype_override="parquet",
-
-        # Hardware
-        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-
-        # Output column - save as list for unanimous voting
-        generated_text_column_name="cycle_results",
-
-        # Checkpointing
-        checkpoint_id_column="ms_id_sample",
-
-        # Save samples as list for unanimous voting
-        save_samples_as_list=True,
-
-        # Retry settings
-        max_task_retries=10,
-    ),
-    pip_dependency_groups=["vllm"],
-)
-
-
-# =============================================================================
-# STEP 7: FACTUAL ERROR CHECK
-# =============================================================================
-
-factual_check = ExecutorStep(
-    name=f"{BASE_PATH}/factual",
-    fn=run_generation_inference,
-    config=TextGenerationInferenceConfig(
-        # IO
-        input_path=cycle_compare,
-        output_path=this_output_path(),
-
-        # Model
-        model_name=QWEN3_4B_HF_ID,
-        engine_kwargs={
-            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
-            "max_model_len": 32768,
-        },
-        generation_kwargs={
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "max_tokens": 32768,
-            "n": 3,  # 3 samples for unanimous voting
-        },
-
-        # Prompting
-        template="{example}",
-        prompt_column="factual_prompt",
-        apply_chat_template=True,
-        save_templated_prompt=False,
-        max_doc_tokens=32768,
-
-        # Ray Data
-        num_instances=(1, 256),
-        batch_size=BATCH_SIZE,
-        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-        preserve_order=False,
-
-        # File
-        filetype="parquet",
-        output_filetype_override="parquet",
-
-        # Hardware
-        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-
-        # Output column - save as list for unanimous voting
-        generated_text_column_name="factual_results",
-
-        # Checkpointing
-        checkpoint_id_column="ms_id_sample",
-
-        # Save samples as list for unanimous voting
-        save_samples_as_list=True,
-
-        # Retry settings
-        max_task_retries=10,
-    ),
-    pip_dependency_groups=["vllm"],
-)
-
-
-# =============================================================================
-# STEP 8: TOTAL CORRECTNESS CHECK
-# =============================================================================
-
-correctness_check = ExecutorStep(
-    name=f"{BASE_PATH}/correctness",
-    fn=run_generation_inference,
-    config=TextGenerationInferenceConfig(
-        # IO
-        input_path=factual_check,
-        output_path=this_output_path(),
-
-        # Model
-        model_name=QWEN3_4B_HF_ID,
-        engine_kwargs={
-            "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
-            "max_model_len": 32768,
-        },
-        generation_kwargs={
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "max_tokens": 32768,
-            "n": 3,  # 3 samples for unanimous voting
-        },
-
-        # Prompting
-        template="{example}",
-        prompt_column="correctness_prompt",
-        apply_chat_template=True,
-        save_templated_prompt=False,
-        max_doc_tokens=32768,
-
-        # Ray Data
-        num_instances=(1, 256),
-        batch_size=BATCH_SIZE,
-        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-        preserve_order=False,
-
-        # File
-        filetype="parquet",
-        output_filetype_override="parquet",
-
-        # Hardware
-        resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-
-        # Output column - save as list for unanimous voting
-        generated_text_column_name="correctness_results",
-
-        # Checkpointing
-        checkpoint_id_column="ms_id_sample",
-
-        # Save samples as list for unanimous voting
-        save_samples_as_list=True,
-
-        # Retry settings
-        max_task_retries=10,
-    ),
-    pip_dependency_groups=["vllm"],
-)
+# NOTE: factual_check and correctness_check ExecutorSteps are created dynamically
+# in the main execution loop (see ITERATIVE UQ PROCESSING section below)
 
 
 # =============================================================================
@@ -1010,34 +932,18 @@ def filter_and_format_output(config: FilterValidationConfig):
     ray.data.from_pandas(df_selected).write_parquet(config.output_path)
 
 
-filter_validation = ExecutorStep(
-    name=f"{BASE_PATH}/validated",
-    fn=filter_and_format_output,
-    config=FilterValidationConfig(
-        input_path=correctness_check,
-        output_path=this_output_path(),
-        is_instruction_tuned=IS_INSTRUCTION_TUNED,
-    ),
-    pip_dependency_groups=["vllm"],
-)
+# NOTE: filter_validation and upload_self_instill ExecutorSteps are created dynamically
+# in the main execution section below
 
 
 # =============================================================================
-# UPLOAD STEP
+# MAIN EXECUTION - ITERATIVE UQ APPROACH
 # =============================================================================
-
-upload_self_instill = upload_dir_to_hf(
-    input_path=filter_validation,
-    repo_id=f"marin-community/self-instill-ot4-math-qwen3-4b-{ROUND}",
-    repo_type="dataset",
-)
-
-upload_self_instill = replace(upload_self_instill, pip_dependency_groups=["vllm"])
-
-
-# =============================================================================
-# MAIN EXECUTION
-# =============================================================================
+# New design: Process samples iteratively. For each original input:
+# - Try sample 0 first, run full UQ
+# - If passes, keep it, done with this input
+# - If fails, try sample 1, etc.
+# This is more efficient than running UQ on all samples upfront.
 
 if __name__ == "__main__":
     # Stage 1: Download dataset (model downloaded via HF Hub on workers)
@@ -1048,47 +954,265 @@ if __name__ == "__main__":
     print("Stage 2: Preprocessing...")
     executor_main([preprocess_ot4])
 
-    # Stage 3: Generate with multi-sample selection
+    # Stage 3: Generate with multi-sample selection (CACHED)
     print("Stage 3: Generating with multi-sample selection...")
     executor_main([generate_with_selection])
 
-    # Stage 4: Filter valid generations (checks <think>...</think> format for instruction-tuned)
-    print("Stage 4: Filtering valid generations...")
-    executor_main([filter_valid])
+    # Stage 4: Filter and collect valid samples (keep as ordered list, don't explode)
+    print("Stage 4: Filtering and collecting valid samples...")
+    executor_main([filter_collect])
 
-    # NOTE: Summarization step is SKIPPED for instruction-tuned models
-    # The model already outputs in <think>...</think> SUMMARY format
+    # ==========================================================================
+    # ITERATIVE UQ PROCESSING
+    # ==========================================================================
+    # For each round (0-3), process the current sample index for all pending rows
+    # Rows that pass move to final output, rows that fail continue to next round
 
-    # Stage 5: Prepare validation prompts (uses longer prompts for instruction-tuned)
-    print("Stage 5: Preparing validation prompts...")
-    executor_main([prep_validation])
+    MAX_ROUNDS = 4  # Maximum number of samples to try (0, 1, 2, 3)
+    passed_paths = []  # Collect paths to passed rows from each round
 
-    # Stage 6: Cycle consistency - generate inferred questions
-    print("Stage 6: Cycle consistency - generating inferred questions...")
-    executor_main([cycle_gen_questions])
+    # Track the input for each round
+    # Round 0 input: filter_collect step (executor resolves the path)
+    # Round N input: failed rows from round N-1
+    current_input = filter_collect  # Start with the filter_collect step
 
-    # Stage 7: Cycle consistency - prepare comparison
-    print("Stage 7: Cycle consistency - preparing comparison...")
-    executor_main([prep_cycle_compare])
+    for round_idx in range(MAX_ROUNDS):
+        print(f"\n{'='*60}")
+        print(f"TRY {round_idx}: Processing sample index {round_idx}")
+        print(f"{'='*60}")
 
-    # Stage 8: Cycle consistency - compare
-    print("Stage 8: Cycle consistency - comparing...")
-    executor_main([cycle_compare])
+        # Define paths for this round
+        round_base = f"{BASE_PATH}/try{round_idx}"
 
-    # Stage 9: Factual error check
-    print("Stage 9: Factual error check...")
-    executor_main([factual_check])
+        # Step 1: Extract sample for this round
+        print(f"Try {round_idx} - Step 1: Extracting sample...")
+        extract_step = ExecutorStep(
+            name=f"{round_base}/extract",
+            fn=extract_sample_for_round,
+            config=ExtractSampleConfig(
+                input_path=current_input,  # Step for round 0, string path for round 1+
+                output_path=this_output_path(),
+                sample_round=round_idx,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([extract_step])
 
-    # Stage 10: Total correctness check
-    print("Stage 10: Total correctness check...")
-    executor_main([correctness_check])
+        # Step 2: Prepare validation prompts
+        print(f"Try {round_idx} - Step 2: Preparing validation prompts...")
+        prep_val_step = ExecutorStep(
+            name=f"{round_base}/prep-validation",
+            fn=prep_validation_prompts,
+            config=PrepValidationConfig(
+                input_path=extract_step,  # Use step reference
+                output_path=this_output_path(),
+                is_instruction_tuned=IS_INSTRUCTION_TUNED,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([prep_val_step])
 
-    # Stage 11: Filter validation results and format output
-    print("Stage 11: Filtering validation results and formatting output...")
-    executor_main([filter_validation])
+        # Step 3: Cycle consistency - generate inferred questions
+        print(f"Try {round_idx} - Step 3: Generating inferred questions...")
+        cycle_gen_step = ExecutorStep(
+            name=f"{round_base}/cycle-gen",
+            fn=run_generation_inference,
+            config=TextGenerationInferenceConfig(
+                input_path=prep_val_step,  # Use step reference
+                output_path=this_output_path(),
+                model_name=QWEN3_4B_HF_ID,
+                engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
+                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                template="{example}",
+                prompt_column="cycle_gen_prompt",
+                apply_chat_template=True,
+                save_templated_prompt=False,
+                max_doc_tokens=32768,
+                num_instances=(1, 256),
+                batch_size=BATCH_SIZE,
+                tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+                preserve_order=False,
+                filetype="parquet",
+                output_filetype_override="parquet",
+                resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
+                generated_text_column_name="inferred_questions",
+                checkpoint_id_column="ms_id",
+                save_samples_as_list=True,
+                max_task_retries=10,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([cycle_gen_step])
 
-    # Stage 12: Upload to HuggingFace
-    print("Stage 12: Uploading to HuggingFace...")
-    executor_main([upload_self_instill])
+        # Step 4: Prepare cycle comparison prompts
+        print(f"Try {round_idx} - Step 4: Preparing cycle comparison...")
+        prep_compare_step = ExecutorStep(
+            name=f"{round_base}/prep-cycle-compare",
+            fn=prep_cycle_compare_prompts,
+            config=PrepCycleCompareConfig(
+                input_path=cycle_gen_step,  # Use step reference
+                output_path=this_output_path(),
+                is_instruction_tuned=IS_INSTRUCTION_TUNED,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([prep_compare_step])
 
-    print("Pipeline complete!")
+        # Step 5: Cycle consistency - compare
+        print(f"Try {round_idx} - Step 5: Comparing questions...")
+        cycle_compare_step = ExecutorStep(
+            name=f"{round_base}/cycle-compare",
+            fn=run_generation_inference,
+            config=TextGenerationInferenceConfig(
+                input_path=prep_compare_step,  # Use step reference
+                output_path=this_output_path(),
+                model_name=QWEN3_4B_HF_ID,
+                engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
+                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                template="{example}",
+                prompt_column="cycle_compare_prompt",
+                apply_chat_template=True,
+                save_templated_prompt=False,
+                max_doc_tokens=32768,
+                num_instances=(1, 256),
+                batch_size=BATCH_SIZE,
+                tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+                preserve_order=False,
+                filetype="parquet",
+                output_filetype_override="parquet",
+                resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
+                generated_text_column_name="cycle_results",
+                checkpoint_id_column="ms_id",
+                save_samples_as_list=True,
+                max_task_retries=10,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([cycle_compare_step])
+
+        # Step 6: Factual error check
+        print(f"Try {round_idx} - Step 6: Factual error check...")
+        factual_step = ExecutorStep(
+            name=f"{round_base}/factual",
+            fn=run_generation_inference,
+            config=TextGenerationInferenceConfig(
+                input_path=cycle_compare_step,  # Use step reference
+                output_path=this_output_path(),
+                model_name=QWEN3_4B_HF_ID,
+                engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
+                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                template="{example}",
+                prompt_column="factual_prompt",
+                apply_chat_template=True,
+                save_templated_prompt=False,
+                max_doc_tokens=32768,
+                num_instances=(1, 256),
+                batch_size=BATCH_SIZE,
+                tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+                preserve_order=False,
+                filetype="parquet",
+                output_filetype_override="parquet",
+                resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
+                generated_text_column_name="factual_results",
+                checkpoint_id_column="ms_id",
+                save_samples_as_list=True,
+                max_task_retries=10,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([factual_step])
+
+        # Step 7: Total correctness check
+        print(f"Try {round_idx} - Step 7: Correctness check...")
+        correctness_step = ExecutorStep(
+            name=f"{round_base}/correctness",
+            fn=run_generation_inference,
+            config=TextGenerationInferenceConfig(
+                input_path=factual_step,  # Use step reference
+                output_path=this_output_path(),
+                model_name=QWEN3_4B_HF_ID,
+                engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
+                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                template="{example}",
+                prompt_column="correctness_prompt",
+                apply_chat_template=True,
+                save_templated_prompt=False,
+                max_doc_tokens=32768,
+                num_instances=(1, 256),
+                batch_size=BATCH_SIZE,
+                tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+                preserve_order=False,
+                filetype="parquet",
+                output_filetype_override="parquet",
+                resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
+                generated_text_column_name="correctness_results",
+                checkpoint_id_column="ms_id",
+                save_samples_as_list=True,
+                max_task_retries=10,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([correctness_step])
+
+        # Step 8: Check UQ results and split passed/failed
+        # Use explicit paths for passed/failed since we need to reference them later
+        print(f"Try {round_idx} - Step 8: Checking results and splitting...")
+        passed_path = f"gs://marin-us-central1/{round_base}/passed"
+        failed_path = f"gs://marin-us-central1/{round_base}/failed"
+
+        check_split_step = ExecutorStep(
+            name=f"{round_base}/check-split",
+            fn=check_uq_and_split,
+            config=CheckUQResultsConfig(
+                input_path=correctness_step,  # Use step reference
+                passed_output_path=passed_path,
+                failed_output_path=failed_path,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([check_split_step])
+
+        # Track passed path for final combination
+        passed_paths.append(passed_path)
+
+        # Update input for next round to be the failed rows from this round
+        # Use string path since check_uq_and_split writes to explicit paths
+        current_input = failed_path
+
+        print(f"Try {round_idx} complete. Passed rows saved to {passed_path}")
+
+    # ==========================================================================
+    # COMBINE ALL PASSED ROWS
+    # ==========================================================================
+    print(f"\n{'='*60}")
+    print("COMBINING PASSED ROWS FROM ALL ROUNDS")
+    print(f"{'='*60}")
+
+    combine_step = ExecutorStep(
+        name=f"{BASE_PATH}/combined-passed",
+        fn=combine_passed_rows,
+        config=CombinePassedConfig(
+            input_paths=passed_paths,
+            output_path=this_output_path(),
+        ),
+        pip_dependency_groups=["vllm"],
+    )
+    executor_main([combine_step])
+
+    # ==========================================================================
+    # UPLOAD TO HUGGINGFACE
+    # ==========================================================================
+    print("\nUploading to HuggingFace...")
+    combined_output = f"gs://marin-us-central1/{BASE_PATH}/combined-passed"
+
+    upload_step = upload_dir_to_hf(
+        input_path=combined_output,
+        repo_id=f"marin-community/self-instill-ot4-math-qwen3-4b-{ROUND}",
+        repo_type="dataset",
+    )
+    upload_step = replace(upload_step, pip_dependency_groups=["vllm"])
+    executor_main([upload_step])
+
+    print("\n" + "="*60)
+    print("PIPELINE COMPLETE!")
+    print("="*60)
