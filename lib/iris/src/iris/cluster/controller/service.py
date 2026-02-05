@@ -35,7 +35,7 @@ from iris.cluster.controller.events import (
 )
 from iris.cluster.controller.scheduler import SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
-from iris.cluster.types import JobId, TaskId, WorkerId
+from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -69,7 +69,7 @@ class SchedulerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
+    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
         """Send KILL RPCs to workers for tasks that were running."""
         ...
 
@@ -113,21 +113,21 @@ class ControllerServiceImpl:
         """Submit a new job to the controller.
 
         The job is expanded into tasks based on the replicas field
-        (defaulting to 1). Each task has ID "{job_id}/task-{index}".
+        (defaulting to 1). Each task has ID "/job/.../index".
         """
         with rpc_error_handler("launching job"):
             if not request.name:
                 raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
 
-            job_id = request.name
+            job_id = JobName.from_wire(request.name)
 
-            if self._state.get_job(JobId(job_id)):
+            if self._state.get_job(job_id):
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists")
 
             # Handle bundle_blob: upload to bundle store, then replace blob
             # with the resulting GCS path (preserving all other fields).
             if request.bundle_blob:
-                bundle_path = self._bundle_store.write_bundle(job_id, request.bundle_blob)
+                bundle_path = self._bundle_store.write_bundle(job_id.to_wire(), request.bundle_blob)
 
                 new_request = cluster_pb2.Controller.LaunchJobRequest()
                 new_request.CopyFrom(request)
@@ -138,16 +138,16 @@ class ControllerServiceImpl:
             # Submit job via event API
             self._state.handle_event(
                 JobSubmittedEvent(
-                    job_id=JobId(job_id),
+                    job_id=job_id,
                     request=request,
                     timestamp=Timestamp.now(),
                 )
             )
             self._scheduler.wake()
 
-            num_tasks = len(self._state.get_job_tasks(JobId(job_id)))
+            num_tasks = len(self._state.get_job_tasks(job_id))
             logger.info(f"Job {job_id} submitted with {num_tasks} task(s)")
-            return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id)
+            return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
     def get_job_status(
         self,
@@ -155,7 +155,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetJobStatusResponse:
         """Get status of a specific job including all task statuses."""
-        job = self._state.get_job(JobId(request.job_id))
+        job = self._state.get_job(JobName.from_wire(request.job_id))
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
@@ -193,9 +193,7 @@ class ControllerServiceImpl:
             current_attempt = task.current_attempt
 
             proto_task_status = cluster_pb2.TaskStatus(
-                task_id=str(task.task_id),
-                job_id=str(task.job_id),
-                task_index=task.task_index,
+                task_id=task.task_id.to_wire(),
                 state=task.state,
                 worker_id=str(task.worker_id) if task.worker_id else "",
                 worker_address=worker_address,
@@ -212,11 +210,10 @@ class ControllerServiceImpl:
 
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
-            job_id=job.job_id,
+            job_id=job.job_id.to_wire(),
             state=job.state,
             error=job.error or "",
             exit_code=job.exit_code or 0,
-            parent_job_id=str(job.parent_job_id) if job.parent_job_id else "",
             failure_count=total_failure_count,
             preemption_count=total_preemption_count,
             tasks=task_statuses,
@@ -238,14 +235,14 @@ class ControllerServiceImpl:
         Cascade termination is performed depth-first: all children are
         terminated before the parent. All tasks within each job are killed.
         """
-        job = self._state.get_job(JobId(request.job_id))
+        job = self._state.get_job(JobName.from_wire(request.job_id))
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        self._terminate_job_tree(JobId(request.job_id))
+        self._terminate_job_tree(JobName.from_wire(request.job_id))
         return cluster_pb2.Empty()
 
-    def _terminate_job_tree(self, job_id: JobId) -> None:
+    def _terminate_job_tree(self, job_id: JobName) -> None:
         """Recursively terminate a job and all its descendants (depth-first)."""
         job = self._state.get_job(job_id)
         if not job:
@@ -300,11 +297,10 @@ class ControllerServiceImpl:
             pending_reason = j.error or ""
 
             proto_job = cluster_pb2.JobStatus(
-                job_id=j.job_id,
+                job_id=j.job_id.to_wire(),
                 state=j.state,
                 error=j.error or "",
                 exit_code=j.exit_code or 0,
-                parent_job_id=str(j.parent_job_id) if j.parent_job_id else "",
                 failure_count=total_failure_count,
                 preemption_count=total_preemption_count,
                 name=j.request.name if j.request else "",
@@ -331,7 +327,11 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetTaskStatusResponse:
         """Get status of a specific task."""
-        task_id = TaskId(f"{request.job_id}/task-{request.task_index}")
+        try:
+            task_id = JobName.from_wire(request.task_id)
+            task_id.require_task()
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         task = self._state.get_task(task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
@@ -346,9 +346,7 @@ class ControllerServiceImpl:
         current_attempt = task.current_attempt
 
         proto_task_status = cluster_pb2.TaskStatus(
-            task_id=str(task.task_id),
-            job_id=str(task.job_id),
-            task_index=task.task_index,
+            task_id=task.task_id.to_wire(),
             state=task.state,
             worker_id=str(task.worker_id) if task.worker_id else "",
             worker_address=worker_address,
@@ -369,7 +367,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.ListTasksResponse:
         """List all tasks, optionally filtered by job_id."""
-        job_id = JobId(request.job_id) if request.job_id else None
+        job_id = JobName.from_wire(request.job_id) if request.job_id else None
         tasks = []
 
         if job_id:
@@ -403,9 +401,7 @@ class ControllerServiceImpl:
             current_attempt = task.current_attempt
 
             proto_task_status = cluster_pb2.TaskStatus(
-                task_id=str(task.task_id),
-                job_id=str(task.job_id),
-                task_index=task.task_index,
+                task_id=task.task_id.to_wire(),
                 state=task.state,
                 worker_id=str(task.worker_id) if task.worker_id else "",
                 worker_address=worker_address,
@@ -492,7 +488,7 @@ class ControllerServiceImpl:
                     healthy=w.healthy,
                     consecutive_failures=w.consecutive_failures,
                     last_heartbeat=w.last_heartbeat.to_proto(),
-                    running_job_ids=list(w.running_tasks),  # Now contains task IDs
+                    running_job_ids=[task_id.to_wire() for task_id in w.running_tasks],
                     address=w.address,
                     metadata=w.metadata,
                     status_message=status_message,
@@ -515,7 +511,7 @@ class ControllerServiceImpl:
         with rpc_error_handler("registering endpoint"):
             endpoint_id = str(uuid.uuid4())
 
-            job = self._state.get_job(JobId(request.job_id))
+            job = self._state.get_job(JobName.from_wire(request.job_id))
             if not job:
                 raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
@@ -523,7 +519,7 @@ class ControllerServiceImpl:
                 endpoint_id=endpoint_id,
                 name=request.name,
                 address=request.address,
-                job_id=JobId(request.job_id),
+                job_id=JobName.from_wire(request.job_id),
                 metadata=dict(request.metadata),
                 registered_at=Timestamp.now(),
             )
@@ -558,7 +554,7 @@ class ControllerServiceImpl:
                 endpoint_id=e.endpoint_id,
                 name=e.name,
                 address=e.address,
-                job_id=e.job_id,
+                job_id=e.job_id.to_wire(),
                 metadata=e.metadata,
             )
         )
@@ -576,7 +572,7 @@ class ControllerServiceImpl:
                     endpoint_id=e.endpoint_id,
                     name=e.name,
                     address=e.address,
-                    job_id=e.job_id,
+                    job_id=e.job_id.to_wire(),
                     metadata=e.metadata,
                 )
                 for e in endpoints
@@ -630,11 +626,11 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
         """Get task logs by proxying the request to the worker that owns the task."""
-        job_id = JobId(request.job_id)
-        tasks = self._state.get_job_tasks(job_id)
-        task = next((t for t in tasks if t.task_index == request.task_index), None)
+        task_id = JobName.from_wire(request.task_id)
+        task_id.require_task()
+        task = self._state.get_task(task_id)
         if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.job_id}/task-{request.task_index} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
 
         if not task.worker_id:
             raise ConnectError(Code.FAILED_PRECONDITION, "Task has no assigned worker")
@@ -651,7 +647,7 @@ class ControllerServiceImpl:
         worker_client = WorkerServiceClientSync(f"http://{worker.address}")
         worker_resp = worker_client.fetch_task_logs(
             cluster_pb2.Worker.FetchTaskLogsRequest(
-                task_id=str(task.task_id),
+                task_id=task.task_id.to_wire(),
                 filter=log_filter,
             )
         )

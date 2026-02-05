@@ -3164,6 +3164,7 @@ dev = [
     { name = "pytest-flakefinder" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 examples = [
     { name = "ipykernel" },
@@ -3205,6 +3206,7 @@ dev = [
     { name = "pytest-flakefinder", specifier = ">=1.1.0" },
     { name = "pytest-playwright", specifier = ">=0.6.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 examples = [
     { name = "ipykernel", specifier = ">=7.1.0" },
@@ -4878,6 +4880,7 @@ dependencies = [
     { name = "iris" },
     { name = "levanter" },
     { name = "marin" },
+    { name = "watchdog" },
     { name = "zephyr" },
 ]
 
@@ -4888,6 +4891,7 @@ requires-dist = [
     { name = "iris", editable = "lib/iris" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
+    { name = "watchdog" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
 
