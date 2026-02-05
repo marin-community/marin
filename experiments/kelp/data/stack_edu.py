@@ -82,13 +82,15 @@ def process_stack_edu_file(
 
         prompt = f'"""{func["docstring"]}"""\n{func["signature"]}'
 
-        examples.append({
-            "prompt": prompt,
-            "code": func["full_code"],
-            "docstring": func["docstring"],
-            "signature": func["signature"],
-            "body": func["body"],
-        })
+        examples.append(
+            {
+                "prompt": prompt,
+                "code": func["full_code"],
+                "docstring": func["docstring"],
+                "signature": func["signature"],
+                "body": func["body"],
+            }
+        )
 
     return examples
 
@@ -264,6 +266,7 @@ def create_stack_edu_data_iter(
         tokenizer = LlamaTokenizer()
     else:
         from experiments.kelp.data.quine_dataset import SimpleTokenizer
+
         tokenizer = SimpleTokenizer()
 
     if data_path is None:
@@ -278,10 +281,12 @@ def create_stack_edu_data_iter(
         code_ids = tokenizer.encode(item["code"])
 
         if len(code_ids) <= max_seq_len:
-            encoded_examples.append({
-                "tokens": code_ids,
-                "prefix_len": min(len(prompt_ids), max_seq_len),
-            })
+            encoded_examples.append(
+                {
+                    "tokens": code_ids,
+                    "prefix_len": min(len(prompt_ids), max_seq_len),
+                }
+            )
 
     logger.info(f"Filtered to {len(encoded_examples)} examples within max_seq_len")
 

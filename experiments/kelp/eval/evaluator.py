@@ -249,8 +249,12 @@ class TreeDiffusionEvaluator:
                 dataset = self._load_mbpp()
                 if self.config.max_eval_instances:
                     dataset = dataset[: self.config.max_eval_instances]
-                results.mbpp_pass_at_1 = self.evaluate_pass_at_k(dataset, k=1, n_samples=task.num_samples, task_config=task)
-                results.mbpp_pass_at_10 = self.evaluate_pass_at_k(dataset, k=10, n_samples=task.num_samples, task_config=task)
+                results.mbpp_pass_at_1 = self.evaluate_pass_at_k(
+                    dataset, k=1, n_samples=task.num_samples, task_config=task
+                )
+                results.mbpp_pass_at_10 = self.evaluate_pass_at_k(
+                    dataset, k=10, n_samples=task.num_samples, task_config=task
+                )
                 logger.info(f"MBPP pass@1: {results.mbpp_pass_at_1.pass_rate:.2%}")
                 logger.info(f"MBPP pass@10: {results.mbpp_pass_at_10.pass_rate:.2%}")
 
@@ -258,8 +262,12 @@ class TreeDiffusionEvaluator:
                 dataset = self._load_humaneval()
                 if self.config.max_eval_instances:
                     dataset = dataset[: self.config.max_eval_instances]
-                results.humaneval_pass_at_1 = self.evaluate_pass_at_k(dataset, k=1, n_samples=task.num_samples, task_config=task)
-                results.humaneval_pass_at_10 = self.evaluate_pass_at_k(dataset, k=10, n_samples=task.num_samples, task_config=task)
+                results.humaneval_pass_at_1 = self.evaluate_pass_at_k(
+                    dataset, k=1, n_samples=task.num_samples, task_config=task
+                )
+                results.humaneval_pass_at_10 = self.evaluate_pass_at_k(
+                    dataset, k=10, n_samples=task.num_samples, task_config=task
+                )
                 logger.info(f"HumanEval pass@1: {results.humaneval_pass_at_1.pass_rate:.2%}")
                 logger.info(f"HumanEval pass@10: {results.humaneval_pass_at_10.pass_rate:.2%}")
 
@@ -295,11 +303,13 @@ class TreeDiffusionEvaluator:
             ds = load_dataset("google-research-datasets/mbpp", "full", split="test")
             problems = []
             for item in ds:
-                problems.append({
-                    "prompt": item["text"],
-                    "test_cases": item["test_list"],
-                    "task_id": item["task_id"],
-                })
+                problems.append(
+                    {
+                        "prompt": item["text"],
+                        "test_cases": item["test_list"],
+                        "task_id": item["task_id"],
+                    }
+                )
             return problems
         except Exception as e:
             logger.warning(f"Could not load MBPP dataset: {e}")
@@ -320,11 +330,13 @@ class TreeDiffusionEvaluator:
                 test_fn = item["test"]
                 entry_point = item["entry_point"]
                 test_cases = [f"{test_fn}\ncheck({entry_point})"]
-                problems.append({
-                    "prompt": item["prompt"],
-                    "test_cases": test_cases,
-                    "task_id": item["task_id"],
-                })
+                problems.append(
+                    {
+                        "prompt": item["prompt"],
+                        "test_cases": test_cases,
+                        "task_id": item["task_id"],
+                    }
+                )
             return problems
         except Exception as e:
             logger.warning(f"Could not load HumanEval dataset: {e}")
