@@ -1624,6 +1624,8 @@ class AttentionConfig:
 
         The axis is always named "gate_size" for consistency.
         """
+        if self.gated == "none":
+            raise ValueError("GateSize is only defined when gating is enabled")
         if self.gated == "headwise":
             return Axis("gate_size", 1)
         else:  # elementwise
