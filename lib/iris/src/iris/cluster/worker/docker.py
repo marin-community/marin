@@ -28,9 +28,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
-from iris.cluster.worker.worker_types import TaskLogs, LogLine
+from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.rpc import cluster_pb2
+from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class ContainerConfig:
     timeout_seconds: int | None = None
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
-    network_mode: str = ""  # e.g. "host" for --network=host
+    network_mode: str = "host"  # e.g. "host" for --network=host
     task_id: str | None = None
     job_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
@@ -128,7 +129,7 @@ class ContainerRuntime(Protocol):
 
     def remove(self, container_id: str) -> None: ...
 
-    def get_logs(self, container_id: str) -> list[LogLine]: ...
+    def get_logs(self, container_id: str, since: "Timestamp | None" = None) -> list[LogLine]: ...
 
     def get_stats(self, container_id: str) -> ContainerStats: ...
 
@@ -406,12 +407,18 @@ except Exception:
         if result.returncode != 0:
             raise RuntimeError(f"Failed to remove container: {result.stderr}")
 
-    def get_logs(self, container_id: str) -> list[LogLine]:
+    def get_logs(self, container_id: str, since: Timestamp | None = None) -> list[LogLine]:
         logs: list[LogLine] = []
+
+        # Build base command with timestamps
+        base_cmd = ["docker", "logs", "--timestamps"]
+        if since:
+            base_cmd.extend(["--since", since.as_formatted_date()])
+        base_cmd.append(container_id)
 
         # Fetch stdout with timestamps
         result = subprocess.run(
-            ["docker", "logs", "--timestamps", container_id],
+            base_cmd,
             capture_output=True,
             text=True,
             check=False,
@@ -424,7 +431,7 @@ except Exception:
         # Docker logs combines stdout and stderr by default, but we can't easily separate them
         # after the fact. We'll use stderr redirection to get them separately.
         stdout_result = subprocess.run(
-            ["docker", "logs", "--timestamps", container_id],
+            base_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -438,7 +445,7 @@ except Exception:
 
         # Fetch stderr with timestamps
         stderr_result = subprocess.run(
-            ["docker", "logs", "--timestamps", container_id],
+            base_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,

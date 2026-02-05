@@ -24,7 +24,7 @@ import pytest
 from connectrpc.request import RequestContext
 
 from iris.rpc import cluster_pb2
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
@@ -178,9 +178,7 @@ def create_test_entrypoint():
 
 
 def create_run_task_request(
-    task_id: str = "test-task-1",
-    job_id: str | None = None,
-    task_index: int = 0,
+    task_id: str = JobName.root("test-task").task(0).to_wire(),
     num_tasks: int = 1,
     ports: list[str] | None = None,
     attempt_id: int = 0,
@@ -205,8 +203,6 @@ def create_run_task_request(
 
     request = cluster_pb2.Worker.RunTaskRequest(
         task_id=task_id,
-        job_id=job_id or task_id,
-        task_index=task_index,
         num_tasks=num_tasks,
         attempt_id=attempt_id,
         entrypoint=entrypoint_proto,
@@ -303,7 +299,7 @@ def test_task_exception_handling(worker, mock_bundle_cache):
 
 def test_list_tasks(worker):
     """Test listing all tasks."""
-    requests = [create_run_task_request(task_id=f"task-{i}") for i in range(3)]
+    requests = [create_run_task_request(task_id=JobName.root("test-job").task(i).to_wire()) for i in range(3)]
 
     for request in requests:
         worker.submit_task(request)
@@ -342,11 +338,12 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
     """New attempt for same task_id kills the old attempt and starts a new one."""
     mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
 
-    request_0 = create_run_task_request(task_id="retry-task", attempt_id=0)
+    request_0 = create_run_task_request(task_id=JobName.root("retry-task").task(0).to_wire(), attempt_id=0)
     worker.submit_task(request_0)
 
     # Wait for attempt 0 to be running
-    old_task = worker.get_task("retry-task")
+    task_id = JobName.root("retry-task").task(0).to_wire()
+    old_task = worker.get_task(task_id)
     deadline = time.time() + 2.0
     while time.time() < deadline:
         if old_task.status == cluster_pb2.TASK_STATE_RUNNING and old_task.container_id:
@@ -359,19 +356,19 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
     assert old_task.attempt_id == 0
 
     # Submit attempt 1 for the same task_id — should kill attempt 0
-    request_1 = create_run_task_request(task_id="retry-task", attempt_id=1)
+    request_1 = create_run_task_request(task_id=JobName.root("retry-task").task(0).to_wire(), attempt_id=1)
     worker.submit_task(request_1)
 
     # Old attempt should have been killed
     assert old_task.should_stop is True
 
     # The new attempt should now be tracked with the new attempt_id
-    new_task = worker.get_task("retry-task")
+    new_task = worker.get_task(task_id)
     assert new_task.attempt_id == 1
     assert new_task is not old_task
 
     # Clean up
-    worker.kill_task("retry-task")
+    worker.kill_task(task_id)
     new_task.thread.join(timeout=15.0)
 
 
@@ -379,11 +376,12 @@ def test_duplicate_attempt_rejected(worker, mock_runtime):
     """Same attempt_id for an existing non-terminal task is rejected."""
     mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
 
-    request = create_run_task_request(task_id="dup-task", attempt_id=0)
+    request = create_run_task_request(task_id=JobName.root("dup-task").task(0).to_wire(), attempt_id=0)
     worker.submit_task(request)
 
     # Wait for it to be running
-    task = worker.get_task("dup-task")
+    task_id = JobName.root("dup-task").task(0).to_wire()
+    task = worker.get_task(task_id)
     deadline = time.time() + 2.0
     while time.time() < deadline:
         if task.status == cluster_pb2.TASK_STATE_RUNNING:
@@ -393,23 +391,23 @@ def test_duplicate_attempt_rejected(worker, mock_runtime):
     assert task.status == cluster_pb2.TASK_STATE_RUNNING, f"Task did not reach RUNNING state, got {task.status}"
 
     # Submit same attempt_id again — should be rejected (task unchanged)
-    worker.submit_task(create_run_task_request(task_id="dup-task", attempt_id=0))
-    assert worker.get_task("dup-task") is task  # Same object, not replaced
+    worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0))
+    assert worker.get_task(task_id) is task  # Same object, not replaced
 
     # Clean up
-    worker.kill_task("dup-task")
+    worker.kill_task(task_id)
     task.thread.join(timeout=15.0)
 
 
 def test_kill_nonexistent_task(worker):
     """Test killing a nonexistent task returns False."""
-    result = worker.kill_task("nonexistent-task")
+    result = worker.kill_task(JobName.root("nonexistent-task").task(0).to_wire())
     assert result is False
 
 
 def test_get_logs_nonexistent_task(worker):
     """Test getting logs for nonexistent task returns empty list."""
-    logs = worker.get_logs("nonexistent-task")
+    logs = worker.get_logs(JobName.root("nonexistent-task").task(0).to_wire())
     assert logs == []
 
 
@@ -510,7 +508,8 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
     assert final_task.status == cluster_pb2.TASK_STATE_SUCCEEDED
 
     assert runtime.start_container.call_count == 2
-    assert runtime.remove.call_count == 1
+    # 1 remove from port retry cleanup + 1 remove from final task cleanup
+    assert runtime.remove.call_count == 2
 
     logs = worker.get_logs(task_id)
     build_logs = [log for log in logs if log.source == "build"]
@@ -598,8 +597,6 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
 
     return cluster_pb2.Worker.RunTaskRequest(
         task_id=task_id,
-        job_id=task_id,
-        task_index=0,
         num_tasks=1,
         entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
@@ -689,13 +686,14 @@ class TestWorkerServiceIntegration:
         """Test FetchLogs with negative start_line for tailing."""
         ctx = Mock(spec=RequestContext)
 
-        request = create_integration_run_task_request(test_bundle, "logs-test")
+        task_id = JobName.root("logs-test").task(0).to_wire()
+        request = create_integration_run_task_request(test_bundle, task_id)
         real_service.run_task(request, ctx)
 
         time.sleep(2)
 
         log_request = cluster_pb2.Worker.FetchTaskLogsRequest(
-            task_id="logs-test",
+            task_id=task_id,
             filter=cluster_pb2.Worker.FetchLogsFilter(start_line=-10),
         )
 

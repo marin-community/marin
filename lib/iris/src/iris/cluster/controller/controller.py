@@ -40,10 +40,16 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
     ControllerWorker,
+)
+from iris.cluster.types import (
+    JobName,
+    WorkerId,
+    VmWorkerStatus,
+    VmWorkerStatusMap,
+    PREEMPTIBLE_ATTRIBUTE_KEY,
     get_device_type_enum,
     get_device_variant,
 )
-from iris.cluster.types import JobId, TaskId, WorkerId, VmWorkerStatus, VmWorkerStatusMap, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
@@ -78,68 +84,55 @@ def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint
 
 
 def compute_demand_entries(state: ControllerState) -> list:
-    """Compute demand entries from controller state.
-
-    Groups pending tasks by device type and variant, returning DemandEntry objects.
-    CPU-only tasks get DeviceType.CPU with variant=None.
-
-    For coscheduled jobs, all tasks in the job share a single slice, so we count
-    the job once (not each task). For non-coscheduled jobs, each task counts as
-    one slice of demand.
-
-    Args:
-        state: Controller state with pending tasks.
-
-    Returns:
-        List of DemandEntry objects with device_type, device_variant, and count.
-    """
+    """Compute demand entries from controller state."""
     from iris.cluster.vm.autoscaler import DemandEntry
     from iris.cluster.types import DeviceType
 
-    @dataclass
-    class DemandAccumulator:
-        count: int = 0
-        total_cpu: int = 0
-        total_memory_bytes: int = 0
+    demand_entries: list[DemandEntry] = []
 
-    demand_by_device: dict[tuple[DeviceType, str | None, bool | None], DemandAccumulator] = {}
-    coscheduled_jobs_counted: set[str] = set()
-
+    tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
     for task in state.peek_pending_tasks():
-        job = state.get_job(task.job_id)
+        if not task.can_be_scheduled():
+            continue
+        tasks_by_job[task.job_id].append(task)
+
+    for job_id, tasks in tasks_by_job.items():
+        job = state.get_job(job_id)
         if not job:
             continue
-
-        # For coscheduled jobs, only count once per job (all tasks share one slice)
-        if job.is_coscheduled:
-            if job.job_id in coscheduled_jobs_counted:
-                continue
-            coscheduled_jobs_counted.add(job.job_id)
 
         device = job.request.resources.device
         device_type = get_device_type_enum(device)
         device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
         preemptible_pref = _extract_preemptible_preference(job.request.constraints)
 
-        key = (device_type, device_variant, preemptible_pref)
-        if key not in demand_by_device:
-            demand_by_device[key] = DemandAccumulator()
-        acc = demand_by_device[key]
-        acc.count += 1
-        acc.total_cpu += job.request.resources.cpu
-        acc.total_memory_bytes += job.request.resources.memory_bytes
+        if job.is_coscheduled:
+            task_ids = [t.task_id.to_wire() for t in tasks]
+            entry = DemandEntry(
+                task_ids=task_ids,
+                coschedule_group_id=job.job_id.to_wire(),
+                device_type=device_type,
+                device_variant=device_variant,
+                constraints=list(job.request.constraints),
+                resources=job.request.resources,
+                preemptible=preemptible_pref,
+            )
+            demand_entries.append(entry)
+            continue
 
-    return [
-        DemandEntry(
-            device_type=dt,
-            device_variant=variant,
-            count=acc.count,
-            total_cpu=acc.total_cpu,
-            total_memory_bytes=acc.total_memory_bytes,
-            preemptible=preemptible,
-        )
-        for (dt, variant, preemptible), acc in demand_by_device.items()
-    ]
+        for task in tasks:
+            entry = DemandEntry(
+                task_ids=[task.task_id.to_wire()],
+                coschedule_group_id=None,
+                device_type=device_type,
+                device_variant=device_variant,
+                constraints=list(job.request.constraints),
+                resources=job.request.resources,
+                preemptible=preemptible_pref,
+            )
+            demand_entries.append(entry)
+
+    return demand_entries
 
 
 class WorkerClient(Protocol):
@@ -422,7 +415,7 @@ class Controller:
         Resource commitment happens via TaskAssignedEvent.
         """
         # Group assignments by job for coscheduled handling
-        by_job: dict[JobId, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
+        by_job: dict[JobName, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
         for task, worker in assignments:
             by_job[task.job_id].append((task, worker))
 
@@ -444,9 +437,7 @@ class Controller:
                         )
                     )
                     request = cluster_pb2.Worker.RunTaskRequest(
-                        job_id=str(task.job_id),
-                        task_id=str(task.task_id),
-                        task_index=task.task_index,
+                        task_id=task.task_id.to_wire(),
                         num_tasks=len(self._state.get_job_tasks(task.job_id)),
                         entrypoint=job.request.entrypoint,
                         environment=job.request.environment,
@@ -491,7 +482,7 @@ class Controller:
         """
         return self._scheduler.task_schedule_status(task, context)
 
-    def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
+    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
         """Buffer kill requests for delivery via next heartbeat.
 
         Called after state has marked tasks as killed. For each task that had
@@ -508,7 +499,7 @@ class Controller:
                 continue
             with self._dispatch_lock:
                 wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-                wd.kill_outbox.append(str(task_id))
+                wd.kill_outbox.append(task_id.to_wire())
                 any_buffered = True
 
         # Wake heartbeat thread to deliver buffered kills immediately
@@ -582,7 +573,7 @@ class Controller:
         stub = self._stub_factory.get_stub(worker.address)
         expected_tasks = [
             cluster_pb2.Controller.RunningTaskEntry(
-                task_id=str(tid),
+                task_id=tid.to_wire(),
                 attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
             )
             for tid in worker.running_tasks
@@ -609,7 +600,7 @@ class Controller:
         # Update task states from running tasks (e.g. ASSIGNED -> BUILDING -> RUNNING)
         for entry in response.running_tasks:
             if entry.state != cluster_pb2.TASK_STATE_UNSPECIFIED:
-                task_id = TaskId(entry.task_id)
+                task_id = JobName.from_wire(entry.task_id)
                 task = self._state.get_task(task_id)
                 if task and task.state != entry.state and not task.is_finished():
                     self._state.handle_event(
@@ -621,7 +612,7 @@ class Controller:
                     )
 
         for entry in response.completed_tasks:
-            task_id = TaskId(entry.task_id)
+            task_id = JobName.from_wire(entry.task_id)
             task = self._state.get_task(task_id)
             if task and not task.is_finished():
                 self._state.handle_event(
@@ -708,7 +699,7 @@ class Controller:
 
             result[vm_addr] = VmWorkerStatus(
                 vm_address=vm_addr,
-                running_task_ids=frozenset(str(tid) for tid in worker.running_tasks),
+                running_task_ids=frozenset(tid.to_wire() for tid in worker.running_tasks),
             )
         return result
 

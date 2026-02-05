@@ -170,12 +170,14 @@ class TestIrisActorHandlePickle:
         handle = IrisActorHandle("my-actor")
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
-        assert restored._actor_name == "my-actor"
+        assert restored._endpoint_name == "my-actor"
         assert restored._client is None
 
     def test_pickle_drops_client(self):
         """Client is transient state — pickle should not carry it."""
-        handle = IrisActorHandle("my-actor", client="fake-client")
+        handle = IrisActorHandle("my-actor")
+        # Manually set client to simulate resolved state
+        handle._client = "fake-client"
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None

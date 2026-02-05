@@ -20,16 +20,16 @@ import logging
 import os
 import time
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import humanfriendly
 import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorFuture, ActorGroup
-from fray.v2.ray.deps import build_python_path, build_runtime_env_for_packages
-from fray.v2.ray.tpu import run_on_pod_ray
+from fray.v2.actor import ActorFuture, ActorGroup, ActorHandle
+from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
+from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
     CpuConfig,
     GpuConfig,
@@ -362,7 +362,7 @@ class RayClient:
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
-    ) -> RayActorGroup:
+    ) -> ActorGroup:
         """Create N Ray actors named "{name}-0", "{name}-1", ..."""
         ray_options = _actor_ray_options(resources)
         # Don't specify runtime_env - let actors inherit from parent job
@@ -373,7 +373,7 @@ class RayClient:
             remote_cls = ray.remote(actor_class)
             actor_ref = remote_cls.options(name=actor_name, **ray_options).remote(*args, **kwargs)
             handles.append(RayActorHandle(actor_ref))
-        return RayActorGroup(handles)
+        return RayActorGroup(cast(list[ActorHandle], handles))
 
     def shutdown(self, wait: bool = True) -> None:
         logger.info("RayClient shutdown (namespace=%s)", self._namespace)
@@ -387,6 +387,7 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
     across nodes instead of piling onto one.
 
     preemptible=False pins the actor to the head node via a custom resource.
+    max_concurrency>1 enables concurrent method calls (threaded actor).
     """
     options: dict[str, Any] = {
         "num_cpus": resources.cpu,
@@ -396,6 +397,8 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
         options["memory"] = humanfriendly.parse_size(resources.ram, binary=True)
     if not resources.preemptible:
         options["resources"] = {"head_node": 0.0001}
+    if resources.max_concurrency > 1:
+        options["max_concurrency"] = resources.max_concurrency
     return options
 
 
@@ -438,18 +441,35 @@ class RayActorFuture:
         return ray.get(self._object_ref, timeout=timeout)
 
 
-class RayActorGroup(ActorGroup):
+class RayActorGroup:
     """ActorGroup for Ray actors. All actors are ready immediately after creation."""
 
-    def __init__(self, handles: list[RayActorHandle]):
-        # Ray actors are usable as soon as ray.remote().remote() returns,
-        # so we pass empty job lists — lifecycle is managed via ray.kill().
-        super().__init__(handles, [])  # type: ignore[arg-type]
-        self._ray_handles = handles
+    def __init__(self, handles: list[ActorHandle]):
+        self._handles = handles
+        self._yielded = False
+
+    @property
+    def ready_count(self) -> int:
+        """All Ray actors are ready immediately after creation."""
+        return len(self._handles)
+
+    def wait_ready(self, count: int | None = None, timeout: float = 300.0) -> list[ActorHandle]:
+        """Return ready actor handles. Ray actors are ready immediately."""
+        if count is None:
+            count = len(self._handles)
+        self._yielded = True
+        return self._handles[:count]
+
+    def discover_new(self) -> list[ActorHandle]:
+        """Return handles not yet yielded. After wait_ready, returns empty."""
+        if self._yielded:
+            return []
+        self._yielded = True
+        return self._handles
 
     def shutdown(self) -> None:
         """Kill all Ray actors."""
-        for handle in self._ray_handles:
+        for handle in self._handles:
             try:
                 ray.kill(handle._actor_ref)
             except Exception as e:

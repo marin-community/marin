@@ -19,15 +19,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from click.testing import CliRunner
-from iris.cli import iris
 from iris.cluster.vm.config import config_to_dict, load_config
-from iris.cluster.vm.controller import (
+from iris.cluster.vm.controller_vm import (
     GcpController,
     HealthCheckResult,
     ManualController,
     check_health,
-    create_controller,
+    create_controller_vm,
 )
 from iris.cluster.vm.managed_vm import (
     _build_bootstrap_script,
@@ -47,15 +45,19 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
     ssh_config.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
 
     return config_pb2.IrisClusterConfig(
-        provider_type="manual",
-        controller_vm=config_pb2.ControllerVmConfig(
+        platform=config_pb2.PlatformConfig(
+            manual=config_pb2.ManualPlatformConfig(),
+        ),
+        controller=config_pb2.ControllerVmConfig(
             image="gcr.io/project/iris-controller:latest",
             manual=config_pb2.ManualControllerConfig(
                 host="10.0.0.100",
                 port=10000,
             ),
         ),
-        ssh=ssh_config,
+        defaults=config_pb2.DefaultsConfig(
+            ssh=ssh_config,
+        ),
     )
 
 
@@ -63,10 +65,13 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
 def gcp_config() -> config_pb2.IrisClusterConfig:
     """Config for GCP controller VM."""
     return config_pb2.IrisClusterConfig(
-        provider_type="gcp",
-        project_id="my-project",
-        zone="us-central1-a",
-        controller_vm=config_pb2.ControllerVmConfig(
+        platform=config_pb2.PlatformConfig(
+            gcp=config_pb2.GcpPlatformConfig(
+                project_id="my-project",
+                zone="us-central1-a",
+            ),
+        ),
+        controller=config_pb2.ControllerVmConfig(
             image="gcr.io/project/iris-controller:latest",
             gcp=config_pb2.GcpControllerConfig(
                 port=10000,
@@ -79,16 +84,16 @@ def test_manual_controller_start_requires_image(ssh_bootstrap_config: config_pb2
     """start() requires image to be configured."""
     config = config_pb2.IrisClusterConfig()
     config.CopyFrom(ssh_bootstrap_config)
-    config.controller_vm.image = ""
+    config.controller.image = ""
 
     controller = ManualController(config)
     with pytest.raises(RuntimeError, match="image required"):
         controller.start()
 
 
-@patch("iris.cluster.vm.controller.check_health")
-@patch("iris.cluster.vm.controller.run_streaming_with_retry")
-@patch("iris.cluster.vm.controller.DirectSshConnection")
+@patch("iris.cluster.vm.controller_vm.check_health")
+@patch("iris.cluster.vm.controller_vm.run_streaming_with_retry")
+@patch("iris.cluster.vm.controller_vm.DirectSshConnection")
 def test_manual_controller_start_runs_bootstrap(
     mock_conn_cls: MagicMock,
     mock_run_streaming: MagicMock,
@@ -111,40 +116,48 @@ def test_create_controller_raises_on_missing_config(gcp_config: config_pb2.IrisC
     """create_controller raises ValueError when no oneof is set."""
     config = config_pb2.IrisClusterConfig()
     config.CopyFrom(gcp_config)
-    config.controller_vm.ClearField("gcp")
+    config.controller.ClearField("gcp")
 
     with pytest.raises(ValueError, match="No controller config specified"):
-        create_controller(config)
+        create_controller_vm(config)
 
 
 class TestConfigParsing:
     """Tests for config parsing with controller VM settings."""
 
     def test_load_config_with_manual_controller(self, tmp_path: Path):
-        """Config with controller_vm.manual can be loaded and used to create a controller."""
+        """Config with controller.manual can be loaded and used to create a controller."""
         config_content = """\
-provider_type: manual
+platform:
+  manual: {}
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+  ssh:
+    user: ubuntu
+    key_file: ~/.ssh/id_rsa
 
-controller_vm:
+controller:
   image: gcr.io/project/iris-controller:latest
   manual:
     host: 10.0.0.100
     port: 10000
 
-ssh:
-  user: ubuntu
-  key_file: ~/.ssh/id_rsa
-
 scale_groups:
   manual_hosts:
-    provider:
-      manual:
-        hosts: [10.0.0.1]
+    vm_type: manual_vm
     accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 1
+      ram: 1GB
+      disk: 0
+      gpu_count: 0
+      tpu_count: 0
+    manual:
+      hosts: [10.0.0.1]
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -152,7 +165,7 @@ scale_groups:
         config = load_config(config_path)
 
         # Test behavior: we can create a controller from this config without errors
-        create_controller(config)
+        create_controller_vm(config)
 
 
 class TestConfigSerialization:
@@ -161,17 +174,20 @@ class TestConfigSerialization:
     def test_config_to_dict_includes_scale_groups(self, tmp_path: Path):
         """config_to_dict() properly serializes scale groups."""
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
   tpu_v5e_8:
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
@@ -179,6 +195,13 @@ scale_groups:
     max_slices: 10
     zones: [us-central1-a]
     preemptible: true
+    slice_size: 8
+    resources:
+      cpu: 1
+      ram: 1GB
+      disk: 0
+      gpu_count: 0
+      tpu_count: 8
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -186,9 +209,8 @@ scale_groups:
         config = load_config(config_path)
         d = config_to_dict(config)
 
-        assert d["provider_type"] == "tpu"
-        assert d["project_id"] == "my-project"
-        assert d["bootstrap"]["docker_image"] == "gcr.io/project/iris-worker:latest"
+        assert d["platform"]["gcp"]["project_id"] == "my-project"
+        assert d["defaults"]["bootstrap"]["docker_image"] == "gcr.io/project/iris-worker:latest"
         assert "tpu_v5e_8" in d["scale_groups"]
         sg = d["scale_groups"]["tpu_v5e_8"]
         assert sg["accelerator_variant"] == "v5litepod-8"
@@ -201,17 +223,20 @@ scale_groups:
         import yaml
 
         config_content = """\
-provider_type: tpu
-project_id: my-project
-zone: us-central1-a
+platform:
+  gcp:
+    project_id: my-project
+    zone: us-central1-a
 
-bootstrap:
-  docker_image: gcr.io/project/iris-worker:latest
-  worker_port: 10001
-  controller_address: "http://10.0.0.1:10000"
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
   tpu_v5e_8:
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
@@ -220,6 +245,13 @@ scale_groups:
     zones: [us-central1-a]
     preemptible: true
     priority: 50
+    slice_size: 8
+    resources:
+      cpu: 1
+      ram: 1GB
+      disk: 0
+      gpu_count: 0
+      tpu_count: 8
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -231,9 +263,8 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        assert loaded_config.provider_type == original_config.provider_type
-        assert loaded_config.project_id == original_config.project_id
-        assert loaded_config.bootstrap.docker_image == original_config.bootstrap.docker_image
+        assert loaded_config.platform == original_config.platform
+        assert loaded_config.defaults.bootstrap.docker_image == original_config.defaults.bootstrap.docker_image
         assert len(loaded_config.scale_groups) == len(original_config.scale_groups)
         assert "tpu_v5e_8" in loaded_config.scale_groups
         assert loaded_config.scale_groups["tpu_v5e_8"].priority == 50
@@ -244,9 +275,9 @@ class TestBootstrapScriptConfig:
 
     def test_bootstrap_script_includes_config_when_provided(self):
         """Bootstrap script writes config file when provided."""
-        from iris.cluster.vm.controller import _build_controller_bootstrap_script
+        from iris.cluster.vm.controller_vm import _build_controller_bootstrap_script
 
-        config_yaml = "provider_type: tpu\n"
+        config_yaml = "platform:\\n  gcp:\\n    project_id: my-project\\n"
         script = _build_controller_bootstrap_script(
             docker_image="gcr.io/project/iris:latest",
             port=10000,
@@ -260,7 +291,7 @@ class TestBootstrapScriptConfig:
 
     def test_bootstrap_script_omits_config_when_empty(self):
         """Bootstrap script skips config setup when not provided."""
-        from iris.cluster.vm.controller import _build_controller_bootstrap_script
+        from iris.cluster.vm.controller_vm import _build_controller_bootstrap_script
 
         script = _build_controller_bootstrap_script(
             docker_image="gcr.io/project/iris:latest",
@@ -283,10 +314,10 @@ class TestControllerLifecycle:
             ("gcp", "gcp_config", "http://10.0.0.50:10000"),
         ],
     )
-    @patch("iris.cluster.vm.controller.wait_healthy_via_ssh")
-    @patch("iris.cluster.vm.controller.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller.DirectSshConnection")
-    @patch("iris.cluster.vm.controller.GceSshConnection")
+    @patch("iris.cluster.vm.controller_vm.wait_healthy_via_ssh")
+    @patch("iris.cluster.vm.controller_vm.run_streaming_with_retry")
+    @patch("iris.cluster.vm.controller_vm.DirectSshConnection")
+    @patch("iris.cluster.vm.controller_vm.GceSshConnection")
     def test_controller_start_succeeds_when_healthy(
         self,
         mock_gce_conn: MagicMock,
@@ -323,10 +354,10 @@ class TestControllerLifecycle:
             ("gcp", "gcp_config"),
         ],
     )
-    @patch("iris.cluster.vm.controller.wait_healthy_via_ssh")
-    @patch("iris.cluster.vm.controller.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller.DirectSshConnection")
-    @patch("iris.cluster.vm.controller.GceSshConnection")
+    @patch("iris.cluster.vm.controller_vm.wait_healthy_via_ssh")
+    @patch("iris.cluster.vm.controller_vm.run_streaming_with_retry")
+    @patch("iris.cluster.vm.controller_vm.DirectSshConnection")
+    @patch("iris.cluster.vm.controller_vm.GceSshConnection")
     def test_controller_start_fails_when_unhealthy(
         self,
         mock_gce_conn: MagicMock,
@@ -355,9 +386,9 @@ class TestControllerLifecycle:
                         with pytest.raises(RuntimeError, match="failed health check after bootstrap"):
                             controller.start()
 
-    @patch("iris.cluster.vm.controller.wait_healthy_via_ssh")
-    @patch("iris.cluster.vm.controller.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller.GceSshConnection")
+    @patch("iris.cluster.vm.controller_vm.wait_healthy_via_ssh")
+    @patch("iris.cluster.vm.controller_vm.run_streaming_with_retry")
+    @patch("iris.cluster.vm.controller_vm.GceSshConnection")
     def test_gcp_controller_reload_returns_url_when_healthy(
         self,
         mock_gce_conn: MagicMock,
@@ -384,73 +415,34 @@ class TestControllerLifecycle:
 
 
 @pytest.fixture
-def cli_runner() -> CliRunner:
-    """Create a Click CLI test runner."""
-    return CliRunner()
-
-
-@pytest.fixture
-def gcp_config_file(tmp_path: Path) -> Path:
-    """Create a GCP controller config file."""
-    config_path = tmp_path / "gcp_config.yaml"
-    config_content = """
-provider_type: gcp
-project_id: test-project
-region: us-central1
-zone: us-central1-a
-
-bootstrap:
-  docker_image: test-image:latest
-  worker_port: 10001
-
-controller_vm:
-  image: gcr.io/test-project/iris-controller:latest
-  gcp:
-    machine_type: n2-standard-4
-    boot_disk_size_gb: 50
-    port: 10000
-
-scale_groups:
-  test_group:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-4
-    runtime_version: v2-alpha-tpuv5-lite
-    min_slices: 0
-    max_slices: 10
-    zones: [us-central1-a]
-"""
-    config_path.write_text(config_content)
-    return config_path
-
-
-@pytest.fixture
 def manual_config_file(tmp_path: Path) -> Path:
     """Create a manual controller config file with SSH bootstrap."""
     config_path = tmp_path / "manual_config.yaml"
     config_content = """
-provider_type: manual
+platform:
+  manual: {}
 
-bootstrap:
-  docker_image: gcr.io/test-project/iris-worker:latest
-  worker_port: 10001
+defaults:
+  bootstrap:
+    docker_image: gcr.io/test-project/iris-worker:latest
+    worker_port: 10001
+  ssh:
+    user: ubuntu
+    key_file: ~/.ssh/id_rsa
+    connect_timeout: { milliseconds: 30000 }
 
-controller_vm:
+controller:
   image: gcr.io/test-project/iris-controller:latest
   manual:
     host: 10.0.0.100
     port: 10000
 
-ssh:
-  user: ubuntu
-  key_file: ~/.ssh/id_rsa
-  connect_timeout: 30
-
 scale_groups:
   manual_hosts:
-    provider:
-      manual:
-        hosts: [10.0.0.1]
+    vm_type: manual_vm
     accelerator_type: cpu
+    manual:
+      hosts: [10.0.0.1]
 """
     config_path.write_text(config_content)
     return config_path
@@ -469,44 +461,8 @@ class TestControllerFactory:
     def test_creates_correct_controller_type(self, config_fixture: str, expected_type: type, request):
         """create_controller returns correct controller type based on config."""
         config = request.getfixturevalue(config_fixture)
-        controller = create_controller(config)
+        controller = create_controller_vm(config)
         assert isinstance(controller, expected_type)
-
-
-class TestCliControllerCommands:
-    """Tests for CLI controller start/stop/reload commands."""
-
-    @pytest.mark.parametrize(
-        "command,mock_target,error_msg,expected_output",
-        [
-            (
-                "stop",
-                "iris.cluster.vm.controller.GcpController.stop",
-                "VM not found",
-                "Failed to stop controller: VM not found",
-            ),
-        ],
-    )
-    def test_cli_controller_failure_shows_error(
-        self,
-        cli_runner: CliRunner,
-        gcp_config_file: Path,
-        command: str,
-        mock_target: str,
-        error_msg: str,
-        expected_output: str,
-    ):
-        """CLI shows appropriate error message when controller operation fails."""
-        with patch(mock_target) as mock_op:
-            mock_op.side_effect = RuntimeError(error_msg)
-
-            result = cli_runner.invoke(
-                iris,
-                ["cluster", "--config", str(gcp_config_file), "controller", command],
-            )
-
-        assert result.exit_code == 1
-        assert expected_output in result.output
 
 
 # ============================================================================

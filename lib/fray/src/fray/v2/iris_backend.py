@@ -22,22 +22,25 @@ via submitted jobs, and deferred actor handle resolution.
 from __future__ import annotations
 
 import logging
-import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
-if TYPE_CHECKING:
-    from iris.cluster.types import Constraint, Entrypoint as IrisEntrypoint, EnvironmentSpec, ResourceSpec
-    from iris.rpc import cluster_pb2
+from iris.actor.server import ActorServer
+from iris.client.client import IrisClient as IrisClientLib
+from iris.client.client import Job as IrisJob
+from iris.client.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import Constraint, EnvironmentSpec, ResourceSpec
+from iris.cluster.types import Entrypoint as IrisEntrypoint
+from iris.rpc import cluster_pb2
 
-from fray.v2.actor import ActorFuture, ActorGroup, ActorHandle, FutureActorFuture
+from fray.v2.actor import ActorFuture, ActorHandle
 from fray.v2.types import (
     CpuConfig,
     DeviceConfig,
-    Entrypoint as Entrypoint_v2,
     EnvironmentConfig,
     GpuConfig,
     JobRequest,
@@ -45,7 +48,9 @@ from fray.v2.types import (
     ResourceConfig,
     TpuConfig,
 )
-from iris.client.client import IrisClient as IrisClientLib, Job as IrisJob
+from fray.v2.types import (
+    Entrypoint as Entrypoint_v2,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +63,6 @@ def _get_shared_executor() -> ThreadPoolExecutor:
     if _shared_executor is None:
         _shared_executor = ThreadPoolExecutor(max_workers=32)
     return _shared_executor
-
-
-# ---------------------------------------------------------------------------
-# Type conversion: fray v2 → Iris
-# ---------------------------------------------------------------------------
 
 
 def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
@@ -137,11 +137,6 @@ def convert_environment(env: EnvironmentConfig | None) -> EnvironmentSpec | None
     )
 
 
-# ---------------------------------------------------------------------------
-# Job status mapping: Iris → fray v2
-# ---------------------------------------------------------------------------
-
-
 def map_iris_job_state(iris_state: int) -> JobStatus:
     """Map Iris protobuf JobState enum to fray v2 JobStatus."""
     from iris.rpc import cluster_pb2
@@ -156,11 +151,6 @@ def map_iris_job_state(iris_state: int) -> JobStatus:
         cluster_pb2.JOB_STATE_UNSCHEDULABLE: JobStatus.FAILED,
     }
     return _STATE_MAP.get(iris_state, JobStatus.PENDING)
-
-
-# ---------------------------------------------------------------------------
-# IrisJobHandle
-# ---------------------------------------------------------------------------
 
 
 class IrisJobHandle:
@@ -190,21 +180,6 @@ class IrisJobHandle:
         self._job.terminate()
 
 
-# ---------------------------------------------------------------------------
-# Actor hosting entrypoint
-# ---------------------------------------------------------------------------
-
-
-def _get_host_ip() -> str:
-    """Get the IP address that other hosts can reach this machine on."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    finally:
-        s.close()
-
-
 def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
     """Entrypoint for actor-hosting Iris jobs.
 
@@ -212,18 +187,16 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     endpoint for discovery, and blocks until the job is terminated.
 
     For multi-replica jobs, each replica gets a unique actor name based on
-    its task index (extracted from job_id): "{name_prefix}-{task_index}".
+    its task index. Uses absolute endpoint names: "/{job_id}/{name_prefix}-{task_index}".
     """
-    from iris.actor.server import ActorServer
-    from iris.client.client import iris_ctx
-    from iris.cluster.client.job_info import get_job_info
 
     ctx = iris_ctx()
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("_host_actor must run inside an Iris job but get_job_info() returned None")
 
-    actor_name = f"{name_prefix}-{job_info.task_index}"
+    # Absolute endpoint name - bypasses namespace prefix in resolver
+    actor_name = f"/{ctx.job_id}/{name_prefix}-{job_info.task_index}"
     logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
     instance = actor_class(*args, **kwargs)
@@ -242,90 +215,41 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     threading.Event().wait()
 
 
-# ---------------------------------------------------------------------------
-# IrisActorHandle
-# ---------------------------------------------------------------------------
-
-
 class IrisActorHandle:
-    """Handle to an Iris-hosted actor.
+    """Handle to an Iris-hosted actor. Resolves via iris_ctx()."""
 
-    Deferred: created with just an actor name. On first use, resolves the
-    name via iris_ctx().resolver to find the actor's address.
+    def __init__(self, endpoint_name: str):
+        self._endpoint_name = endpoint_name
+        self._client: Any = None  # Lazily resolved ActorClient
 
-    Picklable: serializes as (actor_name, job_id) and reconstructs from the current
-    IrisContext on the receiving end. This works because child jobs inherit
-    the parent's namespace.
-    """
+    def __getstate__(self) -> dict:
+        # Only serialize the endpoint name - client is lazily resolved
+        return {"endpoint_name": self._endpoint_name}
 
-    def __init__(
-        self,
-        actor_name: str,
-        client: Any = None,
-        job_id: str | None = None,
-        iris_client: IrisClientLib | None = None,
-        controller_address: str | None = None,
-    ):
-        self._actor_name = actor_name
-        self._client = client
-        self._job_id = job_id
-        self._iris_client = iris_client
-        self._controller_address = controller_address
+    def __setstate__(self, state: dict) -> None:
+        self._endpoint_name = state["endpoint_name"]
+        self._client = None
 
     def _resolve(self) -> Any:
+        """Resolve endpoint to ActorClient via IrisContext."""
         if self._client is None:
             from iris.actor.client import ActorClient
             from iris.client.client import get_iris_ctx
 
-            # If we have an explicit IrisClient and job_id, use that (for external calls)
-            if self._iris_client is not None and self._job_id is not None:
-                resolver = self._iris_client.resolver_for_job(self._job_id)
-            else:
-                # Try the context's resolver first (works when called within a job
-                # that has iris context properly set up via ContextVar inheritance).
-                ctx = get_iris_ctx()
-                if ctx is not None and self._job_id is not None and ctx.client is not None:
-                    resolver = ctx.client.resolver_for_job(self._job_id)
-                elif ctx is not None and ctx.client is not None:
-                    resolver = ctx.resolver
-                elif self._controller_address is not None and self._job_id is not None:
-                    # Fallback: create a lightweight client from the serialized
-                    # controller address. This handles the case where the handle
-                    # was deserialized in a thread that doesn't inherit the iris
-                    # ContextVar (e.g. ActorServer RPC dispatch threads).
-                    fallback_client = IrisClientLib.remote(self._controller_address)
-                    resolver = fallback_client.resolver_for_job(self._job_id)
-                else:
-                    raise RuntimeError(
-                        f"Cannot resolve actor '{self._actor_name}': no iris context, "
-                        f"no iris_client, and no controller_address available"
-                    )
-            self._client = ActorClient(resolver, self._actor_name)
+            ctx = get_iris_ctx()
+            if ctx is None:
+                raise RuntimeError(
+                    "IrisActorHandle._resolve() requires IrisContext. "
+                    "Call from within an Iris job or set context via iris_ctx_scope()."
+                )
+            # ActorClient handles resolution internally with retries
+            self._client = ActorClient(ctx.resolver, self._endpoint_name)
         return self._client
 
     def __getattr__(self, method_name: str) -> _IrisActorMethod:
         if method_name.startswith("_"):
             raise AttributeError(method_name)
         return _IrisActorMethod(self, method_name)
-
-    def __getstate__(self) -> dict:
-        controller_address = self._controller_address
-        if controller_address is None and self._iris_client is not None:
-            # Extract controller address from the IrisClient so the handle
-            # can reconstruct a resolver after deserialization.
-            controller_address = getattr(self._iris_client._cluster, "_address", None)
-        return {
-            "actor_name": self._actor_name,
-            "job_id": self._job_id,
-            "controller_address": controller_address,
-        }
-
-    def __setstate__(self, state: dict) -> None:
-        self._actor_name = state["actor_name"]
-        self._job_id = state.get("job_id")
-        self._controller_address = state.get("controller_address")
-        self._client = None
-        self._iris_client = None
 
 
 class _IrisActorMethod:
@@ -339,39 +263,56 @@ class _IrisActorMethod:
         client = self._handle._resolve()
         executor = _get_shared_executor()
         future = executor.submit(lambda: getattr(client, self._method)(*args, **kwargs))
-        return FutureActorFuture(future)
+        return future
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         client = self._handle._resolve()
         return getattr(client, self._method)(*args, **kwargs)
 
 
-# ---------------------------------------------------------------------------
-# IrisActorGroup
-# ---------------------------------------------------------------------------
+class IrisActorGroup:
+    """ActorGroup that polls the Iris resolver to discover actors as they start."""
 
-
-class IrisActorGroup(ActorGroup):
-    """ActorGroup that polls the Iris resolver to discover actors as they start.
-
-    Unlike LocalClient's ActorGroup where all actors are ready immediately,
-    Iris actors become available asynchronously as their hosting jobs start
-    and register endpoints.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        count: int,
-        jobs: list[IrisJobHandle],
-        iris_client: IrisClientLib,
-    ):
-        # Start with empty handles — they'll be populated via wait_ready()
-        super().__init__(handles=[], jobs=jobs)
+    def __init__(self, name: str, count: int, job_id: Any):
+        """Args:
+        name: Actor name prefix
+        count: Number of actors to discover
+        job_id: JobId/JobName for the actor job
+        """
         self._name = name
         self._count = count
-        self._iris_client = iris_client
+        self._job_id = job_id
+        self._handles: list[ActorHandle] = []
         self._discovered_names: set[str] = set()
+
+    def __getstate__(self) -> dict:
+        # Serialize only the discovery parameters - discovery state resets on deserialize
+        return {
+            "name": self._name,
+            "count": self._count,
+            "job_id": self._job_id,
+        }
+
+    def __setstate__(self, state: dict) -> None:
+        self._name = state["name"]
+        self._count = state["count"]
+        self._job_id = state["job_id"]
+        self._handles = []
+        self._discovered_names = set()
+
+    def _get_client(self) -> IrisClientLib:
+        """Get IrisClient from context."""
+        from iris.client.client import get_iris_ctx
+
+        ctx = get_iris_ctx()
+        if ctx is None or ctx.client is None:
+            raise RuntimeError("IrisActorGroup requires IrisContext with client. " "Set context via iris_ctx_scope().")
+        return ctx.client
+
+    @property
+    def ready_count(self) -> int:
+        """Number of actors that are available for RPC."""
+        return len(self._handles)
 
     def discover_new(self) -> list[ActorHandle]:
         """Probe for newly available actors without blocking.
@@ -379,32 +320,26 @@ class IrisActorGroup(ActorGroup):
         Returns only the handles discovered during this call (not previously
         known ones). Call repeatedly to pick up workers as they come online.
         """
+        client = self._get_client()
+        resolver = client.resolver_for_job(self._job_id)
+
         newly_discovered: list[ActorHandle] = []
-        # With multi-replica jobs, there's a single job for all replicas.
-        # Use the first (and only) job handle for all endpoint resolution.
-        job = self._jobs[0]
-        resolver = self._iris_client.resolver_for_job(job.job_id)
         for i in range(self._count):
-            actor_name = f"{self._name}-{i}"
-            if actor_name in self._discovered_names:
+            # Absolute endpoint name matches what _host_actor registers
+            endpoint_name = f"/{self._job_id}/{self._name}-{i}"
+            if endpoint_name in self._discovered_names:
                 continue
-            result = resolver.resolve(actor_name)
+            result = resolver.resolve(endpoint_name)
 
             if not result.is_empty:
-                self._discovered_names.add(actor_name)
-                controller_address = getattr(self._iris_client._cluster, "_address", None)
-                handle = IrisActorHandle(
-                    actor_name,
-                    job_id=job.job_id,
-                    iris_client=self._iris_client,
-                    controller_address=controller_address,
-                )
+                self._discovered_names.add(endpoint_name)
+                handle = IrisActorHandle(endpoint_name)
                 self._handles.append(handle)
                 newly_discovered.append(handle)
                 logger.info(
                     "discover_new: found actor=%s job_id=%s (%d/%d ready)",
-                    actor_name,
-                    job.job_id,
+                    endpoint_name,
+                    self._job_id,
                     len(self._discovered_names),
                     self._count,
                 )
@@ -430,24 +365,14 @@ class IrisActorGroup(ActorGroup):
 
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
-                job = self._jobs[0]
-                all_eps = self._iris_client._cluster.list_endpoints(prefix="")
-                for i in range(self._count):
-                    actor_name = f"{self._name}-{i}"
-                    logger.error(
-                        "wait_ready TIMEOUT: actor=%s job_id=%s all_endpoints=%s",
-                        actor_name,
-                        job.job_id,
-                        [(ep.name, ep.address, ep.job_id) for ep in all_eps],
-                    )
                 raise TimeoutError(f"Only {len(self._discovered_names)}/{target} actors ready after {timeout}s")
 
             time.sleep(sleep_secs)
 
-
-# ---------------------------------------------------------------------------
-# FrayIrisClient
-# ---------------------------------------------------------------------------
+    def shutdown(self) -> None:
+        """Terminate the actor job."""
+        client = self._get_client()
+        client.terminate(self._job_id)
 
 
 class FrayIrisClient:
@@ -544,8 +469,7 @@ class FrayIrisClient:
         return IrisActorGroup(
             name=name,
             count=count,
-            jobs=[IrisJobHandle(job)],  # Single job with multiple replicas
-            iris_client=self._iris,
+            job_id=job.job_id,
         )
 
     def shutdown(self, wait: bool = True) -> None:
