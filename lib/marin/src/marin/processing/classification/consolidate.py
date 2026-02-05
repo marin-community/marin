@@ -43,7 +43,7 @@ from marin.utils import (
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Dataset, ZephyrContext
+from zephyr import Backend, Dataset
 from zephyr.readers import InputFileSpec, load_file
 
 
@@ -203,13 +203,12 @@ def _compute_percentile_threshold(
             combined.merge(sketch)
         return combined
 
-    with ZephyrContext() as ctx:
-        result = ctx.execute(
-            Dataset.from_list(attr_paths)
-            .load_file()
-            .select("attributes")
-            .reduce(local_reducer=local_reducer, global_reducer=global_reducer)
-        )
+    result = Backend.execute(
+        Dataset.from_list(attr_paths)
+        .load_file()
+        .select("attributes")
+        .reduce(local_reducer=local_reducer, global_reducer=global_reducer)
+    )
 
     combined_sketch = next(iter(result))
     threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
@@ -333,15 +332,14 @@ def consolidate(config: ConsolidateConfig):
 
     output_pattern = f"{config.output_path}/part-{{shard:04d}}.parquet"
 
-    with ZephyrContext() as ctx:
-        results = ctx.execute(
-            Dataset.from_list(input_paths)
-            .map_shard(
-                lambda shard: process_file_shard(
-                    shard=shard, filters=filters, input_base=config.input_path, filetype=config.filetype
-                )
+    results = Backend.execute(
+        Dataset.from_list(input_paths)
+        .map_shard(
+            lambda shard: process_file_shard(
+                shard=shard, filters=filters, input_base=config.input_path, filetype=config.filetype
             )
-            .write_parquet(output_pattern)
         )
+        .write_parquet(output_pattern)
+    )
 
     logger.info(f"Consolidation complete. Wrote {len(results)} output files")

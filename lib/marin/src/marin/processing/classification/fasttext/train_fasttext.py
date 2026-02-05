@@ -37,7 +37,7 @@ from marin.processing.classification.dataset_utils import (
     Document,
 )
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm, rebase_file_path
-from zephyr import Dataset, ZephyrContext
+from zephyr import Backend, Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -106,12 +106,11 @@ def create_dataset(config: CreateDatasetConfig) -> None:
     if config.merge_dataset_shards:
         output_path = os.path.join(config.output_dataset_path, "data", "data.jsonl.gz")
 
-    with ZephyrContext() as ctx:
-        ctx.execute(
-            Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
-            .flat_map(processing_func)
-            .write_jsonl(output_path)
-        )
+    Backend.execute(
+        Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
+        .flat_map(processing_func)
+        .write_jsonl(output_path)
+    )
 
 
 def create_dataset_shard(

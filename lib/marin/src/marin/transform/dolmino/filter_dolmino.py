@@ -27,7 +27,7 @@ uv run zephyr --backend=ray --max-parallelism=1000 --memory=10GB --num-cpus=2 \
 import dataclasses
 
 import draccus
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 
 @dataclasses.dataclass
@@ -66,8 +66,7 @@ def filter_dolmino(config: FilterDolminoConfig):
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl.gz")
     )
 
-    with ZephyrContext() as ctx:
-        ctx.execute(pipeline)
+    Backend.execute(pipeline)
 
 
 @draccus.wrap()

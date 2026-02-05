@@ -47,7 +47,7 @@ from marin.transform.ar5iv.transform import (
 )
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -186,5 +186,4 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
         )
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext() as ctx:
-        ctx.execute(pipeline)
+    Backend.execute(pipeline)

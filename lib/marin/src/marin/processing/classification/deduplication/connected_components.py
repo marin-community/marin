@@ -12,20 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
+import logging
 from typing import Any, TypedDict
+from collections.abc import Sequence
 
-try:
-    from dupekit import hash_xxh3_128
-except ModuleNotFoundError:
-    raise ModuleNotFoundError(
-        "dupekit is required for deduplication. Install it with: pip install marin[dedup]"
-    ) from None
-
-from zephyr import Dataset, ZephyrContext
+from dupekit import hash_xxh3_128
+from fray.job import JobContext
+from zephyr import Backend, Dataset
 from zephyr.expr import col
 
 logger = logging.getLogger(__name__)
@@ -89,6 +85,7 @@ class BucketWithIds(TypedDict):
 def connected_components(
     ds: Dataset[CCInput],
     *,
+    ctx: JobContext,
     output_dir: str,
     max_iterations: int = 10,
     preserve_singletons: bool = True,
@@ -98,60 +95,63 @@ def connected_components(
 
     Args:
         ds: Input dataset containing 'bucket' and 'ids' fields, most likely from MinHash LSH output
+        ctx: Job context to execute the connected components algorithm
         output_dir: Directory to write intermediate and final output files
         max_iterations: Maximum number of iterations to run the connected components algorithm
         preserve_singletons: Whether to preserve single-node buckets in the output
     """
 
-    with ZephyrContext() as ctx:
-        curr_it = ctx.execute(
-            ds
-            # Group nodes in buckets
-            .group_by(
-                lambda x: x["bucket"],
-                _reduce_buckets,
-            )
-            # Go from bucket -> links
-            .flat_map(partial(_gen_links_within_buckets, preserve_singletons=preserve_singletons))
-            # Construct Node state, init with:
-            #  * each node is its own component
-            #  * adjacency list from links
-            .group_by(
-                lambda x: x[0]["record_id_norm"],
-                _build_adjacency,
-            ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
+    curr_it = Backend.execute(
+        ds
+        # Group nodes in buckets
+        .group_by(
+            lambda x: x["bucket"],
+            _reduce_buckets,
+        )
+        # Go from bucket -> links
+        .flat_map(partial(_gen_links_within_buckets, preserve_singletons=preserve_singletons))
+        # Construct Node state, init with:
+        #  * each node is its own component
+        #  * adjacency list from links
+        .group_by(
+            lambda x: x[0]["record_id_norm"],
+            _build_adjacency,
+        ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
+        context=ctx,
+        verbose=True,
+    )
+
+    converged = False
+    for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
+        logger.info(f"Connected components iteration {i}...")
+        curr_it = Backend.execute(
+            Dataset.from_list(curr_it)
+            .load_parquet()
+            .map(lambda record: CCNode(**record))
+            .flat_map(_emit_messages)
+            .group_by(key=lambda x: x[0], reducer=_reduce_node_step)
+            # NOTE: parquet built-in does not support list of int :/
+            .write_parquet(f"{output_dir}/it_{i}/part-{{shard:05d}}.parquet"),
+            context=ctx,
             verbose=True,
         )
 
-        converged = False
-        for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
-            logger.info(f"Connected components iteration {i}...")
-            curr_it = ctx.execute(
-                Dataset.from_list(curr_it)
-                .load_parquet()
-                .map(lambda record: CCNode(**record))
-                .flat_map(_emit_messages)
-                .group_by(key=lambda x: x[0], reducer=_reduce_node_step)
-                # NOTE: parquet built-in does not support list of int :/
-                .write_parquet(f"{output_dir}/it_{i}/part-{{shard:05d}}.parquet"),
-                verbose=True,
-            )
+        # Check for convergence
+        changes = Backend.execute(
+            Dataset.from_list(curr_it).load_parquet(columns=["changed"]).filter(col("changed")).count(),
+            context=ctx,
+        )
 
-            # Check for convergence
-            changes = ctx.execute(
-                Dataset.from_list(curr_it).load_parquet(columns=["changed"]).filter(col("changed")).count(),
-            )
+        num_changes = changes[0]
 
-            num_changes = changes[0]
+        if num_changes == 0:
+            converged = True
+            logger.info(f"Connected components converged after {i} iterations.")
+            break
+        else:
+            logger.info(f"Connected components iteration {i} found {num_changes} changes.")
 
-            if num_changes == 0:
-                converged = True
-                logger.info(f"Connected components converged after {i} iterations.")
-                break
-            else:
-                logger.info(f"Connected components iteration {i} found {num_changes} changes.")
-
-        return converged, curr_it
+    return converged, curr_it
 
 
 def _reduce_buckets(bucket: str, items: Iterator[CCInput]) -> BucketWithIds:

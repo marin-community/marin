@@ -31,7 +31,7 @@ uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
 import dataclasses
 
 import draccus
-from zephyr import Dataset, ZephyrContext
+from zephyr import Backend, Dataset
 
 
 @dataclasses.dataclass
@@ -90,8 +90,7 @@ def filter_stackexchange(config: FilterStackExchangeConfig):
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
 
-    with ZephyrContext() as ctx:
-        ctx.execute(pipeline)
+    Backend.execute(pipeline)
 
 
 if __name__ == "__main__":

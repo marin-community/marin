@@ -40,7 +40,6 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
-from fray.v2.types import ResourceConfig
 
 from experiments.evals.task_configs import (
     CORE_TASKS,
@@ -179,17 +178,6 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
-        resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
-        pip_dependency_groups=["marin:cpu"],
-        env_vars={
-            "JAX_PLATFORMS": "cpu",
-            "JAX_PLATFORM_NAME": "cpu",
-            "CUDA_VISIBLE_DEVICES": "",
-            "TRANSFORMERS_NO_TORCH": "1",
-            "TRANSFORMERS_NO_TORCHVISION": "1",
-            "USE_TORCH": "0",
-            "TORCH_DISABLE_GLOBAL_DEPS": "1",
-        },
     )
 
 

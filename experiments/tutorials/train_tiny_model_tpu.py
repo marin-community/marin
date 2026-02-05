@@ -19,7 +19,7 @@ For CPU training, see train_tiny_model_cpu.py
 For GPU training, see train_tiny_model_gpu.py
 """
 
-from fray.v2 import ResourceConfig
+from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main, versioned
 
@@ -28,13 +28,7 @@ from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = ResourceConfig.with_tpu(
-    "v5litepod-16",
-    slice_count=4,
-    cpu=32,
-    ram="128g",
-    disk="50g",
-)
+RESOURCES = ResourceConfig.with_tpu("v4-8")
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
@@ -55,7 +49,7 @@ small_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
     resources=RESOURCES,
     train_batch_size=128,
-    num_train_steps=200,
+    num_train_steps=10000,
     # set hyperparameters
     learning_rate=6e-4,
     weight_decay=0.1,

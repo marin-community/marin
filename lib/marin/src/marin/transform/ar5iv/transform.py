@@ -29,7 +29,7 @@ from dataclasses import dataclass
 import draccus
 from bs4 import BeautifulSoup
 from marin import markdown
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 
 def transform_abstract(html: BeautifulSoup):
@@ -274,25 +274,24 @@ class Config:
 @draccus.wrap()
 def main(cfg: Config) -> None:
     """Convert ar5iv HTML to markdown in two stages."""
-    with ZephyrContext() as ctx:
-        # Stage 1: Clean HTML
-        print("Stage 1: Cleaning HTML...")
-        clean_pipeline = (
-            Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
-            .flat_map(load_jsonl)
-            .map(clean_ar5iv_record)
-            .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
-        )
-        ctx.execute(clean_pipeline)
+    # Stage 1: Clean HTML
+    print("Stage 1: Cleaning HTML...")
+    clean_pipeline = (
+        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
+        .flat_map(load_jsonl)
+        .map(clean_ar5iv_record)
+        .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
+    Backend.execute(clean_pipeline)
 
-        # Stage 2: Convert to Markdown
-        print("Stage 2: Converting to markdown...")
-        markdown_pipeline = (
-            Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
-            .flat_map(load_jsonl)
-            .map(markdownify_ar5iv_record)
-            .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
-        )
-        ctx.execute(markdown_pipeline)
+    # Stage 2: Convert to Markdown
+    print("Stage 2: Converting to markdown...")
+    markdown_pipeline = (
+        Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
+        .flat_map(load_jsonl)
+        .map(markdownify_ar5iv_record)
+        .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
+    Backend.execute(markdown_pipeline)
 
     print("Transformation complete!")

@@ -37,7 +37,7 @@ import requests
 import warcio
 from marin.utils import fsspec_glob
 from tqdm import tqdm
-from zephyr import Dataset, ZephyrContext
+from zephyr import Backend, Dataset
 from zephyr.writers import ensure_parent_dir
 
 CC_IDX_HOST_URL = "http://34.72.201.218:8080"
@@ -213,7 +213,6 @@ def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
     # Single-level parallelism over all files
     pipeline = Dataset.from_list(all_files).map(process_file)
 
-    with ZephyrContext() as ctx:
-        ctx.execute(pipeline)
+    Backend.execute(pipeline)
 
     logger.info("Processing completed successfully!")

@@ -15,7 +15,7 @@
 from collections import defaultdict
 
 from marin.processing.classification.deduplication.connected_components import CCInput, connected_components
-from zephyr import Dataset, ZephyrContext
+from zephyr import Backend, Dataset
 
 
 def test_connected_components_happy_path(sync_backend, tmp_path):
@@ -29,10 +29,9 @@ def test_connected_components_happy_path(sync_backend, tmp_path):
 
     ds = Dataset.from_list(input_data)
 
-    converged, output_path = connected_components(ds, output_dir=tmp_path.as_posix(), max_iterations=5)
+    converged, output_path = connected_components(ds, ctx=sync_backend, output_dir=tmp_path.as_posix(), max_iterations=5)
     assert converged
-    with ZephyrContext() as ctx:
-        results = ctx.execute(Dataset.from_list(output_path).load_parquet())
+    results = Backend.execute(Dataset.from_list(output_path).load_parquet(), context=sync_backend)
     assert len(results) == len(set(r["id"] for r in input_data))
 
     components = defaultdict(list)
