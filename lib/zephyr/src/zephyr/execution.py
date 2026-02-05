@@ -755,14 +755,9 @@ class ZephyrWorker:
             # Unpack task and config
             task, attempt, config = response
 
-            # Update config for this execution
-            self._shared_data = config["shared_data"]
-            self._chunk_prefix = config["chunk_prefix"]
-            self._execution_id = config["execution_id"]
-
             logger.info("[%s] Executing task for shard %d (attempt %d)", worker_id, task.shard_idx, attempt)
             try:
-                result = self._execute_shard(task)
+                result = self._execute_shard(task, config)
                 logger.info("[%s] Task complete, reporting result for shard %d", worker_id, task.shard_idx)
                 coordinator.report_result.remote(worker_id, task.shard_idx, attempt, result)
                 task_count += 1
@@ -776,11 +771,16 @@ class ZephyrWorker:
                     "".join(traceback.format_exc()),
                 )
 
-    def _execute_shard(self, task: ShardTask) -> TaskResult:
+    def _execute_shard(self, task: ShardTask, config: dict) -> TaskResult:
         """Execute a stage's operations on a single shard.
 
-        Returns list of TaskResult.
+        Returns list[TaskResult].
         """
+        # Update config for this execution
+        self._shared_data = config["shared_data"]
+        self._chunk_prefix = config["chunk_prefix"]
+        self._execution_id = config["execution_id"]
+
         _shard_ctx_var.set(self)
 
         logger.info(
@@ -800,7 +800,7 @@ class ZephyrWorker:
             aux_shards=task.aux_shards,
         )
 
-        results: list[TaskResult] = []
+        results: list[ResultChunk] = []
         chunk_idx = 0
 
         for stage_output in run_stage(stage_ctx, task.operations):
@@ -1011,8 +1011,8 @@ def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
     output_idx = 0
     for shard in shards:
         for chunk in shard.chunks:
-            output_idx = (output_idx + 1) % num_shards
             output_by_shard[output_idx].append(chunk)
+            output_idx = (output_idx + 1) % num_shards
     return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_shards)]
 
 

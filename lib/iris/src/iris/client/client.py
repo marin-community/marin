@@ -56,7 +56,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Deadline, Duration, RateLimiter, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -269,32 +269,43 @@ class Job:
         """
         log_states: dict[JobName, _TaskLogState] = {}
         # Use a fixed low interval for responsive streaming (capped at poll_interval)
-        stream_interval = min(0.2, poll_interval)
-        start = time.monotonic()
+        stream_interval = Duration.from_seconds(min(0.2, poll_interval))
+        task_limiter = RateLimiter(interval_seconds=max(1.0, stream_interval.to_seconds()))
+        child_limiter = RateLimiter(interval_seconds=10.0)
+        deadline = Deadline.from_seconds(timeout)
+        active_jobs: list[cluster_pb2.JobStatus] = []
 
         while True:
             status = self._client._cluster_client.get_job_status(self._job_id)
 
-            job_statuses = [status]
-            if include_children:
+            if not active_jobs:
+                active_jobs = [status]
+
+            if include_children and child_limiter.should_run():
                 try:
-                    job_statuses = self._client.list_jobs(prefix=self._job_id)
+                    active_jobs = self._client.list_jobs(prefix=self._job_id)
+                    if not active_jobs:
+                        active_jobs = [status]
                 except Exception as e:
                     logger.debug("Failed to list child jobs for %s: %s", self._job_id, e)
+                    active_jobs = [status]
+            else:
+                active_jobs[0] = status
 
-            # Initialize log pollers when we learn num_tasks
-            for job_status in job_statuses:
-                task_statuses = job_status.tasks
-                if not task_statuses:
-                    try:
-                        job_id = JobName.from_wire(job_status.job_id)
-                        task_statuses = self._client._cluster_client.list_tasks(job_id)
-                    except Exception as e:
-                        logger.debug("Failed to list tasks for job %s: %s", job_status.job_id, e)
-                        task_statuses = []
-                for task_status in task_statuses:
-                    task_id = JobName.from_wire(task_status.task_id)
-                    log_states.setdefault(task_id, _TaskLogState(task_id))
+            if task_limiter.should_run():
+                # Refresh task list for known jobs at a lower cadence than log polling.
+                for job_status in active_jobs:
+                    task_statuses = job_status.tasks
+                    if not task_statuses:
+                        try:
+                            job_id = JobName.from_wire(job_status.job_id)
+                            task_statuses = self._client._cluster_client.list_tasks(job_id)
+                        except Exception as e:
+                            logger.debug("Failed to list tasks for job %s: %s", job_status.job_id, e)
+                            task_statuses = []
+                    for task_status in task_statuses:
+                        task_id = JobName.from_wire(task_status.task_id)
+                        log_states.setdefault(task_id, _TaskLogState(task_id))
 
             # Poll logs from all tasks
             for state in log_states.values():
@@ -322,11 +333,9 @@ class Job:
                         )
                 return status
 
-            elapsed = time.monotonic() - start
-            if elapsed >= timeout:
-                raise TimeoutError(f"Job {self._job_id} did not complete in {timeout}s")
+            deadline.raise_if_expired(f"Job {self._job_id} did not complete in {timeout}s")
 
-            time.sleep(stream_interval)
+            time.sleep(stream_interval.to_seconds())
 
     def terminate(self) -> None:
         """Terminate this job."""

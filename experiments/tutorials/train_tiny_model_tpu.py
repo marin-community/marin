@@ -28,7 +28,7 @@ from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = ResourceConfig.with_tpu("v4-8")
+RESOURCES = ResourceConfig.with_tpu("v5litepod-16")
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
@@ -49,7 +49,7 @@ small_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
     resources=RESOURCES,
     train_batch_size=128,
-    num_train_steps=10000,
+    num_train_steps=200,
     # set hyperparameters
     learning_rate=6e-4,
     weight_decay=0.1,
