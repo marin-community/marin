@@ -50,7 +50,6 @@ class WorkerConfig:
     host: str = "127.0.0.1"
     port: int = 0
     cache_dir: Path | None = None
-    registry: str = "localhost:5000"
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
@@ -91,7 +90,6 @@ class Worker:
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
         self._image_cache = image_provider or ImageCache(
             self._cache_dir,
-            registry=config.registry,
             max_images=50,
         )
         self._runtime = container_runtime or DockerRuntime()
@@ -463,9 +461,6 @@ class Worker:
             except Exception as e:
                 logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-        # Build expected_tasks lookup
-        expected_task_ids = {entry.task_id: entry for entry in request.expected_tasks}
-
         # Terminal states
         terminal_states = {
             cluster_pb2.TASK_STATE_SUCCEEDED,
@@ -518,16 +513,18 @@ class Worker:
                         )
                     )
 
-            # Report all non-terminal tasks (including unexpected ones)
+            # Kill tasks not in expected_tasks - the controller has decided these
+            # tasks should no longer run (e.g., job was killed, task was reassigned)
+            expected_task_ids = {entry.task_id for entry in request.expected_tasks}
+            tasks_to_kill = []
             for task_id, task in self._tasks.items():
                 if task_id not in expected_task_ids and task.status not in terminal_states:
-                    running_tasks.append(
-                        cluster_pb2.Controller.RunningTaskEntry(
-                            task_id=task_id,
-                            attempt_id=task.to_proto().current_attempt_id,
-                            state=task.status,
-                        )
-                    )
+                    tasks_to_kill.append(task_id)
+
+        # Kill removed tasks outside lock to avoid deadlock
+        for task_id in tasks_to_kill:
+            logger.warning("Killing task %s (no longer in expected_tasks)", task_id)
+            self.kill_task(task_id)
 
         return cluster_pb2.HeartbeatResponse(
             running_tasks=running_tasks,
