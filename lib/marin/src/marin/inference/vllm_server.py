@@ -827,9 +827,7 @@ def _start_vllm_native_server(
                 stdout_f.close()
                 stderr_f.close()
                 logs = _native_logs_tail(log_dir)
-                raise TimeoutError(
-                    "Failed to start vLLM server within timeout period.\n" f"Logs: {log_dir}\n" f"{logs}"
-                )
+                raise TimeoutError("Failed to start vLLM server within timeout period.\n" f"Logs: {log_dir}\n" f"{logs}")
 
             time.sleep(5)
     except BaseException:
