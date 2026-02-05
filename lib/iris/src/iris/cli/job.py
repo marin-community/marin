@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Job submission via command passthrough (replaces ``iris-run``).
+"""Job management via command passthrough (replaces ``iris-run``).
 
 Usage:
-    iris --config cluster.yaml run -- python train.py --epochs 10
-    iris --config cluster.yaml run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+    iris --config cluster.yaml job run -- python train.py --epochs 10
+    iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
 import getpass
@@ -29,10 +29,12 @@ from pathlib import Path
 import click
 import yaml
 
+from iris.cli.main import require_controller_url
 from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
+from iris.client.client import LogEntry
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +145,7 @@ def run_iris_job(
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
+    include_children_logs: bool = False,
 ) -> int:
     """Core job submission logic.
 
@@ -175,6 +178,7 @@ def run_iris_job(
         timeout=timeout,
         wait=wait,
         extras=extras,
+        include_children_logs=include_children_logs,
     )
 
 
@@ -189,6 +193,7 @@ def _submit_and_wait_job(
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
+    include_children_logs: bool = False,
 ) -> int:
     """Submit job and optionally wait for completion."""
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
@@ -212,7 +217,7 @@ def _submit_and_wait_job(
             from iris.client.client import JobFailedError
 
             try:
-                status = job.wait(stream_logs=True, timeout=float("inf"))
+                status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
                 logger.info(f"Job completed with state: {status.state}")
                 return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
             except JobFailedError as e:
@@ -226,7 +231,12 @@ def _submit_and_wait_job(
         return 0
 
 
-@click.command(
+@click.group("job")
+def job() -> None:
+    """Manage Iris jobs."""
+
+
+@job.command(
     "run",
     context_settings={"ignore_unknown_options": True},
     help="""Submit jobs to Iris clusters.
@@ -235,16 +245,16 @@ Examples:
 
   \b
   # Simple CPU job
-  iris --config cluster.yaml run -- python script.py
+  iris --config cluster.yaml job run -- python script.py
 
   \b
   # TPU job with environment variables
-  iris --config cluster.yaml run --tpu v5litepod-16 \\
+  iris --config cluster.yaml job run --tpu v5litepod-16 \\
     -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 
   \b
   # Submit and detach
-  iris --config cluster.yaml run --no-wait -- python long_job.py
+  iris --config cluster.yaml job run --no-wait -- python long_job.py
 """,
 )
 @click.option(
@@ -265,6 +275,11 @@ Examples:
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, help="Job timeout in seconds (default: 0 = no timeout)")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
+@click.option(
+    "--include-children-logs/--no-include-children-logs",
+    default=False,
+    help="Stream logs from child jobs (nested submissions).",
+)
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
 def run(
@@ -280,6 +295,7 @@ def run(
     max_retries: int,
     timeout: int,
     extra: tuple[str, ...],
+    include_children_logs: bool,
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
@@ -288,11 +304,7 @@ def run(
     configure_logging(level=logging.INFO)
 
     # Get controller_url from parent context (established by main group)
-    controller_url = ctx.obj.get("controller_url") if ctx.obj else None
-    if not controller_url:
-        raise click.ClickException(
-            "Controller URL not available. Ensure --config or --controller-url is provided to the iris group."
-        )
+    controller_url = require_controller_url(ctx)
 
     command = list(cmd)
     if not command:
@@ -314,5 +326,95 @@ def run(
         max_retries=max_retries,
         timeout=timeout,
         extras=list(extra),
+        include_children_logs=include_children_logs,
     )
     sys.exit(exit_code)
+
+
+@job.command("stop")
+@click.argument("job_id", nargs=-1, required=True)
+@click.option(
+    "--include-children/--no-include-children",
+    default=True,
+    help="Terminate child jobs under the given job ID prefix (default: include).",
+)
+@click.pass_context
+def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
+    """Terminate one or more jobs."""
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+
+    terminated = []
+    for raw in job_id:
+        name = JobName.from_wire(raw)
+        if include_children:
+            terminated.extend(client.terminate_prefix(name, exclude_finished=True))
+        else:
+            client.terminate(name)
+            terminated.append(name)
+
+    if terminated:
+        click.echo("Terminated jobs:")
+        for job_name in terminated:
+            click.echo(f"  {job_name}")
+    else:
+        click.echo("No running jobs matched.")
+
+
+@job.command("logs")
+@click.argument("job_id")
+@click.option("--since-ms", type=int, default=None, help="Only show logs after this epoch millisecond timestamp.")
+@click.option(
+    "--since-seconds",
+    type=int,
+    default=None,
+    help="Only show logs from the last N seconds.",
+)
+@click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
+@click.option(
+    "--include-children/--no-include-children",
+    default=False,
+    help="Include logs from child jobs (nested submissions).",
+)
+@click.pass_context
+def logs(
+    ctx,
+    job_id: str,
+    since_ms: int | None,
+    since_seconds: int | None,
+    follow: bool,
+    include_children: bool,
+) -> None:
+    """Stream task logs for a job using batch log fetching."""
+    if since_ms is not None and since_seconds is not None:
+        raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
+
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+
+    if since_seconds is not None:
+        since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
+
+    cursor_ms = since_ms or 0
+    job_name = JobName.from_wire(job_id)
+
+    while True:
+        response = client._cluster_client.fetch_task_logs(
+            job_name,
+            include_children=include_children,
+            since_ms=cursor_ms,
+        )
+
+        for batch in response.task_logs:
+            task_id = JobName.from_wire(batch.task_id)
+            for proto in batch.logs:
+                entry = LogEntry.from_proto(proto)
+                ts = entry.timestamp.as_short_time()
+                click.echo(f"[{ts}] {task_id} {entry.data}")
+
+        if response.last_timestamp_ms > cursor_ms:
+            cursor_ms = response.last_timestamp_ms
+
+        if not follow:
+            break
+        time.sleep(1.0)

@@ -711,23 +711,36 @@ class Controller(_message.Message):
         actions: _containers.RepeatedCompositeFieldContainer[Controller.TransactionAction]
         def __init__(self, actions: _Optional[_Iterable[_Union[Controller.TransactionAction, _Mapping]]] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
-        __slots__ = ("task_id", "start_ms", "limit", "start_line")
+        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex")
+        ID_FIELD_NUMBER: _ClassVar[int]
+        INCLUDE_CHILDREN_FIELD_NUMBER: _ClassVar[int]
+        SINCE_MS_FIELD_NUMBER: _ClassVar[int]
+        MAX_TOTAL_LINES_FIELD_NUMBER: _ClassVar[int]
+        REGEX_FIELD_NUMBER: _ClassVar[int]
+        id: str
+        include_children: bool
+        since_ms: int
+        max_total_lines: int
+        regex: str
+        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., regex: _Optional[str] = ...) -> None: ...
+    class TaskLogBatch(_message.Message):
+        __slots__ = ("task_id", "logs", "error")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        START_MS_FIELD_NUMBER: _ClassVar[int]
-        LIMIT_FIELD_NUMBER: _ClassVar[int]
-        START_LINE_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        start_ms: int
-        limit: int
-        start_line: int
-        def __init__(self, task_id: _Optional[str] = ..., start_ms: _Optional[int] = ..., limit: _Optional[int] = ..., start_line: _Optional[int] = ...) -> None: ...
-    class GetTaskLogsResponse(_message.Message):
-        __slots__ = ("logs", "worker_address")
         LOGS_FIELD_NUMBER: _ClassVar[int]
-        WORKER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+        ERROR_FIELD_NUMBER: _ClassVar[int]
+        task_id: str
         logs: _containers.RepeatedCompositeFieldContainer[Worker.LogEntry]
-        worker_address: str
-        def __init__(self, logs: _Optional[_Iterable[_Union[Worker.LogEntry, _Mapping]]] = ..., worker_address: _Optional[str] = ...) -> None: ...
+        error: str
+        def __init__(self, task_id: _Optional[str] = ..., logs: _Optional[_Iterable[_Union[Worker.LogEntry, _Mapping]]] = ..., error: _Optional[str] = ...) -> None: ...
+    class GetTaskLogsResponse(_message.Message):
+        __slots__ = ("task_logs", "last_timestamp_ms", "truncated")
+        TASK_LOGS_FIELD_NUMBER: _ClassVar[int]
+        LAST_TIMESTAMP_MS_FIELD_NUMBER: _ClassVar[int]
+        TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+        task_logs: _containers.RepeatedCompositeFieldContainer[Controller.TaskLogBatch]
+        last_timestamp_ms: int
+        truncated: bool
+        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., last_timestamp_ms: _Optional[int] = ..., truncated: _Optional[bool] = ...) -> None: ...
     class GetProcessLogsRequest(_message.Message):
         __slots__ = ("prefix", "limit")
         PREFIX_FIELD_NUMBER: _ClassVar[int]

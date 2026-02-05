@@ -557,8 +557,8 @@ def capture_worker_screenshots(controller_url: str, output_dir: Path) -> list[Pa
 @click.option(
     "--output-dir",
     type=click.Path(path_type=Path),
-    default=None,
-    help="Directory for saved screenshots (optional, skips screenshots if not provided)",
+    required=True,
+    help="Directory for saved screenshots",
 )
 @click.option(
     "--stay-open",
@@ -590,43 +590,40 @@ def main(config: Path, output_dir: Path, stay_open: bool):
         # Brief pause so the running job has time to start
         time.sleep(2.0)
 
-        if output_dir:
-            logger.info("Capturing controller screenshots to %s", output_dir)
-            saved = capture_screenshots(url, job_ids, output_dir)
-            logger.info("Controller screenshots: %d saved", len(saved))
+        logger.info("Capturing controller screenshots to %s", output_dir)
+        saved = capture_screenshots(url, job_ids, output_dir)
+        logger.info("Controller screenshots: %d saved", len(saved))
 
-            logger.info("Capturing worker screenshots...")
-            worker_saved = capture_worker_screenshots(url, output_dir)
-            saved.extend(worker_saved)
-            logger.info("Worker screenshots: %d saved", len(worker_saved))
+        logger.info("Capturing worker screenshots...")
+        worker_saved = capture_worker_screenshots(url, output_dir)
+        saved.extend(worker_saved)
+        logger.info("Worker screenshots: %d saved", len(worker_saved))
 
-            logger.info("Summary: %d total screenshots saved", len(saved))
-            for path in saved:
-                logger.info("  %s", path)
+        logger.info("Summary: %d total screenshots saved", len(saved))
+        for path in saved:
+            logger.info("  %s", path)
 
-            # After screenshots, wait for building job to complete
-            # (chaos delay is 30s, should complete shortly after screenshots)
-            building_jid = JobName.from_wire(job_ids["building"]) if job_ids.get("building") else None
-            if building_jid:
-                logger.info("Waiting for building job to complete after chaos delay...")
-                deadline = time.monotonic() + 60.0
-                terminal_states = (
-                    cluster_pb2.JOB_STATE_SUCCEEDED,
-                    cluster_pb2.JOB_STATE_FAILED,
-                    cluster_pb2.JOB_STATE_KILLED,
-                    cluster_pb2.JOB_STATE_WORKER_FAILED,
-                )
-                while time.monotonic() < deadline:
-                    status = client.status(building_jid)
-                    if status.state in terminal_states:
-                        state_name = cluster_pb2.JobState.Name(status.state)
-                        logger.info("  building -> %s", state_name)
-                        break
-                    time.sleep(0.5)
-                else:
-                    logger.warning("  building job did not complete within timeout")
-        else:
-            logger.info("Skipping screenshots (no --output-dir specified)")
+        # After screenshots, wait for building job to complete
+        # (chaos delay is 30s, should complete shortly after screenshots)
+        building_jid = JobName.from_wire(job_ids["building"]) if job_ids.get("building") else None
+        if building_jid:
+            logger.info("Waiting for building job to complete after chaos delay...")
+            deadline = time.monotonic() + 60.0
+            terminal_states = (
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+                cluster_pb2.JOB_STATE_FAILED,
+                cluster_pb2.JOB_STATE_KILLED,
+                cluster_pb2.JOB_STATE_WORKER_FAILED,
+            )
+            while time.monotonic() < deadline:
+                status = client.status(building_jid)
+                if status.state in terminal_states:
+                    state_name = cluster_pb2.JobState.Name(status.state)
+                    logger.info("  building -> %s", state_name)
+                    break
+                time.sleep(0.5)
+            else:
+                logger.warning("  building job did not complete within timeout")
 
         print(f"\nDashboard URL: {url}")
 
