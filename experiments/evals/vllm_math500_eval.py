@@ -36,7 +36,7 @@ from marin.execution.executor import (
 from zephyr import Backend, Dataset, load_jsonl
 from datasets import load_dataset
 
-from experiments.models import qwen2_5_7b, olmo_2_base_32b
+from experiments.models import qwen2_5_7b, olmo_2_base_32b, olmo_2_base_8b
 
 
 @dataclass(frozen=True)
@@ -113,6 +113,17 @@ class Math500EvalConfig:
 
 
 def run_math500_eval(config: Math500EvalConfig):
+    # # Patch the kernel tuning to use smaller block sizes for high-KV-head models
+    # import tpu_inference.kernels.ragged_paged_attention.v3.kernel as rpa_kernel
+
+    # original_get_tuned = rpa_kernel.get_tuned_block_sizes
+
+    # def patched_get_tuned_block_sizes(*args, **kwargs):
+    #     bkv_p, bq_sz = original_get_tuned(*args, **kwargs)
+    #     return (max(1, bkv_p // 2), bq_sz)
+
+    # rpa_kernel.get_tuned_block_sizes = patched_get_tuned_block_sizes
+
     from vllm import LLM, SamplingParams
     from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
 
@@ -278,8 +289,8 @@ def dumb_run_math500_eval(config: Math500EvalConfig):
 
     print("HELLO WHAT'S UP!")
 
-name = "olmo-stuff"
-model_step = olmo_2_base_32b
+name = "olmo-stuff-rpa-kernel"
+model_step = olmo_2_base_8b
 
 eval_step = ExecutorStep(
     name=f"rohith_math500_eval/analysis/{name}",

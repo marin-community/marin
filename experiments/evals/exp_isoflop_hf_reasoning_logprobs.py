@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 def build_steps(model_types: list[str]):
     math_reasoning_dict = math_reasoning_tokenized(tokenizer=llama3_tokenizer)
-    math500_rollouts_dict = math500_rollouts_tokenized(tokenizer=llama3_tokenizer)
+    math500_rollouts_dict = math500_rollouts_tokenized(tokenizer=llama3_tokenizer, prompt_format="standard_fewshot")
     eval_data = mixture_for_evaluation(math_reasoning_dict | math500_rollouts_dict)
 
     isoflop_steps, isoflop_candidates = MARIN_SCALING_SUITES["nemotron"]
@@ -94,7 +94,7 @@ def build_steps(model_types: list[str]):
         for model_config in models:
             tokenizer = model_config.tokenizer if model_config.tokenizer is not None else model_config.model_name
             math_reasoning_dict = math_reasoning_tokenized(tokenizer=tokenizer)
-            math500_rollouts_dict = math500_rollouts_tokenized(tokenizer=tokenizer)
+            math500_rollouts_dict = math500_rollouts_tokenized(tokenizer=tokenizer, prompt_format="standard_fewshot")
             eval_data = mixture_for_evaluation(math_reasoning_dict | math500_rollouts_dict)
 
             model_identifier = f"{model_config.model_name}@{model_config.revision}"
