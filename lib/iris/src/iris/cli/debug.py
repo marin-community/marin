@@ -106,10 +106,14 @@ def _get_zone_project(ctx: click.Context) -> tuple[str, str]:
     if not config:
         click.echo("Error: --config is required on the cluster group", err=True)
         raise SystemExit(1)
-    zone = config.zone
-    project = config.project_id
+    if config.platform.WhichOneof("platform") != "gcp":
+        click.echo("Error: Debug commands require a GCP platform config", err=True)
+        raise SystemExit(1)
+    platform = config.platform.gcp
+    zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+    project = platform.project_id
     if not zone or not project:
-        click.echo("Error: Config must specify zone and project_id", err=True)
+        click.echo("Error: Config must specify platform.gcp.project_id and zone", err=True)
         raise SystemExit(1)
     return zone, project
 
@@ -711,7 +715,7 @@ def show_task_logs(ctx, job_id: str, category: str | None, max_entries: int):
     click.echo()
 
     for task in job.tasks:
-        click.echo(f"=== Task: {task.task_id} (index {task.task_index}) ===")
+        click.echo(f"=== Task: {task.task_id} ===")
         click.echo(f"State: {cluster_pb2.TaskState.Name(task.state)}")
         if task.worker_id:
             click.echo(f"Worker: {task.worker_id}")
@@ -721,12 +725,10 @@ def show_task_logs(ctx, job_id: str, category: str | None, max_entries: int):
 
         try:
             logs_resp = client.get_task_logs(
-                cluster_pb2.Controller.GetTaskLogsRequest(
-                    job_id=job.job_id, task_index=task.task_index, start_ms=0, limit=max_entries
-                )
+                cluster_pb2.Controller.GetTaskLogsRequest(task_id=task.task_id, start_ms=0, limit=max_entries)
             )
         except Exception as e:
-            click.echo(f"Failed to fetch logs for task {task.task_index}: {e}", err=True)
+            click.echo(f"Failed to fetch logs for task {task.task_id}: {e}", err=True)
             continue
 
         log_entries = logs_resp.logs

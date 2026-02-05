@@ -14,8 +14,8 @@ class BlockSizes:
     """
 
     b_block_size: int = 1024
-    h_block_size: int = 256
-    v_block_size: int = 2048
+    h_block_size: int = 512
+    v_block_size: int = 1024
 
     @classmethod
     def get_default(cls) -> "BlockSizes":

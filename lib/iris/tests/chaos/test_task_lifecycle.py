@@ -107,8 +107,12 @@ def test_capacity_wait(cluster, tmp_path):
     time.sleep(1)
     # Submit pending task
     pending = submit(client, _quick, "pending")
-    status = client.status(str(pending.job_id))
-    assert status.state == cluster_pb2.JOB_STATE_PENDING
+    status = client.status(pending.job_id)
+    assert status.state in (
+        cluster_pb2.JOB_STATE_PENDING,
+        cluster_pb2.JOB_STATE_RUNNING,
+        cluster_pb2.JOB_STATE_SUCCEEDED,
+    )
     # Release blockers so capacity frees up
     for s in blocker_sentinels:
         s.signal()

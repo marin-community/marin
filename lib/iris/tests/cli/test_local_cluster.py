@@ -26,7 +26,6 @@ from unittest.mock import patch
 import pytest
 import yaml
 from click.testing import CliRunner
-
 from iris.cli import iris
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
@@ -41,20 +40,40 @@ def cluster_config_file(tmp_path: Path) -> Path:
     config_path.write_text(
         yaml.dump(
             {
-                "project_id": "test-project",
-                "region": "us-central1",
-                "zone": "us-central1-a",
-                "bootstrap": {
-                    "docker_image": "test-image:latest",
-                    "worker_port": 10001,
-                    "controller_address": "127.0.0.1:10000",
+                "platform": {
+                    "gcp": {
+                        "project_id": "test-project",
+                        "region": "us-central1",
+                        "zone": "us-central1-a",
+                    }
+                },
+                "defaults": {
+                    "bootstrap": {
+                        "docker_image": "test-image:latest",
+                        "worker_port": 10001,
+                        "controller_address": "127.0.0.1:10000",
+                    },
+                },
+                "controller": {
+                    "gcp": {
+                        "port": 10000,
+                    }
                 },
                 "scale_groups": {
                     "local-cpu": {
+                        "vm_type": "gce_vm",
                         "accelerator_type": "ACCELERATOR_TYPE_CPU",
                         "min_slices": 1,
                         "max_slices": 1,
                         "zones": ["us-central1-a"],
+                        "slice_size": 1,
+                        "resources": {
+                            "cpu": 1,
+                            "ram": "1GB",
+                            "disk": 0,
+                            "gpu_count": 0,
+                            "tpu_count": 0,
+                        },
                     },
                 },
             }

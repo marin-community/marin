@@ -50,7 +50,6 @@ from typing import Literal, TextIO
 
 import click
 from google.protobuf.json_format import MessageToJson
-
 from iris.client import IrisClient
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -59,8 +58,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
-from iris.cluster.vm.config import load_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import load_config, make_local_config
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
     controller_tunnel,
@@ -518,6 +517,7 @@ class SmokeTestRunner:
         self.config = config
         self.log_tree = LogTree(config.log_dir)
         self.logger = SmokeTestLogger(self.log_tree)
+        self._task_logs_dir = self.log_tree.get_dir("task-logs", "Task logs from each job/task")
         self._manager: ClusterManager | None = None
         self._interrupted = False
         self._deadline: float | None = None
@@ -554,19 +554,27 @@ class SmokeTestRunner:
 
             # Apply prefix to cluster config for unique controller VM name
             if self.config.prefix:
-                cluster_config.label_prefix = self.config.prefix
+                cluster_config.platform.label_prefix = self.config.prefix
 
             manager = ClusterManager(cluster_config)
             self._manager = manager
 
-            zone = cluster_config.zone
-            project = cluster_config.project_id
+            platform_kind = cluster_config.platform.WhichOneof("platform")
+            if platform_kind == "gcp":
+                platform = cluster_config.platform.gcp
+                zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
+                project = platform.project_id
+            else:
+                zone = ""
+                project = ""
             # Store for use in cleanup
             self._zone = zone
             self._project = project
 
             # GCP-only setup phases
             if not manager.is_local:
+                if platform_kind != "gcp":
+                    raise RuntimeError("Smoke test requires a gcp platform when not running locally")
                 # Extract region/project for image building
                 self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
                 self._image_project = project
@@ -579,14 +587,7 @@ class SmokeTestRunner:
                 if self._interrupted or self._check_deadline():
                     return False
 
-                if self.config.fast:
-                    # Fast mode: reload existing VMs instead of recreating
-                    self.logger.section("FAST MODE: Reloading Cluster")
-                    manager.reload()
-                    self.logger.log("Cluster reloaded successfully")
-                    if self._interrupted or self._check_deadline():
-                        return False
-                else:
+                if not self.config.fast:
                     # Normal mode: clean start + create VMs
                     if self.config.clean_start:
                         self.logger.section("PHASE 0b: Clean Start")
@@ -624,6 +625,8 @@ class SmokeTestRunner:
 
     def _handle_interrupt(self, _signum: int, _frame: object):
         self.logger.log("Interrupted! Cleaning up...", level="WARN")
+        signal.signal(signal.SIGINT, None)
+        signal.signal(signal.SIGTERM, None)
         self._interrupted = True
 
     def _check_deadline(self) -> bool:
@@ -737,6 +740,27 @@ class SmokeTestRunner:
         except Exception as e:
             self.logger.log(f"  Failed to fetch task logs: {e}", level="WARN")
 
+    def _write_task_logs(self, job, test_name: str):
+        """Persist task logs for a job to the log directory."""
+        job_dir = self._task_logs_dir / str(job.job_id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        for task in job.tasks():
+            task_file = job_dir / f"task-{task.task_index}.log"
+            try:
+                entries = task.logs()
+                with open(task_file, "w") as handle:
+                    handle.write(f"test_name={test_name}\n")
+                    handle.write(f"job_id={job.job_id}\n")
+                    handle.write(f"task_index={task.task_index}\n")
+                    handle.write(f"task_state={cluster_pb2.TaskState.Name(task.state)}\n\n")
+                    for entry in entries:
+                        handle.write(f"[{entry.timestamp}] [{entry.source}] {entry.data}\n")
+            except Exception as e:
+                self.logger.log(
+                    f"  Failed to write logs for job {job.job_id} task {task.task_index}: {e}",
+                    level="WARN",
+                )
+
     def _run_job_test(
         self,
         client: IrisClient,
@@ -768,6 +792,7 @@ class SmokeTestRunner:
 
             status = job.wait(timeout=job_timeout, raise_on_failure=False)
             duration = time.monotonic() - start
+            self._write_task_logs(job, test_name)
 
             if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
                 self.logger.log(f"  [PASS] Completed in {duration:.1f}s")
@@ -781,6 +806,10 @@ class SmokeTestRunner:
         except TimeoutError:
             duration = time.monotonic() - start
             self.logger.log(f"  [FAIL] Timed out after {job_timeout}s", level="ERROR")
+            try:
+                self._write_task_logs(job, test_name)
+            except Exception:
+                pass
             return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _submit_and_wait_multiple(
@@ -815,6 +844,7 @@ class SmokeTestRunner:
             if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
                 state_name = cluster_pb2.JobState.Name(status.state)
                 failed_jobs.append(f"{job.job_id}: {state_name}")
+            self._write_task_logs(job, "Concurrent TPU jobs (3x)")
 
         return time.monotonic() - start, failed_jobs
 

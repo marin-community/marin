@@ -53,38 +53,45 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
 
     # Load config if provided
     if config_file:
-        from iris.cluster.vm.config import load_config
+        from iris.cluster.vm.config import IrisConfig
 
-        ctx.obj["config"] = load_config(config_file)
+        iris_config = IrisConfig.load(config_file)
+        ctx.obj["config"] = iris_config.proto
         ctx.obj["config_file"] = config_file
 
     # Establish controller URL (either direct or via tunnel)
     if controller_url:
         ctx.obj["controller_url"] = controller_url
     elif config_file:
-        # Establish tunnel from config
-        config = ctx.obj["config"]
-        if config.zone and config.project_id:
-            from iris.cluster.vm.debug import controller_tunnel
+        # Establish controller URL from config using Platform abstraction.
+        iris_config = IrisConfig(ctx.obj["config"])
+        platform = iris_config.platform()
 
-            zone = config.zone
-            project = config.project_id
-            label_prefix = config.label_prefix or "iris"
+        if iris_config.proto.controller.WhichOneof("controller") == "local":
+            from iris.cluster.vm.cluster_manager import ClusterManager
 
-            # Establish tunnel with 5-second timeout and keep it alive for command duration
-            try:
-                logger.info("Discovering controller VM in %s...", zone)
-                tunnel_cm = controller_tunnel(
-                    zone, project, label_prefix=label_prefix, tunnel_logger=logger, timeout=5.0
-                )
-                tunnel_url = tunnel_cm.__enter__()
-                ctx.obj["controller_url"] = tunnel_url
-                # Clean up tunnel when context closes
-                ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
-            except Exception as e:
-                # If tunnel fails (e.g., no controller VM), continue without controller_url
-                # Commands that need it will fail with clear error
-                logger.warning("Could not establish controller tunnel (timeout=5s): %s", e)
+            manager = ClusterManager(iris_config.proto)
+            controller_address = manager.start()
+            ctx.call_on_close(manager.stop)
+        else:
+            controller_address = iris_config.controller_address()
+
+        # Establish tunnel with 5-second timeout and keep it alive for command duration
+        try:
+            logger.info("Establishing tunnel to controller...")
+            tunnel_cm = platform.tunnel(
+                controller_address=controller_address,
+                timeout=5.0,
+                tunnel_logger=logger,
+            )
+            tunnel_url = tunnel_cm.__enter__()
+            ctx.obj["controller_url"] = tunnel_url
+            # Clean up tunnel when context closes
+            ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
+        except Exception as e:
+            # If tunnel fails (e.g., no controller VM), continue without controller_url
+            # Commands that need it will fail with clear error
+            logger.warning("Could not establish controller tunnel (timeout=5s): %s", e)
 
 
 # Register subcommand groups — imported at module level to ensure they are

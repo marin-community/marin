@@ -15,8 +15,8 @@
 """Job submission via command passthrough (replaces ``iris-run``).
 
 Usage:
-    iris run --config cluster.yaml -- python train.py --epochs 10
-    iris run --config cluster.yaml --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+    iris --config cluster.yaml run -- python train.py --epochs 10
+    iris --config cluster.yaml run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
 import getpass
@@ -31,43 +31,10 @@ import yaml
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
-from iris.cluster.vm.debug import controller_tunnel
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
-
-
-def load_cluster_config(config_path: Path) -> dict:
-    """Load cluster config YAML and extract connection info.
-
-    Args:
-        config_path: Path to cluster YAML file
-
-    Returns:
-        Dict with 'zone', 'project_id', and optionally 'controller_address' keys.
-
-    Raises:
-        FileNotFoundError: If config file doesn't exist
-        ValueError: If required fields are missing
-    """
-    with open(config_path) as f:
-        data = yaml.safe_load(f)
-
-    if not data:
-        raise ValueError(f"Empty or invalid YAML in {config_path}")
-
-    zone = data.get("zone")
-    project_id = data.get("project_id", "")
-    controller_address = data.get("controller_address")
-
-    if not zone:
-        raise ValueError(f"Missing 'zone' in {config_path}")
-
-    if not controller_address and not project_id:
-        raise ValueError(f"Missing 'project_id' in {config_path} (required for remote clusters)")
-
-    return {"zone": zone, "project_id": project_id, "controller_address": controller_address}
 
 
 def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[str, str]:
@@ -163,9 +130,9 @@ def generate_job_name(command: list[str]) -> str:
 
 
 def run_iris_job(
-    config_path: Path,
     command: list[str],
     env_vars: dict[str, str],
+    controller_url: str,
     tpu: str | None = None,
     gpu: int | None = None,
     cpu: int | None = None,
@@ -179,10 +146,12 @@ def run_iris_job(
 ) -> int:
     """Core job submission logic.
 
+    Args:
+        controller_url: Controller URL (from parent context tunnel).
+
     Returns:
         Exit code: 0 for success, 1 for failure
     """
-    config = load_cluster_config(config_path)
     env_vars = add_standard_env_vars(env_vars)
     resources = build_resources(tpu, gpu, cpu, memory)
     job_name = job_name or generate_job_name(command)
@@ -194,40 +163,19 @@ def run_iris_job(
     if resources.device and resources.device.HasField("tpu"):
         logger.info(f"TPU: {resources.device.tpu.variant}")
 
-    if config["controller_address"]:
-        controller_url = config["controller_address"]
-        logger.info(f"Connecting directly to controller: {controller_url}")
-        return _submit_and_wait_job(
-            controller_url=controller_url,
-            job_name=job_name,
-            command=command,
-            resources=resources,
-            env_vars=env_vars,
-            replicas=replicas,
-            max_retries=max_retries,
-            timeout=timeout,
-            wait=wait,
-            extras=extras,
-        )
-    else:
-        with controller_tunnel(
-            zone=config["zone"],
-            project=config["project_id"],
-            tunnel_logger=logger,
-        ) as controller_url:
-            logger.info(f"Connected to controller: {controller_url}")
-            return _submit_and_wait_job(
-                controller_url=controller_url,
-                job_name=job_name,
-                command=command,
-                resources=resources,
-                env_vars=env_vars,
-                replicas=replicas,
-                max_retries=max_retries,
-                timeout=timeout,
-                wait=wait,
-                extras=extras,
-            )
+    logger.info(f"Using controller: {controller_url}")
+    return _submit_and_wait_job(
+        controller_url=controller_url,
+        job_name=job_name,
+        command=command,
+        resources=resources,
+        env_vars=env_vars,
+        replicas=replicas,
+        max_retries=max_retries,
+        timeout=timeout,
+        wait=wait,
+        extras=extras,
+    )
 
 
 def _submit_and_wait_job(
@@ -287,23 +235,17 @@ Examples:
 
   \b
   # Simple CPU job
-  iris run --config cluster.yaml -- python script.py
+  iris --config cluster.yaml run -- python script.py
 
   \b
   # TPU job with environment variables
-  iris run --config cluster.yaml --tpu v5litepod-16 \\
+  iris --config cluster.yaml run --tpu v5litepod-16 \\
     -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 
   \b
   # Submit and detach
-  iris run --config cluster.yaml --no-wait -- python long_job.py
+  iris --config cluster.yaml run --no-wait -- python long_job.py
 """,
-)
-@click.option(
-    "--config",
-    required=True,
-    type=click.Path(exists=True, path_type=Path),
-    help="Path to Iris cluster config YAML",
 )
 @click.option(
     "-e",
@@ -324,8 +266,9 @@ Examples:
 @click.option("--timeout", type=int, default=0, help="Job timeout in seconds (default: 0 = no timeout)")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
+@click.pass_context
 def run(
-    config: Path,
+    ctx,
     env_vars: tuple[tuple[str, str], ...],
     tpu: str | None,
     gpu: int | None,
@@ -344,6 +287,13 @@ def run(
 
     configure_logging(level=logging.INFO)
 
+    # Get controller_url from parent context (established by main group)
+    controller_url = ctx.obj.get("controller_url") if ctx.obj else None
+    if not controller_url:
+        raise click.ClickException(
+            "Controller URL not available. Ensure --config or --controller-url is provided to the iris group."
+        )
+
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
@@ -351,9 +301,9 @@ def run(
     env_vars_dict = load_env_vars(env_vars)
 
     exit_code = run_iris_job(
-        config_path=config,
         command=command,
         env_vars=env_vars_dict,
+        controller_url=controller_url,
         tpu=tpu,
         gpu=gpu,
         cpu=cpu,
