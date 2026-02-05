@@ -132,12 +132,14 @@ class PythonTreeParser:
     ) -> None:
         """Recursively find error nodes in the parse tree."""
         if node.type == "ERROR" or node.is_missing:
-            errors.append((
-                node.start_point[0],
-                node.start_point[1],
-                node.end_point[0],
-                node.end_point[1],
-            ))
+            errors.append(
+                (
+                    node.start_point[0],
+                    node.start_point[1],
+                    node.end_point[0],
+                    node.end_point[1],
+                )
+            )
         for child in node.children:
             self._find_errors(child, errors)
 
