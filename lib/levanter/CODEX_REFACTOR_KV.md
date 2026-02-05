@@ -477,11 +477,179 @@ M5 failure modes and strategies (clarified):
      or by splitting into multiple jobs.
 
 Next steps for M5:
-- Decide whether the new `max_pages` **warning** (estimated required pages) should be promoted
-  to a hard error for batched rounds. The warning now prevents the silent `Out of free pages during allocation`
-  failure seen with `max_pages=240`.
 - Decide whether we want to keep the batched-rounds mode as the **official** path for `n_rounds > 1`,
   or keep investigating the per-round reset TPU slice failure as a deeper runtime issue.
+- Consider adding a helper that recommends a safe **batch size** given `max_pages` + prompt lengths,
+  so large prompt sets can be chunked without trial-and-error.
+
+### M5.1 - Very Large Prompt Sets (Design + Tradeoffs)
+
+Status: DESIGN NOTES (2026-02-05)
+
+Problem statement:
+We need a safe, repeatable way to handle very large prompt sets (e.g., 10k–100k prompts)
+without silent TPU failures or KV cache exhaustion.
+
+Known constraints and failure modes (from `CODEX_REFACTOR_KV_M5_DEBUG.md`):
+1. Multi-round/per-batch resets in a **single job** are unstable on v5p-16 and can trigger TPU slice failures.
+2. Single-call overfill hits `Out of free pages during allocation` when `max_pages` is undersized.
+3. Leader-only `jax.device_get` of globally sharded arrays can crash/hang; all-host reads are required.
+4. Large batched runs can saturate `max_prefill_size` and `max_seqs_in_prefill` (both scale with total prompts).
+
+Sizing formula (for any single `engine.generate()` call):
+`required_pages ≈ ceil((max_prompt_len + max_new_tokens) / page_size) * (num_prompts * n_rounds * n_generations)`
+This must be ≤ `engine.max_pages`, and `max_seqs`/`max_seqs_in_prefill` must cover the same total.
+
+Strategies for very large prompt sets:
+
+| Strategy | Pros | Cons / Risks | When to use |
+| --- | --- | --- | --- |
+| Single giant batch (`n_rounds=1`, all prompts in one call) | Avoids per-call reset; simplest operationally | Usually exceeds `max_pages`/HBM; large prefill; W&B tables huge | Only if prompt count is small enough to fit in one call |
+| Batched rounds (single call with `n_rounds>1`) | Avoids per-round resets; stable in current TPU setup | Multiplies capacity requirements; still limited by `max_pages` | When you need repeated samples per prompt and can fit capacity |
+| Multiple generate calls inside one job (prompt chunking) | Amortizes model load; best throughput if reset were stable | **Currently unstable** due to TPU slice failure on reset | Future option once reset path is fixed |
+| Separate jobs per batch (external orchestration) | Most reliable today; no in-process reset; easy to parallelize | Repeated model load overhead; higher cost/latency; more complex bookkeeping | **Recommended now** for 10k–100k prompts |
+| Persistent service / queue (future) | Best long-run throughput and latency | Requires robust in-process reset and admission control; not implemented | Long-term target, not for M5 |
+
+Current recommendation (M5.1):
+Use **external orchestration** to split large prompt sets into batches, each run as a **single job**
+with `n_rounds=1` (or batched rounds if repeated sampling is needed). This avoids the TPU reset failure
+until we fix multi-call stability. Batch size should be chosen using the `required_pages` estimate and
+`max_prefill_size` constraints.
+
+External orchestration sketch (detailed plan, tied to `KV_CACHING_RESTRUCTURE.MD`):
+
+1. Preprocess prompts and compute token lengths.
+   - Use the same tokenizer as the job (`config.tokenizer` or `hf_checkpoint`).
+   - Record `prompt_id`, `prompt_text`, `prompt_token_len`.
+   - Why: KV cache allocation is page-based (`PageTable` + `SequenceTable.allocate_for_seq`), so we must
+     bound pages per sequence before we build a batch.
+
+2. Compute per-sequence page usage (upper bound).
+   - `pages_per_seq = ceil((prompt_token_len + max_new_tokens) / page_size)`.
+   - For `n_generations > 1`, use `pages_per_seq * n_generations` as a safe upper bound (clones may share
+     full pages, but we plan with a worst-case bound to avoid `Out of free pages`).
+
+3. Choose a batch size algorithm (two constraints).
+   - **Page budget**: sum of per-seq pages ≤ `engine.max_pages`.
+   - **Prefill budget**: sum of prompt token lengths ≤ `engine.max_prefill_size`.
+   - Also respect `engine.max_seqs` and `engine.max_seqs_in_prefill`.
+   - Practical heuristic: sort prompts by length (descending) and greedy-pack until either budget is hit.
+
+4. Emit one config per batch.
+   - Base on a template sampler config (same model/engine settings).
+   - Replace `prompts:` with the batch’s prompt subset.
+   - Keep `n_rounds=1` (or `n_rounds>1` batched) to avoid multi-call reset instability.
+   - Keep `tracker.type=wandb` and set tags that include batch index and size.
+
+5. Launch one job per batch (external orchestration).
+   - Each job is a **fresh process**: new `DecodeState`, `PageTable`, `SequenceTable`, `TokenQueue`
+     are created during `InferenceEngine` initialization.
+   - This avoids the in-process reset path that triggers TPU slice failures.
+   - Logs per batch: `/tmp/levanter_run_m5_batch_<idx>.log`.
+
+6. Track completion and resume safely.
+   - Write a `batches.jsonl` manifest with status: `pending`, `running`, `done`, `failed`.
+   - On restart, skip `done` batches; rerun `failed`.
+
+7. Validate outputs and aggregation.
+   - Aggregate outputs with stable `prompt_id` + `generation_id`.
+   - Optional: store generated text in a single `jsonl` file per batch to avoid huge W&B tables.
+
+Minimal orchestration pseudocode (host-side):
+```
+load prompts
+tokenize -> lengths
+sort by length desc
+for batch in greedy_pack(lengths, page_budget, prefill_budget):
+  write batch_config.yaml (prompts subset, n_rounds=1)
+  run launch.py with batch_config.yaml, log to /tmp/...
+  mark batch done/failed in manifest
+```
+
+Notes:
+- Avoid leader-only `jax.device_get` on sharded arrays; all-host stats calls only.
+- If you must increase throughput, add TPUs and run batches in parallel (one TPU per batch).
+
+### M5.2 - Per-Round Reset Failure (Root-Cause Sketch + Visibility Plan)
+
+Status: INVESTIGATION PLAN (2026-02-05)
+
+Problem statement:
+Multi-round **per-call** reset (multiple `engine.generate()` calls inside one job) fails on TPU
+with a runtime slice failure between rounds. We need to understand **why reset fails** and
+add visibility so the failure is observable before the TPU halts.
+
+Observed failure signature:
+- `launch.py` reports: `Command execution on worker {0,1} failed with exit status 1`.
+- With TPU debug logs (see `CODEX_REFACTOR_KV_M5_DEBUG.md`):
+  - `FAILED_PRECONDITION: The program continuator has halted unexpectedly.`
+  - `INTERNAL: *** Halt is unexpected, all pending programs will fail.`
+  - `Slice health check failed ... Worker connection ... failed.`
+  - `Detected slice failure, core dump will begin.`
+- No Python traceback; indicates TPU runtime instability or invalid program state between rounds.
+
+Configs that reliably trigger the failure (per-round reset path):
+- `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2_cleanup_none_noop.yaml`
+- `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_logical_round2_cleanup_none_noop.yaml`
+- `config/sampler/sample_llama8b_multihost_real_1prompt_256_round2.yaml` (fast repro)
+All fail after Round 0 completes and before Round 1 starts.
+
+What does **not** fix it:
+- Physical vs logical reset mode.
+- Engine recreation between rounds.
+- Per-round request rebuild (new keys, new `SeqDecodingParams`).
+- Skipping round barrier (`skip_round_barrier: true`).
+- Skipping samples table (`skip_samples_table: true`).
+- KV cache zeroing change (multiply-by-zero to encourage reuse).
+
+What is **not** the cause:
+- Leader-only stats read: fixed separately (leader-only `device_get` of sharded arrays was a **different** failure).
+- Model load and engine creation: both succeed and logs show the first round running normally.
+
+Hypotheses (ordered by likelihood):
+1. **Reset path triggers invalid device state** after a full decode run.
+   - `InferenceEngine.reset()` → `GenState.reset_*()` → `PageCache.zero()`.
+   - Potentially invalid donation / aliasing across JAX buffers on TPU in multi-host.
+2. **Dangling in-flight work / program state** at reset boundary.
+   - TPU may still have pending programs at round boundary; reset might clobber buffers.
+3. **Cross-host synchronization mismatch** around reset.
+   - If one host reaches reset earlier, a sharded operation could leave TPU in inconsistent state.
+
+Visibility plan (increase signal before the TPU halts):
+1. Add **explicit reset boundary logging** on all hosts:
+   - `Generate reset: start` / `Generate reset: done` already exists.
+   - Add log markers inside `GenState.reset_*` (pre/post) on all hosts (not just leader).
+2. Add **JAX async error checking** in a dedicated debug config:
+   - `JAX_ASYNC_ERROR_CHECKING=1`
+   - `TPU_STDERR_LOG_LEVEL=0`, `TPU_MIN_LOG_LEVEL=0`
+3. Add **post-round invariant checks** before reset:
+   - `DecodeState.stats()` (all-host).
+   - Validate `used_mask` and `page_ref_counts` are zeroed after cleanup.
+4. Add **explicit device sync** before reset:
+   - `jax.block_until_ready` on relevant state (tokens/logprobs or decode state).
+   - This may surface the failure earlier with a clearer error.
+5. Minimal reproducer:
+   - Use `sample_llama8b_multihost_real_1prompt_256_round2.yaml`.
+   - Reduce logs to just reset markers + async error checking to keep signal clear.
+   - Command (with tee logging):
+     `python lib/levanter/infra/launch.py --foreground --zone us-central1-a --tpu_name simpo_worker_2 --tpu_type v5p-16 --capacity_type on-demand -- -e TPU_STDERR_LOG_LEVEL 0 -e TPU_MIN_LOG_LEVEL 0 -e JAX_ASYNC_ERROR_CHECKING 1 -- uv run src/levanter/main/sample_lm_multihost.py --config_path config/sampler/sample_llama8b_multihost_real_1prompt_256_round2.yaml 2>&1 | tee /tmp/levanter_run_m5_1prompt_256_round2_debuglogs.log`
+
+Plan to isolate the root cause:
+1. Verify the failure is **deterministic** with the fast repro config.
+2. Add reset boundary markers inside `GenState.reset_*` to locate exact crash point.
+3. Try `jax.block_until_ready` **before** `reset_*` to see if the failure moves earlier.
+4. If failure persists, bisect: disable `PageCache.zero()` and only reset metadata
+   (if safe) to see whether physical KV zeroing is the trigger.
+5. If physical zeroing is the trigger, attempt a **donation-safe** reset path
+   (new buffers vs in-place) to avoid TPU aliasing.
+
+Baseline per-round failure command (non-debug, tee):
+`python lib/levanter/infra/launch.py --foreground --zone us-central1-a --tpu_name simpo_worker_2 --tpu_type v5p-16 --capacity_type on-demand -- uv run src/levanter/main/sample_lm_multihost.py --config_path config/sampler/sample_llama8b_multihost_real_1prompt_256_round2.yaml 2>&1 | tee /tmp/levanter_run_m5_1prompt_256_round2.log`
+
+Exit criteria for M5.2:
+- We can run `n_rounds=2` with **per-round reset** without TPU slice failure.
+- Or, we can provide a clear minimal reproducer and a narrowed root cause
+  that can be handed off to TPU runtime / JAX maintainers.
 
 ### M6 - Performance Work: Reference Attention and KV Update
 
