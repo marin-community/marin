@@ -14,27 +14,36 @@
 # limitations under the License.
 
 """
-OLMo-style comprehensive evaluation suite.
+Comprehensive evaluation suite.
 
-This module provides evaluation configurations inspired by OLMo's evaluation suite,
-organized into logprob (multiple choice) and generative tasks.
+This module provides evaluation configurations organized into logprob
+(multiple choice) and generative tasks.
 
 Logprob tasks use Levanter's JAX-based inference (TPU-native).
 Generative tasks use vLLM for text generation.
 """
 
+import json
+import logging
+import os
+from dataclasses import dataclass
 from typing import Literal
 
+import fsspec
 from fray.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, fsspec_mtime
 
 from experiments.evals.evals import (
     evaluate_levanter_lm_evaluation_harness,
     evaluate_lm_evaluation_harness,
     extract_model_name_and_path,
 )
+from experiments.models import qwen2_5_0_5b
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -45,25 +54,12 @@ from experiments.evals.evals import (
 # - an ExecutorStep
 # - an InputName (e.g., InputName.hardcoded("gs://.../hf/step-12345"))
 # - a string path or HF model id
-MODEL_STEP: ExecutorStep | InputName | str | None = None
-
-# Choose what to run.
-RUN_MODE: Literal[
-    "olmo_full",
-    "olmo_core",
-    "olmo_batched",
-    "logprob_generative",
-    "gen2mc",
-    "generative_batched",
-] = "olmo_batched"
+MODEL_STEP: ExecutorStep | InputName | str | None = qwen2_5_0_5b
 
 # General knobs.
 RESOURCE_CONFIG = ResourceConfig.with_tpu("v5p-8")
-RUN_GENERATIVE = True
 DISCOVER_LATEST_CHECKPOINT = True
 MAX_EVAL_INSTANCES: int | None = None
-BATCH_SIZE = 5
-LOGPROB_CORE_ONLY = False
 
 # vLLM / lm-eval args.
 DEFAULT_ENGINE_KWARGS = {
@@ -75,12 +71,11 @@ ENGINE_KWARGS = DEFAULT_ENGINE_KWARGS
 
 
 # =============================================================================
-# OLMo-style Task Configurations
+# Task Configurations
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Core QA / Reading Comprehension Tasks (Logprob - Multiple Choice)
-# Maps to OLMo's qa_rc and stem_qa_mc task suites
 # -----------------------------------------------------------------------------
 CORE_QA_MC_TASKS = (
     # ARC (AI2 Reasoning Challenge)
@@ -297,6 +292,12 @@ REASONING_GEN_TASKS = (
 # Code Tasks (Generative)
 # -----------------------------------------------------------------------------
 CODE_GEN_TASKS = (
+    EvalTaskConfig("code2text_go", 0, task_alias="code2text_go_0shot"),
+    EvalTaskConfig("code2text_java", 0, task_alias="code2text_java_0shot"),
+    EvalTaskConfig("code2text_javascript", 0, task_alias="code2text_javascript_0shot"),
+    EvalTaskConfig("code2text_php", 0, task_alias="code2text_php_0shot"),
+    EvalTaskConfig("code2text_python", 0, task_alias="code2text_python_0shot"),
+    EvalTaskConfig("code2text_ruby", 0, task_alias="code2text_ruby_0shot"),
     EvalTaskConfig("humaneval", 0, task_alias="humaneval_0shot"),
     EvalTaskConfig("mbpp", 3, task_alias="mbpp_3shot"),
     # bigcodebench and ds1000 removed: require max_gen_toks=32768 which exceeds 4096 context
@@ -320,11 +321,17 @@ MULTIPL_E_GEN_TASKS = (
 QA_GEN_TASKS = (
     EvalTaskConfig("drop", 0, task_alias="drop_0shot"),
     EvalTaskConfig("coqa", 0, task_alias="coqa_0shot"),
-    # squadv2 removed: uses both generate_until AND loglikelihood (for "unanswerable" detection)
-    # which crashes vLLM's local-completions backend. Run with Levanter instead.
+    # squadv2 uses generate_until + loglikelihood (for "unanswerable" detection)
     EvalTaskConfig("nq_open", 0, task_alias="naturalqs_0shot"),
     EvalTaskConfig("triviaqa", 0, task_alias="triviaqa_0shot"),
+    EvalTaskConfig("squadv2", 0, task_alias="squadv2_0shot"),
+    EvalTaskConfig("popqa", 0, task_alias="popqa_0shot"),
 )
+
+# -----------------------------------------------------------------------------
+# Perplexity / Loglikelihood (run with vLLM, not Levanter)
+# -----------------------------------------------------------------------------
+PPL_GEN_TASKS = (EvalTaskConfig("wikitext", 0, task_alias="wikitext_0shot"),)
 
 # Jeopardy
 JEOPARDY_GEN_TASKS = (EvalTaskConfig("jeopardy", 0, task_alias="jeopardy_0shot"),)
@@ -488,16 +495,11 @@ REASONING_TASKS = (
     EvalTaskConfig("arc_easy", 25, task_alias="arc_easy_25shot"),
     EvalTaskConfig("arc_challenge", 25, task_alias="arc_challenge_25shot"),
     # NOTE: babi removed - it's a generative task (output_type: generate_until)
-    EvalTaskConfig("bbh_zeroshot", 0, task_alias="bbh_zeroshot_0shot"),
-    EvalTaskConfig("bbh_fewshot", 3, task_alias="bbh_fewshot_3shot"),
-    EvalTaskConfig("bbh_cot_zeroshot", 0, task_alias="bbh_cot_zeroshot_0shot"),
-    EvalTaskConfig("bbh_cot_fewshot", 3, task_alias="bbh_cot_fewshot_3shot"),
     EvalTaskConfig("commonsense_qa", 0, task_alias="commonsense_qa_0shot"),
     EvalTaskConfig("copal_id_standard", 0, task_alias="copal_id_standard_0shot"),
     EvalTaskConfig("copal_id_colloquial", 0, task_alias="copal_id_colloquial_0shot"),
     EvalTaskConfig("logiqa", 0, task_alias="logiqa_0shot"),
     EvalTaskConfig("logiqa2", 0, task_alias="logiqa2_0shot"),
-    EvalTaskConfig("logieval", 1, task_alias="logiqa2_1shot"),
     EvalTaskConfig("mastermind_24_easy", 0, task_alias="mastermind_24_easy_0shot"),
     EvalTaskConfig("mastermind_24_hard", 0, task_alias="mastermind_24_hard_0shot"),
     EvalTaskConfig("mastermind_35_easy", 0, task_alias="mastermind_35_easy_0shot"),
@@ -512,8 +514,6 @@ REASONING_TASKS = (
 )
 
 MATH_TASKS = (
-    EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot"),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8, task_alias="gsm8k_cot_8shot"),
     EvalTaskConfig("arithmetic_1dc", 0, task_alias="arithmetic_1dc_0shot"),
     EvalTaskConfig("arithmetic_2da", 0, task_alias="arithmetic_2da_0shot"),
     EvalTaskConfig("arithmetic_2dm", 0, task_alias="arithmetic_2dm_0shot"),
@@ -525,19 +525,10 @@ MATH_TASKS = (
     EvalTaskConfig("arithmetic_5da", 0, task_alias="arithmetic_5da_0shot"),
     EvalTaskConfig("arithmetic_5ds", 0, task_alias="arithmetic_5ds_0shot"),
     EvalTaskConfig("asdiv", 0, task_alias="asdiv_0shot"),
-    EvalTaskConfig("hendrycks_math_algebra", 0, task_alias="hendrycks_math_algebra_0shot"),
-    EvalTaskConfig("hendrycks_math_counting_and_prob", 0, task_alias="hendrycks_math_counting_and_prob_0shot"),
-    EvalTaskConfig("hendrycks_math_geometry", 0, task_alias="hendrycks_math_geometry_0shot"),
-    EvalTaskConfig("hendrycks_math_intermediate_algebra", 0, task_alias="hendrycks_math_intermediate_algebra_0shot"),
-    EvalTaskConfig("hendrycks_math_num_theory", 0, task_alias="hendrycks_math_num_theory_0shot"),
-    EvalTaskConfig("hendrycks_math_prealgebra", 0, task_alias="hendrycks_math_prealgebra_0shot"),
-    EvalTaskConfig("hendrycks_math_precalc", 0, task_alias="hendrycks_math_precalc_0shot"),
     EvalTaskConfig("mathqa", 0, task_alias="mathqa_0shot"),
 )
 
 LANGUAGE_TASKS = (
-    EvalTaskConfig("coqa", 0, task_alias="coqa_0shot"),
-    EvalTaskConfig("drop", 0, task_alias="drop_0shot"),
     EvalTaskConfig("cola", 0, task_alias="cola_0shot"),
     EvalTaskConfig("mnli", 0, task_alias="mnli_0shot"),
     EvalTaskConfig("mrpc", 0, task_alias="mrpc_0shot"),
@@ -551,27 +542,11 @@ LANGUAGE_TASKS = (
     # NOTE: lambada_standard removed - use lambada_openai (EleutherAI/lambada_openai) instead
     EvalTaskConfig("mutual", 0, task_alias="mutual_0shot"),
     EvalTaskConfig("mutual_plus", 0, task_alias="mutual_plus_0shot"),
-    EvalTaskConfig("nq_open", 0, task_alias="nq_open_0shot"),
     EvalTaskConfig("race", 0, task_alias="race_0shot"),
-    EvalTaskConfig("squad_completion", 0, task_alias="squad_completion_0shot"),
-    EvalTaskConfig("squadv2", 0, task_alias="squadv2_0shot"),
     EvalTaskConfig("swag", 0, task_alias="swag_0shot"),
-    EvalTaskConfig("triviaqa", 0, task_alias="triviaqa_0shot"),
-    EvalTaskConfig("wikitext", 0, task_alias="wikitext_0shot"),
 )
 
-CODE_TASKS = (
-    EvalTaskConfig("code2text_go", 0, task_alias="code2text_go_0shot"),
-    EvalTaskConfig("code2text_java", 0, task_alias="code2text_java_0shot"),
-    EvalTaskConfig("code2text_javascript", 0, task_alias="code2text_javascript_0shot"),
-    EvalTaskConfig("code2text_php", 0, task_alias="code2text_php_0shot"),
-    EvalTaskConfig("code2text_python", 0, task_alias="code2text_python_0shot"),
-    EvalTaskConfig("code2text_ruby", 0, task_alias="code2text_ruby_0shot"),
-    EvalTaskConfig("jsonschema_bench_easy", 2, task_alias="jsonschema_bench_easy_2shot"),
-    EvalTaskConfig("jsonschema_bench_medium", 2, task_alias="jsonschema_bench_medium_2shot"),
-    EvalTaskConfig("jsonschema_bench_hard", 2, task_alias="jsonschema_bench_hard_2shot"),
-    EvalTaskConfig("humaneval", 0, task_alias="humaneval_0shot"),
-)
+CODE_TASKS = ()
 
 MARIN_MEDICAL_TASKS = (
     EvalTaskConfig("careqa_en", 0, task_alias="careqa_en_0shot"),
@@ -589,28 +564,21 @@ MARIN_MEDICAL_TASKS = (
 KNOWLEDGE_TASKS = (
     EvalTaskConfig("cmmlu", 0, task_alias="cmmlu_0shot"),
     EvalTaskConfig("kmmlu", 0, task_alias="kmmlu_0shot"),
-    EvalTaskConfig("popqa", 0, task_alias="popqa_0shot"),
 )
 
 TRUTHFULNESS_TASKS = (
     EvalTaskConfig("truthfulqa_mc1", 0, task_alias="truthfulqa_0shot"),
     EvalTaskConfig("truthfulqa_mc2", 0, task_alias="truthfulqa_mc2_0shot"),
-    EvalTaskConfig("truthfulqa_gen", 0, task_alias="truthfulqa_gen_0shot"),
 )
 
 SPECIALIZED_TASKS = (
-    EvalTaskConfig("fda", 0, task_alias="fda_0shot"),
-    EvalTaskConfig("fld_default", 0, task_alias="fld_default_0shot"),
-    EvalTaskConfig("fld_star", 0, task_alias="fld_star_0shot"),
     EvalTaskConfig("haerae", 0, task_alias="haerae_0shot"),
     EvalTaskConfig("prost", 0, task_alias="prost_0shot"),
     EvalTaskConfig("qa4mre_2011", 0, task_alias="qa4mre_2011_0shot"),
     EvalTaskConfig("qa4mre_2012", 0, task_alias="qa4mre_2012_0shot"),
     EvalTaskConfig("qa4mre_2013", 0, task_alias="qa4mre_2013_0shot"),
     EvalTaskConfig("qasper_bool", 0, task_alias="qasper_bool_0shot"),
-    EvalTaskConfig("qasper_freeform", 0, task_alias="qasper_freeform_0shot"),
     EvalTaskConfig("sciq", 0, task_alias="sciq_0shot"),
-    EvalTaskConfig("swde", 0, task_alias="swde_0shot"),
     EvalTaskConfig("webqs", 0, task_alias="webqs_0shot"),
 )
 
@@ -709,49 +677,22 @@ MARIN_BASE_GENERATIVE_TASKS = _dedupe_tasks(
 )
 
 # -----------------------------------------------------------------------------
-# OLMo-style logprob/MC tasks (use Levanter)
-# -----------------------------------------------------------------------------
-OLMO_LOGPROB_TASKS = _dedupe_tasks(
-    (
-        *CORE_QA_MC_TASKS,
-        *MEDICAL_MC_TASKS,
-        *LANGUAGE_UNDERSTANDING_TASKS,
-        *REASONING_MC_TASKS,
-        *LEADERBOARD_MC_TASKS,
-        *AGI_EVAL_TASKS,
-        *TRUTHFULNESS_MC_TASKS,
-    )
-)
-
-# OLMo-style generative tasks (use vLLM)
-OLMO_GENERATIVE_TASKS = _dedupe_tasks(
-    (
-        *INSTRUCTION_FOLLOWING_GEN_TASKS,
-        *MATH_GEN_TASKS,
-        *AIME_GEN_TASKS,
-        *REASONING_GEN_TASKS,
-        *CODE_GEN_TASKS,
-        *QA_GEN_TASKS,
-        *JEOPARDY_GEN_TASKS,
-    )
-)
-
-# -----------------------------------------------------------------------------
 # Combined comprehensive suites (deduplicated)
 # -----------------------------------------------------------------------------
-# All generative tasks: Marin defaults + OLMo-style (define first for cross-suite dedup)
+# All generative tasks (define first for cross-suite dedup)
 _ALL_GENERATIVE_TASKS_RAW = _dedupe_tasks(
     (
         *BASE_GENERATION_TASKS,
         *KEY_GENERATION_TASKS,
         *CODE_TASKS,
-        # OLMo-specific additions
+        # Additional generative suites
         *INSTRUCTION_FOLLOWING_GEN_TASKS,
         *MATH_GEN_TASKS,  # gsm8k, minerva_math require generation
         *AIME_GEN_TASKS,
         *REASONING_GEN_TASKS,  # BBH CoT tasks require generation
         *CODE_GEN_TASKS,
         *QA_GEN_TASKS,
+        *PPL_GEN_TASKS,
         *JEOPARDY_GEN_TASKS,
         # Multilingual math (diverse subset)
         *MGSM_DIVERSE_TASKS,
@@ -769,7 +710,7 @@ _ALL_GENERATIVE_TASKS_RAW = _dedupe_tasks(
     )
 )
 
-# All logprob tasks: Marin defaults + OLMo-style + extended categories
+# All logprob tasks: Marin defaults + extended categories
 # Remove any tasks that are also in generative suite (those require generation)
 _ALL_LOGPROB_TASKS_RAW = _dedupe_tasks(
     (
@@ -786,7 +727,7 @@ _ALL_LOGPROB_TASKS_RAW = _dedupe_tasks(
         *KNOWLEDGE_TASKS,
         *TRUTHFULNESS_TASKS,
         *SPECIALIZED_TASKS,
-        # OLMo-specific additions
+        # Additional logprob suites
         *AGI_EVAL_TASKS,
         *MEDICAL_MC_TASKS,
         # Multilingual (diverse subset)
@@ -823,7 +764,7 @@ CORE_GENERATIVE_TASKS = (
 # =============================================================================
 
 
-def olmo_full_eval(
+def core_eval(
     step: ExecutorStep | InputName | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
     max_eval_instances: int | None = None,
@@ -832,62 +773,7 @@ def olmo_full_eval(
     discover_latest_checkpoint: bool = True,
 ) -> list[ExecutorStep]:
     """
-    Run full OLMo-style evaluation suite.
-
-    Args:
-        step: Model step to evaluate
-        resource_config: TPU/GPU resources for evaluation
-        max_eval_instances: Limit number of eval instances (for debugging)
-        engine_kwargs: vLLM engine kwargs for generative tasks
-        run_generative: Whether to run generative tasks (requires vLLM)
-        discover_latest_checkpoint: Auto-discover latest HF checkpoint
-
-    Returns:
-        List of evaluation ExecutorSteps (run in parallel)
-    """
-    if engine_kwargs is None:
-        engine_kwargs = DEFAULT_ENGINE_KWARGS
-
-    name, model_path = extract_model_name_and_path(step)
-    eval_jobs = []
-
-    # Logprob tasks (Levanter)
-    logprob_eval = evaluate_levanter_lm_evaluation_harness(
-        model_name=name,
-        model_path=model_path,
-        evals=ALL_LOGPROB_TASKS,
-        resource_config=resource_config,
-        max_eval_instances=max_eval_instances,
-        discover_latest_checkpoint=discover_latest_checkpoint,
-    )
-    eval_jobs.append(logprob_eval)
-
-    # Generative tasks (vLLM)
-    if run_generative:
-        gen_eval = evaluate_lm_evaluation_harness(
-            model_name=name,
-            model_path=model_path,
-            evals=ALL_GENERATIVE_TASKS,
-            max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        )
-        eval_jobs.append(gen_eval)
-
-    return eval_jobs
-
-
-def olmo_core_eval(
-    step: ExecutorStep | InputName | str,
-    resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
-    max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = None,
-    run_generative: bool = True,
-    discover_latest_checkpoint: bool = True,
-) -> list[ExecutorStep]:
-    """
-    Run core OLMo-style evaluation (smaller subset for faster iteration).
+    Run core evaluation (smaller subset for faster iteration).
 
     Args:
         step: Model step to evaluate
@@ -933,7 +819,7 @@ def olmo_core_eval(
     return eval_jobs
 
 
-def olmo_batched_eval(
+def batched_eval(
     step: ExecutorStep | InputName | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
     max_eval_instances: int | None = None,
@@ -1158,80 +1044,135 @@ def _require_model_step() -> ExecutorStep | InputName | str:
 def build_steps(
     step: ExecutorStep | InputName | str,
     *,
-    run_mode: Literal[
-        "olmo_full",
-        "olmo_core",
-        "olmo_batched",
-        "logprob_generative",
-        "gen2mc",
-        "generative_batched",
-    ] = RUN_MODE,
     resource_config: ResourceConfig = RESOURCE_CONFIG,
     max_eval_instances: int | None = MAX_EVAL_INSTANCES,
     engine_kwargs: dict | None = ENGINE_KWARGS,
-    run_generative: bool = RUN_GENERATIVE,
     discover_latest_checkpoint: bool = DISCOVER_LATEST_CHECKPOINT,
-    batch_size: int = BATCH_SIZE,
-    logprob_core_only: bool = False,
 ) -> list[ExecutorStep]:
-    if run_mode == "olmo_full":
-        return olmo_full_eval(
-            step=step,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            run_generative=run_generative,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        )
-    if run_mode == "olmo_core":
-        return olmo_core_eval(
-            step=step,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            run_generative=run_generative,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        )
-    if run_mode == "olmo_batched":
-        return olmo_batched_eval(
-            step=step,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            run_generative=run_generative,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            batch_size=batch_size,
-        )
-    if run_mode == "logprob_generative":
-        return logprob_generative_eval(
-            step=step,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            core_only=logprob_core_only,
-        )
-    if run_mode == "gen2mc":
-        return gen2mc_eval(
-            step=step,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        )
-    if run_mode == "generative_batched":
-        return generative_batched_eval(
-            step=step,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            batch_size=batch_size,
-        )
-    raise ValueError(f"Unknown run_mode={run_mode!r}")
+    return batched_eval(
+        step=step,
+        resource_config=resource_config,
+        max_eval_instances=max_eval_instances,
+        engine_kwargs=engine_kwargs,
+        run_generative=True,
+        discover_latest_checkpoint=discover_latest_checkpoint,
+    )
+
+
+# =============================================================================
+# Aggregation (all_evals)
+# =============================================================================
+
+
+@dataclass(frozen=True, kw_only=True)
+class AllEvalsAggregateConfig:
+    """Configuration for aggregating all_evals outputs."""
+
+    eval_runs: list[str]
+    """Eval output roots (Executor resolves InputName to str at runtime)."""
+
+    output_path: str
+
+
+def _discover_result_files(eval_root: str) -> list[str]:
+    root_result = os.path.join(eval_root, "results.json")
+    candidates: list[str] = []
+    if fsspec_exists(root_result):
+        candidates.append(root_result)
+
+    candidates.extend(fsspec_glob(os.path.join(eval_root, "**", "results_*.json")))
+    if not candidates:
+        candidates.extend(fsspec_glob(os.path.join(eval_root, "**", "results.json")))
+
+    if not candidates:
+        return []
+
+    unique = sorted(set(candidates))
+    unique.sort(key=lambda path: fsspec_mtime(path) if fsspec_exists(path) else 0)
+    return unique
+
+
+def _load_json(path: str) -> dict:
+    with fsspec.open(path, "r") as f:
+        return json.load(f)
+
+
+def run_all_evals_aggregate(config: AllEvalsAggregateConfig) -> str:
+    """Aggregate evaluation results into a single JSON output."""
+    result_files: list[str] = []
+    for root in config.eval_runs:
+        files = _discover_result_files(root)
+        if not files:
+            logger.warning("No result files found under %s", root)
+            continue
+        result_files.extend(files)
+
+    if not result_files:
+        raise RuntimeError("No evaluation results found; cannot aggregate")
+
+    aggregated: dict[str, object] = {"sources": result_files, "results": {}}
+    results_out: dict[str, object] = aggregated["results"]  # type: ignore[assignment]
+
+    for result_path in result_files:
+        data = _load_json(result_path)
+        results = data.get("results")
+        if not isinstance(results, dict):
+            logger.warning("Skipping %s: missing results", result_path)
+            continue
+
+        for task_name, metrics in results.items():
+            if not isinstance(metrics, dict):
+                continue
+            entry = {"source": result_path, "metrics": metrics}
+            existing = results_out.get(task_name)
+            if existing is None:
+                results_out[task_name] = entry
+                continue
+            if isinstance(existing, list):
+                existing.append(entry)
+            else:
+                results_out[task_name] = [existing, entry]
+
+    output_path = config.output_path
+    fsspec_mkdirs(output_path, exist_ok=True)
+
+    all_results_path = os.path.join(output_path, "all_results.json")
+    with fsspec.open(all_results_path, "w") as f:
+        json.dump(aggregated, f, indent=2, sort_keys=True)
+
+    logger.info("Wrote aggregated results to %s", output_path)
+    return output_path
+
+
+def build_all_evals_aggregate_step(
+    eval_steps: list[ExecutorStep | InputName],
+    *,
+    output_path: str | None = None,
+) -> ExecutorStep:
+    """Create an ExecutorStep that aggregates eval outputs."""
+    inputs: list[InputName] = []
+    for step in eval_steps:
+        if isinstance(step, ExecutorStep):
+            inputs.append(step.as_input_name())
+        elif isinstance(step, InputName):
+            inputs.append(step)
+        else:
+            raise TypeError(f"Unexpected eval step type: {type(step)}")
+
+    return ExecutorStep(
+        name="evaluation/all_evals/aggregate",
+        fn=run_all_evals_aggregate,
+        config=AllEvalsAggregateConfig(
+            eval_runs=inputs,
+            output_path=output_path or this_output_path(),
+        ),
+        description="Aggregate all_evals outputs into a consolidated JSON",
+    )
 
 
 def main() -> None:
     step = _require_model_step()
-    steps = build_steps(step, logprob_core_only=LOGPROB_CORE_ONLY)
+    steps = build_steps(step)
 
     # Print task counts for verification
     print(f"Logprob tasks: {len(ALL_LOGPROB_TASKS)}")
@@ -1243,7 +1184,7 @@ def main() -> None:
 
     # Steps are run with max parallelism by default (max_concurrent=None)
     # Both eval steps will start as soon as the model is ready
-    executor_main(steps=steps)
+    executor_main(steps=[build_all_evals_aggregate_step(steps)])
 
 
 if __name__ == "__main__":
