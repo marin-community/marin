@@ -385,7 +385,7 @@ def filter_valid_generations(config: FilterConfig):
     total_rows = ds.count()
     # Count unique ms_ids to see how many original samples have at least one valid
     unique_ms_ids = ds.unique("ms_id")
-    num_unique = unique_ms_ids.count()
+    num_unique = len(unique_ms_ids)
 
     print(f"Exploded to {total_rows} rows from {num_unique} unique samples (is_instruction_tuned={is_instruct})")
     print(f"Average valid samples per original: {total_rows / num_unique:.2f}" if num_unique > 0 else "No valid samples")
