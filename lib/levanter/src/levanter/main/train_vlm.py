@@ -875,7 +875,7 @@ def main(config: TrainVLMConfig):
 
         # Set resume positions on StreamingImageDatasets when resuming from checkpoint
         if state.step > 0 and isinstance(train_dataset_mixture, MixtureDataset):
-            total_items = state.step * trainer.config.train_batch_size
+            total_items = int(state.step) * trainer.config.train_batch_size
             per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
             num_processes = jax.process_count()
 

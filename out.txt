@@ -1,265 +1,786 @@
-(<lambda> pid=24639, ip=10.164.2.65) 2026-02-05T01:07:50 - 46 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0046_parquet
-(<lambda> pid=24641, ip=10.164.2.33) 2026-02-05T00:11:12 - 49 - levanter.main.train_vlm - train_vlm.py:808 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory. [repeated 63x across cluster]
-(<lambda> pid=24641, ip=10.164.2.33) 2026-02-05T00:11:12 - 49 - levanter.main.train_vlm - train_vlm.py:868 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16) [repeated 63x across cluster]
-(<lambda> pid=24696, ip=10.164.2.97) 2026-02-05T00:11:13 - 35 - levanter.data.image - image.py:2697 - INFO :: First get_batch call with min(indices)=1929, process_count=64, seeking to item 30 [repeated 63x across cluster]
-(<lambda> pid=24639, ip=10.164.2.65) 2026-02-05T01:08:16 - 46 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5025 rows) in 25.73s
-(<lambda> pid=24639, ip=10.164.2.65) 2026-02-05T01:08:16 - 46 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5025 (skipped 30 total items)
-(<lambda> pid=25795, ip=10.164.2.8) 2026-02-05T01:08:55 - 32 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0032_parquet
-(<lambda> pid=24726, ip=10.164.2.98) 2026-02-05T01:09:05 - 3 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0003_parquet [repeated 2x across cluster]
-(<lambda> pid=24696, ip=10.164.2.97) 2026-02-05T01:09:13 - 35 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0035_parquet [repeated 2x across cluster]
-(<lambda> pid=24852, ip=10.164.2.66) 2026-02-05T01:09:18 - 10 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4899 rows) in 20.84s
-(<lambda> pid=24852, ip=10.164.2.66) 2026-02-05T01:09:18 - 10 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4899 (skipped 30 total items)
-(<lambda> pid=24377, ip=10.164.0.253) 2026-02-05T01:09:13 - 15 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0015_parquet
-(<lambda> pid=25795, ip=10.164.2.8) 2026-02-05T01:09:24 - 32 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.759.
-(<lambda> pid=25795, ip=10.164.2.8) 2026-02-05T01:09:23 - 32 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5052 rows) in 27.54s
-(<lambda> pid=25795, ip=10.164.2.8) 2026-02-05T01:09:23 - 32 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5052 (skipped 30 total items)
-(<lambda> pid=24578, ip=10.164.2.9) 2026-02-05T01:09:31 - 48 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0048_parquet
-(<lambda> pid=25042, ip=10.164.0.250) 2026-02-05T01:09:31 - 37 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5025 rows) in 26.47s
-(<lambda> pid=25042, ip=10.164.0.250) 2026-02-05T01:09:31 - 37 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5025 (skipped 30 total items)
-(<lambda> pid=25042, ip=10.164.0.250) 2026-02-05T01:09:32 - 37 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.556.
-(<lambda> pid=24377, ip=10.164.0.253) 2026-02-05T01:09:37 - 15 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5044 rows) in 23.75s [repeated 2x across cluster]
-(<lambda> pid=24377, ip=10.164.0.253) 2026-02-05T01:09:37 - 15 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/5044 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24726, ip=10.164.2.98) 2026-02-05T01:09:33 - 3 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 1.036.
-(<lambda> pid=24377, ip=10.164.0.253) 2026-02-05T01:09:38 - 15 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.570.
-(<lambda> pid=24634, ip=10.164.2.44) 2026-02-05T01:09:40 - 60 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0060_parquet
-(<lambda> pid=24696, ip=10.164.2.97) 2026-02-05T01:09:38 - 35 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4854 rows) in 24.45s
-(<lambda> pid=24696, ip=10.164.2.97) 2026-02-05T01:09:38 - 35 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4854 (skipped 30 total items)
-(<lambda> pid=24578, ip=10.164.2.9) 2026-02-05T01:09:51 - 48 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4932 rows) in 20.67s
-(<lambda> pid=24578, ip=10.164.2.9) 2026-02-05T01:09:51 - 48 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4932 (skipped 30 total items)
-(<lambda> pid=24641, ip=10.164.2.33) 2026-02-05T01:09:44 - 49 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0049_parquet
-(<lambda> pid=24811, ip=10.164.2.69) 2026-02-05T01:09:55 - 31 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0031_parquet
-(<lambda> pid=24634, ip=10.164.2.44) 2026-02-05T01:10:07 - 60 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4949 rows) in 27.00s
-(<lambda> pid=24634, ip=10.164.2.44) 2026-02-05T01:10:07 - 60 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4949 (skipped 30 total items)
-(<lambda> pid=24512, ip=10.164.0.252) 2026-02-05T01:09:58 - 53 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0053_parquet
-(<lambda> pid=24634, ip=10.164.2.44) 2026-02-05T01:10:08 - 60 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.653.
-(<lambda> pid=24635, ip=10.164.2.64) 2026-02-05T01:10:09 - 57 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0057_parquet
-(<lambda> pid=24811, ip=10.164.2.69) 2026-02-05T01:10:13 - 31 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4884 rows) in 17.38s [repeated 2x across cluster]
-(<lambda> pid=24811, ip=10.164.2.69) 2026-02-05T01:10:13 - 31 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4884 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24108, ip=10.164.2.101) 2026-02-05T01:10:15 - 23 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0023_parquet
-(<lambda> pid=24506, ip=10.164.0.255) 2026-02-05T01:10:17 - 2 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0002_parquet
-(<lambda> pid=24512, ip=10.164.0.252) 2026-02-05T01:10:21 - 53 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5055 rows) in 22.74s
-(<lambda> pid=24512, ip=10.164.0.252) 2026-02-05T01:10:21 - 53 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5055 (skipped 30 total items)
-(<lambda> pid=24635, ip=10.164.2.64) 2026-02-05T01:10:32 - 57 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5102 rows) in 22.93s
-(<lambda> pid=24635, ip=10.164.2.64) 2026-02-05T01:10:32 - 57 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5102 (skipped 30 total items)
-(<lambda> pid=24884, ip=10.164.2.106) 2026-02-05T01:10:32 - 16 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0016_parquet
-(<lambda> pid=24635, ip=10.164.2.64) 2026-02-05T01:10:33 - 57 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.606.
-(<lambda> pid=24506, ip=10.164.0.255) 2026-02-05T01:10:33 - 2 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4867 rows) in 16.55s
-(<lambda> pid=24506, ip=10.164.0.255) 2026-02-05T01:10:33 - 2 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4867 (skipped 30 total items)
-(<lambda> pid=24122, ip=10.164.2.72) 2026-02-05T01:10:38 - 1 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0001_parquet [repeated 3x across cluster]
-(<lambda> pid=24108, ip=10.164.2.101) 2026-02-05T01:10:40 - 23 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5032 rows) in 25.06s
-(<lambda> pid=24108, ip=10.164.2.101) 2026-02-05T01:10:40 - 23 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/5032 (skipped 30 total items)
-(<lambda> pid=24864, ip=10.164.2.96) 2026-02-05T01:10:50 - 38 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0038_parquet
-(<lambda> pid=24905, ip=10.164.0.248) 2026-02-05T01:10:53 - 6 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0006_parquet
-(<lambda> pid=24067, ip=10.164.2.99) 2026-02-05T01:11:00 - 30 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5084 rows) in 26.38s
-(<lambda> pid=24067, ip=10.164.2.99) 2026-02-05T01:11:00 - 30 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5084 (skipped 30 total items)
-(<lambda> pid=24806, ip=10.164.0.184) 2026-02-05T01:10:54 - 45 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0045_parquet
-(<lambda> pid=25311, ip=10.164.0.251) 2026-02-05T01:11:05 - 7 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0007_parquet
-(<lambda> pid=24884, ip=10.164.2.106) 2026-02-05T01:11:05 - 16 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.549.
-(<lambda> pid=24884, ip=10.164.2.106) 2026-02-05T01:11:04 - 16 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4968 rows) in 31.95s [repeated 2x across cluster]
-(<lambda> pid=24884, ip=10.164.2.106) 2026-02-05T01:11:04 - 16 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4968 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24866, ip=10.164.0.247) 2026-02-05T01:11:11 - 20 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0020_parquet
-(<lambda> pid=24122, ip=10.164.2.72) 2026-02-05T01:11:08 - 1 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5050 rows) in 29.81s
-(<lambda> pid=24122, ip=10.164.2.72) 2026-02-05T01:11:08 - 1 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/5050 (skipped 30 total items)
-(<lambda> pid=25269, ip=10.164.2.62) 2026-02-05T01:11:11 - 40 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0040_parquet
-(<lambda> pid=24806, ip=10.164.0.184) 2026-02-05T01:11:18 - 45 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5066 rows) in 24.44s
-(<lambda> pid=24806, ip=10.164.0.184) 2026-02-05T01:11:18 - 45 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5066 (skipped 30 total items)
-(<lambda> pid=24921, ip=10.164.2.12) 2026-02-05T01:11:13 - 51 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0051_parquet
-(<lambda> pid=24806, ip=10.164.0.184) 2026-02-05T01:11:19 - 45 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.646.
-(<lambda> pid=24566, ip=10.164.2.0) 2026-02-05T01:11:29 - 17 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0017_parquet
-(<lambda> pid=24905, ip=10.164.0.248) 2026-02-05T01:11:23 - 6 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4993 rows) in 29.31s [repeated 3x across cluster]
-(<lambda> pid=24905, ip=10.164.0.248) 2026-02-05T01:11:23 - 6 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4993 (skipped 30 total items) [repeated 3x across cluster]
-(<lambda> pid=24272, ip=10.164.2.60) 2026-02-05T01:11:35 - 34 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0034_parquet [repeated 2x across cluster]
-(<lambda> pid=24866, ip=10.164.0.247) 2026-02-05T01:11:35 - 20 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4960 rows) in 23.94s
-(<lambda> pid=24866, ip=10.164.0.247) 2026-02-05T01:11:35 - 20 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4960 (skipped 30 total items)
-(<lambda> pid=24921, ip=10.164.2.12) 2026-02-05T01:11:37 - 51 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.628.
-(<lambda> pid=24546, ip=10.164.0.245) 2026-02-05T01:11:47 - 18 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0018_parquet [repeated 2x across cluster]
-(<lambda> pid=25269, ip=10.164.2.62) 2026-02-05T01:11:37 - 40 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4953 rows) in 26.08s [repeated 2x across cluster]
-(<lambda> pid=25269, ip=10.164.2.62) 2026-02-05T01:11:37 - 40 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4953 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24702, ip=10.164.2.95) 2026-02-05T01:11:52 - 28 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0028_parquet [repeated 3x across cluster]
-(<lambda> pid=24566, ip=10.164.2.0) 2026-02-05T01:11:51 - 17 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4938 rows) in 21.96s
-(<lambda> pid=24566, ip=10.164.2.0) 2026-02-05T01:11:51 - 17 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4938 (skipped 30 total items)
-(<lambda> pid=24566, ip=10.164.2.0) 2026-02-05T01:11:52 - 17 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.535.
-(<lambda> pid=24820, ip=10.164.2.63) 2026-02-05T01:11:55 - 21 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4902 rows) in 23.63s
-(<lambda> pid=24820, ip=10.164.2.63) 2026-02-05T01:11:55 - 21 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4902 (skipped 30 total items)
-(<lambda> pid=24470, ip=10.164.2.70) 2026-02-05T01:12:01 - 62 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0062_parquet [repeated 4x across cluster]
-(<lambda> pid=24650, ip=10.164.2.73) 2026-02-05T01:12:01 - 39 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4968 rows) in 22.23s
-(<lambda> pid=24650, ip=10.164.2.73) 2026-02-05T01:12:01 - 39 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4968 (skipped 30 total items)
-(<lambda> pid=24765, ip=10.164.2.68) 2026-02-05T01:12:08 - 63 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0063_parquet [repeated 3x across cluster]
-(<lambda> pid=24272, ip=10.164.2.60) 2026-02-05T01:12:03 - 34 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5085 rows) in 28.34s
-(<lambda> pid=24272, ip=10.164.2.60) 2026-02-05T01:12:03 - 34 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5085 (skipped 30 total items)
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:12:09 - 0 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4487 rows) in 14.66s
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:12:09 - 0 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4487 (skipped 30 total items)
-(<lambda> pid=24681, ip=10.164.2.94) 2026-02-05T01:12:13 - 11 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0011_parquet [repeated 4x across cluster]
-(<lambda> pid=24573, ip=10.164.2.24) 2026-02-05T01:12:16 - 41 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5015 rows) in 22.74s [repeated 2x across cluster]
-(<lambda> pid=24573, ip=10.164.2.24) 2026-02-05T01:12:16 - 41 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5015 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24546, ip=10.164.0.245) 2026-02-05T01:12:18 - 18 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.597.
-(<lambda> pid=30069, ip=10.164.2.46) 2026-02-05T01:12:18 - 25 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0025_parquet
-(<lambda> pid=24656, ip=10.164.0.244) 2026-02-05T01:12:21 - 12 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0012_parquet
-(<lambda> pid=24702, ip=10.164.2.95) 2026-02-05T01:12:20 - 28 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4942 rows) in 27.99s [repeated 3x across cluster]
-(<lambda> pid=24702, ip=10.164.2.95) 2026-02-05T01:12:20 - 28 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4942 (skipped 30 total items) [repeated 3x across cluster]
-(autoscaler +1h22m42s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +1h22m42s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24702, ip=10.164.2.95) 2026-02-05T01:12:21 - 28 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.633. [repeated 2x across cluster]
-(<lambda> pid=24975, ip=10.164.2.93) 2026-02-05T01:12:22 - 29 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0029_parquet
-(<lambda> pid=25222, ip=10.164.2.102) 2026-02-05T01:12:27 - 59 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5030 rows) in 31.77s [repeated 2x across cluster]
-(<lambda> pid=25222, ip=10.164.2.102) 2026-02-05T01:12:27 - 59 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5030 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24742, ip=10.164.2.57) 2026-02-05T01:12:29 - 42 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0042_parquet
-(<lambda> pid=24478, ip=10.164.2.53) 2026-02-05T01:12:26 - 24 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.659.
-(<lambda> pid=24608, ip=10.164.0.254) 2026-02-05T01:12:33 - 26 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4987 rows) in 20.33s [repeated 4x across cluster]
-(<lambda> pid=24608, ip=10.164.0.254) 2026-02-05T01:12:33 - 26 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4987 (skipped 30 total items) [repeated 4x across cluster]
-(<lambda> pid=24470, ip=10.164.2.70) 2026-02-05T01:12:33 - 62 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.752.
-(<lambda> pid=24656, ip=10.164.0.244) 2026-02-05T01:12:41 - 12 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4924 rows) in 20.36s [repeated 2x across cluster]
-(<lambda> pid=24656, ip=10.164.0.244) 2026-02-05T01:12:41 - 12 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4924 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24608, ip=10.164.0.254) 2026-02-05T01:12:34 - 26 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.541.
-(<lambda> pid=30069, ip=10.164.2.46) 2026-02-05T01:12:45 - 25 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 1.036.
-(<lambda> pid=24637, ip=10.164.2.100) 2026-02-05T01:12:45 - 47 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0047_parquet
-(<lambda> pid=24975, ip=10.164.2.93) 2026-02-05T01:12:47 - 29 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4945 rows) in 25.23s [repeated 3x across cluster]
-(<lambda> pid=24975, ip=10.164.2.93) 2026-02-05T01:12:47 - 29 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4945 (skipped 30 total items) [repeated 3x across cluster]
-(<lambda> pid=24681, ip=10.164.2.94) 2026-02-05T01:12:52 - 11 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.662.
-(<lambda> pid=25465, ip=10.164.2.11) 2026-02-05T01:12:47 - 61 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0061_parquet
-(<lambda> pid=24742, ip=10.164.2.57) 2026-02-05T01:12:56 - 42 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5025 rows) in 27.16s [repeated 2x across cluster]
-(<lambda> pid=24742, ip=10.164.2.57) 2026-02-05T01:12:56 - 42 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5025 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24349, ip=10.164.2.54) 2026-02-05T01:12:58 - 19 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0019_parquet
-(<lambda> pid=24786, ip=10.164.0.235) 2026-02-05T01:13:07 - 55 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0055_parquet [repeated 2x across cluster]
-(<lambda> pid=25465, ip=10.164.2.11) 2026-02-05T01:13:11 - 61 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5098 rows) in 23.47s
-(<lambda> pid=25465, ip=10.164.2.11) 2026-02-05T01:13:11 - 61 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5098 (skipped 30 total items)
-(<lambda> pid=32271, ip=10.164.0.242) 2026-02-05T01:13:09 - 27 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0027_parquet
-(<lambda> pid=24349, ip=10.164.2.54) 2026-02-05T01:13:22 - 19 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5074 rows) in 23.35s [repeated 2x across cluster]
-(<lambda> pid=24349, ip=10.164.2.54) 2026-02-05T01:13:22 - 19 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/5074 (skipped 30 total items) [repeated 2x across cluster]
-(<lambda> pid=24349, ip=10.164.2.54) 2026-02-05T01:13:23 - 19 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.574.
-(<lambda> pid=25806, ip=10.164.2.105) 2026-02-05T01:13:27 - 14 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4942 rows) in 27.73s
-(<lambda> pid=25806, ip=10.164.2.105) 2026-02-05T01:13:27 - 14 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4942 (skipped 30 total items)
-(<lambda> pid=24492, ip=10.164.2.67) 2026-02-05T01:13:29 - 58 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0058_parquet
-(<lambda> pid=24786, ip=10.164.0.235) 2026-02-05T01:13:34 - 55 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5080 rows) in 26.82s
-(<lambda> pid=24786, ip=10.164.0.235) 2026-02-05T01:13:34 - 55 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5080 (skipped 30 total items)
-(<lambda> pid=24497, ip=10.164.2.71) 2026-02-05T01:13:31 - 52 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0052_parquet
-(<lambda> pid=32271, ip=10.164.0.242) 2026-02-05T01:13:40 - 27 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5102 rows) in 30.68s
-(<lambda> pid=32271, ip=10.164.0.242) 2026-02-05T01:13:40 - 27 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/5102 (skipped 30 total items)
-(<lambda> pid=25438, ip=10.164.0.246) 2026-02-05T01:13:40 - 4 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0004_parquet
-(<lambda> pid=32271, ip=10.164.0.242) 2026-02-05T01:13:41 - 27 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.521.
-(<lambda> pid=24492, ip=10.164.2.67) 2026-02-05T01:13:53 - 58 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4893 rows) in 23.89s
-(<lambda> pid=24492, ip=10.164.2.67) 2026-02-05T01:13:53 - 58 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4893 (skipped 30 total items)
-(<lambda> pid=24759, ip=10.164.2.103) 2026-02-05T01:14:00 - 44 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0044_parquet
-(<lambda> pid=24497, ip=10.164.2.71) 2026-02-05T01:13:57 - 52 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4938 rows) in 26.17s
-(<lambda> pid=24497, ip=10.164.2.71) 2026-02-05T01:13:57 - 52 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4938 (skipped 30 total items)
-(<lambda> pid=25438, ip=10.164.0.246) 2026-02-05T01:14:03 - 4 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4986 rows) in 22.93s
-(<lambda> pid=25438, ip=10.164.0.246) 2026-02-05T01:14:03 - 4 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4986 (skipped 30 total items)
-(autoscaler +1h24m29s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h24m29s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24355, ip=10.164.2.92) 2026-02-05T01:14:11 - 43 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0043_parquet [repeated 2x across cluster]
-(<lambda> pid=24895, ip=10.164.2.10) 2026-02-05T01:14:17 - 50 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0050_parquet
-(<lambda> pid=25335, ip=10.164.0.243) 2026-02-05T01:14:20 - 5 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0005_parquet
-(<lambda> pid=24869, ip=10.164.2.52) 2026-02-05T01:14:26 - 56 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4897 rows) in 23.98s
-(<lambda> pid=24869, ip=10.164.2.52) 2026-02-05T01:14:26 - 56 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4897 (skipped 30 total items)
-(<lambda> pid=24355, ip=10.164.2.92) 2026-02-05T01:14:32 - 43 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4934 rows) in 21.05s [repeated 2x across cluster]
-(<lambda> pid=24355, ip=10.164.2.92) 2026-02-05T01:14:32 - 43 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/4934 (skipped 30 total items) [repeated 2x across cluster]
-(autoscaler +1h25m0s) Adding 2 node(s) of type tpu_worker.
+-full-0-dacc8f. [repeated 62x across cluster]
+(<lambda> pid=2126, ip=10.164.2.107) wandb: Tracking run with wandb version 0.24.0 [repeated 63x across cluster]
+(<lambda> pid=2126, ip=10.164.2.101) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 62x across cluster]
+(<lambda> pid=2126, ip=10.164.2.107) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/wandb/run-20260205_125433-vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f [repeated 63x across cluster]
+(<lambda> pid=2126, ip=10.164.2.36) 2026-02-05T12:54:38 - 25 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f [repeated 125x across cluster]
+(<lambda> pid=2126, ip=10.164.2.107) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 63x across cluster]
+(<lambda> pid=2126, ip=10.164.2.107) 2026-02-05T12:54:38 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/184146 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(autoscaler +1h10m23s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h10m23s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h10m43s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h10m43s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h10m56s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h10m56s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h11m22s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h11m22s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h11m51s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h11m51s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h12m12s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h12m12s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h12m26s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h12m26s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h12m46s) Adding 3 node(s) of type tpu_worker.
+(autoscaler +1h12m46s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h13m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h13m2s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h13m17s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h13m17s) Resized to 8280 CPUs, 276 TPUs.
+(raylet) The node with node id: 490db29c8ec875f805aa14ca366c5aaa5ea154792093bfc5f40dd7d3 and address: 10.164.0.176 and node name: 10.164.0.176 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +1h16m34s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h16m34s) Resized to 8280 CPUs, 276 TPUs.
+(raylet) The node with node id: 923b817130c18ddc2171a54f3f125814b18e394f691ba7509a745ab6 and address: 10.164.1.5 and node name: 10.164.1.5 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a  (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +1h17m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h17m31s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h17m52s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h17m52s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h18m7s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h18m7s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h18m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h18m28s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h18m48s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h18m48s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h20m9s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h20m9s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h22m36s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h22m36s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h23m23s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h23m23s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h24m19s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h24m19s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h24m45s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h24m45s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h25m0s) Adding 1 node(s) of type tpu_worker.
 (autoscaler +1h25m0s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=25335, ip=10.164.0.243) 2026-02-05T01:14:43 - 5 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (4986 rows) in 23.62s
-(<lambda> pid=25335, ip=10.164.0.243) 2026-02-05T01:14:43 - 5 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/148, row 30/4986 (skipped 30 total items)
-(<lambda> pid=24895, ip=10.164.2.10) 2026-02-05T01:14:44 - 50 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5027 rows) in 27.05s
-(<lambda> pid=24895, ip=10.164.2.10) 2026-02-05T01:14:44 - 50 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5027 (skipped 30 total items)
-(<lambda> pid=24535, ip=10.164.0.249) 2026-02-05T01:14:55 - 36 - levanter.data.image - image.py:2574 - INFO :: Loading shard 0: 0036_parquet
-(<lambda> pid=24535, ip=10.164.0.249) 2026-02-05T01:15:15 - 36 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 0 (5017 rows) in 19.79s
-(<lambda> pid=24535, ip=10.164.0.249) 2026-02-05T01:15:15 - 36 - levanter.data.image - image.py:2522 - INFO :: Seeked to shard 0/147, row 30/5017 (skipped 30 total items)
-(<lambda> pid=24535, ip=10.164.0.249) 2026-02-05T01:15:16 - 36 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.909.
-(raylet) The node with node id: bf57abe7f2632cce744d8926145cef9d0ece35287dac2e6b35456655 and address: 10.164.0.48 and node name: 10.164.0.48 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a        (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload.
-(<lambda> pid=24639, ip=10.164.2.65) 2026-02-05T01:15:56 - 46 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:29.4it/s remaining:23:21 elapsed:1:21:11 postfix:-
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:15:56 - 0 - levanter.tracker.wandb - wandb.py:65 - WARNING :: Step 143001 is less than the current step 143405. Cowardly refusing to log metrics.
-(<lambda> pid=24905, ip=10.164.0.248) 2026-02-05T01:15:56 - 6 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 143001.
-(<lambda> pid=24905, ip=10.164.0.248) 2026-02-05T01:15:56 - 6 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 143001 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001
-(<lambda> pid=24921, ip=10.164.2.12) 2026-02-05T01:15:56 - 51 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001 for step 143001
-(<lambda> pid=24506, ip=10.164.0.255) 2026-02-05T01:17:21 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:24.7it/s remaining:27:48 elapsed:1:22:37 postfix:loss=0.886
-(<lambda> pid=24759, ip=10.164.2.103) 2026-02-05T01:15:56 - 44 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:29.4it/s remaining:23:21 elapsed:1:21:11 postfix:- [repeated 63x across cluster]
-(<lambda> pid=24478, ip=10.164.2.53) 2026-02-05T01:15:56 - 24 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 143001. [repeated 63x across cluster]
-(<lambda> pid=24478, ip=10.164.2.53) 2026-02-05T01:15:56 - 24 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 143001 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001 [repeated 63x across cluster]
-(<lambda> pid=24895, ip=10.164.2.10) 2026-02-05T01:15:56 - 50 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001 for step 143001 [repeated 63x across cluster]
-(raylet) The node with node id: 8a6b6163043564d268c4184c18793fb236441439b1530ae06c3809d0 and address: 10.164.0.70 and node name: 10.164.0.70 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a        (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload.
-(autoscaler +1h28m28s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +1h28m28s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=30069, ip=10.164.2.46) 2026-02-05T01:18:22 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.5s/it remaining:16:40:42 elapsed:1:23:38 postfix:loss=0.947 [repeated 64x across cluster]
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:18:48 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001 for step 143001
-(<lambda> pid=24765, ip=10.164.2.68) 2026-02-05T01:18:22 - 63 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.5s/it remaining:16:40:42 elapsed:1:23:38 postfix:loss=0.947 [repeated 63x across cluster]
-(<lambda> pid=24866, ip=10.164.0.247) 2026-02-05T01:19:22 - 20 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.2s/it remaining:13:25:06 elapsed:1:24:38 postfix:loss=0.969
-(<lambda> pid=24635, ip=10.164.2.64) 2026-02-05T01:19:22 - 57 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.2s/it remaining:13:25:06 elapsed:1:24:38 postfix:loss=0.969
-(<lambda> pid=24478, ip=10.164.2.53) 2026-02-05T01:20:23 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.2s/it remaining:13:46:30 elapsed:1:25:38 postfix:loss=0.974 [repeated 63x across cluster]
-(autoscaler +1h31m36s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h31m36s) Resized to 12000 CPUs, 400 TPUs.
-(<lambda> pid=24492, ip=10.164.2.67) 2026-02-05T01:21:24 - 58 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.2s/it remaining:13:21:13 elapsed:1:26:39 postfix:loss=0.941 [repeated 64x across cluster]
-(autoscaler +1h32m32s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h32m32s) Resized to 12000 CPUs, 400 TPUs.
-(autoscaler +1h32m42s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h32m42s) Resized to 12000 CPUs, 400 TPUs.
-(<lambda> pid=25014, ip=10.164.2.42) 2026-02-05T01:22:24 - 13 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.1s/it remaining:12:17:19 elapsed:1:27:40 postfix:loss=0.925 [repeated 64x across cluster]
-(autoscaler +1h32m58s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h32m58s) Resized to 12000 CPUs, 400 TPUs.
-(<lambda> pid=24492, ip=10.164.2.67) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
-(<lambda> pid=24864, ip=10.164.2.96) 2026-02-05T01:22:24 - 38 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.1s/it remaining:12:17:19 elapsed:1:27:40 postfix:loss=0.925 [repeated 63x across cluster]
-(autoscaler +1h33m18s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h33m18s) Resized to 12000 CPUs, 400 TPUs.
-(autoscaler +1h33m33s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h33m33s) Removing 31 nodes of type tpu_slice_v5e_128 (idle).
-(autoscaler +1h33m33s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24869, ip=10.164.2.52) 2026-02-05T01:23:25 - 56 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.1s/it remaining:12:55:35 elapsed:1:28:40 postfix:loss=0.894
-(<lambda> pid=24129, ip=10.164.2.50) 2026-02-05T01:23:25 - 22 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.1s/it remaining:12:55:35 elapsed:1:28:40 postfix:loss=0.894
-(autoscaler +1h33m58s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h33m58s) Resized to 8280 CPUs, 276 TPUs.
-(autoscaler +1h34m13s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h34m13s) Resized to 8280 CPUs, 276 TPUs.
-(autoscaler +1h34m28s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h34m28s) Resized to 8280 CPUs, 276 TPUs.
-(autoscaler +1h34m44s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h34m44s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24578, ip=10.164.2.9) 2026-02-05T01:24:25 - 48 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.2s/it remaining:13:16:01 elapsed:1:29:41 postfix:loss=1 [repeated 63x across cluster]
-(autoscaler +1h35m4s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h35m4s) Resized to 8280 CPUs, 276 TPUs.
-(autoscaler +1h35m39s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h35m39s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24566, ip=10.164.2.0) 2026-02-05T01:25:26 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.0s/it remaining:11:21:51 elapsed:1:30:41 postfix:loss=0.887 [repeated 64x across cluster]
-(<lambda> pid=24122, ip=10.164.2.72) 2026-02-05T01:26:00 - 1 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 143481.
-(<lambda> pid=24122, ip=10.164.2.72) 2026-02-05T01:26:00 - 1 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 143481 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143481
-(<lambda> pid=24634, ip=10.164.2.44) 2026-02-05T01:25:26 - 60 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 143kit/184kit rate:1.0s/it remaining:11:21:52 elapsed:1:30:41 postfix:loss=0.887 [repeated 63x across cluster]
-(<lambda> pid=24349, ip=10.164.2.54) 2026-02-05T01:26:00 - 19 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143481 for step 143481
-(autoscaler +1h36m35s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h36m35s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24905, ip=10.164.0.248) 2026-02-05T01:26:00 - 6 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 143481. [repeated 63x across cluster]
-(<lambda> pid=24905, ip=10.164.0.248) 2026-02-05T01:26:00 - 6 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 143481 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143481 [repeated 63x across cluster]
-(<lambda> pid=24634, ip=10.164.2.44) 2026-02-05T01:26:26 - 60 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 144kit/184kit rate:1.0it/s remaining:11:01:43 elapsed:1:31:42 postfix:loss=0.913
-(<lambda> pid=25311, ip=10.164.0.251) 2026-02-05T01:26:00 - 7 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143481 for step 143481 [repeated 63x across cluster]
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:26:26 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 144kit/184kit rate:1.0it/s remaining:11:01:44 elapsed:1:31:42 postfix:loss=0.913
-(<lambda> pid=24726, ip=10.164.2.98) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
-(autoscaler +1h37m6s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h37m6s) Resized to 8280 CPUs, 276 TPUs.
-(autoscaler +1h37m40s) Adding 3 node(s) of type tpu_worker.
-(autoscaler +1h37m40s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24377, ip=10.164.0.253) 2026-02-05T01:27:27 - 15 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 144kit/184kit rate:1.0it/s remaining:11:12:44 elapsed:1:32:42 postfix:loss=0.959 [repeated 63x across cluster]
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:27:46 - 0 - levanter.data.image - image.py:2574 - INFO :: Loading shard 1: 0064_parquet
-(<lambda> pid=24470, ip=10.164.2.70) 2026-02-05T01:27:27 - 62 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 144kit/184kit rate:1.0it/s remaining:11:12:44 elapsed:1:32:42 postfix:loss=0.959 [repeated 63x across cluster]
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:28:24 - 0 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 1 (5002 rows) in 38.04s
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:28:24 - 0 - levanter.data.image - image.py:2548 - INFO :: Loading shard 2: 0128_parquet
-(<lambda> pid=24975, ip=10.164.2.93) 2026-02-05T01:28:27 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 144kit/184kit rate:1.0s/it remaining:11:19:13 elapsed:1:33:43 postfix:loss=0.923
-(autoscaler +1h38m59s) Adding 3 node(s) of type tpu_worker.
-(autoscaler +1h38m59s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:28:47 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143481 for step 143481
-(<lambda> pid=24377, ip=10.164.0.253) 2026-02-05T01:28:27 - 15 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 144kit/184kit rate:1.0s/it remaining:11:19:13 elapsed:1:33:43 postfix:loss=0.923 [repeated 63x across cluster]
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:28:47 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001 after saving new checkpoint.
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:28:47 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:28:47 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:28:47 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-143001 in 0.28 seconds
-(<lambda> pid=25925, ip=10.164.2.59) 2026-02-05T01:28:56 - 0 - levanter.data.image - image.py:2553 - INFO :: Loaded shard 2 (4975 rows) in 31.62s
-(<lambda> pid=24765, ip=10.164.2.68) 2026-02-05T01:29:17 - 63 - levanter.data.image - image.py:2574 - INFO :: Loading shard 1: 0127_parquet
-(autoscaler +1h39m38s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h39m38s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24811, ip=10.164.2.69) 2026-02-05T01:29:25 - 31 - levanter.data.image - image.py:2574 - INFO :: Loading shard 1: 0095_parquet [repeated 2x across cluster]
-(<lambda> pid=24864, ip=10.164.2.96) 2026-02-05T01:29:27 - 38 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 144kit/184kit rate:1.0s/it remaining:11:24:53 elapsed:1:34:43 postfix:loss=1.01
-(<lambda> pid=24820, ip=10.164.2.63) 2026-02-05T01:29:33 - 21 - levanter.data.image - image.py:2574 - INFO :: Loading shard 1: 0085_parquet [repeated 3x across cluster]
-(<lambda> pid=24349, ip=10.164.2.54) 2026-02-05T01:29:27 - 19 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 144kit/184kit rate:1.0s/it remaining:11:24:53 elapsed:1:34:43 postfix:loss=1.01 [repeated 63x across cluster]
-(autoscaler +1h39m53s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +1h39m53s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24634, ip=10.164.2.44) 2026-02-05T01:29:40 - 60 - levanter.data.image - image.py:2574 - INFO :: Loading shard 1: 0124_parquet [repeated 5x across cluster]
-(autoscaler +1h40m6s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h40m6s) Resized to 8280 CPUs, 276 TPUs.
-(<lambda> pid=24608, ip=10.164.0.254) 2026-02-05T01:29:48 - 26 - levanter.data.image - image.py:2574 - INFO :: Loading shard 1: 0090_parquet [repeated 11x across cluster]
-(<lambda> pid=24696, ip=10.164.2.97) 2026-02-05T01:29:48 - 35 - levanter.data.image - image.py:2578 - INFO :: Loaded shard 1 (5070 rows) in 30.74s
+(autoscaler +1h25m21s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h25m21s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=2126, ip=10.164.2.107) 2026-02-05T13:10:11 - 0 - levanter.data.image - image.py:2437 - INFO :: Initializing streaming dataset (step-based mode)...
+(<lambda> pid=2126, ip=10.164.2.107) 2026-02-05T13:10:11 - 0 - levanter.data.image - image.py:2447 - INFO :: Found 9437 total shards in 0.00s
+(<lambda> pid=2126, ip=10.164.2.107) 2026-02-05T13:10:11 - 0 - levanter.data.image - image.py:2456 - INFO :: Worker 0/64: assigned 148 shards (indices 0, 64, ...)
+(<lambda> pid=2126, ip=10.164.2.107) 2026-02-05T13:10:11 - 0 - levanter.data.image - image.py:3511 - INFO :: Built streaming dataset for train (train): streaming mode
+(<lambda> pid=2124, ip=10.164.2.110) 2026-02-05T12:54:47 - 45 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-146000 [repeated 63x across cluster]
+(autoscaler +1h25m41s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h25m41s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=2124, ip=10.164.2.63) 2026-02-05T13:10:12 - 3 - levanter.main.train_vlm - train_vlm.py:683 - INFO :: Using max_num_patches=0 from model config
+(<lambda> pid=2124, ip=10.164.2.63) 2026-02-05T13:10:12 - 3 - levanter.main.train_vlm - train_vlm.py:691 - INFO :: Using config-based image shape: C=3, H=384, W=384
+(<lambda> pid=2124, ip=10.164.2.63) 2026-02-05T13:10:12 - 3 - levanter.main.train_vlm - train_vlm.py:702 - INFO :: Using compute dtype <class 'jax.numpy.bfloat16'> for pixel values
+(<lambda> pid=2125, ip=10.164.2.21) 2026-02-05T13:10:12 - 54 - levanter.main.train_vlm - train_vlm.py:711 - INFO :: Using VLM checkpoint vocab size 151936 (tokenizer has 151669)
+(<lambda> pid=2125, ip=10.164.2.100) 2026-02-05T13:10:23 - 27 - levanter.checkpoint - checkpoint.py:452 - INFO :: Loading checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-146000
+(<lambda> pid=2125, ip=10.164.2.100) 2026-02-05T13:10:12 - 27 - levanter.data.image - image.py:2437 - INFO :: Initializing streaming dataset (step-based mode)... [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.100) 2026-02-05T13:10:12 - 27 - levanter.data.image - image.py:2447 - INFO :: Found 9437 total shards in 0.00s [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.100) 2026-02-05T13:10:12 - 27 - levanter.data.image - image.py:2456 - INFO :: Worker 27/64: assigned 148 shards (indices 27, 91, ...) [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.100) 2026-02-05T13:10:12 - 27 - levanter.data.image - image.py:3511 - INFO :: Built streaming dataset for train (train): streaming mode [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.100) 2026-02-05T13:10:23 - 27 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-146000
+(<lambda> pid=2125, ip=10.164.2.45) 2026-02-05T13:10:12 - 20 - levanter.main.train_vlm - train_vlm.py:683 - INFO :: Using max_num_patches=0 from model config [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.45) 2026-02-05T13:10:12 - 20 - levanter.main.train_vlm - train_vlm.py:691 - INFO :: Using config-based image shape: C=3, H=384, W=384 [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.45) 2026-02-05T13:10:12 - 20 - levanter.main.train_vlm - train_vlm.py:702 - INFO :: Using compute dtype <class 'jax.numpy.bfloat16'> for pixel values [repeated 63x across cluster]
+(<lambda> pid=2126, ip=10.164.2.31) 2026-02-05T13:10:13 - 43 - levanter.main.train_vlm - train_vlm.py:711 - INFO :: Using VLM checkpoint vocab size 151936 (tokenizer has 151669) [repeated 63x across cluster]
+(<lambda> pid=2124, ip=10.164.2.42) 2026-02-05T13:10:23 - 4 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-146000
+(<lambda> pid=2124, ip=10.164.2.42) 2026-02-05T13:10:23 - 4 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2124, ip=10.164.2.42) 2026-02-05T13:10:23 - 4 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2124, ip=10.164.2.42) 2026-02-05T13:10:23 - 4 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2124, ip=10.164.2.42) 2026-02-05T13:10:23 - 4 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2124, ip=10.164.2.42) 2026-02-05T13:10:23 - 4 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2124, ip=10.164.2.42) 2026-02-05T13:10:23 - 4 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2125, ip=10.164.2.16) I0205 13:10:23.361170    3777 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
+(autoscaler +1h25m57s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h25m57s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=2127, ip=10.164.2.28) 2026-02-05T13:10:31 - 14 - levanter.main.train_vlm - train_vlm.py:810 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory.
+(<lambda> pid=2125, ip=10.164.2.108) 2026-02-05T13:10:23 - 34 - levanter.checkpoint - checkpoint.py:452 - INFO :: Loading checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-146000 [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.108) 2026-02-05T13:10:23 - 34 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-146000 [repeated 62x across cluster]
+(<lambda> pid=2126, ip=10.164.2.29) 2026-02-05T13:10:23 - 52 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'> [repeated 2746x across cluster]
+(<lambda> pid=2125, ip=10.164.2.33) I0205 13:10:23.373025    3742 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 63x across cluster]
+(<lambda> pid=2126, ip=10.164.2.109) 2026-02-05T13:10:31 - 55 - levanter.main.train_vlm - train_vlm.py:870 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16)
+(<lambda> pid=2125, ip=10.164.2.20) 2026-02-05T13:10:32 - 42 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
+(<lambda> pid=2127, ip=10.164.2.55) wandb: 
+(<lambda> pid=2127, ip=10.164.2.55) wandb: Run summary:
+(<lambda> pid=2127, ip=10.164.2.55) wandb:                                 backend tpu
+(<lambda> pid=2127, ip=10.164.2.55) wandb:                             num_devices 256
+(<lambda> pid=2127, ip=10.164.2.55) wandb:                               num_hosts 64
+(<lambda> pid=2127, ip=10.164.2.55) wandb:                         parameter_count 2140151024
+(<lambda> pid=2127, ip=10.164.2.55) wandb:                  throughput/device_kind TPU v5 lite
+(<lambda> pid=2127, ip=10.164.2.55) wandb:            throughput/theoretical_flops 5.0432e+16
+(<lambda> pid=2127, ip=10.164.2.55) wandb: throughput/theoretical_flops_per_device 197000000000000.0
+(<lambda> pid=2127, ip=10.164.2.55) wandb: 
+(<lambda> pid=2127, ip=10.164.2.55) wandb: You can sync this run to the cloud by running:
+(<lambda> pid=2127, ip=10.164.2.55) wandb: wandb sync /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/wandb/offline-run-20260205_125433-vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f
+(<lambda> pid=2127, ip=10.164.2.55) wandb: Find logs at: ./wandb/offline-run-20260205_125433-vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/logs
+(<lambda> pid=2125, ip=10.164.2.59) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f133c317600>
+(<lambda> pid=2125, ip=10.164.2.59) Traceback (most recent call last):
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=2125, ip=10.164.2.59)     conn.teardown(hooks.exit_code)
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=2125, ip=10.164.2.59)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=2125, ip=10.164.2.59)     return future.result()
+(<lambda> pid=2125, ip=10.164.2.59)            ^^^^^^^^^^^^^^^
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=2125, ip=10.164.2.59)     return self.__get_result()
+(<lambda> pid=2125, ip=10.164.2.59)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=2125, ip=10.164.2.59)     raise self._exception
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=2125, ip=10.164.2.59)     return await fn()
+(<lambda> pid=2125, ip=10.164.2.59)            ^^^^^^^^^^
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=2125, ip=10.164.2.59)     await self._client.close()
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=2125, ip=10.164.2.59)     await self._writer.wait_closed()
+(<lambda> pid=2125, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=2125, ip=10.164.2.59)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=2125, ip=10.164.2.59) BrokenPipeError: [Errno 32] Broken pipe
+(<lambda> pid=2124, ip=10.164.2.44)   
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2126, ip=10.164.2.66)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2194, ip=10.164.2.96)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2127, ip=10.164.2.28)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.95)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2124, ip=10.164.2.63)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2128, ip=10.164.2.93)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2126, ip=10.164.2.109)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.59)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2124, ip=10.164.2.42)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2123, ip=10.164.2.92)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.100)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.20)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.30)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2126, ip=10.164.2.65)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2124, ip=10.164.2.32)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2126, ip=10.164.2.24)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.68)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.103)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2126, ip=10.164.2.67)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.47)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.102)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.49)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2127, ip=10.164.2.55)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.22)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2087, ip=10.164.2.37)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2127, ip=10.164.15.210)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2124, ip=10.164.2.44)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2126, ip=10.164.2.36)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.38)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.35)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2126, ip=10.164.2.15)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.99)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.16)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.21)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2126, ip=10.164.2.71)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.73)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2124, ip=10.164.2.64)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(SliceActor pid=2050, ip=10.164.2.96) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2125, ip=10.164.2.27)
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2050, ip=10.164.2.96)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2050, ip=10.164.2.96)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main
+(SliceActor pid=2050, ip=10.164.2.96)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items)
+(SliceActor pid=2050, ip=10.164.2.96)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset
+(SliceActor pid=2050, ip=10.164.2.96)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0
+(SliceActor pid=2050, ip=10.164.2.96)     ~~~~~~^^^
+(SliceActor pid=2050, ip=10.164.2.96)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem
+(SliceActor pid=2050, ip=10.164.2.96)     raise TypeError(msg.format(type(self)))
+(SliceActor pid=2050, ip=10.164.2.96) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html
+(<lambda> pid=2126, ip=10.164.2.107) wandb: ERROR Problem finishing run
+(run_on_pod_ray pid=2034, ip=10.164.0.43) Task error ray::<lambda>() (pid=2126, ip=10.164.2.66)
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     return func(*args, **kwargs)
+(run_on_pod_ray pid=2034, ip=10.164.0.43)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=2034, ip=10.164.0.43) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=2126, ip=10.164.2.66)
+(run_on_pod_ray pid=2034, ip=10.164.0.43) Failed 1 times. Continuing to retry.
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     return func(*args, **kwargs)
+(run_on_pod_ray pid=2034, ip=10.164.0.43)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=2034, ip=10.164.0.43) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=2126, ip=10.164.2.66)
+(<lambda> pid=2126, ip=10.164.2.68) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=2126, ip=10.164.2.14) 2026-02-05T13:10:31 - 46 - levanter.main.train_vlm - train_vlm.py:810 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory. [repeated 63x across cluster]
+(<lambda> pid=2127, ip=10.164.2.28) 2026-02-05T13:10:31 - 14 - levanter.main.train_vlm - train_vlm.py:870 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16) [repeated 63x across cluster]
+(<lambda> pid=2126, ip=10.164.2.107) 2026-02-05T13:10:32 - 0 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run... [repeated 63x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb:  [repeated 124x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb: Run summary: [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb:                                 backend tpu [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb:                             num_devices 256 [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb:                               num_hosts 64 [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb:                         parameter_count 2140151024 [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb:                  throughput/device_kind TPU v5 lite [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb:            throughput/theoretical_flops 5.0432e+16 [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb: throughput/theoretical_flops_per_device 197000000000000.0 [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb: You can sync this run to the cloud by running: [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb: wandb sync /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/wandb/offline-run-20260205_125433-vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f [repeated 62x across cluster]
+(<lambda> pid=2124, ip=10.164.2.110) wandb: Find logs at: ./wandb/offline-run-20260205_125433-vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/logs [repeated 62x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f1327687560> [repeated 37x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43) Traceback (most recent call last): [repeated 39x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     conn.teardown(hooks.exit_code) [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     self._asyncer.run(publish_teardown_and_close) [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     return future.result() [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)            ^^^^^^^^^^^^^^^ [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     return self.__get_result() [repeated 37x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 41x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     raise self._exception [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     return await fn() [repeated 37x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)                                                  ^^^^^^^^^^ [repeated 39x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     await self._client.close() [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     await self._writer.wait_closed() [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66)     await self._protocol._get_close_waiter(self) [repeated 37x across cluster]
+(<lambda> pid=2126, ip=10.164.2.66) BrokenPipeError: [Errno 32] Broken pipe [repeated 37x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/main/train_vlm.py", line 879, in main [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     per_ds_items = train_dataset_mixture.cumulative_items_per_dataset(total_items) [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/lib/levanter/src/levanter/data/mixture.py", line 334, in cumulative_items_per_dataset [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     result[i] += int(remainder * counts[i] / total_in_block) if total_in_block > 0 else 0 [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     ~~~~~~^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/numpy/array_methods.py", line 617, in _unimplemented_setitem [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43)     raise TypeError(msg.format(type(self))) [repeated 3x across cluster]
+(run_on_pod_ray pid=2034, ip=10.164.0.43) TypeError: JAX arrays are immutable and do not support in-place item assignment. Instead of x[idx] = y, use x = x.at[idx].set(y) or another .at[] method: https://docs.jax.dev/en/latest/_autosummary/jax.numpy.ndarray.at.html [repeated 3x across cluster]
+(<lambda> pid=2127, ip=10.164.2.55) F0205 13:10:42.147364    2127 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: INTERNAL: Failed to disconnect from coordination service with status: INTERNAL: Shutdown barrier has failed.
+(<lambda> pid=2127, ip=10.164.2.55) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:17 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x11']. Barrier Id: Shutdown::12114657740190079596::0, Task: /job:jax_worker/replica:0/task:17 [type.googleapis.com/tensorflow.BarrierError='\n\x1eShutdown::12114657740190079596'] [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(<lambda> pid=2127, ip=10.164.2.55) 
+(<lambda> pid=2127, ip=10.164.2.55) RPC: /tensorflow.CoordinationService/ShutdownTask [type.googleapis.com/tensorflow.CoordinationServiceError='']Proceeding with agent shutdown anyway. This is usually caused by an earlier error during execution. Check the logs of (a) this task, (b) the leader (usually slice 0 task 0) and (c) the scheduler (e.g. preemption, eviction) for an earlier error to debug further. [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(<lambda> pid=2125, ip=10.164.2.16) 
+(<lambda> pid=2125, ip=10.164.2.30) 
+(<lambda> pid=2126, ip=10.164.2.15) 
+(<lambda> pid=2124, ip=10.164.2.32) 
+(<lambda> pid=2125, ip=10.164.2.35) 
+(<lambda> pid=2125, ip=10.164.2.49) 
+(<lambda> pid=2125, ip=10.164.2.99) 
+(<lambda> pid=2124, ip=10.164.2.63) 
+(<lambda> pid=2125, ip=10.164.2.100) 
+(<lambda> pid=2124, ip=10.164.2.42) 
+(<lambda> pid=2127, ip=10.164.15.210) 
+(<lambda> pid=2087, ip=10.164.2.37) 
+(<lambda> pid=2125, ip=10.164.2.103) 
+(<lambda> pid=2126, ip=10.164.2.36) 
+(<lambda> pid=2125, ip=10.164.2.95) 
+(<lambda> pid=2125, ip=10.164.2.59) 
+(<lambda> pid=2126, ip=10.164.2.24) 
+(<lambda> pid=2124, ip=10.164.2.44) 
+(<lambda> pid=2125, ip=10.164.2.38) 
+(<lambda> pid=2124, ip=10.164.2.64) 
+(<lambda> pid=2125, ip=10.164.2.73) 
+(<lambda> pid=2126, ip=10.164.2.67) 
+(<lambda> pid=2194, ip=10.164.2.96) E0205 13:10:42.146243    2376 coordination_service.cc:681] /job:jax_worker/replica:0/task:17 unexpectedly tried to connect with a different incarnation. It has likely restarted.
+(<lambda> pid=2194, ip=10.164.2.96) 
+(<lambda> pid=2125, ip=10.164.2.22) 
+(<lambda> pid=2126, ip=10.164.2.65) 
+(<lambda> pid=2127, ip=10.164.2.28) 
+(<lambda> pid=2126, ip=10.164.2.109) 
+(<lambda> pid=2128, ip=10.164.2.93) 
+(<lambda> pid=2125, ip=10.164.2.21) 
+(<lambda> pid=2123, ip=10.164.2.92) 
+(<lambda> pid=2125, ip=10.164.2.102) 
+(<lambda> pid=2126, ip=10.164.2.71) 
+(<lambda> pid=2126, ip=10.164.2.66) 
+(<lambda> pid=2125, ip=10.164.2.68) 
+(<lambda> pid=2125, ip=10.164.2.47) 
+(<lambda> pid=2125, ip=10.164.2.27) 
+(<lambda> pid=2125, ip=10.164.2.20) 
+(autoscaler +1h26m17s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h26m17s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +1h26m33s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h26m33s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=2126, ip=10.164.2.33) 2026-02-05T13:11:10 - 60 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=2127, ip=10.164.2.107) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.20) F0205 13:10:42.148271    2125 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: INTERNAL: Failed to disconnect from coordination service with status: INTERNAL: Shutdown barrier has failed. [repeated 37x across cluster]
+(<lambda> pid=2125, ip=10.164.2.20) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:17 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x11']. Barrier Id: Shutdown::12114657740190079596::0, Task: /job:jax_worker/replica:0/task:17 [type.googleapis.com/tensorflow.BarrierError='\n\x1eShutdown::12114657740190079596'] [type.googleapis.com/tensorflow.CoordinationServiceError=''] [repeated 37x across cluster]
+(<lambda> pid=2125, ip=10.164.2.20) RPC: /tensorflow.CoordinationService/ShutdownTask [type.googleapis.com/tensorflow.CoordinationServiceError='']Proceeding with agent shutdown anyway. This is usually caused by an earlier error during execution. Check the logs of (a) this task, (b) the leader (usually slice 0 task 0) and (c) the scheduler (e.g. preemption, eviction) for an earlier error to debug further. [type.googleapis.com/tensorflow.CoordinationServiceError=''] [repeated 37x across cluster]
+(<lambda> pid=2127, ip=10.164.2.107) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=2125, ip=10.164.2.98) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f.
+(<lambda> pid=2126, ip=10.164.2.33) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=2126, ip=10.164.2.33) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=2126, ip=10.164.2.33) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/wandb/offline-run-20260205_131110-vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f
+(<lambda> pid=2127, ip=10.164.2.107) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=2127, ip=10.164.2.107) wandb: setting up run vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f
+(<lambda> pid=2127, ip=10.164.2.107) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=2127, ip=10.164.2.107) wandb: Resuming run vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f
+(<lambda> pid=2127, ip=10.164.2.107) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
+(<lambda> pid=2127, ip=10.164.2.107) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f
+(<lambda> pid=2126, ip=10.164.2.69) 2026-02-05T13:11:12 - 50 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f
+(<lambda> pid=2127, ip=10.164.2.107) 2026-02-05T13:11:12 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
+(<lambda> pid=2127, ip=10.164.2.107) 2026-02-05T13:11:12 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f
+(<lambda> pid=2127, ip=10.164.2.15) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=2127, ip=10.164.2.107) 2026-02-05T13:11:15 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
+(<lambda> pid=2127, ip=10.164.2.107) 2026-02-05T13:11:15 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f
+(<lambda> pid=2127, ip=10.164.2.24) 2026-02-05T13:11:15 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/184146 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=2125, ip=10.164.2.98) 2026-02-05T13:11:20 - 10 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-146000
+(<lambda> pid=2127, ip=10.164.2.107) 2026-02-05T13:11:14 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 127x across cluster]
+(<lambda> pid=2127, ip=10.164.2.101) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f. [repeated 62x across cluster]
+(<lambda> pid=2127, ip=10.164.2.107) wandb: Tracking run with wandb version 0.24.0 [repeated 63x across cluster]
+(<lambda> pid=2126, ip=10.164.2.108) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 62x across cluster]
+(<lambda> pid=2127, ip=10.164.2.107) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_9a121b5517004c0c/wandb/run-20260205_131111-vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f [repeated 63x across cluster]
+(<lambda> pid=2125, ip=10.164.2.63) 2026-02-05T13:11:15 - 3 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f [repeated 125x across cluster]
+(<lambda> pid=2127, ip=10.164.2.107) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 63x across cluster]
+(<lambda> pid=2127, ip=10.164.2.107) 2026-02-05T13:11:15 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/184146 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(autoscaler +1h26m53s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h26m53s) Resized to 8280 CPUs, 276 TPUs.

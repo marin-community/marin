@@ -309,6 +309,7 @@ class MixtureDataset(AsyncDataset[T]):
         Uses the block-based distribution to compute exact per-dataset counts,
         accounting for multi-stage weight schedules.
         """
+        total_global_items = int(total_global_items)  # Ensure Python int, not JAX scalar
         result = np.zeros(len(self.datasets), dtype=np.int64)
         remaining = total_global_items
 
