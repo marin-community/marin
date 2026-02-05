@@ -42,8 +42,8 @@ To edit this file for your speedrun:
 # nodryrun
 import sys
 import os
-import dataclasses
 import logging
+import dataclasses
 from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Literal
