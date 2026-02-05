@@ -192,7 +192,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             f"model={env.model_id},"
                             f"base_url={env.server_url}/chat/completions,"
                             "tokenizer_backend=huggingface,"
-                            "tokenized_requests=False"
+                            "tokenized_requests=True"
                         )
                     else:
                         lm_eval_model_local = "local-completions"
@@ -200,7 +200,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             f"model={env.model_id},"
                             f"base_url={env.server_url}/completions,"
                             "tokenizer_backend=huggingface,"
-                            "tokenized_requests=False"
+                            "tokenized_requests=True"
                         )
                     if tokenizer is not None:
                         pretrained_args_local += f",tokenizer={tokenizer}"
