@@ -2413,6 +2413,9 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         self._prefetch_thread: Optional[threading.Thread] = None
         self._stop_prefetch = threading.Event()
 
+        # Pipeline start is deferred until first get_batch() call to support seeking
+        self._pipeline_started: bool = False
+
     def _ensure_data_loaded(self):
         """Initialize dataset in step-based mode (no pre-counting of rows).
 
@@ -2460,12 +2463,75 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             self._initialized = True
             self._data_loaded.set()
 
-            # Load first shard
-            if self._shard_names:
-                self._load_current_shard()
+            # NOTE: First shard loading and prefetch thread start are deferred
+            # to _start_pipeline(), which is called on the first get_batch() call.
+            # This allows computing the correct seek position from the indices.
 
-            # Start background prefetch thread
-            self._start_prefetch_thread()
+    def _start_pipeline(self, items_to_skip: int = 0):
+        """Start the data pipeline, optionally seeking to a position first.
+
+        Called on the first get_batch() call. Deferred from _ensure_data_loaded()
+        so that we can compute the seek position from the batch indices.
+        """
+        if self._pipeline_started:
+            return
+        self._pipeline_started = True
+
+        if items_to_skip > 0 and self._shard_names:
+            self._seek_to_item(items_to_skip)
+        elif self._shard_names:
+            self._load_current_shard()
+
+        self._start_prefetch_thread()
+
+    def _seek_to_item(self, items_to_skip: int):
+        """Fast-forward the sequential stream by skipping items.
+
+        Uses shard metadata (row counts) to skip entire shards efficiently,
+        only loading the target shard that contains the seek position.
+        """
+        total_items_in_all_shards = 0
+        shard_row_counts = []
+
+        # First pass: collect row counts using metadata (fast for parquet)
+        for shard_name in self._shard_names:
+            try:
+                num_rows = self.source.shard_num_rows(shard_name)
+            except Exception:
+                # Fallback: load shard to get count (slow)
+                logger.warning(f"shard_num_rows not available for {shard_name}, loading full shard to count")
+                shard_data = list(self.source.open_shard(shard_name))
+                num_rows = len(shard_data)
+            shard_row_counts.append(num_rows)
+            total_items_in_all_shards += num_rows
+
+        if total_items_in_all_shards == 0:
+            logger.warning("No data available for seeking")
+            return
+
+        # Handle wrap-around: if we've consumed more than one full pass, take modulo
+        items_to_skip = items_to_skip % total_items_in_all_shards
+
+        # Second pass: find target shard and row
+        skipped = 0
+        for shard_idx, num_rows in enumerate(shard_row_counts):
+            if items_to_skip < num_rows:
+                self._current_shard_idx = shard_idx
+                self._current_local_idx = items_to_skip
+                self._load_current_shard()
+                logger.info(
+                    f"Seeked to shard {shard_idx}/{len(self._shard_names)}, "
+                    f"row {items_to_skip}/{num_rows} "
+                    f"(skipped {skipped + items_to_skip} total items)"
+                )
+                return
+            items_to_skip -= num_rows
+            skipped += num_rows
+
+        # Should not reach here due to modulo above, but just in case
+        self._current_shard_idx = 0
+        self._current_local_idx = 0
+        self._load_current_shard()
 
     def _load_shard(self, shard_idx: int):
         """Load a specific shard into memory."""
@@ -2616,11 +2682,25 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
     def _get_from_cache_or_process(self, indices: Sequence[int]) -> List[ImageTextDict]:
         """Get items from cache (step-based mode).
 
-        In step-based mode, indices are ignored - we just return batch_size items
-        in sequential order from the cache. Only the prefetch thread produces data
-        to avoid duplicate consumption of the data stream.
+        In step-based mode, we return batch_size items in sequential order from
+        the cache. On the first call, the indices are used to compute how many
+        items to skip (for checkpoint resume support).
         """
         self._ensure_data_loaded()
+
+        # Start the pipeline on first call, using indices to compute seek position
+        if not self._pipeline_started:
+            with self._data_lock:
+                if not self._pipeline_started:
+                    items_to_skip = min(indices) // jax.process_count() if indices else 0
+                    if items_to_skip > 0:
+                        logger.info(
+                            f"First get_batch call with min(indices)={min(indices)}, "
+                            f"process_count={jax.process_count()}, "
+                            f"seeking to item {items_to_skip}"
+                        )
+                    self._start_pipeline(items_to_skip)
+
         batch_size = len(indices)
         results: List[ImageTextDict] = []
 

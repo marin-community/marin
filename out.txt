@@ -1,637 +1,574 @@
-d on the Hugging Face Hub
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since allenai/ai2_arc couldn't be found on the Hugging Face Hub
-(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'ARC-Easy' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:26 2026).
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'ARC-Easy' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:26 2026).
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_easy] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_easy] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:03 - 0 - levanter.eval_harness - eval_harness.py:1086 - INFO :: Loading tasks... [repeated 7x across cluster]
-(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'ARC-Challenge' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:28 2026).
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'ARC-Challenge' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:28 2026).
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_challenge] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_challenge] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:847 - WARNING :: [Task: boolq] metric acc is defined, but aggregation is not. using default aggregation=mean
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:859 - WARNING :: [Task: boolq] metric acc is defined, but higher_is_better is not. using default higher_is_better=True
-(<lambda> pid=14883, ip=10.130.0.103) Using the latest cached version of the dataset since super_glue couldn't be found on the Hugging Face Hub
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since super_glue couldn't be found on the Hugging Face Hub
-(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'boolq' at /home/ray/.cache/huggingface/datasets/super_glue/boolq/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:30 2026).
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'boolq' at /home/ray/.cache/huggingface/datasets/super_glue/boolq/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:30 2026).
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: boolq] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:08 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: boolq] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=14883, ip=10.130.0.103) Using the latest cached version of the dataset since tau/commonsense_qa couldn't be found on the Hugging Face Hub
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:09 - 6 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since tau/commonsense_qa couldn't be found on the Hugging Face Hub
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:09 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: commonsense_qa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:09 - 6 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: commonsense_qa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:10 - 1 - lm_eval.api.task - task.py:847 - WARNING :: [Task: copa] metric acc is defined, but aggregation is not. using default aggregation=mean
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:10 - 1 - lm_eval.api.task - task.py:859 - WARNING :: [Task: copa] metric acc is defined, but higher_is_better is not. using default higher_is_better=True
-(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'copa' at /home/ray/.cache/huggingface/datasets/super_glue/copa/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:35 2026).
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:10 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'copa' at /home/ray/.cache/huggingface/datasets/super_glue/copa/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:35 2026).
-(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:10 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:08 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on: -/15 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since hails/agieval-lsat-ar couldn't be found on the Hugging Face Hub [repeated 7x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:08 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since hails/agieval-lsat-ar couldn't be found on the Hugging Face Hub [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/Rowan___hellaswag/default/0.0.0/218ec52e09a7e7462a5400043bb9a69a41d06b76 (last modified on Tue Feb  3 13:04:06 2026). [repeated 23x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:13 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/Rowan___hellaswag/default/0.0.0/218ec52e09a7e7462a5400043bb9a69a41d06b76 (last modified on Tue Feb  3 13:04:06 2026). [repeated 23x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:08 - 0 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: agieval_lsat_ar] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since allenai/ai2_arc couldn't be found on the Hugging Face Hub [repeated 15x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:08 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since allenai/ai2_arc couldn't be found on the Hugging Face Hub [repeated 15x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'ARC-Easy' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:26 2026). [repeated 7x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:09 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'ARC-Easy' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:26 2026). [repeated 7x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:09 - 0 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_easy] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:15 - 1 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: hellaswag] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:15 - 1 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: hellaswag] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'ARC-Challenge' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:28 2026). [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:10 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'ARC-Challenge' at /home/ray/.cache/huggingface/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453 (last modified on Tue Feb  3 13:03:28 2026). [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:10 - 7 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: arc_challenge] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:10 - 7 - lm_eval.api.task - task.py:847 - WARNING :: [Task: boolq] metric acc is defined, but aggregation is not. using default aggregation=mean [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:10 - 7 - lm_eval.api.task - task.py:859 - WARNING :: [Task: boolq] metric acc is defined, but higher_is_better is not. using default higher_is_better=True [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since super_glue couldn't be found on the Hugging Face Hub [repeated 15x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:12 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since super_glue couldn't be found on the Hugging Face Hub [repeated 15x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'boolq' at /home/ray/.cache/huggingface/datasets/super_glue/boolq/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:31 2026). [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:11 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'boolq' at /home/ray/.cache/huggingface/datasets/super_glue/boolq/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:31 2026). [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:11 - 7 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: boolq] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since tau/commonsense_qa couldn't be found on the Hugging Face Hub [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:11 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since tau/commonsense_qa couldn't be found on the Hugging Face Hub [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:11 - 7 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: commonsense_qa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:12 - 7 - lm_eval.api.task - task.py:847 - WARNING :: [Task: copa] metric acc is defined, but aggregation is not. using default aggregation=mean [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:12 - 7 - lm_eval.api.task - task.py:859 - WARNING :: [Task: copa] metric acc is defined, but higher_is_better is not. using default higher_is_better=True [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'copa' at /home/ray/.cache/huggingface/datasets/super_glue/copa/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:35 2026). [repeated 7x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:12 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'copa' at /home/ray/.cache/huggingface/datasets/super_glue/copa/0.0.0/3de24cf8022e94f4ee4b9d55a6f539891524d646 (last modified on Tue Feb  3 13:03:35 2026). [repeated 7x across cluster]
-(<lambda> pid=14883, ip=10.130.0.103) Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub [repeated 9x across cluster]
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:15 - 6 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub [repeated 9x across cluster]
-(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:19 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4 (last modified on Tue Feb  3 13:03:57 2026). [repeated 9x across cluster]
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:19 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4 (last modified on Tue Feb  3 13:03:57 2026). [repeated 9x across cluster]
-(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since openbookqa couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:19 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since openbookqa couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'main' at /home/ray/.cache/huggingface/datasets/openbookqa/main/0.0.0/388097ea7776314e93a529163e0fea805b8a6454 (last modified on Tue Feb  3 13:04:00 2026).
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:19 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'main' at /home/ray/.cache/huggingface/datasets/openbookqa/main/0.0.0/388097ea7776314e93a529163e0fea805b8a6454 (last modified on Tue Feb  3 13:04:00 2026).
-(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since baber/piqa couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:20 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since baber/piqa couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:20 - 1 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: piqa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:20 - 1 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: piqa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule.
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:19 - 7 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: hellaswag] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 14x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:17 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since Rowan/hellaswag couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the module from /home/ray/.cache/huggingface/modules/datasets_modules/datasets/winograd_wsc/0651311f3b6dda14889d9a063030a02458395ee50ab9f41cca4cd5a89c0c3dce (last modified on Tue Feb  3 13:04:04 2026) since it couldn't be found locally at winograd_wsc, or remotely on the Hugging Face Hub.
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:21 - 1 - datasets.load - load.py:1340 - WARNING :: Using the latest cached version of the module from /home/ray/.cache/huggingface/modules/datasets_modules/datasets/winograd_wsc/0651311f3b6dda14889d9a063030a02458395ee50ab9f41cca4cd5a89c0c3dce (last modified on Tue Feb  3 13:04:04 2026) since it couldn't be found locally at winograd_wsc, or remotely on the Hugging Face Hub.
-(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since winogrande couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:21 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since winogrande couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'winogrande_xl' at /home/ray/.cache/huggingface/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5 (last modified on Tue Feb  3 13:04:08 2026).
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:21 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'winogrande_xl' at /home/ray/.cache/huggingface/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5 (last modified on Tue Feb  3 13:04:08 2026).
-(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'logical_fallacies' at /home/ray/.cache/huggingface/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:11 2026).
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'logical_fallacies' at /home/ray/.cache/huggingface/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:11 2026).
-(<lambda> pid=15019, ip=10.130.0.110) Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub
-(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'moral_disputes' at /home/ray/.cache/huggingface/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:13 2026).
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'moral_disputes' at /home/ray/.cache/huggingface/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:13 2026).
-(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'formal_logic' at /home/ray/.cache/huggingface/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:14 2026).
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:23 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'formal_logic' at /home/ray/.cache/huggingface/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:14 2026).
-(<lambda> pid=15019, ip=10.130.0.110) Found the latest cached dataset configuration 'high_school_european_history' at /home/ray/.cache/huggingface/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:16 2026).
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:24 - 1 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'high_school_european_history' at /home/ray/.cache/huggingface/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:16 2026).
-(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:20 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/baber___piqa/default/0.0.0/142f6d7367fd9877f0fb3b5734ea6a545f54cdd1 (last modified on Tue Feb  3 13:04:02 2026). [repeated 13x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/baber___piqa/default/0.0.0/142f6d7367fd9877f0fb3b5734ea6a545f54cdd1 (last modified on Tue Feb  3 13:04:02 2026). [repeated 13x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since openbookqa couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since openbookqa couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'main' at /home/ray/.cache/huggingface/datasets/openbookqa/main/0.0.0/388097ea7776314e93a529163e0fea805b8a6454 (last modified on Tue Feb  3 13:03:59 2026). [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'main' at /home/ray/.cache/huggingface/datasets/openbookqa/main/0.0.0/388097ea7776314e93a529163e0fea805b8a6454 (last modified on Tue Feb  3 13:03:59 2026). [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since baber/piqa couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since baber/piqa couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:21 - 0 - lm_eval.api.task - task.py:1063 - WARNING :: [Task: piqa] num_fewshot > 0 but fewshot_split is None. using preconfigured rule. [repeated 12x across cluster]
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:25 - 1 - levanter.eval_harness - eval_harness.py:1116 - ERROR :: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-(<lambda> pid=15019, ip=10.130.0.110) Traceback (most recent call last):
-(<lambda> pid=15019, ip=10.130.0.110)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1110, in to_task_dict
-(<lambda> pid=15019, ip=10.130.0.110)     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
-(<lambda> pid=15019, ip=10.130.0.110)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
-(<lambda> pid=15019, ip=10.130.0.110)     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
-(<lambda> pid=15019, ip=10.130.0.110)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
-(<lambda> pid=15019, ip=10.130.0.110)     return load_fn(*args, **kwargs)
-(<lambda> pid=15019, ip=10.130.0.110)            ^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
-(<lambda> pid=15019, ip=10.130.0.110)     **task_manager.load_config(config=task_element),
-(<lambda> pid=15019, ip=10.130.0.110)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
-(<lambda> pid=15019, ip=10.130.0.110)     return self._load_individual_task_or_group(config)
-(<lambda> pid=15019, ip=10.130.0.110)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
-(<lambda> pid=15019, ip=10.130.0.110)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
-(<lambda> pid=15019, ip=10.130.0.110)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
-(<lambda> pid=15019, ip=10.130.0.110)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
-(<lambda> pid=15019, ip=10.130.0.110)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
-(<lambda> pid=15019, ip=10.130.0.110)     return _load_task(task_config, task=name)
-(<lambda> pid=15019, ip=10.130.0.110)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
-(<lambda> pid=15019, ip=10.130.0.110)     task_object = ConfigurableTask(config=config)
-(<lambda> pid=15019, ip=10.130.0.110)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
-(<lambda> pid=15019, ip=10.130.0.110)     self.download(self.config.dataset_kwargs)
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
-(<lambda> pid=15019, ip=10.130.0.110)     self.dataset = datasets.load_dataset(
-(<lambda> pid=15019, ip=10.130.0.110)                    ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
-(<lambda> pid=15019, ip=10.130.0.110)     builder_instance = load_dataset_builder(
-(<lambda> pid=15019, ip=10.130.0.110)                        ^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
-(<lambda> pid=15019, ip=10.130.0.110)     builder_instance: DatasetBuilder = builder_cls(
-(<lambda> pid=15019, ip=10.130.0.110)                                        ^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__
-(<lambda> pid=15019, ip=10.130.0.110)     config_name, version, hash = _find_hash_in_cache(
-(<lambda> pid=15019, ip=10.130.0.110)                                  ^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
-(<lambda> pid=15019, ip=10.130.0.110)     raise ValueError(
-(<lambda> pid=15019, ip=10.130.0.110) ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
-(<lambda> pid=15019, ip=10.130.0.110) Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:25 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on: 13.0it/15.0it rate:1.2s/it remaining:00:02 elapsed:00:18 postfix:-
-(<lambda> pid=15019, ip=10.130.0.110) 2026-02-03T13:05:25 - 1 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
-(<lambda> pid=15019, ip=10.130.0.110) wandb: 
-(<lambda> pid=15019, ip=10.130.0.110) wandb: Run summary:
-(<lambda> pid=15019, ip=10.130.0.110) wandb:                                 backend tpu
-(<lambda> pid=15019, ip=10.130.0.110) wandb:                             num_devices 32
-(<lambda> pid=15019, ip=10.130.0.110) wandb:                               num_hosts 8
-(<lambda> pid=15019, ip=10.130.0.110) wandb:                         parameter_count 1235814400
-(<lambda> pid=15019, ip=10.130.0.110) wandb:                  throughput/device_kind TPU v4
-(<lambda> pid=15019, ip=10.130.0.110) wandb:            throughput/flops_per_example 37044092928000.0
-(<lambda> pid=15019, ip=10.130.0.110) wandb:            throughput/theoretical_flops 8800000000000000.0
-(<lambda> pid=15019, ip=10.130.0.110) wandb: throughput/theoretical_flops_per_device 275000000000000.0
-(<lambda> pid=15019, ip=10.130.0.110) wandb: 
-(<lambda> pid=15019, ip=10.130.0.110) wandb: You can sync this run to the cloud by running:
-(<lambda> pid=15019, ip=10.130.0.110) wandb: wandb sync /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/wandb/offline-run-20260203_130436-unified-language-only-llama-1b-tootsie-1e20-2
-(<lambda> pid=15019, ip=10.130.0.110) wandb: Find logs at: ./wandb/offline-run-20260203_130436-unified-language-only-llama-1b-tootsie-1e20-2/logs
-(SliceActor pid=15273, ip=10.130.0.73) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(SliceActor pid=15273, ip=10.130.0.73) 
-(SliceActor pid=15273, ip=10.130.0.73) The above exception was the direct cause of the following exception:
-(SliceActor pid=15273, ip=10.130.0.73) 
-(SliceActor pid=15273, ip=10.130.0.73) ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(SliceActor pid=15273, ip=10.130.0.73)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=15273, ip=10.130.0.73)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=15273, ip=10.130.0.73)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=15273, ip=10.130.0.73)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
-(SliceActor pid=15273, ip=10.130.0.73)     levanter.eval_harness.lm_eval_harness(
-(SliceActor pid=15273, ip=10.130.0.73)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
-(SliceActor pid=15273, ip=10.130.0.73)     tasks_to_run = config.to_task_dict()
-(SliceActor pid=15273, ip=10.130.0.73)     raise ValueError(f"Failed to load task {task}") from e
-(SliceActor pid=15273, ip=10.130.0.73) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-(run_on_pod_ray pid=99553, ip=10.130.0.136) Task error ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(run_on_pod_ray pid=99553, ip=10.130.0.136) 
-(run_on_pod_ray pid=99553, ip=10.130.0.136) 
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=99553, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return func(*args, **kwargs)
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(run_on_pod_ray pid=99553, ip=10.130.0.136) 
-(run_on_pod_ray pid=99553, ip=10.130.0.136) 
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(<lambda> pid=15019, ip=10.130.0.110) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f26b824f060>
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=15019, ip=10.130.0.110)     conn.teardown(hooks.exit_code)
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=15019, ip=10.130.0.110)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
-(<lambda> pid=15019, ip=10.130.0.110)     return future.result()
-(<lambda> pid=15019, ip=10.130.0.110)            ^^^^^^^^^^^^^^^
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=15019, ip=10.130.0.110)     return self.__get_result()
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=15019, ip=10.130.0.110)     raise self._exception
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=15019, ip=10.130.0.110)     return await fn()
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=15019, ip=10.130.0.110)     await self._client.close()
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=15019, ip=10.130.0.110)     await self._writer.wait_closed()
-(<lambda> pid=15019, ip=10.130.0.110)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=15019, ip=10.130.0.110)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=15019, ip=10.130.0.110) BrokenPipeError: [Errno 32] Broken pipe
-(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the module from /home/ray/.cache/huggingface/modules/datasets_modules/datasets/winograd_wsc/0651311f3b6dda14889d9a063030a02458395ee50ab9f41cca4cd5a89c0c3dce (last modified on Tue Feb  3 13:04:03 2026) since it couldn't be found locally at winograd_wsc, or remotely on the Hugging Face Hub. [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:22 - 0 - datasets.load - load.py:1340 - WARNING :: Using the latest cached version of the module from /home/ray/.cache/huggingface/modules/datasets_modules/datasets/winograd_wsc/0651311f3b6dda14889d9a063030a02458395ee50ab9f41cca4cd5a89c0c3dce (last modified on Tue Feb  3 13:04:03 2026) since it couldn't be found locally at winograd_wsc, or remotely on the Hugging Face Hub. [repeated 6x across cluster]
-(<lambda> pid=15019, ip=10.130.0.110) E0203 13:05:27.661509   17211 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=15019, ip=10.130.0.110) F0203 13:05:27.661552   17211 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=15019, ip=10.130.0.110) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=15019, ip=10.130.0.110) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
-(<lambda> pid=14944, ip=10.130.0.72) Using the latest cached version of the dataset since winogrande couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:22 - 0 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since winogrande couldn't be found on the Hugging Face Hub [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'winogrande_xl' at /home/ray/.cache/huggingface/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5 (last modified on Tue Feb  3 13:04:08 2026). [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:22 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'winogrande_xl' at /home/ray/.cache/huggingface/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5 (last modified on Tue Feb  3 13:04:08 2026). [repeated 6x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136) Failed 2 times. Continuing to retry.
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return func(*args, **kwargs)
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(run_on_pod_ray pid=99553, ip=10.130.0.136) 
-(run_on_pod_ray pid=99553, ip=10.130.0.136) 
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(<lambda> pid=15441, ip=10.130.0.73) Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub [repeated 20x across cluster]
-(<lambda> pid=15441, ip=10.130.0.73) 2026-02-03T13:05:25 - 5 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since cais/mmlu couldn't be found on the Hugging Face Hub [repeated 20x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'logical_fallacies' at /home/ray/.cache/huggingface/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:11 2026). [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:24 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'logical_fallacies' at /home/ray/.cache/huggingface/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:11 2026). [repeated 6x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136) Failed too many times
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return func(*args, **kwargs)
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(run_on_pod_ray pid=99553, ip=10.130.0.136) 
-(run_on_pod_ray pid=99553, ip=10.130.0.136) 
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(raylet, ip=10.130.0.61) [2026-02-03 13:05:32,886 E 5488 5488] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(<lambda> pid=14944, ip=10.130.0.72) Found the latest cached dataset configuration 'moral_disputes' at /home/ray/.cache/huggingface/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:12 2026). [repeated 6x across cluster]
-(<lambda> pid=14944, ip=10.130.0.72) 2026-02-03T13:05:24 - 0 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'moral_disputes' at /home/ray/.cache/huggingface/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:12 2026). [repeated 6x across cluster]
-(<lambda> pid=15441, ip=10.130.0.73) Found the latest cached dataset configuration 'formal_logic' at /home/ray/.cache/huggingface/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:13 2026). [repeated 4x across cluster]
-(<lambda> pid=15441, ip=10.130.0.73) 2026-02-03T13:05:25 - 5 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'formal_logic' at /home/ray/.cache/huggingface/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:13 2026). [repeated 4x across cluster]
-(<lambda> pid=14883, ip=10.130.0.103) Found the latest cached dataset configuration 'high_school_european_history' at /home/ray/.cache/huggingface/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:14 2026).
-(<lambda> pid=14883, ip=10.130.0.103) 2026-02-03T13:05:24 - 6 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'high_school_european_history' at /home/ray/.cache/huggingface/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe (last modified on Tue Feb  3 13:04:14 2026).
-(<lambda> pid=17510, ip=10.130.0.64) Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:25 - 7 - datasets.load - load.py:1377 - WARNING :: Using the latest cached version of the dataset since EleutherAI/lambada_openai couldn't be found on the Hugging Face Hub
-(<lambda> pid=17510, ip=10.130.0.64) Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4 (last modified on Tue Feb  3 13:04:13 2026).
-(<lambda> pid=17510, ip=10.130.0.64) 2026-02-03T13:05:26 - 7 - datasets.packaged_modules.cache.cache - cache.py:94 - WARNING :: Found the latest cached dataset configuration 'default' at /home/ray/.cache/huggingface/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4 (last modified on Tue Feb  3 13:04:13 2026).
-(run_on_pod_ray pid=99553, ip=10.130.0.136) Traceback (most recent call last): [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager) [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return load_fn(*args, **kwargs) [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     **task_manager.load_config(config=task_element), [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return self._load_individual_task_or_group(config) [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group [repeated 15x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list)))) [repeated 10x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 10x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     return _load_task(task_config, task=name) [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     task_object = ConfigurableTask(config=config) [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__ [repeated 10x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     self.download(self.config.dataset_kwargs) [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     self.dataset = datasets.load_dataset( [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                    ^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     builder_instance = load_dataset_builder( [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                    ^^^^^^^^^^^^^^^^^^^^^ [repeated 13x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     builder_instance: DatasetBuilder = builder_cls( [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                                        ^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     config_name, version, hash = _find_hash_in_cache( [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                                  ^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise ValueError( [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ValueError: Couldn't find cache for cais/mmlu for config 'world_religions' [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136) Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes'] [repeated 5x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136) The above exception was the direct cause of the following exception: [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     levanter.eval_harness.lm_eval_harness( [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     tasks_to_run = config.to_task_dict() [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)     raise ValueError(f"Failed to load task {task}") from e [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0} [repeated 4x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                                                  ^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=99553, ip=10.130.0.136)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) Job 140254845632112 failed with message: ray::run_on_pod_ray() (pid=99553, ip=10.130.0.136)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     raise problem or RuntimeError("TPU job failed too many times")
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) 
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) 
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) ray::<lambda>() (pid=15019, ip=10.130.0.110)
-2026-02-03 13:05:36,058 WARNING cluster.py:350 -- Job 124635539964240 failed with message: ray::run_levanter_train_lm() (pid=99420, ip=10.130.0.136)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140254845632112 failed with status failed and error: ray::run_on_pod_ray() (pid=99553, ip=10.130.0.136)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
-    task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
-    return load_fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
-    **task_manager.load_config(config=task_element),
-      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
-    return self._load_individual_task_or_group(config)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
-    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
-    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
-    return _load_task(task_config, task=name)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
-    task_object = ConfigurableTask(config=config)
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
-    self.download(self.config.dataset_kwargs)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
-    self.dataset = datasets.load_dataset(
-                   ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
-    builder_instance = load_dataset_builder(
-                       ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
-    builder_instance: DatasetBuilder = builder_cls(
-                                       ^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__
-    config_name, version, hash = _find_hash_in_cache(
-                                 ^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
-    raise ValueError(
-ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
-Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
-
-The above exception was the direct cause of the following exception:
-
-ray::<lambda>() (pid=15019, ip=10.130.0.110)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
-    levanter.eval_harness.lm_eval_harness(
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
-    tasks_to_run = config.to_task_dict()
-                   ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict
-    raise ValueError(f"Failed to load task {task}") from e
-ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-2026-02-03 13:05:36,058 INFO executor.py:796 -- Waiting for 124635539964240 to finish for step checkpoints/unified-language-only-llama-1b-tootsie-1e20-2
-2026-02-03 13:05:36,058 - INFO - Starting wait for job 124635539964240
-2026-02-03 13:05:36,058 WARNING cluster.py:350 -- Job 124635539964240 failed with message: ray::run_levanter_train_lm() (pid=99420, ip=10.130.0.136)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140254845632112 failed with status failed and error: ray::run_on_pod_ray() (pid=99553, ip=10.130.0.136)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
-    task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
-    return load_fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
-    **task_manager.load_config(config=task_element),
-      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
-    return self._load_individual_task_or_group(config)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
-    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
-    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
-    return _load_task(task_config, task=name)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
-    task_object = ConfigurableTask(config=config)
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
-    self.download(self.config.dataset_kwargs)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
-    self.dataset = datasets.load_dataset(
-                   ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
-    builder_instance = load_dataset_builder(
-                       ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
-    builder_instance: DatasetBuilder = builder_cls(
-                                       ^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__
-    config_name, version, hash = _find_hash_in_cache(
-                                 ^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
-    raise ValueError(
-ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
-Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
-
-The above exception was the direct cause of the following exception:
-
-ray::<lambda>() (pid=15019, ip=10.130.0.110)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
-    levanter.eval_harness.lm_eval_harness(
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
-    tasks_to_run = config.to_task_dict()
-                   ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict
-    raise ValueError(f"Failed to load task {task}") from e
-ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-2026-02-03 13:05:36,058 - INFO - Job 124635539964240 completed with status failed
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/experiments/unified/exp600_tootsie.py", line 226, in <module>
-    executor_main(
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
-    response = fn(cfg, *args, **kwargs)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/execution/executor.py", line 743, in run
-    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
-    runner.wait()
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/execution/executor.py", line 207, in wait
-    raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-RuntimeError: Job 124635539964240 failed: ray::run_levanter_train_lm() (pid=99420, ip=10.130.0.136)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/marin/src/marin/training/training.py", line 248, in run_levanter_train_lm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140254845632112 failed with status failed and error: ray::run_on_pod_ray() (pid=99553, ip=10.130.0.136)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=15019, ip=10.130.0.110)
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
-    task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
-    return load_fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
-    **task_manager.load_config(config=task_element),
-      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
-    return self._load_individual_task_or_group(config)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
-    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 412, in _load_individual_task_or_group
-    group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list))))
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group
-    return _load_task(task_config, task=name)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
-    task_object = ConfigurableTask(config=config)
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 866, in __init__
-    self.download(self.config.dataset_kwargs)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
-    self.dataset = datasets.load_dataset(
-                   ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
-    builder_instance = load_dataset_builder(
-                       ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
-    builder_instance: DatasetBuilder = builder_cls(
-                                       ^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__
-    config_name, version, hash = _find_hash_in_cache(
-                                 ^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
-    raise ValueError(
-ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
-Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
-
-The above exception was the direct cause of the following exception:
-
-ray::<lambda>() (pid=15019, ip=10.130.0.110)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
-    levanter.eval_harness.lm_eval_harness(
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
-    tasks_to_run = config.to_task_dict()
-                   ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict
-    raise ValueError(f"Failed to load task {task}") from e
-ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1117, in to_task_dict
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1143, in _get_task_and_rename
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     task_dict = _load_task_with_retry(tasks.get_task_dict, [task], manager)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 932, in _load_task_with_retry
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     return load_fn(*args, **kwargs)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 645, in get_task_dict
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     **task_manager.load_config(config=task_element),
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 438, in load_config
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     return self._load_individual_task_or_group(config)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 399, in _load_individual_task_or_group [repeated 3x across cluster]
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     group_name: dict(collections.ChainMap(*map(fn, reversed(subtask_list)))) [repeated 2x across cluster]
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     return _load_task(task_config, task=name)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 286, in _load_task
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     task_object = ConfigurableTask(config=config)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 124, in __init__ [repeated 2x across cluster]
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     self.download(self.config.dataset_kwargs)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/lm_eval/api/task.py", line 998, in download
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     self.dataset = datasets.load_dataset(
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                    ^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 2062, in load_dataset
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     builder_instance = load_dataset_builder(
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                    ^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/load.py", line 1819, in load_dataset_builder
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     builder_instance: DatasetBuilder = builder_cls(
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                        ^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     config_name, version, hash = _find_hash_in_cache(
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                  ^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/home/ray/anaconda3/lib/python3.11/site-packages/datasets/packaged_modules/cache/cache.py", line 64, in _find_hash_in_cache
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     raise ValueError(
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) ValueError: Couldn't find cache for cais/mmlu for config 'world_religions'
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) Available configs in the cache: ['formal_logic', 'high_school_european_history', 'logical_fallacies', 'moral_disputes']
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) The above exception was the direct cause of the following exception:
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/main/train_lm.py", line 245, in main
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     levanter.eval_harness.lm_eval_harness(
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_29aa802b8799f36a/lib/levanter/src/levanter/eval_harness.py", line 1575, in lm_eval_harness
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     tasks_to_run = config.to_task_dict()
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)     raise ValueError(f"Failed to load task {task}") from e
-(run_levanter_train_lm pid=99420, ip=10.130.0.136) ValueError: Failed to load task {'task_alias': 'mmlu_0shot', 'num_fewshot': 0}
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                                  ^^^^^^^^^^
-(run_levanter_train_lm pid=99420, ip=10.130.0.136)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 
+<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:19:17 - 22 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0214_parquet [repeated 16x across cluster]
+(<lambda> pid=18276, ip=10.164.2.93) 2026-02-04T22:19:18 - 29 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 2 (5023 rows) in 35.09s [repeated 9x across cluster]
+(autoscaler +9h33m53s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h33m53s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +9h33m53s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18205, ip=10.164.0.246) 2026-02-04T22:19:16 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.7s/it remaining:21:37:18 elapsed:55:56 postfix:loss=0.869 [repeated 63x across cluster]
+(<lambda> pid=18000, ip=10.164.2.57) 2026-02-04T22:19:23 - 42 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0234_parquet [repeated 7x across cluster]
+(<lambda> pid=18000, ip=10.164.2.57) 2026-02-04T22:19:23 - 42 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 2 (4906 rows) in 21.58s [repeated 7x across cluster]
+(<lambda> pid=17742, ip=10.164.2.51) 2026-02-04T22:19:27 - 8 - levanter.data.image - image.py:2508 - INFO :: Loading shard 2: 0136_parquet [repeated 11x across cluster]
+(<lambda> pid=17854, ip=10.164.2.0) 2026-02-04T22:19:29 - 17 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (5084 rows) in 33.14s [repeated 5x across cluster]
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:19:34 - 54 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0246_parquet [repeated 6x across cluster]
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:19:34 - 54 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 2 (5006 rows) in 32.75s [repeated 6x across cluster]
+(<lambda> pid=17944, ip=10.164.2.104) 2026-02-04T22:19:39 - 9 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0201_parquet [repeated 11x across cluster]
+(<lambda> pid=17641, ip=10.164.2.99) 2026-02-04T22:19:41 - 30 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 2 (4945 rows) in 26.82s [repeated 8x across cluster]
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T22:19:46 - 34 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0226_parquet [repeated 5x across cluster]
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T22:19:46 - 34 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 2 (4996 rows) in 32.01s [repeated 10x across cluster]
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:19:50 - 54 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 139000.
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:19:50 - 54 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 139000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139000
+(<lambda> pid=18165, ip=10.164.2.103) 2026-02-04T22:19:50 - 44 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139000 for step 139000
+(<lambda> pid=18276, ip=10.164.2.93) 2026-02-04T22:19:50 - 29 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=18276, ip=10.164.2.93) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096
+(<lambda> pid=18276, ip=10.164.2.93) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096
+(<lambda> pid=18276, ip=10.164.2.93) 2026-02-04T22:19:50 - 29 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=17682, ip=10.164.2.101) 2026-02-04T22:19:50 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/4280302048 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=17682, ip=10.164.2.101) 2026-02-04T22:19:50 - 23 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 1 shards with max size 4.28 GB
+(<lambda> pid=17682, ip=10.164.2.101) 2026-02-04T22:19:50 - 23 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmplu_z3gky
+(<lambda> pid=17830, ip=10.164.2.70) 2026-02-04T22:19:50 - 62 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpqxfewjfj
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T22:19:51 - 11 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpe_eymggv
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:19:50 - 54 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpwe_urpvo
+(<lambda> pid=17636, ip=10.164.2.92) 2026-02-04T22:19:51 - 43 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpcedcklva
+(<lambda> pid=17854, ip=10.164.2.0) 2026-02-04T22:19:51 - 17 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpdb_talfz
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:19:51 - 61 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpheyefijk
+(<lambda> pid=17996, ip=10.164.2.62) 2026-02-04T22:19:50 - 40 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0232_parquet [repeated 6x across cluster]
+(<lambda> pid=18498, ip=10.164.2.105) 2026-02-04T22:19:51 - 14 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (5064 rows) in 32.14s [repeated 11x across cluster]
+(<lambda> pid=18165, ip=10.164.2.103) 2026-02-04T22:19:54 - 44 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model.safetensors (4.28 GB, 100.00% of model)
+(<lambda> pid=17896, ip=10.164.2.102) 2026-02-04T22:19:50 - 59 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 139000. [repeated 63x across cluster]
+(<lambda> pid=17896, ip=10.164.2.102) 2026-02-04T22:19:50 - 59 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 139000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139000 [repeated 63x across cluster]
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T22:19:50 - 24 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139000 for step 139000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:19:53 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096 [repeated 126x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:19:53 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:19:53 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/4280302048 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:19:53 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 1 shards with max size 4.28 GB [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:19:53 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpdz6u42i6 [repeated 57x across cluster]
+(<lambda> pid=18082, ip=10.164.0.252) 2026-02-04T22:19:55 - 53 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0245_parquet [repeated 6x across cluster]
+(<lambda> pid=18221, ip=10.164.2.69) 2026-02-04T22:19:56 - 31 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (5087 rows) in 31.19s [repeated 11x across cluster]
+(<lambda> pid=17539, ip=10.164.0.253) 2026-02-04T22:19:55 - 15 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model.safetensors (4.28 GB, 100.00% of model) [repeated 63x across cluster]
+(<lambda> pid=18078, ip=10.164.2.64) 2026-02-04T22:20:02 - 57 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=18157, ip=10.164.2.42) 2026-02-04T22:19:57 - 13 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0205_parquet
+(<lambda> pid=17919, ip=10.164.2.73) 2026-02-04T22:20:00 - 39 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (4967 rows) in 27.88s [repeated 6x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:20:02 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=17609, ip=10.164.2.72) 2026-02-04T22:20:04 - 1 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0193_parquet
+(<lambda> pid=18116, ip=10.164.2.63) 2026-02-04T22:20:02 - 21 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 [repeated 62x across cluster]
+(<lambda> pid=17861, ip=10.164.2.44) 2026-02-04T22:20:07 - 60 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (4960 rows) in 25.89s [repeated 11x across cluster]
+(<lambda> pid=17926, ip=10.164.0.245) 2026-02-04T22:20:09 - 18 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0210_parquet [repeated 5x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:20:16 - 61 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 2 (4978 rows) in 27.43s [repeated 10x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:20:16 - 61 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0253_parquet
+(<lambda> pid=18078, ip=10.164.2.64) 2026-02-04T22:20:17 - 57 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0249_parquet
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:20:22 - 33 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (4923 rows) in 27.31s [repeated 4x across cluster]
+(<lambda> pid=17418, ip=10.164.2.10) 2026-02-04T22:20:27 - 50 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (4987 rows) in 33.92s [repeated 6x across cluster]
+(<lambda> pid=17544, ip=10.164.2.54) 2026-02-04T22:20:34 - 19 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (5002 rows) in 26.60s [repeated 3x across cluster]
+(<lambda> pid=18098, ip=10.164.2.96) 2026-02-04T22:20:43 - 38 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpb45sbhoe
+(<lambda> pid=18098, ip=10.164.2.96) 2026-02-04T22:20:43 - 38 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer
+(<lambda> pid=18074, ip=10.164.0.235) 2026-02-04T22:20:39 - 55 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (5000 rows) in 33.40s [repeated 4x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:20:43 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=17899, ip=10.164.2.9) 2026-02-04T22:20:43 - 48 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmppxplxxam
+(<lambda> pid=18074, ip=10.164.0.235) 2026-02-04T22:20:43 - 55 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmptpyxlcbf
+(<lambda> pid=17877, ip=10.164.0.249) 2026-02-04T22:20:43 - 36 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpcdboajjx
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:20:43 - 33 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmpxtkd_ztx
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T22:20:43 - 35 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:20:44 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:20:44 - 22 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:20:44 - 22 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:375,660,402.1B/s remaining:00:00 elapsed:00:53 postfix:-
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:20:44 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000
+(<lambda> pid=18031, ip=10.164.2.71) 2026-02-04T22:20:45 - 52 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:17.6s/it remaining:220:09:49 elapsed:57:26 postfix:loss=0.906
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:20:43 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 via temp path /tmp/tmp5ifdujbv [repeated 59x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:20:43 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer [repeated 63x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:20:51 - 61 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (5008 rows) in 34.80s [repeated 2x across cluster]
+(<lambda> pid=18205, ip=10.164.0.246) 2026-02-04T22:20:43 - 4 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 [repeated 62x across cluster]
+(<lambda> pid=18111, ip=10.164.0.248) 2026-02-04T22:20:44 - 6 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-139000 [repeated 63x across cluster]
+(<lambda> pid=18111, ip=10.164.0.248) 2026-02-04T22:20:44 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:376,160,609.3B/s remaining:00:00 elapsed:00:53 postfix:- [repeated 63x across cluster]
+(<lambda> pid=18303, ip=10.164.2.8) 2026-02-04T22:20:45 - 32 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:17.6s/it remaining:220:10:29 elapsed:57:26 postfix:loss=0.906 [repeated 63x across cluster]
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T22:20:52 - 24 - levanter.data.image - image.py:2508 - INFO :: Loading shard 2: 0152_parquet
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T22:21:20 - 24 - levanter.data.image - image.py:2482 - INFO :: Loading shard 3: 0216_parquet
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T22:21:20 - 24 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 2 (4983 rows) in 28.65s
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T22:21:46 - 11 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.0s/it remaining:13:00:35 elapsed:58:27 postfix:loss=0.876
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T22:21:51 - 24 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 3 (4998 rows) in 30.16s
+(autoscaler +9h36m33s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h36m33s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:22:11 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139000 for step 139000
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:22:11 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-138495 after saving new checkpoint.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:22:11 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-138495
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:22:11 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-138495
+(<lambda> pid=23900, ip=10.164.0.242) 2026-02-04T22:21:46 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.0s/it remaining:13:00:36 elapsed:58:27 postfix:loss=0.876 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:22:11 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-138495 in 0.25 seconds
+(autoscaler +9h37m8s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h37m8s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17830, ip=10.164.2.70) 2026-02-04T22:22:46 - 62 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.3s/it remaining:15:54:05 elapsed:59:27 postfix:loss=0.949
+(<lambda> pid=18085, ip=10.164.2.66) 2026-02-04T22:22:46 - 10 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.3s/it remaining:15:54:05 elapsed:59:27 postfix:loss=0.949
+(autoscaler +9h37m54s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h37m54s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:23:47 - 33 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:27:52 elapsed:1:00:28 postfix:loss=0.841 [repeated 63x across cluster]
+(autoscaler +9h38m25s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h38m25s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h38m40s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h38m40s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h39m0s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h39m0s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h39m15s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h39m15s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18111, ip=10.164.0.248) 2026-02-04T22:24:48 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:19:10 elapsed:1:01:28 postfix:loss=0.965 [repeated 64x across cluster]
+(autoscaler +9h39m29s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h39m29s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h39m44s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h39m44s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h40m4s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h40m4s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:25:48 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:12:03 elapsed:1:02:29 postfix:loss=0.991 [repeated 64x across cluster]
+(autoscaler +9h40m29s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h40m29s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h41m5s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h41m5s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17919, ip=10.164.2.73) 2026-02-04T22:26:48 - 39 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:12:00 elapsed:1:03:29 postfix:loss=0.813 [repeated 64x across cluster]
+(autoscaler +9h41m35s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h41m35s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18074, ip=10.164.0.235) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:26:48 - 61 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:12:00 elapsed:1:03:29 postfix:loss=0.813 [repeated 63x across cluster]
+(autoscaler +9h42m5s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h42m5s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18085, ip=10.164.2.66) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(raylet, ip=10.164.0.175) [2026-02-04 22:27:44,493 E 1069 1069] (raylet) main.cc:1032: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+(<lambda> pid=17867, ip=10.164.2.65) 2026-02-04T22:27:49 - 46 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:25:23 elapsed:1:04:30 postfix:loss=0.987
+(autoscaler +9h42m36s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h42m36s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h42m56s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h42m56s) Resized to 12000 CPUs, 400 TPUs.
+(raylet, ip=10.164.0.175) [2026-02-04 22:27:44,493 E 1069 1069] (raylet) main.cc:1032: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+(<lambda> pid=17899, ip=10.164.2.9) 2026-02-04T22:27:49 - 48 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:25:24 elapsed:1:04:30 postfix:loss=0.987 [repeated 63x across cluster]
+(raylet, ip=10.164.0.118) [2026-02-04 22:28:35,007 E 2045 2045] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(<lambda> pid=18156, ip=10.164.0.247) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(<lambda> pid=17894, ip=10.164.0.255) 2026-02-04T22:28:50 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:22:24 elapsed:1:05:31 postfix:loss=0.97
+(<lambda> pid=18498, ip=10.164.2.105) 2026-02-04T22:28:50 - 14 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 139kit/184kit rate:1.1it/s remaining:11:22:24 elapsed:1:05:31 postfix:loss=0.97
+(autoscaler +9h43m32s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h43m32s) Resized to 12000 CPUs, 400 TPUs.
+(autoscaler +9h44m12s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h44m12s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18157, ip=10.164.2.42) 2026-02-04T22:29:51 - 13 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.0it/s remaining:12:13:21 elapsed:1:06:31 postfix:loss=1.01 [repeated 63x across cluster]
+(<lambda> pid=17418, ip=10.164.2.10) 2026-02-04T22:29:54 - 50 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 139529.
+(<lambda> pid=17418, ip=10.164.2.10) 2026-02-04T22:29:54 - 50 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 139529 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529
+(<lambda> pid=17854, ip=10.164.2.0) 2026-02-04T22:29:54 - 17 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529 for step 139529
+(autoscaler +9h44m37s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h44m37s) Resized to 12000 CPUs, 400 TPUs.
+(raylet, ip=10.164.0.118) [2026-02-04 22:28:35,007 E 2045 2045] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(<lambda> pid=17830, ip=10.164.2.70) 2026-02-04T22:29:51 - 62 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.0it/s remaining:12:13:21 elapsed:1:06:31 postfix:loss=1.01 [repeated 63x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:29:54 - 61 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 139529. [repeated 63x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:29:54 - 61 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 139529 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529 [repeated 63x across cluster]
+(<lambda> pid=17877, ip=10.164.0.249) 2026-02-04T22:29:54 - 36 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529 for step 139529 [repeated 63x across cluster]
+(raylet, ip=10.164.0.175) [2026-02-04 22:27:44,493 E 1069 1069] (raylet) main.cc:1032: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+(<lambda> pid=17418, ip=10.164.2.10) 2026-02-04T22:30:51 - 50 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.4s/it remaining:17:54:26 elapsed:1:07:32 postfix:loss=1
+(<lambda> pid=18303, ip=10.164.2.8) 2026-02-04T22:30:51 - 32 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.4s/it remaining:17:54:26 elapsed:1:07:32 postfix:loss=1
+(autoscaler +9h45m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h45m28s) Resized to 12000 CPUs, 400 TPUs.
+(autoscaler +9h45m53s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h45m53s) Resized to 12000 CPUs, 400 TPUs.
+(autoscaler +9h46m9s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h46m9s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T22:31:51 - 11 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.4s/it remaining:17:09:29 elapsed:1:08:32 postfix:loss=0.955 [repeated 63x across cluster]
+(autoscaler +9h46m29s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h46m29s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:32:11 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529 for step 139529
+(<lambda> pid=17641, ip=10.164.2.99) 2026-02-04T22:31:51 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.4s/it remaining:17:09:29 elapsed:1:08:32 postfix:loss=0.955 [repeated 63x across cluster]
+(<lambda> pid=17418, ip=10.164.2.10) 2026-02-04T22:32:53 - 50 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.3s/it remaining:16:33:06 elapsed:1:09:33 postfix:loss=0.868
+(<lambda> pid=18221, ip=10.164.2.69) 2026-02-04T22:32:53 - 31 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.3s/it remaining:16:33:06 elapsed:1:09:33 postfix:loss=0.868
+(<lambda> pid=18205, ip=10.164.0.246) 2026-02-04T22:33:53 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.3s/it remaining:15:39:00 elapsed:1:10:34 postfix:loss=0.87 [repeated 63x across cluster]
+(autoscaler +9h49m20s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h49m20s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18110, ip=10.164.2.98) 2026-02-04T22:34:53 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:04:00 elapsed:1:11:34 postfix:loss=0.879 [repeated 64x across cluster]
+(autoscaler +9h50m26s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h50m26s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18082, ip=10.164.0.252) 2026-02-04T22:35:54 - 53 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:14:45 elapsed:1:12:34 postfix:loss=0.996 [repeated 64x across cluster]
+(autoscaler +9h50m46s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h50m46s) Removing 31 nodes of type tpu_slice_v5e_128 (idle).
+(autoscaler +9h50m46s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h51m1s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h51m1s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h51m16s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h51m16s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17896, ip=10.164.2.102) 2026-02-04T22:36:54 - 59 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.0it/s remaining:11:51:31 elapsed:1:13:35 postfix:loss=0.828 [repeated 64x across cluster]
+(autoscaler +9h51m36s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h51m36s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +9h51m56s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h51m56s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T22:37:55 - 34 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:18:48 elapsed:1:14:35 postfix:loss=0.954 [repeated 64x across cluster]
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:38:07 - 33 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 140000.
+(<lambda> pid=18082, ip=10.164.0.252) 2026-02-04T22:37:55 - 53 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:18:48 elapsed:1:14:35 postfix:loss=0.954 [repeated 63x across cluster]
+(<lambda> pid=17835, ip=10.164.0.251) 2026-02-04T22:38:07 - 7 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 140000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140000
+(<lambda> pid=18111, ip=10.164.0.248) 2026-02-04T22:38:07 - 6 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140000 for step 140000
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:38:07 - 22 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000
+(<lambda> pid=17496, ip=10.164.2.50) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096
+(<lambda> pid=17496, ip=10.164.2.50) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:38:07 - 22 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000
+(<lambda> pid=17861, ip=10.164.2.44) 2026-02-04T22:38:07 - 60 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/4280302048 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=17861, ip=10.164.2.44) 2026-02-04T22:38:07 - 60 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 1 shards with max size 4.28 GB
+(<lambda> pid=17861, ip=10.164.2.44) 2026-02-04T22:38:07 - 60 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmp01pqz974
+(<lambda> pid=17851, ip=10.164.2.33) 2026-02-04T22:38:07 - 49 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpbcjulnin
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T22:38:07 - 34 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpkujzdurq
+(<lambda> pid=17877, ip=10.164.0.249) 2026-02-04T22:38:07 - 36 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpnp_cpqeg
+(<lambda> pid=17926, ip=10.164.0.245) 2026-02-04T22:38:07 - 18 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpeeaefzvz
+(<lambda> pid=18498, ip=10.164.2.105) 2026-02-04T22:38:07 - 14 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpyzaedyaz
+(<lambda> pid=18003, ip=10.164.0.244) 2026-02-04T22:38:07 - 12 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpyuxeeuon
+(<lambda> pid=17896, ip=10.164.2.102) 2026-02-04T22:38:07 - 59 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpwxmcrovd
+(<lambda> pid=17944, ip=10.164.2.104) 2026-02-04T22:38:07 - 9 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpwfuyahej
+(<lambda> pid=18068, ip=10.164.2.95) 2026-02-04T22:38:11 - 28 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model.safetensors (4.28 GB, 100.00% of model)
+(<lambda> pid=17830, ip=10.164.2.70) 2026-02-04T22:38:18 - 62 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000
+(<lambda> pid=17609, ip=10.164.2.72) 2026-02-04T22:38:07 - 1 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 140000. [repeated 63x across cluster]
+(<lambda> pid=17609, ip=10.164.2.72) 2026-02-04T22:38:07 - 1 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 140000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140000 [repeated 63x across cluster]
+(<lambda> pid=21486, ip=10.164.2.46) 2026-02-04T22:38:07 - 25 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140000 for step 140000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:38:10 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096 [repeated 126x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:38:10 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:38:10 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/4280302048 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:38:10 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 1 shards with max size 4.28 GB [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:38:10 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmp8i_g0bae [repeated 55x across cluster]
+(<lambda> pid=17944, ip=10.164.2.104) 2026-02-04T22:38:11 - 9 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model.safetensors (4.28 GB, 100.00% of model) [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:38:18 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000
+(autoscaler +9h53m32s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h53m32s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +9h53m32s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17899, ip=10.164.2.9) 2026-02-04T22:38:59 - 48 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpb1sy32vw
+(<lambda> pid=18157, ip=10.164.2.42) 2026-02-04T22:38:18 - 13 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 [repeated 62x across cluster]
+(<lambda> pid=17899, ip=10.164.2.9) 2026-02-04T22:38:59 - 48 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:38:59 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000
+(<lambda> pid=18167, ip=10.164.2.52) 2026-02-04T22:38:59 - 56 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpmzdkuqlg
+(<lambda> pid=18204, ip=10.164.0.184) 2026-02-04T22:38:59 - 45 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmptcsxzpqj
+(<lambda> pid=17536, ip=10.164.2.12) 2026-02-04T22:38:59 - 51 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpegnnhxul
+(<lambda> pid=18078, ip=10.164.2.64) 2026-02-04T22:38:59 - 57 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpvechlzpe
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:38:59 - 33 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmppitaxrwx
+(<lambda> pid=18165, ip=10.164.2.103) 2026-02-04T22:38:59 - 44 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpbodcg_or
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:38:59 - 54 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmppv_hrreg
+(<lambda> pid=18049, ip=10.164.0.243) 2026-02-04T22:38:59 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmpeuss_fwt
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:39:00 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:39:00 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:39:00 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:39:00 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:507,401,285.2B/s remaining:00:00 elapsed:00:50 postfix:-
+(<lambda> pid=18156, ip=10.164.0.247) 2026-02-04T22:39:02 - 20 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:17.2s/it remaining:210:49:50 elapsed:1:15:42 postfix:loss=0.936
+(raylet) The node with node id: 86be13a4e1cc96adcb1d82c7637762d7a52318604d22a2663b3ad2ec and address: 10.164.0.120 and node name: 10.164.0.120 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:39:00 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 via temp path /tmp/tmprmac6kp5 [repeated 55x across cluster]
+(<lambda> pid=18162, ip=10.164.2.106) 2026-02-04T22:38:59 - 16 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:39:00 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer [repeated 63x across cluster]
+(<lambda> pid=18019, ip=10.164.0.254) 2026-02-04T22:39:00 - 26 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-140000 [repeated 63x across cluster]
+(<lambda> pid=18019, ip=10.164.0.254) 2026-02-04T22:39:00 - 26 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:390,696,537.5B/s remaining:00:00 elapsed:00:52 postfix:- [repeated 63x across cluster]
+(<lambda> pid=18000, ip=10.164.2.57) 2026-02-04T22:40:02 - 42 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:25:10 elapsed:1:16:43 postfix:loss=0.958 [repeated 64x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:40:29 - 0 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0192_parquet
+(<lambda> pid=17996, ip=10.164.2.62) 2026-02-04T22:40:02 - 40 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:25:10 elapsed:1:16:43 postfix:loss=0.958 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:40:53 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140000 for step 140000
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:40:53 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529 after saving new checkpoint.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:40:53 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:40:53 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:40:53 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-139529 in 0.25 seconds
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:40:57 - 0 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (4937 rows) in 27.62s
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:40:57 - 0 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0256_parquet
+(<lambda> pid=17641, ip=10.164.2.99) 2026-02-04T22:41:03 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:31:13 elapsed:1:17:43 postfix:loss=0.899
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:41:25 - 0 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (5055 rows) in 28.44s
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T22:41:03 - 34 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:31:13 elapsed:1:17:43 postfix:loss=0.899 [repeated 63x across cluster]
+(autoscaler +9h56m27s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h56m27s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17854, ip=10.164.2.0) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(<lambda> pid=17854, ip=10.164.2.0) 2026-02-04T22:42:03 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:29:52 elapsed:1:18:44 postfix:loss=0.913
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T22:42:09 - 35 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0227_parquet
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:42:03 - 61 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.1it/s remaining:11:29:53 elapsed:1:18:44 postfix:loss=0.913 [repeated 63x across cluster]
+(<lambda> pid=17835, ip=10.164.0.251) 2026-02-04T22:42:16 - 7 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0199_parquet
+(<lambda> pid=18167, ip=10.164.2.52) 2026-02-04T22:42:16 - 56 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0248_parquet
+(<lambda> pid=17798, ip=10.164.2.67) 2026-02-04T22:42:24 - 58 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0250_parquet
+(<lambda> pid=21486, ip=10.164.2.46) 2026-02-04T22:42:24 - 25 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0217_parquet
+(<lambda> pid=18000, ip=10.164.2.57) 2026-02-04T22:42:35 - 42 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0234_parquet [repeated 4x across cluster]
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T22:42:39 - 35 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (5018 rows) in 30.44s
+(<lambda> pid=17835, ip=10.164.0.251) 2026-02-04T22:42:43 - 7 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0263_parquet [repeated 10x across cluster]
+(<lambda> pid=18167, ip=10.164.2.52) 2026-02-04T22:42:44 - 56 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (5021 rows) in 28.05s [repeated 2x across cluster]
+(<lambda> pid=17798, ip=10.164.2.67) 2026-02-04T22:42:52 - 58 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0314_parquet [repeated 9x across cluster]
+(<lambda> pid=17798, ip=10.164.2.67) 2026-02-04T22:42:52 - 58 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (5034 rows) in 27.45s
+(<lambda> pid=18042, ip=10.164.2.100) 2026-02-04T22:42:53 - 47 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (4982 rows) in 28.51s
+(autoscaler +9h57m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h57m28s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:42:59 - 22 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0278_parquet [repeated 17x across cluster]
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:42:59 - 22 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (4984 rows) in 23.18s [repeated 4x across cluster]
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:43:04 - 33 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.2s/it remaining:14:41:43 elapsed:1:19:45 postfix:loss=1.01
+(<lambda> pid=18000, ip=10.164.2.57) 2026-02-04T22:43:03 - 42 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0298_parquet [repeated 2x across cluster]
+(<lambda> pid=18000, ip=10.164.2.57) 2026-02-04T22:43:03 - 42 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (5017 rows) in 27.92s [repeated 2x across cluster]
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T22:43:04 - 35 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.2s/it remaining:14:41:44 elapsed:1:19:45 postfix:loss=1.01 [repeated 63x across cluster]
+(<lambda> pid=18019, ip=10.164.0.254) 2026-02-04T22:43:09 - 26 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0282_parquet [repeated 14x across cluster]
+(<lambda> pid=18019, ip=10.164.0.254) 2026-02-04T22:43:09 - 26 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (5090 rows) in 34.13s [repeated 6x across cluster]
+(<lambda> pid=18205, ip=10.164.0.246) 2026-02-04T22:43:15 - 4 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0260_parquet [repeated 8x across cluster]
+(<lambda> pid=18205, ip=10.164.0.246) 2026-02-04T22:43:15 - 4 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (5003 rows) in 28.32s [repeated 4x across cluster]
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:43:21 - 33 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0289_parquet [repeated 8x across cluster]
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:43:21 - 33 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (4923 rows) in 24.10s [repeated 9x across cluster]
+(<lambda> pid=18303, ip=10.164.2.8) 2026-02-04T22:43:24 - 32 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0224_parquet [repeated 13x across cluster]
+(<lambda> pid=21486, ip=10.164.2.46) 2026-02-04T22:43:27 - 25 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (5003 rows) in 32.15s [repeated 10x across cluster]
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T22:43:32 - 34 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0290_parquet [repeated 5x across cluster]
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T22:43:32 - 34 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (5066 rows) in 26.83s [repeated 8x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:43:37 - 61 - levanter.data.image - image.py:2508 - INFO :: Loading shard 3: 0253_parquet [repeated 10x across cluster]
+(<lambda> pid=18110, ip=10.164.2.98) 2026-02-04T22:43:37 - 3 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 3 (5104 rows) in 31.52s [repeated 11x across cluster]
+(<lambda> pid=23900, ip=10.164.0.242) 2026-02-04T22:43:40 - 27 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0283_parquet [repeated 5x across cluster]
+(<lambda> pid=18019, ip=10.164.0.254) 2026-02-04T22:43:43 - 26 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4986 rows) in 33.50s [repeated 7x across cluster]
+(<lambda> pid=17996, ip=10.164.2.62) 2026-02-04T22:43:44 - 40 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0296_parquet
+(<lambda> pid=17861, ip=10.164.2.44) 2026-02-04T22:43:49 - 60 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4961 rows) in 29.73s [repeated 6x across cluster]
+(<lambda> pid=18078, ip=10.164.2.64) 2026-02-04T22:43:50 - 57 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0313_parquet
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:43:54 - 33 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (5011 rows) in 33.35s [repeated 15x across cluster]
+(<lambda> pid=17926, ip=10.164.0.245) 2026-02-04T22:43:56 - 18 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0274_parquet [repeated 8x across cluster]
+(autoscaler +9h58m34s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h58m34s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18221, ip=10.164.2.69) 2026-02-04T22:44:01 - 31 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4996 rows) in 31.89s [repeated 6x across cluster]
+(<lambda> pid=17919, ip=10.164.2.73) 2026-02-04T22:44:01 - 39 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0295_parquet
+(<lambda> pid=17877, ip=10.164.0.249) 2026-02-04T22:44:03 - 36 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0292_parquet
+(<lambda> pid=17944, ip=10.164.2.104) 2026-02-04T22:44:05 - 9 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.5s/it remaining:18:36:45 elapsed:1:20:45 postfix:loss=0.753
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T22:44:06 - 11 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4973 rows) in 27.18s [repeated 10x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:44:07 - 61 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0317_parquet [repeated 2x across cluster]
+(<lambda> pid=18116, ip=10.164.2.63) 2026-02-04T22:44:05 - 21 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.5s/it remaining:18:44:46 elapsed:1:20:45 postfix:loss=0.753 [repeated 63x across cluster]
+(<lambda> pid=17996, ip=10.164.2.62) 2026-02-04T22:44:15 - 40 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4927 rows) in 30.96s [repeated 8x across cluster]
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T22:44:19 - 24 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0280_parquet
+(<lambda> pid=18049, ip=10.164.0.243) 2026-02-04T22:44:21 - 5 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4987 rows) in 30.42s [repeated 5x across cluster]
+(<lambda> pid=17867, ip=10.164.2.65) 2026-02-04T22:44:24 - 46 - levanter.data.image - image.py:2482 - INFO :: Loading shard 4: 0302_parquet
+(autoscaler +9h58m59s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +9h58m59s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18074, ip=10.164.0.235) 2026-02-04T22:44:27 - 55 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (5015 rows) in 33.63s [repeated 3x across cluster]
+(<lambda> pid=17609, ip=10.164.2.72) 2026-02-04T22:44:34 - 1 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4974 rows) in 29.45s [repeated 2x across cluster]
+(<lambda> pid=17919, ip=10.164.2.73) 2026-02-04T22:44:44 - 39 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (5055 rows) in 43.26s [repeated 3x across cluster]
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T22:44:56 - 24 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4945 rows) in 36.10s
+(<lambda> pid=17867, ip=10.164.2.65) 2026-02-04T22:44:56 - 46 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 4 (4985 rows) in 32.85s
+(<lambda> pid=18082, ip=10.164.0.252) 2026-02-04T22:45:05 - 53 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.4s/it remaining:16:33:46 elapsed:1:21:46 postfix:loss=0.893
+(<lambda> pid=17996, ip=10.164.2.62) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(<lambda> pid=18204, ip=10.164.0.184) 2026-02-04T22:45:05 - 45 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.4s/it remaining:16:33:46 elapsed:1:21:46 postfix:loss=0.893 [repeated 63x across cluster]
+(raylet) The node with node id: f7c7b7bdb42309e211a929f8a29742bc8e36f7f6e14dc1f900dccc25 and address: 10.164.0.19 and node name: 10.164.0.19 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +10h15s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +10h15s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18303, ip=10.164.2.8) 2026-02-04T22:46:05 - 32 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.6s/it remaining:19:11:28 elapsed:1:22:46 postfix:loss=0.891
+(<lambda> pid=18165, ip=10.164.2.103) 2026-02-04T22:46:05 - 44 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.6s/it remaining:19:11:28 elapsed:1:22:46 postfix:loss=0.891
+(<lambda> pid=18165, ip=10.164.2.103) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T22:46:05 - 33 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.6s/it remaining:19:11:28 elapsed:1:22:46 postfix:loss=0.891 [repeated 62x across cluster]
+(<lambda> pid=17926, ip=10.164.0.245) 2026-02-04T22:47:05 - 18 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.3s/it remaining:16:04:13 elapsed:1:23:46 postfix:loss=0.803
+(<lambda> pid=18167, ip=10.164.2.52) 2026-02-04T22:47:05 - 56 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.3s/it remaining:16:04:13 elapsed:1:23:46 postfix:loss=0.803
+(<lambda> pid=21486, ip=10.164.2.46) 2026-02-04T22:48:06 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.0s/it remaining:12:19:03 elapsed:1:24:46 postfix:loss=0.818 [repeated 63x across cluster]
+(<lambda> pid=17944, ip=10.164.2.104) 2026-02-04T22:48:11 - 9 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 140489.
+(<lambda> pid=17944, ip=10.164.2.104) 2026-02-04T22:48:11 - 9 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 140489 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489
+(<lambda> pid=18098, ip=10.164.2.96) 2026-02-04T22:48:06 - 38 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 140kit/184kit rate:1.0s/it remaining:12:19:03 elapsed:1:24:46 postfix:loss=0.818 [repeated 63x across cluster]
+(<lambda> pid=18409, ip=10.164.0.250) 2026-02-04T22:48:11 - 37 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489 for step 140489
+(<lambda> pid=17996, ip=10.164.2.62) 2026-02-04T22:48:11 - 40 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 140489. [repeated 63x across cluster]
+(<lambda> pid=17996, ip=10.164.2.62) 2026-02-04T22:48:11 - 40 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 140489 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489 [repeated 63x across cluster]
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:49:06 - 54 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.0it/s remaining:11:34:35 elapsed:1:25:47 postfix:loss=1.05
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:48:11 - 54 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489 for step 140489 [repeated 63x across cluster]
+(<lambda> pid=18303, ip=10.164.2.8) 2026-02-04T22:49:06 - 32 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.0it/s remaining:11:34:35 elapsed:1:25:47 postfix:loss=1.05
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T22:50:07 - 35 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.0s/it remaining:12:07:08 elapsed:1:26:48 postfix:loss=0.883 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:50:33 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489 for step 140489
+(<lambda> pid=17996, ip=10.164.2.62) 2026-02-04T22:50:07 - 40 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.0s/it remaining:12:07:08 elapsed:1:26:48 postfix:loss=0.883 [repeated 63x across cluster]
+(<lambda> pid=18162, ip=10.164.2.106) 2026-02-04T22:51:08 - 16 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.0it/s remaining:11:37:33 elapsed:1:27:49 postfix:loss=1.05
+(<lambda> pid=17896, ip=10.164.2.102) 2026-02-04T22:51:08 - 59 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.0it/s remaining:11:37:33 elapsed:1:27:49 postfix:loss=1.05
+(autoscaler +10h5m43s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h5m43s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +10h6m34s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h6m34s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17899, ip=10.164.2.9) 2026-02-04T22:52:08 - 48 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1s/it remaining:13:45:35 elapsed:1:28:49 postfix:loss=0.919 [repeated 63x across cluster]
+(<lambda> pid=17682, ip=10.164.2.101) 2026-02-04T22:53:09 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1s/it remaining:13:32:03 elapsed:1:29:50 postfix:loss=0.895 [repeated 64x across cluster]
+(autoscaler +10h7m46s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h7m46s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +10h7m46s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17536, ip=10.164.2.12) 2026-02-04T22:54:11 - 51 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.6s/it remaining:19:06:40 elapsed:1:30:52 postfix:loss=0.906 [repeated 64x across cluster]
+(<lambda> pid=23900, ip=10.164.0.242) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T22:54:11 - 35 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.6s/it remaining:19:06:41 elapsed:1:30:52 postfix:loss=0.906 [repeated 63x across cluster]
+(<lambda> pid=18000, ip=10.164.2.57) 2026-02-04T22:55:12 - 42 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.3s/it remaining:15:42:39 elapsed:1:31:53 postfix:loss=0.928
+(<lambda> pid=17636, ip=10.164.2.92) 2026-02-04T22:55:12 - 43 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.3s/it remaining:15:42:39 elapsed:1:31:53 postfix:loss=0.928
+(autoscaler +10h10m15s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h10m15s) Resized to 12120 CPUs, 404 TPUs.
+(autoscaler +10h10m45s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h10m45s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=17851, ip=10.164.2.33) 2026-02-04T22:56:13 - 49 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.3s/it remaining:15:36:06 elapsed:1:32:53 postfix:loss=0.985 [repeated 63x across cluster]
+(<lambda> pid=17896, ip=10.164.2.102) 2026-02-04T22:57:13 - 59 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:11:07:33 elapsed:1:33:54 postfix:loss=1.04 [repeated 64x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(autoscaler +10h11m57s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h11m57s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=17539, ip=10.164.0.253) 2026-02-04T22:57:37 - 15 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 141000.
+(<lambda> pid=17539, ip=10.164.0.253) 2026-02-04T22:57:37 - 15 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 141000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141000
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:57:13 - 54 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:11:07:33 elapsed:1:33:54 postfix:loss=1.04 [repeated 63x across cluster]
+(<lambda> pid=17894, ip=10.164.0.255) 2026-02-04T22:57:37 - 2 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141000 for step 141000
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T22:57:37 - 11 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000
+(<lambda> pid=18034, ip=10.164.2.94) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096
+(<lambda> pid=18034, ip=10.164.2.94) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T22:57:37 - 11 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000
+(<lambda> pid=17861, ip=10.164.2.44) 2026-02-04T22:57:37 - 60 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/4280302048 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=17861, ip=10.164.2.44) 2026-02-04T22:57:37 - 60 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 1 shards with max size 4.28 GB
+(<lambda> pid=17861, ip=10.164.2.44) 2026-02-04T22:57:37 - 60 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmpihkedn8t
+(<lambda> pid=18111, ip=10.164.0.248) 2026-02-04T22:57:37 - 6 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmpoguhetqs
+(<lambda> pid=17641, ip=10.164.2.99) 2026-02-04T22:57:37 - 30 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmprwwypino
+(<lambda> pid=17682, ip=10.164.2.101) 2026-02-04T22:57:37 - 23 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmpqakjmynt
+(<lambda> pid=17877, ip=10.164.0.249) 2026-02-04T22:57:37 - 36 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmprcdkoajo
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:57:37 - 22 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmpfsxhxnle
+(<lambda> pid=17830, ip=10.164.2.70) 2026-02-04T22:57:41 - 62 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model.safetensors (4.28 GB, 100.00% of model)
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:57:37 - 61 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 141000. [repeated 63x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:57:37 - 61 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 141000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141000 [repeated 63x across cluster]
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T22:57:37 - 22 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141000 for step 141000 [repeated 63x across cluster]
+(autoscaler +10h12m17s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h12m17s) Removing 32 nodes of type tpu_slice_v5e_128 (idle).
+(autoscaler +10h12m17s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17877, ip=10.164.0.249) 2026-02-04T22:57:49 - 36 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:57:40 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096 [repeated 126x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:57:40 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:57:40 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/4280302048 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:57:40 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 1 shards with max size 4.28 GB [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:57:40 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmp217gn8jy [repeated 58x across cluster]
+(<lambda> pid=17996, ip=10.164.2.62) 2026-02-04T22:57:41 - 40 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model.safetensors (4.28 GB, 100.00% of model) [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:57:49 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000
+(autoscaler +10h12m32s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h12m32s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +10h12m47s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h12m47s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18165, ip=10.164.2.103) 2026-02-04T22:58:26 - 44 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmpvq3l26bm
+(<lambda> pid=18165, ip=10.164.2.103) 2026-02-04T22:58:26 - 44 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T22:57:49 - 61 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 [repeated 62x across cluster]
+(<lambda> pid=17798, ip=10.164.2.67) 2026-02-04T22:58:26 - 58 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmp_judyih_
+(<lambda> pid=17641, ip=10.164.2.99) 2026-02-04T22:58:26 - 30 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmptbcnuhiz
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T22:58:26 - 54 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmpetcecwo_
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:58:26 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:58:27 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000
+(<lambda> pid=17854, ip=10.164.2.0) 2026-02-04T22:58:27 - 17 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000
+(<lambda> pid=17854, ip=10.164.2.0) 2026-02-04T22:58:27 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:375,821,637.4B/s remaining:00:00 elapsed:00:50 postfix:-
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:58:27 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000
+(<lambda> pid=18276, ip=10.164.2.93) 2026-02-04T22:58:29 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:16.6s/it remaining:199:12:55 elapsed:1:35:09 postfix:loss=0.857
+(autoscaler +10h13m12s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h13m12s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +10h13m27s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h13m27s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +10h13m47s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h13m47s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:58:27 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 via temp path /tmp/tmps012tsw_ [repeated 60x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T22:58:27 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer [repeated 63x across cluster]
+(<lambda> pid=18116, ip=10.164.2.63) 2026-02-04T22:58:27 - 21 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 [repeated 63x across cluster]
+(<lambda> pid=18003, ip=10.164.0.244) 2026-02-04T22:58:27 - 12 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/hf/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/step-141000 [repeated 63x across cluster]
+(<lambda> pid=18003, ip=10.164.0.244) 2026-02-04T22:58:27 - 12 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:370,394,811.8B/s remaining:00:00 elapsed:00:50 postfix:- [repeated 63x across cluster]
+(<lambda> pid=18167, ip=10.164.2.52) 2026-02-04T22:59:30 - 56 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.4s/it remaining:16:59:26 elapsed:1:36:11 postfix:loss=0.871 [repeated 64x across cluster]
+(autoscaler +10h14m12s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h14m12s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +10h14m27s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h14m27s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:00:00 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141000 for step 141000
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T22:59:30 - 35 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.4s/it remaining:16:59:26 elapsed:1:36:11 postfix:loss=0.871 [repeated 63x across cluster]
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:00:00 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489 after saving new checkpoint.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:00:00 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:00:00 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:00:00 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-140489 in 0.28 seconds
+(autoscaler +10h14m52s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h14m52s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T23:00:30 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.4s/it remaining:16:24:07 elapsed:1:37:11 postfix:loss=1.03
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T23:00:30 - 33 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.4s/it remaining:16:24:08 elapsed:1:37:11 postfix:loss=1.03
+(autoscaler +10h15m13s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h15m13s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +10h15m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h15m28s) Resized to 8280 CPUs, 276 TPUs.
+(autoscaler +10h16m4s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h16m4s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=18000, ip=10.164.2.57) 2026-02-04T23:01:32 - 42 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.3s/it remaining:15:45:29 elapsed:1:38:12 postfix:loss=0.902 [repeated 63x across cluster]
+(autoscaler +10h16m34s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h16m34s) Resized to 8280 CPUs, 276 TPUs.
+(<lambda> pid=17896, ip=10.164.2.102) The channel dimension is ambiguous. Got image shape (3, 384, 3). Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension.
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T23:01:32 - 54 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.3s/it remaining:15:45:29 elapsed:1:38:12 postfix:loss=0.902 [repeated 63x across cluster]
+(autoscaler +10h17m5s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h17m5s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T23:02:32 - 33 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:10:55:08 elapsed:1:39:13 postfix:loss=0.87
+(<lambda> pid=21486, ip=10.164.2.46) 2026-02-04T23:02:32 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:10:55:09 elapsed:1:39:13 postfix:loss=0.87
+(autoscaler +10h17m35s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h17m35s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17851, ip=10.164.2.33) 2026-02-04T23:03:33 - 49 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:10:52:09 elapsed:1:40:14 postfix:loss=0.942 [repeated 63x across cluster]
+(autoscaler +10h18m11s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h18m11s) Resized to 12000 CPUs, 400 TPUs.
+(autoscaler +10h18m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h18m31s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:04:18 - 0 - levanter.data.image - image.py:2508 - INFO :: Loading shard 4: 0256_parquet
+(<lambda> pid=23900, ip=10.164.0.242) 2026-02-04T23:03:33 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:10:52:10 elapsed:1:40:14 postfix:loss=0.942 [repeated 63x across cluster]
+(autoscaler +10h19m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h19m2s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17877, ip=10.164.0.249) 2026-02-04T23:04:34 - 36 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:11:03:09 elapsed:1:41:14 postfix:loss=1.01
+(<lambda> pid=17682, ip=10.164.2.101) 2026-02-04T23:04:34 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:11:03:09 elapsed:1:41:14 postfix:loss=1.01
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:04:45 - 0 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (5055 rows) in 26.57s
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:04:45 - 0 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0320_parquet
+(<lambda> pid=18049, ip=10.164.0.243) 2026-02-04T23:04:34 - 5 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1it/s remaining:11:03:10 elapsed:1:41:14 postfix:loss=1.01 [repeated 62x across cluster]
+(autoscaler +10h19m27s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h19m27s) Resized to 12000 CPUs, 400 TPUs.
+(autoscaler +10h19m42s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h19m42s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18396, ip=10.164.2.59) 2026-02-04T23:05:21 - 0 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (5018 rows) in 36.36s
+(autoscaler +10h20m7s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h20m7s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17418, ip=10.164.2.10) 2026-02-04T23:05:35 - 50 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1s/it remaining:13:07:24 elapsed:1:42:15 postfix:loss=0.927
+(autoscaler +10h20m22s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h20m22s) Resized to 12000 CPUs, 400 TPUs.
+(autoscaler +10h20m42s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h20m42s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T23:06:23 - 35 - levanter.data.image - image.py:2508 - INFO :: Loading shard 4: 0291_parquet
+(<lambda> pid=17854, ip=10.164.2.0) 2026-02-04T23:05:35 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.1s/it remaining:13:07:23 elapsed:1:42:15 postfix:loss=0.927 [repeated 63x across cluster]
+(autoscaler +10h21m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h21m2s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T23:06:32 - 22 - levanter.data.image - image.py:2508 - INFO :: Loading shard 4: 0278_parquet [repeated 3x across cluster]
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T23:06:36 - 35 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.3s/it remaining:15:05:38 elapsed:1:43:17 postfix:loss=1.04
+(<lambda> pid=17899, ip=10.164.2.9) 2026-02-04T23:06:41 - 48 - levanter.data.image - image.py:2508 - INFO :: Loading shard 4: 0304_parquet [repeated 4x across cluster]
+(<lambda> pid=18031, ip=10.164.2.71) 2026-02-04T23:06:36 - 52 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:1.3s/it remaining:15:05:38 elapsed:1:43:17 postfix:loss=1.04 [repeated 63x across cluster]
+(autoscaler +10h21m18s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h21m18s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T23:06:48 - 35 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (4982 rows) in 25.51s
+(<lambda> pid=17826, ip=10.164.2.97) 2026-02-04T23:06:48 - 35 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0355_parquet [repeated 7x across cluster]
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T23:06:56 - 22 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (4968 rows) in 23.87s [repeated 3x across cluster]
+(<lambda> pid=17496, ip=10.164.2.50) 2026-02-04T23:06:56 - 22 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0342_parquet [repeated 11x across cluster]
+(autoscaler +10h21m33s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h21m33s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17894, ip=10.164.0.255) 2026-02-04T23:07:06 - 2 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (4975 rows) in 24.52s [repeated 4x across cluster]
+(<lambda> pid=17894, ip=10.164.0.255) 2026-02-04T23:07:06 - 2 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0322_parquet [repeated 16x across cluster]
+(<lambda> pid=18156, ip=10.164.0.247) 2026-02-04T23:07:11 - 20 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (5020 rows) in 29.53s [repeated 5x across cluster]
+(<lambda> pid=18156, ip=10.164.0.247) 2026-02-04T23:07:11 - 20 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0340_parquet [repeated 13x across cluster]
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T23:07:12 - 33 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (5011 rows) in 30.87s [repeated 2x across cluster]
+(<lambda> pid=18116, ip=10.164.2.63) 2026-02-04T23:07:17 - 21 - levanter.data.image - image.py:2508 - INFO :: Loading shard 4: 0277_parquet [repeated 3x across cluster]
+(autoscaler +10h21m53s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h21m53s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17539, ip=10.164.0.253) 2026-02-04T23:07:22 - 15 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (5008 rows) in 31.38s [repeated 5x across cluster]
+(<lambda> pid=17539, ip=10.164.0.253) 2026-02-04T23:07:22 - 15 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0335_parquet [repeated 10x across cluster]
+(<lambda> pid=17857, ip=10.164.2.24) 2026-02-04T23:07:28 - 41 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (4906 rows) in 27.71s [repeated 9x across cluster]
+(<lambda> pid=18276, ip=10.164.2.93) 2026-02-04T23:07:27 - 29 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0349_parquet [repeated 6x across cluster]
+(<lambda> pid=17536, ip=10.164.2.12) 2026-02-04T23:07:33 - 51 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (4986 rows) in 26.77s [repeated 12x across cluster]
+(<lambda> pid=18205, ip=10.164.0.246) 2026-02-04T23:07:32 - 4 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0324_parquet [repeated 16x across cluster]
+(autoscaler +10h22m13s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h22m13s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17830, ip=10.164.2.70) 2026-02-04T23:07:39 - 62 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (5063 rows) in 31.22s [repeated 11x across cluster]
+(<lambda> pid=17944, ip=10.164.2.104) 2026-02-04T23:07:37 - 9 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0329_parquet [repeated 6x across cluster]
+(<lambda> pid=17536, ip=10.164.2.12) 2026-02-04T23:07:39 - 51 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:2.1s/it remaining:25:25:16 elapsed:1:44:20 postfix:loss=1.02
+(<lambda> pid=17857, ip=10.164.2.24) 2026-02-04T23:07:41 - 41 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 141492.
+(<lambda> pid=17857, ip=10.164.2.24) 2026-02-04T23:07:41 - 41 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 141492 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141492
+(<lambda> pid=17919, ip=10.164.2.73) 2026-02-04T23:07:41 - 39 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141492 for step 141492
+(<lambda> pid=18405, ip=10.164.2.61) 2026-02-04T23:07:44 - 33 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (5077 rows) in 32.54s [repeated 5x across cluster]
+(<lambda> pid=18409, ip=10.164.0.250) 2026-02-04T23:07:44 - 37 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0357_parquet [repeated 4x across cluster]
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T23:07:39 - 11 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 141kit/184kit rate:2.1s/it remaining:25:26:21 elapsed:1:44:20 postfix:loss=1.02 [repeated 63x across cluster]
+(<lambda> pid=18165, ip=10.164.2.103) 2026-02-04T23:07:41 - 44 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 141492. [repeated 63x across cluster]
+(<lambda> pid=18165, ip=10.164.2.103) 2026-02-04T23:07:41 - 44 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 141492 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141492 [repeated 63x across cluster]
+(<lambda> pid=17418, ip=10.164.2.10) 2026-02-04T23:07:41 - 50 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-full-0-dacc8f/checkpoints/step-141492 for step 141492 [repeated 63x across cluster]
+(<lambda> pid=18031, ip=10.164.2.71) 2026-02-04T23:07:48 - 52 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (4982 rows) in 28.00s [repeated 6x across cluster]
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T23:07:49 - 11 - levanter.data.image - image.py:2508 - INFO :: Loading shard 4: 0267_parquet [repeated 8x across cluster]
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T23:07:55 - 34 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (5014 rows) in 23.43s [repeated 9x across cluster]
+(<lambda> pid=17719, ip=10.164.2.60) 2026-02-04T23:07:55 - 34 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0354_parquet [repeated 5x across cluster]
+(autoscaler +10h22m33s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h22m33s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18082, ip=10.164.0.252) 2026-02-04T23:08:01 - 53 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (5021 rows) in 28.92s [repeated 9x across cluster]
+(<lambda> pid=18082, ip=10.164.0.252) 2026-02-04T23:08:01 - 53 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0373_parquet [repeated 4x across cluster]
+(<lambda> pid=17944, ip=10.164.2.104) 2026-02-04T23:08:06 - 9 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (5113 rows) in 28.89s [repeated 13x across cluster]
+(<lambda> pid=18074, ip=10.164.0.235) 2026-02-04T23:08:04 - 55 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0375_parquet [repeated 2x across cluster]
+(<lambda> pid=17418, ip=10.164.2.10) 2026-02-04T23:08:14 - 50 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (5034 rows) in 34.00s [repeated 5x across cluster]
+(<lambda> pid=18021, ip=10.164.2.11) 2026-02-04T23:08:14 - 61 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0381_parquet
+(<lambda> pid=17896, ip=10.164.2.102) 2026-02-04T23:08:19 - 59 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (5063 rows) in 32.51s [repeated 10x across cluster]
+(<lambda> pid=18110, ip=10.164.2.98) 2026-02-04T23:08:18 - 3 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0323_parquet [repeated 4x across cluster]
+(<lambda> pid=18221, ip=10.164.2.69) 2026-02-04T23:08:26 - 31 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (4933 rows) in 23.08s [repeated 3x across cluster]
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T23:08:27 - 24 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0344_parquet
+(<lambda> pid=18074, ip=10.164.0.235) 2026-02-04T23:08:34 - 55 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (4973 rows) in 29.62s [repeated 7x across cluster]
+(autoscaler +10h23m8s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h23m8s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17714, ip=10.164.2.58) 2026-02-04T23:08:39 - 54 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 142kit/184kit rate:1.4s/it remaining:16:47:04 elapsed:1:45:20 postfix:loss=0.929
+(<lambda> pid=17867, ip=10.164.2.65) 2026-02-04T23:08:46 - 46 - levanter.data.image - image.py:2512 - INFO :: Loaded shard 4 (4985 rows) in 29.24s
+(<lambda> pid=17867, ip=10.164.2.65) 2026-02-04T23:08:46 - 46 - levanter.data.image - image.py:2482 - INFO :: Loading shard 5: 0366_parquet
+(<lambda> pid=18204, ip=10.164.0.184) 2026-02-04T23:08:39 - 45 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 142kit/184kit rate:1.4s/it remaining:16:47:25 elapsed:1:45:20 postfix:loss=0.929 [repeated 63x across cluster]
+(autoscaler +10h23m24s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h23m24s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=18034, ip=10.164.2.94) 2026-02-04T23:08:52 - 11 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (4981 rows) in 35.95s [repeated 4x across cluster]
+(<lambda> pid=17913, ip=10.164.2.53) 2026-02-04T23:08:58 - 24 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (5017 rows) in 30.77s
+(autoscaler +10h23m39s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h23m39s) Resized to 12000 CPUs, 400 TPUs.
+(<lambda> pid=17867, ip=10.164.2.65) 2026-02-04T23:09:13 - 46 - levanter.data.image - image.py:2487 - INFO :: Loaded shard 5 (4944 rows) in 27.27s
+(autoscaler +10h23m59s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10h23m59s) Removing 31 nodes of type tpu_slice_v5e_128 (idle).
+(autoscaler +10h23m59s) Resized to 8280 CPUs, 276 TPUs.

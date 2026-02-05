@@ -57,6 +57,10 @@ class ShardedDataSource(Generic[T_co]):
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T_co]:
         raise NotImplementedError
 
+    def shard_num_rows(self, shard_name: str) -> int:
+        """Return the number of rows in a shard. Default implementation loads and counts (slow)."""
+        return sum(1 for _ in self.open_shard(shard_name))
+
     def __iter__(self):
         """
         Iterate over all data in the dataset, in order.
@@ -476,6 +480,12 @@ class ParquetDataSource(UrlBackedShardedDataSource[dict]):
     def __init__(self, urls, columns=None):
         super().__init__(urls)
         self.columns = columns
+
+    def shard_num_rows(self, shard_name: str) -> int:
+        """Return row count by reading parquet metadata only (fast, reads only file footer)."""
+        url = self._shard_name_to_url_mapping[shard_name]
+        with fsspec.open(url, "rb") as f:
+            return pq.ParquetFile(f).metadata.num_rows
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
