@@ -19,15 +19,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from iris.cluster.vm.config import config_to_dict, load_config
-from iris.cluster.vm.controller_vm import (
+from iris.config import config_to_dict, load_config
+from iris.cluster.platform.controller_vm import (
     GcpController,
     HealthCheckResult,
     ManualController,
     check_health,
     create_controller_vm,
 )
-from iris.cluster.vm.managed_vm import (
+from iris.cluster.platform.worker_vm import (
     _build_bootstrap_script,
     _build_env_flags,
 )
@@ -91,9 +91,9 @@ def test_manual_controller_start_requires_image(ssh_bootstrap_config: config_pb2
         controller.start()
 
 
-@patch("iris.cluster.vm.controller_vm.check_health")
-@patch("iris.cluster.vm.controller_vm.run_streaming_with_retry")
-@patch("iris.cluster.vm.controller_vm.DirectSshConnection")
+@patch("iris.cluster.platform.controller_vm.check_health")
+@patch("iris.cluster.platform.controller_vm.run_streaming_with_retry")
+@patch("iris.cluster.platform.controller_vm.DirectSshConnection")
 def test_manual_controller_start_runs_bootstrap(
     mock_conn_cls: MagicMock,
     mock_run_streaming: MagicMock,
@@ -275,7 +275,7 @@ class TestBootstrapScriptConfig:
 
     def test_bootstrap_script_includes_config_when_provided(self):
         """Bootstrap script writes config file when provided."""
-        from iris.cluster.vm.controller_vm import _build_controller_bootstrap_script
+        from iris.cluster.platform.controller_vm import _build_controller_bootstrap_script
 
         config_yaml = "platform:\\n  gcp:\\n    project_id: my-project\\n"
         script = _build_controller_bootstrap_script(
@@ -291,7 +291,7 @@ class TestBootstrapScriptConfig:
 
     def test_bootstrap_script_omits_config_when_empty(self):
         """Bootstrap script skips config setup when not provided."""
-        from iris.cluster.vm.controller_vm import _build_controller_bootstrap_script
+        from iris.cluster.platform.controller_vm import _build_controller_bootstrap_script
 
         script = _build_controller_bootstrap_script(
             docker_image="gcr.io/project/iris:latest",
@@ -314,10 +314,10 @@ class TestControllerLifecycle:
             ("gcp", "gcp_config", "http://10.0.0.50:10000"),
         ],
     )
-    @patch("iris.cluster.vm.controller_vm.wait_healthy_via_ssh")
-    @patch("iris.cluster.vm.controller_vm.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller_vm.DirectSshConnection")
-    @patch("iris.cluster.vm.controller_vm.GceSshConnection")
+    @patch("iris.cluster.platform.controller_vm.wait_healthy_via_ssh")
+    @patch("iris.cluster.platform.controller_vm.run_streaming_with_retry")
+    @patch("iris.cluster.platform.controller_vm.DirectSshConnection")
+    @patch("iris.cluster.platform.controller_vm.GceSshConnection")
     def test_controller_start_succeeds_when_healthy(
         self,
         mock_gce_conn: MagicMock,
@@ -354,10 +354,10 @@ class TestControllerLifecycle:
             ("gcp", "gcp_config"),
         ],
     )
-    @patch("iris.cluster.vm.controller_vm.wait_healthy_via_ssh")
-    @patch("iris.cluster.vm.controller_vm.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller_vm.DirectSshConnection")
-    @patch("iris.cluster.vm.controller_vm.GceSshConnection")
+    @patch("iris.cluster.platform.controller_vm.wait_healthy_via_ssh")
+    @patch("iris.cluster.platform.controller_vm.run_streaming_with_retry")
+    @patch("iris.cluster.platform.controller_vm.DirectSshConnection")
+    @patch("iris.cluster.platform.controller_vm.GceSshConnection")
     def test_controller_start_fails_when_unhealthy(
         self,
         mock_gce_conn: MagicMock,
@@ -386,9 +386,9 @@ class TestControllerLifecycle:
                         with pytest.raises(RuntimeError, match="failed health check after bootstrap"):
                             controller.start()
 
-    @patch("iris.cluster.vm.controller_vm.wait_healthy_via_ssh")
-    @patch("iris.cluster.vm.controller_vm.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller_vm.GceSshConnection")
+    @patch("iris.cluster.platform.controller_vm.wait_healthy_via_ssh")
+    @patch("iris.cluster.platform.controller_vm.run_streaming_with_retry")
+    @patch("iris.cluster.platform.controller_vm.GceSshConnection")
     def test_gcp_controller_reload_returns_url_when_healthy(
         self,
         mock_gce_conn: MagicMock,

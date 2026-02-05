@@ -31,7 +31,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-from iris.cluster.vm.managed_vm import ManagedVm
+from iris.cluster.platform.worker_vm import WorkerVm
 from iris.rpc import vm_pb2
 
 # Maximum workers for parallel host checks during discovery
@@ -127,7 +127,7 @@ class VmGroupProtocol(Protocol):
         """Current status computed from VM states."""
         ...
 
-    def vms(self) -> list[ManagedVm]:
+    def vms(self) -> list[WorkerVm]:
         """Individual VM instances in this group."""
         ...
 

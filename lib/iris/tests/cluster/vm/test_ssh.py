@@ -20,8 +20,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iris.cluster.vm.controller_vm import check_health
-from iris.cluster.vm.ssh import (
+from iris.cluster.platform.controller_vm import check_health
+from iris.cluster.platform.ssh import (
     connection_available,
     run_streaming_with_retry,
     wait_for_connection,
@@ -55,8 +55,8 @@ def test_connection_available_returns_false_on_os_error():
     assert connection_available(conn) is False
 
 
-@patch("iris.cluster.vm.ssh.time.sleep")
-@patch("iris.cluster.vm.ssh.connection_available")
+@patch("iris.cluster.platform.ssh.time.sleep")
+@patch("iris.cluster.platform.ssh.connection_available")
 def test_wait_for_connection_returns_true_immediately(mock_conn_avail, _mock_sleep):
     """wait_for_connection returns True if connection available immediately."""
     mock_conn_avail.return_value = True
@@ -66,8 +66,8 @@ def test_wait_for_connection_returns_true_immediately(mock_conn_avail, _mock_sle
     assert result is True
 
 
-@patch("iris.cluster.vm.ssh.time.sleep")
-@patch("iris.cluster.vm.ssh.connection_available")
+@patch("iris.cluster.platform.ssh.time.sleep")
+@patch("iris.cluster.platform.ssh.connection_available")
 def test_wait_for_connection_returns_false_on_timeout(mock_conn_avail, _mock_sleep):
     """wait_for_connection returns False when timeout expires."""
     mock_conn_avail.return_value = False
@@ -76,8 +76,8 @@ def test_wait_for_connection_returns_false_on_timeout(mock_conn_avail, _mock_sle
     assert wait_for_connection(conn, timeout=Duration.from_ms(50), poll_interval=Duration.from_ms(10)) is False
 
 
-@patch("iris.cluster.vm.ssh.time.sleep")
-@patch("iris.cluster.vm.ssh.connection_available")
+@patch("iris.cluster.platform.ssh.time.sleep")
+@patch("iris.cluster.platform.ssh.connection_available")
 def test_wait_for_connection_respects_stop_event(mock_conn_avail, _mock_sleep):
     """wait_for_connection returns False when stop_event is set."""
     mock_conn_avail.return_value = False
@@ -128,7 +128,7 @@ def test_run_streaming_with_retry_success_first_attempt():
     assert len(lines_received) > 0
 
 
-@patch("iris.cluster.vm.ssh.time.sleep")
+@patch("iris.cluster.platform.ssh.time.sleep")
 def test_run_streaming_with_retry_retries_on_connection_error(_mock_sleep):
     """run_streaming_with_retry eventually succeeds after connection errors."""
     # Simulate initial failures followed by success
@@ -147,7 +147,7 @@ def test_run_streaming_with_retry_retries_on_connection_error(_mock_sleep):
 
 
 @pytest.mark.slow  # Flaky in CI: background thread holds logging lock (gh#2551)
-@patch("iris.cluster.vm.ssh.time.sleep")
+@patch("iris.cluster.platform.ssh.time.sleep")
 def test_run_streaming_with_retry_raises_after_max_retries(_mock_sleep):
     """run_streaming_with_retry raises RuntimeError after max retries."""
     conn = MagicMock()
@@ -216,7 +216,7 @@ def test_check_health_passes_duration_to_run():
 
 def test_direct_ssh_connection_accepts_duration_connect_timeout():
     """DirectSshConnection accepts Duration for connect_timeout field."""
-    from iris.cluster.vm.ssh import DirectSshConnection
+    from iris.cluster.platform.ssh import DirectSshConnection
 
     conn = DirectSshConnection(
         host="10.0.0.1",
@@ -229,8 +229,8 @@ def test_direct_ssh_connection_accepts_duration_connect_timeout():
 
 def test_ssh_config_duration_flows_to_direct_ssh_connection():
     """SshConfig.connect_timeout (Duration) flows correctly to DirectSshConnection."""
-    from iris.cluster.vm.managed_vm import SshConfig
-    from iris.cluster.vm.ssh import DirectSshConnection
+    from iris.cluster.platform.worker_vm import SshConfig
+    from iris.cluster.platform.ssh import DirectSshConnection
 
     ssh_config = SshConfig(connect_timeout=Duration.from_seconds(20))
     conn = DirectSshConnection(

@@ -25,8 +25,8 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from iris.cluster.vm.config import IrisConfig
-from iris.cluster.vm.controller_vm import ControllerProtocol, create_controller_vm
+from iris.config import IrisConfig
+from iris.cluster.platform.controller_runtime import ControllerRuntime
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 
@@ -59,7 +59,9 @@ class ClusterManager:
     ):
         self._config = config
         self._threads = threads if threads is not None else get_thread_container()
-        self._controller: ControllerProtocol | None = None
+        self._iris_config = IrisConfig(config)
+        self._platform = self._iris_config.platform()
+        self._controller: ControllerRuntime | None = None
 
     @property
     def is_local(self) -> bool:
@@ -71,7 +73,8 @@ class ClusterManager:
         For GCP: creates a GCE VM, bootstraps, returns internal IP.
         For local: starts in-process Controller, returns localhost URL.
         """
-        self._controller = create_controller_vm(self._config, threads=self._threads)
+        if self._controller is None:
+            self._controller = ControllerRuntime(self._platform, self._iris_config.proto, threads=self._threads)
         address = self._controller.start()
         logger.info("Controller started at %s (local=%s)", address, self.is_local)
         return address
@@ -107,7 +110,8 @@ class ClusterManager:
             RuntimeError: If controller VM doesn't exist
         """
         # Reload controller - it will re-bootstrap workers on startup
-        self._controller = create_controller_vm(self._config, threads=self._threads)
+        if self._controller is None:
+            self._controller = ControllerRuntime(self._platform, self._iris_config.proto, threads=self._threads)
         address = self._controller.reload()
         logger.info("Controller reloaded at %s", address)
 
@@ -123,15 +127,13 @@ class ClusterManager:
         address = self.start()
         try:
             # Use Platform.tunnel() for consistent connection handling
-            iris_config = IrisConfig(self._config)
-            platform = iris_config.platform()
-            with platform.tunnel(address) as tunnel_url:
+            with self._platform.tunnel(address) as tunnel_url:
                 yield tunnel_url
         finally:
             self.stop()
 
     @property
-    def controller(self) -> ControllerProtocol:
+    def controller(self) -> ControllerRuntime:
         """Access the underlying controller (must call start() first)."""
         if self._controller is None:
             raise RuntimeError("ClusterManager.start() not called")

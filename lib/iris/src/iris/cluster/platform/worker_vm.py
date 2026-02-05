@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ManagedVm - per-VM lifecycle management with dedicated thread.
+"""WorkerVm - per-VM lifecycle management with dedicated thread.
 
 This module provides:
-- ManagedVm: Unified per-VM lifecycle with bootstrap logic
-- VmRegistry: Global tracking for all ManagedVm instances
-- VmFactory: Protocol for creating ManagedVm instances
+- WorkerVm: Unified per-VM lifecycle with bootstrap logic
+- VmRegistry: Global tracking for all WorkerVm instances
+- VmFactory: Protocol for creating WorkerVm instances
 - TrackedVmFactory: VmFactory implementation that registers VMs
 - Bootstrap script and utilities for worker initialization
 - SSH configuration for remote execution
@@ -31,7 +31,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from iris.cluster.vm.ssh import (
+from iris.cluster.platform.ssh import (
     SshConnection,
     run_streaming_with_retry,
     wait_for_connection,
@@ -295,11 +295,11 @@ PARTIAL_SLICE_GRACE_MS = 5 * 60 * 1000  # 5 minutes
 
 
 # ============================================================================
-# ManagedVm - Unified per-VM lifecycle thread
+# WorkerVm - Unified per-VM lifecycle thread
 # ============================================================================
 
 
-class ManagedVm:
+class WorkerVm:
     """A VM with its own lifecycle management thread.
 
     Works for both GCP and manual VMs via the RemoteExecutor abstraction.
@@ -358,7 +358,7 @@ class ManagedVm:
         """Main lifecycle: BOOTING -> INITIALIZING -> READY.
 
         Inlines bootstrap logic directly - no nested state machine.
-        Worker ID is not set by ManagedVm - the worker generates its own ID
+        Worker ID is not set by WorkerVm - the worker generates its own ID
         from IRIS_VM_ADDRESS or host:port at startup.
         """
         boot_timeout = Duration.from_proto(self._timeouts.boot_timeout)
@@ -569,10 +569,10 @@ class VmRegistry:
     """
 
     def __init__(self) -> None:
-        self._vms: dict[str, ManagedVm] = {}
+        self._vms: dict[str, WorkerVm] = {}
         self._lock = threading.Lock()
 
-    def register(self, vm: ManagedVm) -> None:
+    def register(self, vm: WorkerVm) -> None:
         """Register a VM for tracking.
 
         Called when a VM is created. If a VM with the same ID already exists,
@@ -589,12 +589,12 @@ class VmRegistry:
         with self._lock:
             self._vms.pop(vm_id, None)
 
-    def get_vm(self, vm_id: str) -> ManagedVm | None:
+    def get_vm(self, vm_id: str) -> WorkerVm | None:
         """Get a specific VM by ID."""
         with self._lock:
             return self._vms.get(vm_id)
 
-    def all_vms(self) -> list[ManagedVm]:
+    def all_vms(self) -> list[WorkerVm]:
         """Return a snapshot of all tracked VMs."""
         with self._lock:
             return list(self._vms.values())
@@ -614,9 +614,9 @@ class VmRegistry:
 
 
 class VmFactory(Protocol):
-    """Protocol for creating ManagedVm instances.
+    """Protocol for creating WorkerVm instances.
 
-    VmManagers use a factory to create ManagedVm instances. This allows
+    VmManagers use a factory to create WorkerVm instances. This allows
     the registry to track all VMs regardless of which manager created them.
     """
 
@@ -637,8 +637,8 @@ class VmFactory(Protocol):
         labels: dict[str, str],
         address: str | None = None,
         discovery_preamble: str = "",
-    ) -> ManagedVm:
-        """Create a new ManagedVm instance.
+    ) -> WorkerVm:
+        """Create a new WorkerVm instance.
 
         Args:
             vm_id: Unique identifier for the VM
@@ -654,7 +654,7 @@ class VmFactory(Protocol):
                 GCP platforms inject metadata discovery, manual platforms use static address.
 
         Returns:
-            A started ManagedVm instance
+            A started WorkerVm instance
         """
         ...
 
@@ -663,7 +663,7 @@ class TrackedVmFactory:
     """VmFactory that registers VMs with a registry and starts them.
 
     This is the standard factory implementation used by VmManagers.
-    It creates ManagedVm instances, registers them with the registry,
+    It creates WorkerVm instances, registers them with the registry,
     and starts their lifecycle threads.
     """
 
@@ -682,9 +682,9 @@ class TrackedVmFactory:
         labels: dict[str, str],
         address: str | None = None,
         discovery_preamble: str = "",
-    ) -> ManagedVm:
-        """Create a ManagedVm, register it, and start its lifecycle thread."""
-        vm = ManagedVm(
+    ) -> WorkerVm:
+        """Create a WorkerVm, register it, and start its lifecycle thread."""
+        vm = WorkerVm(
             vm_id=vm_id,
             slice_id=slice_id,
             scale_group=scale_group,

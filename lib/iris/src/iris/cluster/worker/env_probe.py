@@ -276,7 +276,7 @@ class DefaultEnvironmentProvider:
         # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
 
-        # VM address from environment (injected by ManagedVm bootstrap)
+        # VM address from environment (injected by WorkerVm bootstrap)
         vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
 
         return cluster_pb2.WorkerMetadata(

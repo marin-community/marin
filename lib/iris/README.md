@@ -49,7 +49,7 @@ Controller Process (in Docker container):
 ├── HTTP dashboard (monitoring, status)
 ├── Scheduler thread (task→worker matching)
 ├── Autoscaler thread (VM lifecycle management)
-└── ManagedVm threads (per-VM state machines)
+└── WorkerVm threads (per-VM state machines)
 
 Worker Process (on each VM):
 ├── Task executor (runs jobs in containers)
@@ -411,7 +411,7 @@ src/iris/
 ├── cluster/                  # Cluster orchestration
 │   ├── controller/          # Controller service + autoscaler
 │   ├── worker/              # Worker service
-│   └── vm/                  # VM management + autoscaling
+│   └── platform/            # Platform integrations + VM lifecycle
 ├── rpc/                      # Protocol definitions + generated code
 └── cli/                      # CLI package
     ├── main.py               # Top-level iris group

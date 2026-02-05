@@ -48,8 +48,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import make_local_config
+from iris.cluster.platform.cluster_manager import ClusterManager
+from iris.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 
 # The iris project root (lib/iris/) - used as workspace for the example
@@ -106,7 +106,7 @@ class DemoCluster:
     def _load_or_default_config(self) -> config_pb2.IrisClusterConfig:
         """Load config from file or build a default demo config."""
         if self._config_path:
-            from iris.cluster.vm.config import load_config
+            from iris.config import load_config
 
             return load_config(Path(self._config_path))
 

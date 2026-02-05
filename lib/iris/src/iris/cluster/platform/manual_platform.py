@@ -30,20 +30,20 @@ import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from iris.cluster.vm.managed_vm import (
-    ManagedVm,
+from iris.cluster.platform.worker_vm import (
+    WorkerVm,
     PoolExhaustedError,
     SshConfig,
     VmFactory,
     VmRegistry,
 )
-from iris.cluster.vm.vm_platform import (
+from iris.cluster.platform.vm_platform import (
     MAX_RECONCILE_WORKERS,
     VmGroupProtocol,
     VmGroupStatus,
     VmSnapshot,
 )
-from iris.cluster.vm.ssh import DirectSshConnection
+from iris.cluster.platform.ssh import DirectSshConnection
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -66,7 +66,7 @@ class ManualVmGroup:
         self,
         group_id: str,
         scale_group: str,
-        vms: list[ManagedVm],
+        vms: list[WorkerVm],
         vm_registry: VmRegistry,
         created_at: Timestamp | None = None,
         on_terminate: Callable[[list[str]], None] | None = None,
@@ -109,7 +109,7 @@ class ManualVmGroup:
         ]
         return VmGroupStatus(vms=snapshots)
 
-    def vms(self) -> list[ManagedVm]:
+    def vms(self) -> list[WorkerVm]:
         return list(self._vms)
 
     def terminate(self) -> None:

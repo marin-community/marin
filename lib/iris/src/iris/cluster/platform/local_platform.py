@@ -46,8 +46,8 @@ from pathlib import Path
 from typing import Any
 
 from iris.cluster.types import get_tpu_topology, tpu_device
-from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
-from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
+from iris.cluster.platform.worker_vm import WorkerVm, VmRegistry
+from iris.cluster.platform.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
@@ -432,8 +432,8 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
-class _StubManagedVm(ManagedVm):
-    """Minimal ManagedVm stub that holds VmInfo without lifecycle management.
+class _StubWorkerVm(WorkerVm):
+    """Minimal WorkerVm stub that holds VmInfo without lifecycle management.
 
     Used by LocalVmGroup to satisfy the VmGroupProtocol interface without
     running actual bootstrap threads.
@@ -481,11 +481,11 @@ class LocalVmGroup(VmGroupProtocol):
         self._vm_registry = vm_registry
         self._terminated = False
 
-        # Create mock ManagedVm instances for each worker (for autoscaler compatibility)
-        self._managed_vms: list[ManagedVm] = []
+        # Create mock WorkerVm instances for each worker (for autoscaler compatibility)
+        self._managed_vms: list[WorkerVm] = []
         for i, (worker_id, port) in enumerate(zip(worker_ids, worker_ports, strict=True)):
-            # Create a minimal ManagedVm that's immediately ready
-            # We don't use ManagedVm's lifecycle thread since workers are in-process
+            # Create a minimal WorkerVm that's immediately ready
+            # We don't use WorkerVm's lifecycle thread since workers are in-process
             vm_info = vm_pb2.VmInfo(
                 vm_id=f"{group_id}-vm-{i}",
                 slice_id=group_id,
@@ -497,8 +497,8 @@ class LocalVmGroup(VmGroupProtocol):
                 created_at=self._created_at.to_proto(),
                 state_changed_at=self._created_at.to_proto(),
             )
-            # Create a stub ManagedVm that just holds the info
-            managed_vm = _StubManagedVm(vm_info)
+            # Create a stub WorkerVm that just holds the info
+            managed_vm = _StubWorkerVm(vm_info)
             self._managed_vms.append(managed_vm)
             vm_registry.register(managed_vm)
 
@@ -546,7 +546,7 @@ class LocalVmGroup(VmGroupProtocol):
             ]
         )
 
-    def vms(self) -> list[ManagedVm]:
+    def vms(self) -> list[WorkerVm]:
         return self._managed_vms
 
     def terminate(self) -> None:

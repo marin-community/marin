@@ -29,11 +29,11 @@ from connectrpc.errors import ConnectError
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import make_local_config
-from iris.cluster.vm.controller_vm import create_controller_vm
-from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
-from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
+from iris.cluster.platform.cluster_manager import ClusterManager
+from iris.cluster.platform.controller_runtime import ControllerRuntime
+from iris.config import make_local_config
+from iris.cluster.platform.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.rpc import cluster_connect, cluster_pb2, config_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
 
@@ -66,6 +66,27 @@ def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
         )
         lines.append(line)
     return "\n".join(lines)
+
+
+def _resolve_group_zones(
+    group_config: config_pb2.ScaleGroupConfig,
+    platform_config: config_pb2.PlatformConfig,
+    zone_override: str | None,
+) -> list[str | None]:
+    if zone_override:
+        return [zone_override]
+
+    if platform_config.WhichOneof("platform") != "gcp":
+        return [None]
+
+    gcp = platform_config.gcp
+    if group_config.zones:
+        return list(group_config.zones)
+    if gcp.default_zones:
+        return list(gcp.default_zones)
+    if gcp.zone:
+        return [gcp.zone]
+    return [None]
 
 
 def _get_autoscaler_status(controller_url: str) -> vm_pb2.AutoscalerStatus:
@@ -207,28 +228,32 @@ def cluster_start(ctx, local: bool):
 
 
 @cluster.command("stop")
+@click.option("--zone", help="Only stop slices in a specific zone")
 @click.pass_context
-def cluster_stop(ctx):
+def cluster_stop(ctx, zone: str | None):
     """Stop controller and terminate all slices."""
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster stop")
-    from iris.cluster.vm.config import IrisConfig
+    from iris.config import IrisConfig
 
     iris_config = IrisConfig(config)
+    config = iris_config.proto
     platform = iris_config.platform()
     ops = platform.vm_ops()
-    slice_ids_by_group: dict[str, list[str]] = {}
+    slice_ids_by_group: dict[str, dict[str | None, list[str]]] = {}
 
     # Discover slices via platform ops (more reliable than RPC since controller may be down)
     click.echo("Discovering existing slices via platform ops...")
     for name, group_config in config.scale_groups.items():
-        slice_ids = ops.list_slices(group_config)
-        if slice_ids:
-            slice_ids_by_group[name] = slice_ids
-        click.echo(f"  Found {len(slice_ids)} slice(s) in group '{name}'")
+        for zone_name in _resolve_group_zones(group_config, config.platform, zone):
+            slice_ids = ops.list_slices(group_config, zone=zone_name)
+            if slice_ids:
+                slice_ids_by_group.setdefault(name, {}).setdefault(zone_name, []).extend(slice_ids)
+            zone_label = zone_name or "default"
+            click.echo(f"  Found {len(slice_ids)} slice(s) in group '{name}' (zone={zone_label})")
 
-    ctrl = create_controller_vm(config)
+    ctrl = ControllerRuntime(platform, config)
     click.echo("Stopping controller...")
     try:
         ctrl.stop()
@@ -240,16 +265,17 @@ def cluster_stop(ctx):
         click.echo("No slices to terminate")
         return
 
-    total = sum(len(ids) for ids in slice_ids_by_group.values())
+    total = sum(len(ids) for per_zone in slice_ids_by_group.values() for ids in per_zone.values())
     click.echo(f"Terminating {total} slice(s)...")
-    for name, slice_ids in slice_ids_by_group.items():
+    for name, per_zone in slice_ids_by_group.items():
         group_config = config.scale_groups[name]
-        for slice_id in slice_ids:
-            try:
-                ops.delete_slice(group_config, slice_id)
-                click.echo(f"Terminated: {slice_id}")
-            except Exception as e:
-                click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
+        for zone_name, slice_ids in per_zone.items():
+            for slice_id in slice_ids:
+                try:
+                    ops.delete_slice(group_config, slice_id, zone=zone_name)
+                    click.echo(f"Terminated: {slice_id}")
+                except Exception as e:
+                    click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
     click.echo("Cluster stopped")
 
 

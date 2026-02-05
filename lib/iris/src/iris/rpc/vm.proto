@@ -139,6 +139,7 @@ message RoutingDecision {
   map<string, string> group_reasons = 2;
   map<string, DemandEntryStatusList> routed_entries = 3;
   repeated UnmetDemand unmet_entries = 4;
+  map<string, string> group_zones = 5;
 }
 
 message DemandEntryStatusList {

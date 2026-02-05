@@ -316,7 +316,7 @@ message WorkerMetadata {
   map<string, AttributeValue> attributes = 40;
 
   // VM address from IRIS_VM_ADDRESS env var, used for autoscaler VM tracking.
-  // For cloud VMs, this is the VM's IP address injected by ManagedVm.
+  // For cloud VMs, this is the VM's IP address injected by WorkerVm.
   // For local workers, this may be empty or a local identifier.
   string vm_address = 41;
 }

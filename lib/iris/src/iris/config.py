@@ -32,11 +32,11 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.types import parse_memory_string
-from iris.cluster.vm.gcp_tpu_platform import TpuVmManager
-from iris.cluster.vm.managed_vm import SshConfig, TrackedVmFactory, VmRegistry
-from iris.cluster.vm.manual_platform import ManualVmManager
-from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.cluster.vm.vm_platform import VmManagerProtocol
+from iris.cluster.platform.gcp_tpu_platform import TpuVmManager
+from iris.cluster.platform.worker_vm import SshConfig, TrackedVmFactory, VmRegistry
+from iris.cluster.platform.manual_platform import ManualVmManager
+from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.platform.vm_platform import VmManagerProtocol
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
@@ -44,6 +44,23 @@ from iris.time_utils import Duration
 logger = logging.getLogger(__name__)
 
 DEFAULT_SSH_PORT = 22
+
+
+def create_platform(
+    platform_config: config_pb2.PlatformConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
+    ssh_config: config_pb2.SshConfig,
+):
+    """Create platform from explicit config sections."""
+    from iris.cluster.platform.platform import create_platform as _create_platform
+
+    return _create_platform(
+        platform_config=platform_config,
+        bootstrap_config=bootstrap_config,
+        timeout_config=timeout_config,
+        ssh_config=ssh_config,
+    )
 
 # Re-export IrisClusterConfig from proto for public API
 IrisClusterConfig = config_pb2.IrisClusterConfig
@@ -590,7 +607,7 @@ def create_autoscaler(
     Raises:
         ValueError: If autoscaler_config has invalid timing values
     """
-    from iris.cluster.vm.autoscaler import Autoscaler
+    from iris.cluster.controller.autoscaler import Autoscaler
 
     # Validate autoscaler config before using it
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
@@ -655,7 +672,7 @@ def create_autoscaler_from_specs(
     Raises:
         ValueError: If a scale group has an unknown provider type
     """
-    from iris.cluster.vm.autoscaler import Autoscaler
+    from iris.cluster.controller.autoscaler import Autoscaler
 
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
@@ -783,8 +800,8 @@ def create_local_autoscaler(
     """
     import tempfile
 
-    from iris.cluster.vm.autoscaler import Autoscaler
-    from iris.cluster.vm.local_platform import LocalVmManager, PortAllocator
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.platform.local_platform import LocalVmManager, PortAllocator
 
     # Create temp dirs for worker resources (autoscaler owns these)
     temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_autoscaler_")
@@ -925,8 +942,6 @@ class IrisConfig:
         Returns:
             Platform implementation (GCP, Manual, or Local)
         """
-        from iris.cluster.vm.platform import create_platform
-
         return create_platform(
             platform_config=self._proto.platform,
             bootstrap_config=self._proto.defaults.bootstrap,

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.cluster.vm.vm_platform import VmGroupProtocol, VmManagerProtocol
+from iris.cluster.platform.vm_platform import VmGroupProtocol, VmManagerProtocol
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -217,7 +217,7 @@ class ScalingGroup:
             QuotaExceededError: When quota is exceeded (quota state is set internally)
         """
         from iris.chaos import chaos_raise
-        from iris.cluster.vm.managed_vm import QuotaExceededError
+        from iris.cluster.platform.worker_vm import QuotaExceededError
 
         timestamp = timestamp or Timestamp.now()
 

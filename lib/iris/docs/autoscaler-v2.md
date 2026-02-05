@@ -29,7 +29,7 @@ The autoscaler currently:
 - For each group, computes a single `ScalingDecision` if demand exceeds capacity or min_slices is violated.
 - Executes scale-up in a background thread (`scale_up` per group) and relies on group-level state for scale-down.
 
-Important details in `lib/iris/src/iris/cluster/vm/autoscaler.py`:
+Important details in `lib/iris/src/iris/cluster/controller/autoscaler.py`:
 - The routing logic is `route_demand`, which chooses groups by matching device type/variant and preemptible, then uses priority and available headroom.
 - The evaluate step only produces at most one scale-up per group per tick.
 - `DemandEntry.total_cpu` and `.total_memory_bytes` exist but are unused in routing.

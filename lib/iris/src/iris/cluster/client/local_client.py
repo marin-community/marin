@@ -24,8 +24,8 @@ from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import make_local_config
+from iris.cluster.platform.cluster_manager import ClusterManager
+from iris.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration, Timestamp

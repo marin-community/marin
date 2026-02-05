@@ -4,7 +4,7 @@
 #   docker build -f Dockerfile.worker -t iris-worker:latest .
 #
 # Or via CLI:
-#   uv run python -m iris.cluster.vm.cli build-image
+#   uv run python -m iris.cluster.platform.cli build-image
 #
 FROM python:3.11-slim
 

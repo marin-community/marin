@@ -23,13 +23,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from iris.cluster.vm.config import (
+from iris.config import (
     config_to_dict,
     create_autoscaler,
     get_ssh_config,
     load_config,
 )
-from iris.cluster.vm.platform import create_platform
+from iris.cluster.platform.platform import create_platform
+from iris.config import IrisConfig
 from iris.rpc import config_pb2
 
 
@@ -137,7 +138,47 @@ scale_groups:
 
         # Verify vm_type is still manual after round-trip
         assert loaded_config.scale_groups["manual_hosts"].vm_type == config_pb2.VM_TYPE_MANUAL_VM
-        assert list(loaded_config.scale_groups["manual_hosts"].manual.hosts) == ["10.0.0.1", "10.0.0.2"]
+
+    def test_iris_config_platform_tunnel_manual(self, tmp_path: Path):
+        """IrisConfig loads config and provides a platform tunnel for manual clusters."""
+        config_content = """\
+platform:
+  manual: {}
+
+defaults:
+  bootstrap:
+    docker_image: gcr.io/project/iris-worker:latest
+    worker_port: 10001
+    controller_address: "http://10.0.0.1:10000"
+  ssh:
+    user: ubuntu
+    key_file: ~/.ssh/id_rsa
+
+scale_groups:
+  manual_hosts:
+    vm_type: manual_vm
+    accelerator_type: cpu
+    slice_size: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      tpu_count: 0
+      gpu_count: 0
+    manual:
+      hosts: [10.0.0.1, 10.0.0.2]
+      ssh_user: ubuntu
+"""
+        config_path = tmp_path / "manual.yaml"
+        config_path.write_text(config_content)
+
+        iris_config = IrisConfig.load(config_path)
+        platform = iris_config.platform()
+        controller_address = iris_config.controller_address()
+
+        with platform.tunnel(controller_address) as url:
+            assert url == controller_address
+            assert list(iris_config.proto.scale_groups["manual_hosts"].manual.hosts) == ["10.0.0.1", "10.0.0.2"]
 
     def test_multiple_scale_groups_preserve_vm_types(self, tmp_path: Path):
         """Config with multiple TPU scale groups preserves vm_type values."""
@@ -561,7 +602,7 @@ class TestLocalConfigTransformation:
 
     def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
         """make_local_config transforms GCP config to local mode."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.config import make_local_config
 
         config_content = """\
 platform:
@@ -627,7 +668,7 @@ scale_groups:
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.config import make_local_config
 
         config_content = """\
 platform:
@@ -698,7 +739,7 @@ scale_groups:
 
     def test_example_configs_load_and_transform(self):
         """Example configs in examples/ directory load and transform to local correctly."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.config import make_local_config
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [

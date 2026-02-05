@@ -49,8 +49,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from iris.cluster.types import get_tpu_topology
-from iris.cluster.vm.managed_vm import QuotaExceededError
-from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
+from iris.cluster.platform.worker_vm import QuotaExceededError
+from iris.cluster.platform.vm_platform import VmGroupStatus, VmSnapshot
 from iris.rpc import time_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
@@ -68,7 +68,7 @@ class FailureMode(Enum):
 class FakeVm:
     """Fake VM that simulates state transitions with configurable delays.
 
-    Unlike ManagedVm, this doesn't run a thread - state transitions happen
+    Unlike WorkerVm, this doesn't run a thread - state transitions happen
     during explicit tick() calls, making tests deterministic.
     """
 
@@ -170,7 +170,7 @@ class FakeVmGroup:
     def vms(self) -> list[FakeVm]:
         """Get VMs in this VM group.
 
-        Returns FakeVm instances (not ManagedVm). The autoscaler uses this
+        Returns FakeVm instances (not WorkerVm). The autoscaler uses this
         to find workers by worker_id, so FakeVm must have a compatible interface.
         """
         return list(self._vms)

@@ -24,16 +24,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from iris.cluster.types import DeviceType, VmWorkerStatus
-from iris.cluster.vm.autoscaler import (
+from iris.cluster.controller.autoscaler import (
     Autoscaler,
     DemandEntry,
     ScalingAction,
     ScalingDecision,
     route_demand,
 )
-from iris.cluster.vm.managed_vm import VmRegistry
-from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
-from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.cluster.platform.worker_vm import VmRegistry
+from iris.cluster.platform.vm_platform import VmGroupStatus, VmSnapshot
+from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -133,7 +133,7 @@ def make_mock_slice(
     status = VmGroupStatus(vms=snapshots)
     mock.status.return_value = status
 
-    # Mock vms() to return ManagedVm-like mocks
+    # Mock vms() to return WorkerVm-like mocks
     worker_ids = worker_ids or [f"worker-{slice_id}-{i}" for i in range(len(vm_states))]
     mock_vms = []
     for i, (state, worker_id) in enumerate(zip(vm_states, worker_ids, strict=True)):
@@ -1150,7 +1150,7 @@ class TestAutoscalerWaterfallEndToEnd:
         next run_once() will see primary in QUOTA_EXCEEDED and route to fallback.
         """
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig, FailureMode
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         config_primary = make_scale_group_config(
             name="primary",
@@ -1217,7 +1217,7 @@ class TestAutoscalerWaterfallEndToEnd:
         """
 
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig, FailureMode
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
         from iris.time_utils import Timestamp
 
         config_primary = make_scale_group_config(
@@ -1290,7 +1290,7 @@ class TestAutoscalerWaterfallEndToEnd:
         """Generic failure triggers backoff, which cascades to fallback."""
 
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig, FailureMode
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         config_primary = make_scale_group_config(
             name="primary",
@@ -1495,8 +1495,8 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_exceeded_sets_group_unavailable(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QuotaExceededError sets group to QUOTA_EXCEEDED state."""
-        from iris.cluster.vm.managed_vm import QuotaExceededError
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("Quota exceeded")
@@ -1518,7 +1518,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_exceeded_routes_to_fallback_group(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """When primary group has quota exceeded, demand routes to fallback."""
-        from iris.cluster.vm.managed_vm import QuotaExceededError
+        from iris.cluster.platform.worker_vm import QuotaExceededError
 
         config_primary = make_scale_group_config(
             name="primary",
@@ -1564,8 +1564,8 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_state_expires_after_timeout(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QUOTA_EXCEEDED state expires after timeout."""
-        from iris.cluster.vm.managed_vm import QuotaExceededError
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("Quota exceeded")
@@ -1585,7 +1585,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_generic_error_triggers_backoff_not_quota(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Non-quota errors trigger backoff, not quota exceeded state."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = RuntimeError("TPU unavailable")
@@ -1645,7 +1645,7 @@ class TestAutoscalerActionLogging:
 
     def test_action_log_records_quota_exceeded(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Verify quota exceeded events are logged."""
-        from iris.cluster.vm.managed_vm import QuotaExceededError
+        from iris.cluster.platform.worker_vm import QuotaExceededError
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("Quota exceeded in zone")
@@ -1734,7 +1734,7 @@ class TestScalingGroupRequestingState:
 
     def test_mark_requesting_sets_requesting_state(self):
         """mark_requesting() causes availability() to return REQUESTING."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
         from iris.time_utils import Duration, Timestamp
 
         config = make_scale_group_config(
@@ -1758,7 +1758,7 @@ class TestScalingGroupRequestingState:
 
     def test_requesting_state_expires_after_timeout(self):
         """REQUESTING state expires after timeout."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
         from iris.time_utils import Duration, Timestamp
 
         config = make_scale_group_config(
@@ -1785,7 +1785,7 @@ class TestScalingGroupRequestingState:
 
     def test_clear_requesting_removes_state(self):
         """clear_requesting() removes REQUESTING state."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
         from iris.time_utils import Duration, Timestamp
 
         config = make_scale_group_config(
@@ -1894,7 +1894,7 @@ class TestAutoscalerAsyncScaleUp:
     def test_group_marked_requesting_during_scale_up(self):
         """Group is marked REQUESTING immediately after execute() is called."""
 
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
         from iris.time_utils import Timestamp
 
         config = make_scale_group_config(

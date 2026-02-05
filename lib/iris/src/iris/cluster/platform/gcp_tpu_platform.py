@@ -29,9 +29,9 @@ import logging
 import subprocess
 
 from iris.cluster.types import get_tpu_topology
-from iris.cluster.vm.managed_vm import ManagedVm, VmFactory, VmRegistry
-from iris.cluster.vm.ssh import GcloudSshConnection
-from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
+from iris.cluster.platform.worker_vm import WorkerVm, VmFactory, VmRegistry
+from iris.cluster.platform.ssh import GcloudSshConnection
+from iris.cluster.platform.vm_platform import VmGroupStatus, VmSnapshot
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
@@ -52,7 +52,7 @@ class TpuVmGroup:
     """A TPU VM group with lifecycle management.
 
     Represents a TPU pod (potentially multi-host) that can be managed
-    as an atomic unit. The group owns its ManagedVm instances and
+    as an atomic unit. The group owns its WorkerVm instances and
     coordinates their lifecycle.
     """
 
@@ -62,7 +62,7 @@ class TpuVmGroup:
         scale_group: str,
         zone: str,
         project_id: str,
-        vms: list[ManagedVm],
+        vms: list[WorkerVm],
         vm_registry: VmRegistry,
         created_at: Timestamp | None = None,
     ):
@@ -105,7 +105,7 @@ class TpuVmGroup:
         ]
         return VmGroupStatus(vms=snapshots)
 
-    def vms(self) -> list[ManagedVm]:
+    def vms(self) -> list[WorkerVm]:
         return list(self._vms)
 
     def terminate(self) -> None:
@@ -179,7 +179,7 @@ class TpuVmManager:
     def create_vm_group(self, tags: dict[str, str] | None = None) -> TpuVmGroup:
         """Create a new TPU VM group.
 
-        Creates the TPU pod via gcloud, then creates ManagedVm instances
+        Creates the TPU pod via gcloud, then creates WorkerVm instances
         for each worker in the pod.
         """
         group_id = f"{self._label_prefix}-{self._config.name}-{Timestamp.now().epoch_ms()}"
@@ -269,14 +269,14 @@ echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"
         addresses: list[str] | None,
         zone: str | None = None,
     ) -> TpuVmGroup:
-        """Create a TpuVmGroup with ManagedVm instances for each worker."""
+        """Create a TpuVmGroup with WorkerVm instances for each worker."""
         zone = zone or self._zone
         vm_count = get_tpu_topology(self._config.accelerator_variant).vm_count
 
         # GCP workers discover controller via GCP instance metadata
         discovery_preamble = self._get_discovery_preamble()
 
-        vms: list[ManagedVm] = []
+        vms: list[WorkerVm] = []
         for i in range(vm_count):
             conn = GcloudSshConnection(
                 project_id=self._project_id,

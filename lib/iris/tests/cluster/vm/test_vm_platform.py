@@ -30,10 +30,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iris.cluster.vm.gcp_tpu_platform import TpuVmGroup, TpuVmManager
-from iris.cluster.vm.managed_vm import PoolExhaustedError, TrackedVmFactory, VmRegistry
-from iris.cluster.vm.manual_platform import ManualVmGroup, ManualVmManager
-from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
+from iris.cluster.platform.gcp_tpu_platform import TpuVmGroup, TpuVmManager
+from iris.cluster.platform.worker_vm import PoolExhaustedError, TrackedVmFactory, VmRegistry
+from iris.cluster.platform.manual_platform import ManualVmGroup, ManualVmManager
+from iris.cluster.platform.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.rpc import config_pb2, vm_pb2
 
 # =============================================================================
@@ -66,7 +66,7 @@ def make_mock_vm(
     init_phase: str = "",
     init_error: str = "",
 ) -> MagicMock:
-    """Create a mock ManagedVm for testing."""
+    """Create a mock WorkerVm for testing."""
     vm = MagicMock()
     vm.info = vm_pb2.VmInfo(
         vm_id=vm_id,
@@ -271,7 +271,7 @@ def test_vm_group_status_collects_error_messages():
 # =============================================================================
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_vm_group_status_reflects_vm_states(
     mock_run: MagicMock,
     vm_group_factory: Callable[[list[MagicMock]], VmGroupProtocol],
@@ -291,7 +291,7 @@ def test_vm_group_status_reflects_vm_states(
     assert status.vm_count == 2
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_vm_group_to_proto_includes_vms(
     mock_run: MagicMock,
     vm_group_factory: Callable[[list[MagicMock]], VmGroupProtocol],
@@ -311,7 +311,7 @@ def test_vm_group_to_proto_includes_vms(
     assert all(vm.state == vm_pb2.VM_STATE_READY for vm in proto.vms)
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_vm_group_terminate_stops_and_unregisters_vms(
     mock_run: MagicMock,
     vm_group_factory: Callable[[list[MagicMock]], VmGroupProtocol],
@@ -390,7 +390,7 @@ def mock_factory(registry: VmRegistry) -> MagicMock:
     return mock
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_vm_manager_create_returns_vm_group(
     mock_run: MagicMock,
     vm_manager_factory: tuple[str, object],
@@ -405,7 +405,7 @@ def test_vm_manager_create_returns_vm_group(
     assert len(vm_group.vms()) >= 1
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_vm_manager_create_with_tags_propagates(
     mock_run: MagicMock,
     mock_factory: MagicMock,
@@ -455,7 +455,7 @@ def test_vm_manager_create_with_tags_propagates(
 # =============================================================================
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_tpu_manager_create_raises_on_gcloud_failure(
     mock_run: MagicMock,
     mock_factory: MagicMock,
@@ -485,7 +485,7 @@ def test_tpu_manager_create_raises_on_gcloud_failure(
         ("v5p-16", 2),  # Multi-host (2 VMs)
     ],
 )
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_tpu_manager_creates_correct_vm_count_for_topology(
     mock_run: MagicMock,
     accelerator_variant: str,
@@ -524,7 +524,7 @@ def test_tpu_manager_creates_correct_vm_count_for_topology(
     assert len(vm_group.vms()) == expected_vm_count
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_tpu_manager_vm_ids_include_worker_index_for_multi_host(
     mock_run: MagicMock,
     mock_factory: MagicMock,
@@ -552,7 +552,7 @@ def test_tpu_manager_vm_ids_include_worker_index_for_multi_host(
     assert any("-worker-1" in vm_id for vm_id in vm_ids)
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_tpu_manager_discover_creates_groups_for_found_tpus(
     mock_run: MagicMock,
     mock_factory: MagicMock,
@@ -601,7 +601,7 @@ def test_tpu_manager_discover_creates_groups_for_found_tpus(
     assert "iris-tpu-v5p-8-67890" in slice_ids
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_tpu_manager_discover_skips_tpus_in_deleting_state(
     mock_run: MagicMock,
     mock_factory: MagicMock,
@@ -657,7 +657,7 @@ def test_tpu_manager_discover_skips_tpus_in_deleting_state(
     assert "iris-tpu-stopped" not in slice_ids
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_tpu_vm_group_terminate_deletes_tpu_resource(mock_run: MagicMock, registry: VmRegistry):
     """TpuVmGroup.terminate() unregisters VMs and executes deletion."""
     vms = [make_mock_vm("vm-0")]
@@ -786,7 +786,7 @@ def test_manual_vm_group_terminate_calls_on_terminate_callback(registry: VmRegis
     assert callback_hosts == ["10.0.0.1"]
 
 
-@patch("iris.cluster.vm.manual_platform.DirectSshConnection")
+@patch("iris.cluster.platform.manual_platform.DirectSshConnection")
 def test_manual_manager_discovers_hosts_with_running_workers(
     mock_ssh_conn_class: MagicMock,
     mock_factory: MagicMock,
@@ -889,7 +889,7 @@ def test_registry_concurrent_access_is_safe(registry: VmRegistry):
 # =============================================================================
 
 
-@patch("iris.cluster.vm.managed_vm.ManagedVm")
+@patch("iris.cluster.platform.worker_vm.WorkerVm")
 def test_factory_creates_registers_and_starts_vm(
     mock_managed_vm_class: MagicMock,
     registry: VmRegistry,
@@ -926,7 +926,7 @@ def test_factory_creates_registers_and_starts_vm(
     assert retrieved_vm is created_vm
 
 
-@patch("iris.cluster.vm.managed_vm.ManagedVm")
+@patch("iris.cluster.platform.worker_vm.WorkerVm")
 def test_factory_and_registry_integration(
     mock_managed_vm_class: MagicMock,
     bootstrap_config: config_pb2.BootstrapConfig,
@@ -986,7 +986,7 @@ def test_factory_and_registry_integration(
 # =============================================================================
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_multi_host_tpu_slice_status_aggregates_all_workers(mock_run: MagicMock, registry: VmRegistry):
     """A multi-host TPU slice reports correct aggregate status from all workers."""
     vms = [make_mock_vm(f"vm-{i}", state=vm_pb2.VM_STATE_READY) for i in range(4)]
@@ -1006,7 +1006,7 @@ def test_multi_host_tpu_slice_status_aggregates_all_workers(mock_run: MagicMock,
     assert status.all_ready is True
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_multi_host_tpu_partial_failure_marks_slice_as_failed(mock_run: MagicMock, registry: VmRegistry):
     """When one host fails, the whole slice is marked as failed."""
     vms = [
@@ -1033,7 +1033,7 @@ def test_multi_host_tpu_partial_failure_marks_slice_as_failed(mock_run: MagicMoc
     assert "Network timeout" in status.error_messages
 
 
-@patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
+@patch("iris.cluster.platform.gcp_tpu_platform.subprocess.run")
 def test_multi_host_tpu_terminate_stops_all_workers(mock_run: MagicMock, registry: VmRegistry):
     """Terminating a multi-host slice unregisters all VMs from the registry."""
     vms = [make_mock_vm(f"vm-{i}") for i in range(4)]

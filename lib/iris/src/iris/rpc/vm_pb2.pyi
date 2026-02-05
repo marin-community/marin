@@ -183,7 +183,7 @@ class UnmetDemand(_message.Message):
     def __init__(self, entry: _Optional[_Union[DemandEntryStatus, _Mapping]] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class RoutingDecision(_message.Message):
-    __slots__ = ("group_to_launch", "group_reasons", "routed_entries", "unmet_entries")
+    __slots__ = ("group_to_launch", "group_reasons", "routed_entries", "unmet_entries", "group_zones")
     class GroupToLaunchEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -205,15 +205,24 @@ class RoutingDecision(_message.Message):
         key: str
         value: DemandEntryStatusList
         def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[DemandEntryStatusList, _Mapping]] = ...) -> None: ...
+    class GroupZonesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     GROUP_TO_LAUNCH_FIELD_NUMBER: _ClassVar[int]
     GROUP_REASONS_FIELD_NUMBER: _ClassVar[int]
     ROUTED_ENTRIES_FIELD_NUMBER: _ClassVar[int]
     UNMET_ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    GROUP_ZONES_FIELD_NUMBER: _ClassVar[int]
     group_to_launch: _containers.ScalarMap[str, int]
     group_reasons: _containers.ScalarMap[str, str]
     routed_entries: _containers.MessageMap[str, DemandEntryStatusList]
     unmet_entries: _containers.RepeatedCompositeFieldContainer[UnmetDemand]
-    def __init__(self, group_to_launch: _Optional[_Mapping[str, int]] = ..., group_reasons: _Optional[_Mapping[str, str]] = ..., routed_entries: _Optional[_Mapping[str, DemandEntryStatusList]] = ..., unmet_entries: _Optional[_Iterable[_Union[UnmetDemand, _Mapping]]] = ...) -> None: ...
+    group_zones: _containers.ScalarMap[str, str]
+    def __init__(self, group_to_launch: _Optional[_Mapping[str, int]] = ..., group_reasons: _Optional[_Mapping[str, str]] = ..., routed_entries: _Optional[_Mapping[str, DemandEntryStatusList]] = ..., unmet_entries: _Optional[_Iterable[_Union[UnmetDemand, _Mapping]]] = ..., group_zones: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class DemandEntryStatusList(_message.Message):
     __slots__ = ("entries",)

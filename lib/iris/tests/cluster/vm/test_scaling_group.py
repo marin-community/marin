@@ -24,8 +24,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from iris.cluster.types import VmWorkerStatus
-from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
-from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.cluster.platform.vm_platform import VmGroupStatus, VmSnapshot
+from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.rpc import time_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -689,7 +689,7 @@ class TestScalingGroupAvailability:
 
     def test_available_when_no_constraints(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Group is AVAILABLE when not in backoff, quota ok, and under capacity."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         group = ScalingGroup(unbounded_config, manager)
@@ -699,7 +699,7 @@ class TestScalingGroupAvailability:
 
     def test_at_capacity_when_at_max_slices(self):
         """Group is AT_CAPACITY when at max_slices."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
@@ -720,7 +720,7 @@ class TestScalingGroupAvailability:
 
     def test_backoff_when_in_backoff_period(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Group is in BACKOFF when backoff timer is active."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         group = ScalingGroup(unbounded_config, manager, backoff_initial=Duration.from_seconds(60.0))
@@ -758,8 +758,8 @@ class TestScalingGroupAvailability:
 
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
-        from iris.cluster.vm.managed_vm import QuotaExceededError
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("TPU quota exhausted")
@@ -779,7 +779,7 @@ class TestScalingGroupAvailability:
 
     def test_successful_scale_up_clears_quota_state(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Successful scale-up clears any quota exceeded state."""
-        from iris.cluster.vm.managed_vm import QuotaExceededError
+        from iris.cluster.platform.worker_vm import QuotaExceededError
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = [
@@ -799,8 +799,8 @@ class TestScalingGroupAvailability:
 
     def test_quota_exceeded_takes_precedence_over_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded has higher precedence than backoff."""
-        from iris.cluster.vm.managed_vm import QuotaExceededError
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.platform.worker_vm import QuotaExceededError
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("Quota exhausted")

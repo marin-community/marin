@@ -111,6 +111,7 @@ When adding new modules or significant features:
 |------|------|-------------|
 | Architecture | README.md | High-level architecture, CLI reference, quick start |
 | Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
+| VM/Platform Refactor | docs/vm-refactor.md | Controller/platform layout and VM lifecycle refactor |
 | Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
 
@@ -159,13 +160,14 @@ src/iris/
 ├── cluster/
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
+│   │   ├── autoscaler.py        # Core scaling logic
+│   │   ├── scaling_group.py     # Per-group state tracking
 │   │   └── main.py              # Controller daemon CLI (serve command)
-│   └── vm/
-│       ├── autoscaler.py        # Core scaling logic
-│       ├── scaling_group.py     # Per-group state tracking
-│       ├── gcp.py               # GCP TPU management
-│       ├── manual.py            # Pre-existing host management
-│       └── config.py            # Config loading + factory functions
+│   └── platform/
+│       ├── platform.py          # Platform factory + GCP/manual/local implementations
+│       ├── gcp_tpu_platform.py  # GCP TPU management
+│       ├── worker_vm.py         # WorkerVm + bootstrap + registry
+│       └── ssh.py               # SSH + tunneling helpers
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.

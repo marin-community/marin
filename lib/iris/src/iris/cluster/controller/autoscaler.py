@@ -38,8 +38,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
-from iris.cluster.vm.managed_vm import VmRegistry
-from iris.cluster.vm.scaling_group import GroupAvailability, ScalingGroup
+from iris.cluster.platform.worker_vm import VmRegistry
+from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -108,6 +108,7 @@ class RoutingDecision:
     routed_entries: dict[str, list[DemandEntry]]
     unmet_entries: list[UnmetDemand]
     group_reasons: dict[str, str]
+    group_zones: dict[str, str]
 
 
 def route_demand(
@@ -124,6 +125,10 @@ def route_demand(
     routed: dict[str, list[DemandEntry]] = {}
     unmet: list[UnmetDemand] = []
     group_reasons: dict[str, str] = {}
+    group_zones = {
+        group.name: (group.config.zones[0] if group.config.zones else "")
+        for group in sorted_groups
+    }
 
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
@@ -230,6 +235,7 @@ def route_demand(
         routed_entries=routed,
         unmet_entries=unmet,
         group_reasons=group_reasons,
+        group_zones=group_zones,
     )
 
 
@@ -543,7 +549,7 @@ class Autoscaler:
         Returns:
             True if scale-up succeeded, False otherwise.
         """
-        from iris.cluster.vm.managed_vm import QuotaExceededError
+        from iris.cluster.platform.worker_vm import QuotaExceededError
 
         # Log action as pending BEFORE execution
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
@@ -699,6 +705,7 @@ class Autoscaler:
             group_reasons=decision.group_reasons,
             routed_entries=routed_entries,
             unmet_entries=unmet_entries,
+            group_zones=decision.group_zones,
         )
 
     def get_group(self, name: str) -> ScalingGroup | None:
