@@ -234,9 +234,11 @@ def save_eval_datasets_to_gcs(
         )
 
         # Upload cache directory to GCS
+        # The trailing slash is needed to upload the contents of the folder to gcs_path
+        # rather than creating a subdirectory (see marin/evaluation/utils.py)
         log_obj.info(f"Uploading datasets to {gcs_path}")
         fs = fsspec.core.url_to_fs(gcs_path)[0]
-        fs.put(cache_dir, gcs_path, recursive=True)
+        fs.put(cache_dir + "/", gcs_path, recursive=True)
 
         # Write manifest file
         with fsspec.open(manifest_path, "w") as f:
@@ -309,10 +311,12 @@ def load_eval_datasets_from_gcs(
     os.makedirs(local_cache_dir, exist_ok=True)
 
     # Sync from GCS to local
+    # The trailing slash is needed to download the contents of the folder to local_cache_dir
+    # rather than creating a subdirectory (see marin/evaluation/utils.py)
     log_obj.info(f"Syncing eval datasets from {gcs_path} to {local_cache_dir}")
     try:
         fs = fsspec.core.url_to_fs(gcs_path)[0]
-        fs.get(gcs_path, local_cache_dir, recursive=True)
+        fs.get(gcs_path + "/", local_cache_dir, recursive=True)
         log_obj.info(f"Successfully synced eval datasets to {local_cache_dir}")
         return True
     except Exception as e:
