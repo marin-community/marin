@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -21,7 +22,10 @@ import fsspec
 import pyarrow as pa
 import ray
 from fray.cluster import ResourceConfig
+from fray.cluster.base import TpuConfig
 from marin.generation.chunk_utils import ChunkStrategy
+
+logger = logging.getLogger(__name__)
 from marin.generation.pipeline import vLLMTextGeneration
 from marin.utils import fsspec_glob
 from ray.data import DataContext
@@ -117,13 +121,19 @@ def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     # Clear JAX_PLATFORMS so TPU devices are detected correctly
     runtime_env = {"env_vars": {"JAX_PLATFORMS": "tpu"}}
 
-    # Request TPU resources directly without placement groups.
-    # For TPU nodes (e.g., v5p-8), all chips are co-located on the same node,
-    # so requesting TPU: N will naturally land on a node with N chips.
-    # This is compatible with Ray autoscaling.
-    tpu_count = config.tensor_parallel_size if config.tensor_parallel_size > 1 else 1
+    # Request TPU resources - use the tensor_parallel_size from config
+    # which should match the number of TPU chips needed
+    resources: dict[str, float] = {"TPU": config.tensor_parallel_size}
+
+    # Also request the specific TPU type resource to ensure scheduling on the correct node type.
+    # The cluster config defines resources like "TPU-v5p-8-head: 1" for each TPU type.
+    if config.resource_config and config.resource_config.device:
+        tpu_variant = config.resource_config.device.variant
+        tpu_head_resource = f"TPU-{tpu_variant}-head"
+        resources[tpu_head_resource] = 1
+
     return {
-        "resources": {"TPU": tpu_count},
+        "resources": resources,
         "max_restarts": -1,
         "runtime_env": runtime_env,
     }
@@ -176,44 +186,80 @@ def _get_column_types_from_schema(schema) -> dict[str, pa.DataType]:
     return column_types
 
 
-@ray.remote
+@ray.remote(num_cpus=0, max_retries=0)
 def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[str, str]):
     import pandas as pd
+    import sys
 
-    if isinstance(id_column, dict):
-        dataset_column = next(iter(id_column.keys()))
-        metadata_key_column = next(iter(id_column.values()))
-    else:
-        dataset_column = id_column
-        metadata_key_column = None
+    try:
+        if isinstance(id_column, dict):
+            dataset_column = next(iter(id_column.keys()))
+            metadata_key_column = next(iter(id_column.values()))
+        else:
+            dataset_column = id_column
+            metadata_key_column = None
 
-    # TODO(chris): replace columns with user input
-    df = pd.read_parquet(checkpoint_filepath, columns=[dataset_column])
-    finished_ids = set()
+        df = pd.read_parquet(checkpoint_filepath, columns=[dataset_column])
+        finished_ids = set()
 
-    if metadata_key_column is None:
-        finished_ids = set(df[dataset_column])
-    else:
-        for metadata in df[dataset_column]:
-            if metadata is not None and metadata_key_column in metadata:
-                finished_ids.add(metadata[metadata_key_column])
+        if metadata_key_column is None:
+            finished_ids = set(df[dataset_column])
+        else:
+            for metadata in df[dataset_column]:
+                if metadata is not None and metadata_key_column in metadata:
+                    finished_ids.add(metadata[metadata_key_column])
 
-    return finished_ids
+        return finished_ids
+    except Exception as e:
+        print(f"Error processing {checkpoint_filepath}: {e}", file=sys.stderr, flush=True)
+        raise
 
 
 def find_all_finished_ids(checkpoint_path: str, filetype: str, id_column: str | dict[str, str]):
-    import concurrent.futures
-
-    import tqdm
+    import sys
 
     files = fsspec_glob(os.path.join(checkpoint_path, f"**/*.{filetype}"))
+    print(f"[CHECKPOINT] Found {len(files)} checkpoint files to scan", flush=True)
+    logger.info(f"Found {len(files)} checkpoint files to scan for finished IDs")
+
+    if len(files) == 0:
+        return set()
+
     finished_ids = set()
 
-    refs = [_find_finished_ids_for_file.remote(file, id_column) for file in files]
-    futures = [ref.future() for ref in refs]
-    for future in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Finding finished IDs"):
-        finished_ids.update(future.result())
+    # Process files in smaller batches to avoid overwhelming the scheduler
+    batch_size = 20
+    for i in range(0, len(files), batch_size):
+        batch_files = files[i:i + batch_size]
+        batch_num = i // batch_size + 1
+        total_batches = (len(files) + batch_size - 1) // batch_size
+        print(f"[CHECKPOINT] Processing batch {batch_num}/{total_batches}", flush=True)
 
+        refs = [_find_finished_ids_for_file.remote(file, id_column) for file in batch_files]
+
+        # Use ray.wait with timeout to track progress
+        try:
+            ready_refs, remaining_refs = ray.wait(refs, num_returns=len(refs), timeout=120)
+            if remaining_refs:
+                print(f"[CHECKPOINT] WARNING: {len(remaining_refs)} tasks not completed after 2 min timeout", flush=True)
+                # Try to get what we can
+                for ref in remaining_refs:
+                    ray.cancel(ref, force=True)
+
+            for ref in ready_refs:
+                try:
+                    result = ray.get(ref)
+                    finished_ids.update(result)
+                except Exception as e:
+                    print(f"[CHECKPOINT] Error getting result: {e}", flush=True)
+
+            print(f"[CHECKPOINT] Batch {batch_num} complete. Total IDs: {len(finished_ids)}", flush=True)
+        except Exception as e:
+            print(f"[CHECKPOINT] Error in batch {batch_num}: {e}", flush=True)
+            raise
+
+    print(f"[CHECKPOINT] Scan complete. Found {len(finished_ids)} finished IDs", flush=True)
+    logger.info(f"Checkpoint scan complete. Found {len(finished_ids)} finished IDs")
     return finished_ids
 
 
@@ -259,15 +305,25 @@ def run_inference(config: TextGenerationInferenceConfig):
             output_filetype = config.output_filetype_override
         else:
             output_filetype = config.filetype
-        finished_ids = find_all_finished_ids(config.output_path, output_filetype, config.checkpoint_id_column)
-        if len(finished_ids) > 0:
-            if isinstance(config.checkpoint_id_column, dict):
-                dataset_column = next(iter(config.checkpoint_id_column.keys()))
-                metadata_key_column = next(iter(config.checkpoint_id_column.values()))
-                ds = ds.filter(lambda x: x[dataset_column][metadata_key_column] not in finished_ids)
-            else:
-                ds = ds.filter(lambda x: x[config.checkpoint_id_column] not in finished_ids)
-            print("Dataset count after checkpoint filter:", ds.count())
+
+        # Check how many checkpoint files exist before scanning
+        checkpoint_files = fsspec_glob(os.path.join(config.output_path, f"**/*.{output_filetype}"))
+        logger.info(f"Found {len(checkpoint_files)} existing checkpoint files")
+
+        if len(checkpoint_files) > 0:
+            finished_ids = find_all_finished_ids(config.output_path, output_filetype, config.checkpoint_id_column)
+            logger.info(f"Found {len(finished_ids)} already-processed IDs to filter out")
+            if len(finished_ids) > 0:
+                if isinstance(config.checkpoint_id_column, dict):
+                    dataset_column = next(iter(config.checkpoint_id_column.keys()))
+                    metadata_key_column = next(iter(config.checkpoint_id_column.values()))
+                    ds = ds.filter(lambda x: x[dataset_column][metadata_key_column] not in finished_ids)
+                else:
+                    ds = ds.filter(lambda x: x[config.checkpoint_id_column] not in finished_ids)
+                # Note: Removed ds.count() call here - it was blocking and causing jobs to hang
+                # The filter will still work lazily during inference
+        else:
+            logger.info("No checkpoint files found, skipping checkpoint filtering")
 
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,
