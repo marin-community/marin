@@ -394,10 +394,42 @@ message Controller {
     string job_id = 1;
   }
 
-  message ListJobsRequest {}
+  // Sort fields for job listing
+  enum JobSortField {
+    JOB_SORT_FIELD_UNSPECIFIED = 0;
+    JOB_SORT_FIELD_DATE = 1;     // submitted_at_ms
+    JOB_SORT_FIELD_NAME = 2;
+    JOB_SORT_FIELD_STATE = 3;
+    JOB_SORT_FIELD_FAILURES = 4;
+    JOB_SORT_FIELD_PREEMPTIONS = 5;
+  }
+
+  enum SortDirection {
+    SORT_DIRECTION_UNSPECIFIED = 0;  // Default to descending for date, ascending for others
+    SORT_DIRECTION_ASC = 1;
+    SORT_DIRECTION_DESC = 2;
+  }
+
+  message ListJobsRequest {
+    // Pagination
+    int32 offset = 1;   // Skip first N jobs (default: 0)
+    int32 limit = 2;    // Max jobs to return (default: 50, max: 500)
+
+    // Sorting (default: date descending)
+    JobSortField sort_field = 3;
+    SortDirection sort_direction = 4;
+
+    // Filtering
+    string name_filter = 5;  // Filter by job name (substring match)
+    string state_filter = 6; // Filter by state (exact match, e.g., "running")
+  }
 
   message ListJobsResponse {
     repeated JobStatus jobs = 1;
+
+    // Pagination info
+    int32 total_count = 2;  // Total jobs matching filters (before pagination)
+    bool has_more = 3;      // More jobs available after this page
   }
 
   // --- Task Operations ---
