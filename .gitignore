@@ -234,5 +234,6 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+.chainlink
 
 .worktrees
