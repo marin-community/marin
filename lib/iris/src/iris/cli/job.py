@@ -240,7 +240,7 @@ def _submit_and_wait_job(
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
-    include_children_logs: bool = False,
+    include_children_logs: bool = True,
     terminate_on_exit: bool = True,
 ) -> int:
     """Submit job and optionally wait for completion.
