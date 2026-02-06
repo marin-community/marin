@@ -20,7 +20,7 @@ processing the data for tree diffusion training.
 
 import logging
 from dataclasses import dataclass
-from typing import Iterator
+from collections.abc import Iterator
 
 import jax
 import jax.numpy as jnp

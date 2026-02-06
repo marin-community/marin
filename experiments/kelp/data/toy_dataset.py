@@ -19,11 +19,11 @@ for testing the tree diffusion training pipeline.
 """
 
 from dataclasses import dataclass
-from typing import Iterator
+from collections.abc import Iterator
 
 import jax.numpy as jnp
 from jax import random
-from jaxtyping import Array, Int, PRNGKeyArray
+from jaxtyping import Array, PRNGKeyArray
 
 
 @dataclass
