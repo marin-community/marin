@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
@@ -29,8 +43,9 @@ from pathlib import Path
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-def sample_mixed_weights(rng: np.random.Generator, n_domains: int, vertex_prob: float = 0.3,
-                         min_dominant_weight: float = 0.7) -> np.ndarray:
+def sample_mixed_weights(
+    rng: np.random.Generator, n_domains: int, vertex_prob: float = 0.3, min_dominant_weight: float = 0.7
+) -> np.ndarray:
     """Sample weights using mixed strategy (uniform + vertex-biased).
 
     This matches the MIXED sampling strategy from weight_sampler.py.
@@ -58,8 +73,7 @@ def sample_mixed_weights(rng: np.random.Generator, n_domains: int, vertex_prob: 
         return x / x.sum()
 
 
-def sample_configs(n_samples: int, n_domains: int = 3, n_phases: int = 3,
-                   seed: int = 42) -> np.ndarray:
+def sample_configs(n_samples: int, n_domains: int = 3, n_phases: int = 3, seed: int = 42) -> np.ndarray:
     """Sample n_samples mixture configurations using mixed strategy.
 
     Returns array of shape (n_samples, n_domains * n_phases).
@@ -78,7 +92,7 @@ def sample_configs(n_samples: int, n_domains: int = 3, n_phases: int = 3,
 
 
 def main():
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     # Load data
     script_dir = Path(__file__).parent
@@ -86,31 +100,37 @@ def main():
 
     # Filter out baseline run 90000 which has anomalous loss (13.47 vs ~3.6 for others)
     # This is the pure SFT-only phase_2 run which diverged
-    df = df[df['run_id'] != 90000]
+    df = df[df["run_id"] != 90000]
 
     print(f"Total runs: {len(df)}")
     print(f"Completed runs: {len(df[df['status'] == 'completed'])}")
 
     # Feature columns (mixture weights for all phases)
     feature_cols = [
-        'phase_0_nemotron_full', 'phase_0_dolmino', 'phase_0_openthoughts_sft',
-        'phase_1_nemotron_full', 'phase_1_dolmino', 'phase_1_openthoughts_sft',
-        'phase_2_nemotron_full', 'phase_2_dolmino', 'phase_2_openthoughts_sft',
+        "phase_0_nemotron_full",
+        "phase_0_dolmino",
+        "phase_0_openthoughts_sft",
+        "phase_1_nemotron_full",
+        "phase_1_dolmino",
+        "phase_1_openthoughts_sft",
+        "phase_2_nemotron_full",
+        "phase_2_dolmino",
+        "phase_2_openthoughts_sft",
     ]
 
     # Target metrics - we'll focus on key ones
     target_cols = [
-        'eval/loss',
-        'eval/paloma/c4_en/bpb',
-        'lm_eval/hellaswag_0shot/acc_norm',
-        'lm_eval/arc_challenge/acc_norm',
-        'lm_eval/piqa/acc',
-        'lm_eval/boolq/acc',
-        'lm_eval/averages/macro_avg_acc',
+        "eval/loss",
+        "eval/paloma/c4_en/bpb",
+        "lm_eval/hellaswag_0shot/acc_norm",
+        "lm_eval/arc_challenge/acc_norm",
+        "lm_eval/piqa/acc",
+        "lm_eval/boolq/acc",
+        "lm_eval/averages/macro_avg_acc",
     ]
 
     # Filter to completed runs
-    df_complete = df[df['status'] == 'completed'].copy()
+    df_complete = df[df["status"] == "completed"].copy()
 
     X = df_complete[feature_cols].values
     print(f"\nFeature matrix shape: {X.shape}")
@@ -118,7 +138,7 @@ def main():
 
     # Split into train/test (80/20)
     n_train = int(0.8 * len(X))
-    indices = np.random.permutation(len(X))
+    indices = rng.permutation(len(X))
     train_idx, test_idx = indices[:n_train], indices[n_train:]
 
     X_train, X_test = X[train_idx], X[test_idx]
@@ -127,19 +147,19 @@ def main():
 
     # Train LightGBM regressors for each target metric
     hyper_params = {
-        'task': 'train',
-        'boosting_type': 'gbdt',
-        'objective': 'regression',
-        'metric': ['l1', 'l2'],
-        'num_iterations': 1000,
-        'seed': 42,
-        'learning_rate': 1e-2,
-        'verbosity': -1,
+        "task": "train",
+        "boosting_type": "gbdt",
+        "objective": "regression",
+        "metric": ["l1", "l2"],
+        "num_iterations": 1000,
+        "seed": 42,
+        "learning_rate": 1e-2,
+        "verbosity": -1,
     }
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("FITTING REGRESSION MODELS")
-    print("="*60)
+    print("=" * 60)
 
     predictors = {}
     for target_col in target_cols:
@@ -148,21 +168,22 @@ def main():
 
         gbm = lgb.LGBMRegressor(**hyper_params)
         reg = gbm.fit(
-            X_train, y_train,
+            X_train,
+            y_train,
             eval_set=[(X_test, y_test)],
-            eval_metric='l2',
-            callbacks=[lgb.early_stopping(stopping_rounds=3, verbose=False)]
+            eval_metric="l2",
+            callbacks=[lgb.early_stopping(stopping_rounds=3, verbose=False)],
         )
 
         pred_test = reg.predict(X_test)
-        r, p = spearmanr(pred_test, y_test)
+        r, _p = spearmanr(pred_test, y_test)
 
         print(f"{target_col:45s} Spearman r = {r:.4f}")
         predictors[target_col] = reg
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("OPTIMIZING MIXTURE WEIGHTS")
-    print("="*60)
+    print("=" * 60)
 
     # Sample many random mixtures using the same mixed strategy as the experiment
     n_samples = 100000
@@ -176,12 +197,12 @@ def main():
         predictions[target_col] = reg.predict(samples)
 
     # Find optimal mixture for each metric
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("OPTIMAL MIXTURES BY METRIC")
-    print("="*60)
+    print("=" * 60)
 
-    domain_names = ['nemotron_full', 'dolmino', 'openthoughts_sft']
-    phase_names = ['phase_0', 'phase_1', 'phase_2']
+    domain_names = ["nemotron_full", "dolmino", "openthoughts_sft"]
+    phase_names = ["phase_0", "phase_1", "phase_2"]
 
     k = 128  # Top-k samples to average
 
@@ -190,7 +211,7 @@ def main():
         pred = predictions[target_col]
 
         # For loss metrics, lower is better; for acc metrics, higher is better
-        if 'loss' in target_col or 'bpb' in target_col:
+        if "loss" in target_col or "bpb" in target_col:
             top_k_idx = np.argsort(pred)[:k]  # Lowest loss
         else:
             top_k_idx = np.argsort(pred)[-k:]  # Highest accuracy
@@ -199,44 +220,44 @@ def main():
         optimal_mixture = np.mean(top_k_samples, axis=0)
 
         results[target_col] = {
-            'optimal_mixture': optimal_mixture,
-            'pred_mean': np.mean(pred[top_k_idx]),
-            'pred_std': np.std(pred[top_k_idx]),
+            "optimal_mixture": optimal_mixture,
+            "pred_mean": np.mean(pred[top_k_idx]),
+            "pred_std": np.std(pred[top_k_idx]),
         }
 
         print(f"\n{target_col}:")
         print(f"  Predicted value: {results[target_col]['pred_mean']:.4f} ± {results[target_col]['pred_std']:.4f}")
 
         for i, phase in enumerate(phase_names):
-            phase_weights = optimal_mixture[i*3:(i+1)*3]
+            phase_weights = optimal_mixture[i * 3 : (i + 1) * 3]
             print(f"  {phase}: ", end="")
             for j, domain in enumerate(domain_names):
                 print(f"{domain}={phase_weights[j]:.3f} ", end="")
             print()
 
     # Focus on eval/paloma/c4_en/bpb as the primary optimization target
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("FINAL RECOMMENDATION: OPTIMIZED FOR eval/paloma/c4_en/bpb")
-    print("="*60)
+    print("=" * 60)
 
-    target = 'eval/paloma/c4_en/bpb'
-    optimal = results[target]['optimal_mixture']
+    target = "eval/paloma/c4_en/bpb"
+    optimal = results[target]["optimal_mixture"]
 
     print(f"\nOptimal mixture weights (predicted bpb: {results[target]['pred_mean']:.4f}):\n")
     for i, phase in enumerate(phase_names):
-        phase_weights = optimal[i*3:(i+1)*3]
+        phase_weights = optimal[i * 3 : (i + 1) * 3]
         print(f"{phase}:")
         for j, domain in enumerate(domain_names):
             print(f"  {domain:20s}: {phase_weights[j]:.4f}")
         print()
 
     # Compare with baseline runs
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("COMPARISON WITH BASELINE RUNS")
-    print("="*60)
+    print("=" * 60)
 
-    baseline_df = df_complete[df_complete['run_id'] >= 90000]
-    print(f"\nBaseline runs (excluding run 90000 which diverged):")
+    baseline_df = df_complete[df_complete["run_id"] >= 90000]
+    print("\nBaseline runs (excluding run 90000 which diverged):")
     for _, row in baseline_df.iterrows():
         print(f"  run_id={int(row['run_id'])}: macro_avg_acc={row['lm_eval/averages/macro_avg_acc']:.4f}")
 

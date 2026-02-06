@@ -640,9 +640,7 @@ def visualize_weights(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Visualize mixture weight distributions from weight_configs.json"
-    )
+    parser = argparse.ArgumentParser(description="Visualize mixture weight distributions from weight_configs.json")
     parser.add_argument(
         "weight_configs_path",
         type=str,

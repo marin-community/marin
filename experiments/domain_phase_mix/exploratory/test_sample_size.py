@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
@@ -15,7 +29,9 @@ import lightgbm as lgb
 from sklearn.model_selection import KFold
 from pathlib import Path
 import warnings
-warnings.filterwarnings('ignore')
+
+warnings.filterwarnings("ignore")
+
 
 def sample_mixed_weights(rng, n_domains, vertex_prob=0.3, min_dominant_weight=0.7):
     if rng.random() < vertex_prob:
@@ -36,6 +52,7 @@ def sample_mixed_weights(rng, n_domains, vertex_prob=0.3, min_dominant_weight=0.
         x = rng.exponential(1.0, n_domains)
         return x / x.sum()
 
+
 def sample_configs(n_samples, n_domains=3, n_phases=3, seed=42):
     rng = np.random.default_rng(seed)
     samples = []
@@ -47,39 +64,54 @@ def sample_configs(n_samples, n_domains=3, n_phases=3, seed=42):
         samples.append(config)
     return np.array(samples)
 
+
 # Load data
 script_dir = Path(__file__).parent
-df = pd.read_csv(script_dir / '3_partitions_3_phases_6.csv')
-df = df[df['run_id'] != 90000]
-df_complete = df[df['status'] == 'completed'].copy()
+df = pd.read_csv(script_dir / "3_partitions_3_phases_6.csv")
+df = df[df["run_id"] != 90000]
+df_complete = df[df["status"] == "completed"].copy()
 
 feature_cols = [
-    'phase_0_nemotron_full', 'phase_0_dolmino', 'phase_0_openthoughts_sft',
-    'phase_1_nemotron_full', 'phase_1_dolmino', 'phase_1_openthoughts_sft',
-    'phase_2_nemotron_full', 'phase_2_dolmino', 'phase_2_openthoughts_sft',
+    "phase_0_nemotron_full",
+    "phase_0_dolmino",
+    "phase_0_openthoughts_sft",
+    "phase_1_nemotron_full",
+    "phase_1_dolmino",
+    "phase_1_openthoughts_sft",
+    "phase_2_nemotron_full",
+    "phase_2_dolmino",
+    "phase_2_openthoughts_sft",
 ]
 X = df_complete[feature_cols].values
-y = df_complete['eval/paloma/c4_en/bpb'].values
+y = df_complete["eval/paloma/c4_en/bpb"].values
 
 # Train k-fold models
 print("Training 5-fold models...")
 hyper_params = {
-    'boosting_type': 'gbdt', 'objective': 'regression',
-    'num_iterations': 1000, 'seed': 42, 'learning_rate': 1e-2, 'verbosity': -1,
+    "boosting_type": "gbdt",
+    "objective": "regression",
+    "num_iterations": 1000,
+    "seed": 42,
+    "learning_rate": 1e-2,
+    "verbosity": -1,
 }
 kfold = KFold(n_splits=5, shuffle=True, random_state=42)
 models = []
 for train_idx, val_idx in kfold.split(X):
     gbm = lgb.LGBMRegressor(**hyper_params)
-    gbm.fit(X[train_idx], y[train_idx], eval_set=[(X[val_idx], y[val_idx])],
-            callbacks=[lgb.early_stopping(stopping_rounds=3, verbose=False)])
+    gbm.fit(
+        X[train_idx],
+        y[train_idx],
+        eval_set=[(X[val_idx], y[val_idx])],
+        callbacks=[lgb.early_stopping(stopping_rounds=3, verbose=False)],
+    )
     models.append(gbm)
 
 # Test different sample sizes
 k = 128
 print("\nTesting different sample sizes for optimal mixture stability:\n")
-print('n_samples  | phase_0 (nem, dol, sft) | phase_1 (nem, dol, sft) | phase_2 (nem, dol, sft) | pred_bpb')
-print('-' * 115)
+print("n_samples  | phase_0 (nem, dol, sft) | phase_1 (nem, dol, sft) | phase_2 (nem, dol, sft) | pred_bpb")
+print("-" * 115)
 
 for n_samples in [10_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000]:
     samples = sample_configs(n_samples, seed=123)
@@ -95,8 +127,12 @@ for n_samples in [10_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000]:
     p0 = optimal[0:3]
     p1 = optimal[3:6]
     p2 = optimal[6:9]
-    print(f'{n_samples:>10,} | ({p0[0]:.3f}, {p0[1]:.3f}, {p0[2]:.3f}) | ({p1[0]:.3f}, {p1[1]:.3f}, {p1[2]:.3f}) | ({p2[0]:.3f}, {p2[1]:.3f}, {p2[2]:.3f}) | {pred_bpb:.4f}')
+    print(
+        f"{n_samples:>10,} | ({p0[0]:.3f}, {p0[1]:.3f}, {p0[2]:.3f})"
+        f" | ({p1[0]:.3f}, {p1[1]:.3f}, {p1[2]:.3f})"
+        f" | ({p2[0]:.3f}, {p2[1]:.3f}, {p2[2]:.3f}) | {pred_bpb:.4f}"
+    )
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("Analysis: Look for convergence in the optimal weights as n_samples increases.")
 print("If weights stabilize, more samples won't help. If they keep changing, more samples may help.")

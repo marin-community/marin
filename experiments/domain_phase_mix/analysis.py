@@ -272,7 +272,9 @@ def match_runs_to_configs(runs: list[dict], configs: list[dict], experiment_name
         # Track unmatched run names for debugging
         unmatched_names.append(name)
 
-    logger.info(f"Pattern matching: {swarm_count} swarm runs, {baseline_count} baseline runs, {len(unmatched_names)} unmatched")
+    logger.info(
+        f"Pattern matching: {swarm_count} swarm runs, {baseline_count} baseline runs, {len(unmatched_names)} unmatched"
+    )
     if unmatched_names:
         logger.info(f"Unmatched run names (first 5): {unmatched_names[:5]}")
 

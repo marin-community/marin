@@ -53,7 +53,7 @@ from experiments.domain_phase_mix.domains import (
 from experiments.domain_phase_mix.experiment import MixtureExperiment
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, SamplingStrategy
-from experiments.evals.task_configs import CORE_TASKS, CODE_TASKS
+from experiments.evals.task_configs import CORE_TASKS, CODE_TASKS, convert_to_task_metrics
 
 logger = logging.getLogger("ray")
 
@@ -83,6 +83,15 @@ DOMAIN_NAMES = ["nemotron_full", "starcoder"]
 
 # Combine CORE_TASKS + CODE_TASKS for evaluation
 EVAL_TASKS = CORE_TASKS + CODE_TASKS
+
+# Metrics to collect from W&B for analysis
+ANALYSIS_METRICS = [
+    "eval/loss",
+    *convert_to_task_metrics(EVAL_TASKS, "acc"),
+    *convert_to_task_metrics(EVAL_TASKS, "acc_norm"),
+    *convert_to_task_metrics(EVAL_TASKS, "bpb"),
+    "lm_eval/averages/macro_avg_acc",
+]
 
 # GCS paths for pre-cached data to avoid HuggingFace rate limiting
 EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/code-tasks"
@@ -343,6 +352,7 @@ def main(
     analysis_step = create_analysis_step(
         weight_configs_step=weight_configs_step,
         name_prefix=name_prefix,
+        metrics=ANALYSIS_METRICS,
     )
 
     if analyze:
@@ -360,6 +370,7 @@ def main(
         analysis_step_with_baselines = create_analysis_step(
             weight_configs_step=weight_configs_step_with_baselines,
             name_prefix=name_prefix,  # Keep original name for W&B tag matching
+            metrics=ANALYSIS_METRICS,
         )
         all_steps = [weight_configs_step_with_baselines, analysis_step_with_baselines]
         executor_main(

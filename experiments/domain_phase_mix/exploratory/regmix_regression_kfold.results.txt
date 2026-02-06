@@ -24,7 +24,7 @@ FITTING REGRESSION MODELS WITH K-FOLD CV
 CROSS-VALIDATION RESULTS
 ============================================================
 
-Metric                                        Spearman r           Pearson r           
+Metric                                        Spearman r           Pearson r
 -------------------------------------------------------------------------------------
 eval/loss                                     0.9028 ± 0.0183    0.8723 ± 0.0279
 eval/paloma/c4_en/bpb                         0.8380 ± 0.1975    0.8072 ± 0.1760
@@ -51,63 +51,63 @@ OPTIMAL MIXTURES BY METRIC
 
 eval/loss:
   Predicted value: 3.5599 ± 0.0000
-  phase_0: nemotron_full=0.926 dolmino=0.036 openthoughts_sft=0.038 
-  phase_1: nemotron_full=0.466 dolmino=0.506 openthoughts_sft=0.028 
-  phase_2: nemotron_full=0.458 dolmino=0.511 openthoughts_sft=0.032 
+  phase_0: nemotron_full=0.926 dolmino=0.036 openthoughts_sft=0.038
+  phase_1: nemotron_full=0.466 dolmino=0.506 openthoughts_sft=0.028
+  phase_2: nemotron_full=0.458 dolmino=0.511 openthoughts_sft=0.032
 
 eval/paloma/c4_en/bpb:
   Predicted value: 1.1419 ± 0.0000
-  phase_0: nemotron_full=0.498 dolmino=0.457 openthoughts_sft=0.045 
-  phase_1: nemotron_full=0.740 dolmino=0.233 openthoughts_sft=0.028 
-  phase_2: nemotron_full=0.689 dolmino=0.234 openthoughts_sft=0.077 
+  phase_0: nemotron_full=0.498 dolmino=0.457 openthoughts_sft=0.045
+  phase_1: nemotron_full=0.740 dolmino=0.233 openthoughts_sft=0.028
+  phase_2: nemotron_full=0.689 dolmino=0.234 openthoughts_sft=0.077
 
 lm_eval/arc_challenge/acc:
   Predicted value: 0.1861 ± 0.0000
-  phase_0: nemotron_full=0.775 dolmino=0.193 openthoughts_sft=0.032 
-  phase_1: nemotron_full=0.222 dolmino=0.713 openthoughts_sft=0.065 
-  phase_2: nemotron_full=0.145 dolmino=0.806 openthoughts_sft=0.049 
+  phase_0: nemotron_full=0.775 dolmino=0.193 openthoughts_sft=0.032
+  phase_1: nemotron_full=0.222 dolmino=0.713 openthoughts_sft=0.065
+  phase_2: nemotron_full=0.145 dolmino=0.806 openthoughts_sft=0.049
 
 lm_eval/arc_challenge/bpb:
   Predicted value: 1.3331 ± 0.0000
-  phase_0: nemotron_full=0.362 dolmino=0.599 openthoughts_sft=0.039 
-  phase_1: nemotron_full=0.084 dolmino=0.858 openthoughts_sft=0.058 
-  phase_2: nemotron_full=0.264 dolmino=0.704 openthoughts_sft=0.032 
+  phase_0: nemotron_full=0.362 dolmino=0.599 openthoughts_sft=0.039
+  phase_1: nemotron_full=0.084 dolmino=0.858 openthoughts_sft=0.058
+  phase_2: nemotron_full=0.264 dolmino=0.704 openthoughts_sft=0.032
 
 lm_eval/arc_challenge/choice_logprob:
   Predicted value: -5.6599 ± 0.0009
-  phase_0: nemotron_full=0.520 dolmino=0.434 openthoughts_sft=0.046 
-  phase_1: nemotron_full=0.147 dolmino=0.826 openthoughts_sft=0.028 
-  phase_2: nemotron_full=0.540 dolmino=0.386 openthoughts_sft=0.074 
+  phase_0: nemotron_full=0.520 dolmino=0.434 openthoughts_sft=0.046
+  phase_1: nemotron_full=0.147 dolmino=0.826 openthoughts_sft=0.028
+  phase_2: nemotron_full=0.540 dolmino=0.386 openthoughts_sft=0.074
 
 lm_eval/hellaswag_0shot/acc_norm:
   Predicted value: 0.2916 ± 0.0000
-  phase_0: nemotron_full=0.784 dolmino=0.183 openthoughts_sft=0.034 
-  phase_1: nemotron_full=0.369 dolmino=0.591 openthoughts_sft=0.040 
-  phase_2: nemotron_full=0.183 dolmino=0.784 openthoughts_sft=0.033 
+  phase_0: nemotron_full=0.784 dolmino=0.183 openthoughts_sft=0.034
+  phase_1: nemotron_full=0.369 dolmino=0.591 openthoughts_sft=0.040
+  phase_2: nemotron_full=0.183 dolmino=0.784 openthoughts_sft=0.033
 
 lm_eval/arc_challenge/acc_norm:
   Predicted value: 0.2314 ± 0.0000
-  phase_0: nemotron_full=0.483 dolmino=0.472 openthoughts_sft=0.045 
-  phase_1: nemotron_full=0.137 dolmino=0.786 openthoughts_sft=0.076 
-  phase_2: nemotron_full=0.149 dolmino=0.823 openthoughts_sft=0.028 
+  phase_0: nemotron_full=0.483 dolmino=0.472 openthoughts_sft=0.045
+  phase_1: nemotron_full=0.137 dolmino=0.786 openthoughts_sft=0.076
+  phase_2: nemotron_full=0.149 dolmino=0.823 openthoughts_sft=0.028
 
 lm_eval/piqa/acc:
   Predicted value: 0.6118 ± 0.0000
-  phase_0: nemotron_full=0.872 dolmino=0.095 openthoughts_sft=0.033 
-  phase_1: nemotron_full=0.579 dolmino=0.355 openthoughts_sft=0.066 
-  phase_2: nemotron_full=0.838 dolmino=0.090 openthoughts_sft=0.072 
+  phase_0: nemotron_full=0.872 dolmino=0.095 openthoughts_sft=0.033
+  phase_1: nemotron_full=0.579 dolmino=0.355 openthoughts_sft=0.066
+  phase_2: nemotron_full=0.838 dolmino=0.090 openthoughts_sft=0.072
 
 lm_eval/boolq/acc:
   Predicted value: 0.5459 ± 0.0000
-  phase_0: nemotron_full=0.298 dolmino=0.393 openthoughts_sft=0.309 
-  phase_1: nemotron_full=0.506 dolmino=0.427 openthoughts_sft=0.067 
-  phase_2: nemotron_full=0.078 dolmino=0.025 openthoughts_sft=0.897 
+  phase_0: nemotron_full=0.298 dolmino=0.393 openthoughts_sft=0.309
+  phase_1: nemotron_full=0.506 dolmino=0.427 openthoughts_sft=0.067
+  phase_2: nemotron_full=0.078 dolmino=0.025 openthoughts_sft=0.897
 
 lm_eval/averages/macro_avg_acc:
   Predicted value: 0.3756 ± 0.0000
-  phase_0: nemotron_full=0.098 dolmino=0.865 openthoughts_sft=0.036 
-  phase_1: nemotron_full=0.606 dolmino=0.365 openthoughts_sft=0.029 
-  phase_2: nemotron_full=0.563 dolmino=0.380 openthoughts_sft=0.057 
+  phase_0: nemotron_full=0.098 dolmino=0.865 openthoughts_sft=0.036
+  phase_1: nemotron_full=0.606 dolmino=0.365 openthoughts_sft=0.029
+  phase_2: nemotron_full=0.563 dolmino=0.380 openthoughts_sft=0.057
 
 ============================================================
 FINAL RECOMMENDATION: OPTIMIZED FOR eval/paloma/c4_en/bpb

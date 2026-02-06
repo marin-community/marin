@@ -108,7 +108,10 @@ class TokenizeConfig(TokenizeConfigBase):
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
     zephyr_max_parallelism: int = 32
-    """Maximum number of concurrent Zephyr tasks per tokenization step. Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor."""
+    """Maximum number of concurrent Zephyr tasks per tokenization step.
+
+    Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -170,7 +173,10 @@ class HfTokenizeConfig(TokenizeConfigBase):
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
     zephyr_max_parallelism: int = 32
-    """Maximum number of concurrent Zephyr tasks per tokenization step. Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor."""
+    """Maximum number of concurrent Zephyr tasks per tokenization step.
+
+    Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
