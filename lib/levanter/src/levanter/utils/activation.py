@@ -16,6 +16,7 @@ ActivationFunction = typing.Callable[[_A], _A]
 
 
 class ActivationFunctionEnum(str, enum.Enum):
+    linear = "linear"
     relu = "relu"
     silu = "silu"
     swish = "swish"
@@ -33,6 +34,7 @@ class ActivationFunctionEnum(str, enum.Enum):
 
 # type: ignore
 TO_FN: dict[ActivationFunctionEnum, ActivationFunction] = {
+    ActivationFunctionEnum.linear: lambda x: x,
     ActivationFunctionEnum.relu: hnn.relu,
     ActivationFunctionEnum.silu: hnn.silu,
     ActivationFunctionEnum.swish: hnn.swish,
