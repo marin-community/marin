@@ -43,9 +43,9 @@ from marin.processing.tokenize import lm_mixture_data_config
 # =============================================================================
 
 DATASETS = {
-    "cds": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v5_256_128",
-    "upstream": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v1_256_128",
-    "downstream": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v15_256_128",
+    "cds": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v5_256_128",
+    "upstream": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v1_256_128",
+    "downstream": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v15_256_128",
 }
 
 # =============================================================================
