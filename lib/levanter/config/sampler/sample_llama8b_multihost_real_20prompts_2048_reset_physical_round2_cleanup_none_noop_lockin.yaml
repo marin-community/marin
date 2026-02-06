@@ -1,0 +1,57 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+stop_sequence: null
+max_new_tokens: 2048
+temperature: 0.7
+n_rounds: 2
+n_generations: 1
+# Lock-in safety for multi-host multi-round runs: avoid in-loop leader tracker emission.
+defer_tracker_logs_until_end: true
+skip_samples_table: true
+trainer:
+  tracker:
+    type: noop
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: false
+engine:
+  max_seq_len: 2560
+  max_pages: 960
+  page_size: 64
+  max_seqs: 20
+  max_seqs_in_prefill: 20
+  max_prefill_size: 4096
+  max_queued_tokens: 512
+  max_rounds: 32
+  debug_stats_every_n: 10
+  reset_mode: physical
+  cleanup_mode: none
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0
+prompts:
+  - "Prompt 001: Provide a concise overview of the benefits of sleep."
+  - "Prompt 002: Summarize the main idea of photosynthesis in one paragraph."
+  - "Prompt 003: Explain what an API is to a non-technical audience."
+  - "Prompt 004: Write a short tip for staying focused while coding."
+  - "Prompt 005: Describe a simple strategy for managing time effectively."
+  - "Prompt 006: Explain the difference between RAM and storage."
+  - "Prompt 007: Give one practical idea for reducing meeting overhead."
+  - "Prompt 008: Describe what unit tests validate in software projects."
+  - "Prompt 009: Summarize how DNS resolution works at a high level."
+  - "Prompt 010: Provide a brief explanation of eventual consistency."
+  - "Prompt 011: Explain why idempotency matters in distributed systems."
+  - "Prompt 012: Write a short note on choosing useful monitoring metrics."
+  - "Prompt 013: Describe the tradeoff between latency and throughput."
+  - "Prompt 014: Summarize what a load balancer does."
+  - "Prompt 015: Explain why schema versioning is important for data pipelines."
+  - "Prompt 016: Give one tactic to reduce flaky integration tests."
+  - "Prompt 017: Describe what backpressure means in streaming systems."
+  - "Prompt 018: Explain the difference between authentication and authorization."
+  - "Prompt 019: Summarize why retries need jitter."
+  - "Prompt 020: Give a concise checklist for production rollout readiness."

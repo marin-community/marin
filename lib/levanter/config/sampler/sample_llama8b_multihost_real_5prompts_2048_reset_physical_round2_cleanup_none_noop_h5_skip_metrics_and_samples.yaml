@@ -4,8 +4,6 @@ max_new_tokens: 2048
 temperature: 0.7
 n_rounds: 2
 n_generations: 1
-# Keep tracker emission deferred for stable multi-host multi-round execution.
-defer_tracker_logs_until_end: true
 trainer:
   tracker:
     type: wandb
@@ -40,3 +38,6 @@ prompts:
   - "Prompt 003: Explain what an API is to a non-technical audience."
   - "Prompt 004: Write a short tip for staying focused while coding."
   - "Prompt 005: Describe a simple strategy for managing time effectively."
+
+skip_metrics_log: true
+skip_samples_table: true

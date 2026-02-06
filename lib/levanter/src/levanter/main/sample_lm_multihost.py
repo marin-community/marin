@@ -120,6 +120,16 @@ class SampleLmMultihostConfig:
     n_rounds: int = 1
     skip_round_barrier: bool = False
     skip_samples_table: bool = False
+    force_post_generate_block_until_ready: bool = False
+    force_post_generate_barrier: bool = False
+    barrier_before_leader_postprocess: bool = False
+    skip_leader_postprocess: bool = False
+    skip_metrics_log: bool = False
+    force_samples_rows_log: bool = False
+    defer_tracker_logs_until_end: bool = True
+    emit_minimal_tracker_probe: bool = False
+    emit_minimal_tracker_probe_all_hosts: bool = False
+    leader_postprocess_sleep_sec: float = 0.0
 
     log_kernel_jaxprs_path: Optional[str] = None
 
@@ -179,7 +189,11 @@ def _validate_engine_config(
     *,
     is_multihost: bool,
 ) -> None:
-    """Validate engine sizing constraints for deterministic multi-host inference."""
+    """Validate engine sizing constraints for deterministic multi-host inference.
+
+    Since we use per-round mode (each round is a separate generate() call with reset between),
+    we only need capacity for ONE round at a time.
+    """
 
     if is_multihost:
         _require(engine_config.max_pages is not None, "engine.max_pages must be explicit for multi-host inference")
@@ -192,23 +206,22 @@ def _validate_engine_config(
     _require(config.n_generations > 0, "n_generations must be >= 1")
 
     num_prompts = len(prompt_ids)
-    rounds = max(1, int(config.n_rounds))
-    total_sequences = num_prompts * int(config.n_generations) * rounds
-    total_prompt_tokens = sum(len(tokens) for tokens in prompt_ids) * rounds
+    # Per-round mode: only need capacity for one round at a time
+    sequences_per_round = num_prompts * int(config.n_generations)
+    prompt_tokens_per_round = sum(len(tokens) for tokens in prompt_ids)
     max_prompt_len = max((len(tokens) for tokens in prompt_ids), default=0)
-    total_prefill_seqs = num_prompts * rounds
 
     _require(
-        engine_config.max_seqs_in_prefill >= total_prefill_seqs,
-        "engine.max_seqs_in_prefill must cover all prompts (including batched rounds)",
+        engine_config.max_seqs_in_prefill >= num_prompts,
+        "engine.max_seqs_in_prefill must cover all prompts per round",
     )
-    _require(engine_config.max_seqs >= total_sequences, "engine.max_seqs must cover all generations")
+    _require(engine_config.max_seqs >= sequences_per_round, "engine.max_seqs must cover all generations per round")
     _require(engine_config.max_seq_len >= max_prompt_len + config.max_new_tokens, "engine.max_seq_len is too small")
 
     if engine_config.max_prefill_size is not None:
         _require(
-            engine_config.max_prefill_size >= total_prompt_tokens,
-            "engine.max_prefill_size must cover the sum of prompt lengths (including batched rounds)",
+            engine_config.max_prefill_size >= prompt_tokens_per_round,
+            "engine.max_prefill_size must cover the sum of prompt lengths per round",
         )
 
     if stop_ids is not None:
@@ -220,14 +233,41 @@ def _validate_engine_config(
 
     if engine_config.max_pages is not None:
         pages_per_seq = math.ceil((max_prompt_len + config.max_new_tokens) / engine_config.page_size)
-        required_pages = pages_per_seq * total_sequences
+        required_pages = pages_per_seq * sequences_per_round
         _require(
             engine_config.max_pages >= required_pages,
             "engine.max_pages="
-            f"{engine_config.max_pages} is too small for {total_sequences} sequences "
+            f"{engine_config.max_pages} is too small for {sequences_per_round} sequences per round "
             f"(est. {required_pages} pages needed at page_size={engine_config.page_size}). "
-            "Increase engine.max_pages or reduce n_rounds/num_prompts/max_new_tokens.",
+            "Increase engine.max_pages or reduce num_prompts/n_generations/max_new_tokens.",
         )
+
+
+def _validate_tracker_logging_safety(config: SampleLmMultihostConfig, *, is_multihost: bool) -> None:
+    """Fail fast for known-unsafe in-loop tracker emission on multi-host multi-round sampling."""
+
+    if not is_multihost:
+        return
+    if int(config.n_rounds) <= 1:
+        return
+    if config.defer_tracker_logs_until_end:
+        return
+    if config.skip_leader_postprocess:
+        return
+
+    has_leader_in_loop_tracker_emission = (
+        not config.skip_metrics_log or not config.skip_samples_table or config.emit_minimal_tracker_probe
+    )
+    if not has_leader_in_loop_tracker_emission:
+        return
+
+    raise ValueError(
+        "Unsafe tracker logging configuration for multi-host multi-round sampling: "
+        "in-loop tracker emission with defer_tracker_logs_until_end=false is known to trigger "
+        "round-boundary launch-group failures. Use defer_tracker_logs_until_end=true or disable "
+        "leader in-loop tracker paths (set skip_metrics_log=true, skip_samples_table=true, "
+        "emit_minimal_tracker_probe=false)."
+    )
 
 
 class _PromptPayload(TypedDict, total=False):
@@ -343,8 +383,9 @@ def main(config: SampleLmMultihostConfig):
             stop_ids,
             is_multihost=is_multihost,
         )
+        _validate_tracker_logging_safety(config, is_multihost=is_multihost)
     except Exception:
-        logger.exception("Engine config validation failed")
+        logger.exception("Config validation failed")
         raise
 
     if stop_ids is None:
@@ -386,35 +427,48 @@ def main(config: SampleLmMultihostConfig):
             engine.write_kernel_jaxprs(jaxprs_path)
 
         base_key = jrandom.PRNGKey(base_seed)
+        deferred_tracker_logs: list[tuple[int, dict[str, object]]] = []
         try:
-            if int(config.n_rounds) > 1:
-                if is_leader:
-                    logger.warning(
-                        "n_rounds=%d detected; using single-batch mode to avoid multi-round TPU instability.",
-                        int(config.n_rounds),
-                    )
-                requests, request_meta = _build_requests_for_rounds(
+            # Per-round generation: each round is a separate generate() call with reset between them.
+            # This is safe now that the reset path has been fixed (see CODEX_FIX_M5.2.md).
+            total_expected = len(prompt_ids) * int(config.n_generations)
+            for round_index in range(int(config.n_rounds)):
+                requests, _ = _build_requests_for_rounds(
                     prompt_ids=prompt_ids,
                     stop_tokens=stop_tokens,
                     config=config,
                     base_key=base_key,
-                    rounds=int(config.n_rounds),
+                    rounds=1,
+                    round_offset=round_index,
                 )
-                total_expected = len(requests) * int(config.n_generations)
                 if is_leader:
                     logger.info(
-                        "Round batch starting: %d rounds x %d prompts x %d generations",
-                        int(config.n_rounds),
+                        "Round %d starting: %d prompts x %d generations",
+                        round_index,
                         len(prompts),
                         int(config.n_generations),
                     )
                 if config.engine.debug_stats_every_n:
-                    logger.warning("RoundBatch: generate start")
+                    logger.warning("Round %d: generate start", round_index)
                 start_time = time.time()
                 result = engine.generate(requests)
                 duration = time.time() - start_time
                 if config.engine.debug_stats_every_n:
-                    logger.warning("RoundBatch: generate done")
+                    logger.warning("Round %d: generate done", round_index)
+
+                if config.force_post_generate_block_until_ready:
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: post-generate block_until_ready start", round_index)
+                    jax.block_until_ready(jax.tree.leaves(engine.gen_state))
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: post-generate block_until_ready done", round_index)
+
+                if is_multihost and config.force_post_generate_barrier:
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: post-generate barrier start", round_index)
+                    barrier_sync_with_tag(f"sample_lm_multihost_round_{round_index}_post_generate_ready")
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: post-generate barrier done", round_index)
 
                 if len(result.tokens) != total_expected:
                     raise RuntimeError(
@@ -422,17 +476,25 @@ def main(config: SampleLmMultihostConfig):
                         "Check engine.max_seqs/max_seqs_in_prefill/max_prefill_size."
                     )
                 if config.engine.debug_stats_every_n:
-                    logger.warning("RoundBatch: decode stats start")
-                _log_decode_stats(engine, "round_batch_after_generate", is_leader=is_leader)
+                    logger.warning("Round %d: decode stats start", round_index)
+                _log_decode_stats(engine, f"round{round_index}_after_generate", is_leader=is_leader)
                 if config.engine.debug_stats_every_n:
-                    logger.warning("RoundBatch: decode stats done")
+                    logger.warning("Round %d: decode stats done", round_index)
+
+                if is_multihost and config.barrier_before_leader_postprocess and not config.skip_round_barrier:
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: pre-postprocess barrier start", round_index)
+                    barrier_sync_with_tag(f"sample_lm_multihost_round_{round_index}")
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: pre-postprocess barrier done", round_index)
 
                 hbm_free_after_gen = estimated_free_device_memory(memory_device)
                 tokens_per_second = result.total_generated / duration if duration > 0 else 0.0
 
-                if is_leader:
+                if is_leader and not config.skip_leader_postprocess:
                     logger.info(
-                        "Round batch finished in %.2fs: %d tokens across %d sequences",
+                        "Round %d finished in %.2fs: %d tokens across %d sequences",
+                        round_index,
                         duration,
                         result.total_generated,
                         len(result.tokens),
@@ -445,186 +507,61 @@ def main(config: SampleLmMultihostConfig):
                         "sample/tokens_per_second": tokens_per_second,
                         "sample/num_prompts": len(prompts),
                         "sample/n_generations": int(config.n_generations),
-                        "sample/num_rounds": int(config.n_rounds),
-                        "sample/rounds_batched": 1,
                     }
-                    metrics["sample/engine_creation_time_sec"] = engine_creation_time
-                    if hbm_free_before_engine is not None:
-                        metrics["sample/hbm_free_before_engine_gib"] = hbm_free_before_engine
-                    if hbm_free_after_engine is not None:
-                        metrics["sample/hbm_free_after_engine_gib"] = hbm_free_after_engine
-                    if hbm_free_before_engine is not None and hbm_free_after_engine is not None:
-                        metrics["sample/hbm_used_by_engine_gib"] = hbm_free_before_engine - hbm_free_after_engine
+                    if round_index == 0:
+                        metrics["sample/engine_creation_time_sec"] = engine_creation_time
+                        if hbm_free_before_engine is not None:
+                            metrics["sample/hbm_free_before_engine_gib"] = hbm_free_before_engine
+                        if hbm_free_after_engine is not None:
+                            metrics["sample/hbm_free_after_engine_gib"] = hbm_free_after_engine
+                        if hbm_free_before_engine is not None and hbm_free_after_engine is not None:
+                            metrics["sample/hbm_used_by_engine_gib"] = hbm_free_before_engine - hbm_free_after_engine
                     if hbm_free_after_gen is not None:
                         metrics["sample/hbm_free_after_gen_gib"] = hbm_free_after_gen
-                    if config.engine.debug_stats_every_n:
-                        logger.warning("RoundBatch: metrics log start")
-                    levanter.tracker.log(metrics, step=0)
-                    if config.engine.debug_stats_every_n:
-                        logger.warning("RoundBatch: metrics log done")
-
-                    samples_rows: list[tuple[int, int, int, str, str, int]] = []
-                    for request_index, (round_index, prompt_index) in enumerate(request_meta):
-                        for generation_index in range(int(config.n_generations)):
-                            sequence_index = request_index * int(config.n_generations) + generation_index
-                            sequence_tokens = result.tokens[sequence_index]
-                            filtered_tokens = [
-                                token
-                                for token in sequence_tokens
-                                if token != tokenizer.pad_token_id and token != INVALID
-                            ]
-                            generated_text = tokenizer.decode(filtered_tokens, skip_special_tokens=True)
-                            logger.info("Sequence %d: %s", sequence_index, generated_text)
-                            prompt_text = prompts[prompt_index] if prompt_index < len(prompts) else ""
-                            samples_rows.append(
-                                (
-                                    round_index,
-                                    prompt_index,
-                                    generation_index,
-                                    prompt_text,
-                                    generated_text,
-                                    len(filtered_tokens),
-                                )
-                            )
-                    if not config.skip_samples_table:
-                        try:
-                            import wandb
-
-                            if config.engine.debug_stats_every_n:
-                                logger.warning("RoundBatch: samples table start")
-                            samples_table = wandb.Table(
-                                columns=[
-                                    "round",
-                                    "prompt_id",
-                                    "generation_id",
-                                    "prompt",
-                                    "generated_text",
-                                    "num_tokens",
-                                ]
-                            )
-                            for row in samples_rows:
-                                samples_table.add_data(*row)
-                            levanter.tracker.log({"sample/samples": samples_table}, step=0)
-                            if config.engine.debug_stats_every_n:
-                                logger.warning("RoundBatch: samples table done")
-                        except ImportError:
-                            if config.engine.debug_stats_every_n:
-                                logger.warning("RoundBatch: samples rows log start")
-                            levanter.tracker.log({"sample/samples": samples_rows}, step=0)
-                            if config.engine.debug_stats_every_n:
-                                logger.warning("RoundBatch: samples rows log done")
-            else:
-                total_expected = len(prompt_ids) * int(config.n_generations)
-                for round_index in range(int(config.n_rounds)):
-                    if round_index > 0:
-                        if is_leader:
-                            logger.info(
-                                "Recreating engine for round %d to avoid multi-round reset instability", round_index
-                            )
-                        del engine
-                        gc.collect()
-                        engine, _, _ = _create_engine(
-                            model=model,
-                            tokenizer=tokenizer,
-                            engine_config=config.engine,
-                            memory_device=memory_device,
-                            is_leader=is_leader,
-                        )
-                    requests, _ = _build_requests_for_rounds(
-                        prompt_ids=prompt_ids,
-                        stop_tokens=stop_tokens,
-                        config=config,
-                        base_key=base_key,
-                        rounds=1,
-                        round_offset=round_index,
-                    )
-                    if is_leader:
-                        logger.info(
-                            "Round %d starting: %d prompts x %d generations",
-                            round_index,
-                            len(prompts),
-                            int(config.n_generations),
-                        )
-                    if config.engine.debug_stats_every_n:
-                        logger.warning("Round %d: generate start", round_index)
-                    start_time = time.time()
-                    result = engine.generate(requests)
-                    duration = time.time() - start_time
-                    if config.engine.debug_stats_every_n:
-                        logger.warning("Round %d: generate done", round_index)
-
-                    if len(result.tokens) != total_expected:
-                        raise RuntimeError(
-                            f"Expected {total_expected} sequences but got {len(result.tokens)}. "
-                            "Check engine.max_seqs/max_seqs_in_prefill/max_prefill_size."
-                        )
-                    if config.engine.debug_stats_every_n:
-                        logger.warning("Round %d: decode stats start", round_index)
-                    _log_decode_stats(engine, f"round{round_index}_after_generate", is_leader=is_leader)
-                    if config.engine.debug_stats_every_n:
-                        logger.warning("Round %d: decode stats done", round_index)
-
-                    hbm_free_after_gen = estimated_free_device_memory(memory_device)
-                    tokens_per_second = result.total_generated / duration if duration > 0 else 0.0
-
-                    if is_leader:
-                        logger.info(
-                            "Round %d finished in %.2fs: %d tokens across %d sequences",
-                            round_index,
-                            duration,
-                            result.total_generated,
-                            len(result.tokens),
-                        )
-
-                        metrics: dict[str, float | int] = {
-                            "sample/total_tokens": result.total_generated,
-                            "sample/num_sequences": len(result.tokens),
-                            "sample/round_time_sec": duration,
-                            "sample/tokens_per_second": tokens_per_second,
-                            "sample/num_prompts": len(prompts),
-                            "sample/n_generations": int(config.n_generations),
-                        }
-                        if round_index == 0:
-                            metrics["sample/engine_creation_time_sec"] = engine_creation_time
-                            if hbm_free_before_engine is not None:
-                                metrics["sample/hbm_free_before_engine_gib"] = hbm_free_before_engine
-                            if hbm_free_after_engine is not None:
-                                metrics["sample/hbm_free_after_engine_gib"] = hbm_free_after_engine
-                            if hbm_free_before_engine is not None and hbm_free_after_engine is not None:
-                                metrics["sample/hbm_used_by_engine_gib"] = (
-                                    hbm_free_before_engine - hbm_free_after_engine
-                                )
-                        if hbm_free_after_gen is not None:
-                            metrics["sample/hbm_free_after_gen_gib"] = hbm_free_after_gen
+                    if not config.skip_metrics_log:
                         if config.engine.debug_stats_every_n:
                             logger.warning("Round %d: metrics log start", round_index)
-                        levanter.tracker.log(metrics, step=round_index)
+                        if config.defer_tracker_logs_until_end:
+                            deferred_tracker_logs.append((round_index, metrics))
+                        else:
+                            levanter.tracker.log(metrics, step=round_index)
                         if config.engine.debug_stats_every_n:
                             logger.warning("Round %d: metrics log done", round_index)
+                    elif config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: metrics log skipped by config", round_index)
 
-                        samples_rows: list[tuple[int, int, int, str, str, int]] = []
-                        for sequence_index, sequence_tokens in enumerate(result.tokens):
-                            filtered_tokens = [
-                                token
-                                for token in sequence_tokens
-                                if token != tokenizer.pad_token_id and token != INVALID
-                            ]
-                            generated_text = tokenizer.decode(filtered_tokens, skip_special_tokens=True)
-                            logger.info("Sequence %d: %s", sequence_index, generated_text)
-                            prompt_index = sequence_index // int(config.n_generations)
-                            generation_index = sequence_index % int(config.n_generations)
-                            prompt_text = prompts[prompt_index] if prompt_index < len(prompts) else ""
-                            samples_rows.append(
-                                (
-                                    round_index,
-                                    prompt_index,
-                                    generation_index,
-                                    prompt_text,
-                                    generated_text,
-                                    len(filtered_tokens),
-                                )
+                    samples_rows: list[tuple[int, int, int, str, str, int]] = []
+                    for sequence_index, sequence_tokens in enumerate(result.tokens):
+                        filtered_tokens = [
+                            token for token in sequence_tokens if token != tokenizer.pad_token_id and token != INVALID
+                        ]
+                        generated_text = tokenizer.decode(filtered_tokens, skip_special_tokens=True)
+                        logger.info("Sequence %d: %s", sequence_index, generated_text)
+                        prompt_index = sequence_index // int(config.n_generations)
+                        generation_index = sequence_index % int(config.n_generations)
+                        prompt_text = prompts[prompt_index] if prompt_index < len(prompts) else ""
+                        samples_rows.append(
+                            (
+                                round_index,
+                                prompt_index,
+                                generation_index,
+                                prompt_text,
+                                generated_text,
+                                len(filtered_tokens),
                             )
-                        if not config.skip_samples_table:
+                        )
+                    if not config.skip_samples_table:
+                        if config.force_samples_rows_log:
+                            if config.engine.debug_stats_every_n:
+                                logger.warning("Round %d: samples rows log start (forced)", round_index)
+                            samples_payload: dict[str, object] = {"sample/samples": samples_rows}
+                            if config.defer_tracker_logs_until_end:
+                                deferred_tracker_logs.append((round_index, samples_payload))
+                            else:
+                                levanter.tracker.log(samples_payload, step=round_index)
+                            if config.engine.debug_stats_every_n:
+                                logger.warning("Round %d: samples rows log done (forced)", round_index)
+                        else:
                             try:
                                 import wandb
 
@@ -642,20 +579,71 @@ def main(config: SampleLmMultihostConfig):
                                 )
                                 for row in samples_rows:
                                     samples_table.add_data(*row)
-                                levanter.tracker.log({"sample/samples": samples_table}, step=round_index)
+                                samples_payload = {"sample/samples": samples_table}
+                                if config.defer_tracker_logs_until_end:
+                                    deferred_tracker_logs.append((round_index, samples_payload))
+                                else:
+                                    levanter.tracker.log(samples_payload, step=round_index)
                                 if config.engine.debug_stats_every_n:
                                     logger.warning("Round %d: samples table done", round_index)
                             except ImportError:
                                 if config.engine.debug_stats_every_n:
                                     logger.warning("Round %d: samples rows log start", round_index)
-                                levanter.tracker.log({"sample/samples": samples_rows}, step=round_index)
+                                samples_payload = {"sample/samples": samples_rows}
+                                if config.defer_tracker_logs_until_end:
+                                    deferred_tracker_logs.append((round_index, samples_payload))
+                                else:
+                                    levanter.tracker.log(samples_payload, step=round_index)
                                 if config.engine.debug_stats_every_n:
                                     logger.warning("Round %d: samples rows log done", round_index)
-                    if is_multihost and not config.skip_round_barrier:
-                        barrier_sync_with_tag(f"sample_lm_multihost_round_{round_index}")
+                    if config.emit_minimal_tracker_probe:
+                        if config.engine.debug_stats_every_n:
+                            logger.warning("Round %d: minimal tracker probe start", round_index)
+                        probe_payload: dict[str, object] = {"sample/minimal_probe": float(round_index)}
+                        if config.defer_tracker_logs_until_end:
+                            deferred_tracker_logs.append((round_index, probe_payload))
+                        else:
+                            levanter.tracker.log(probe_payload, step=round_index)
+                        if config.engine.debug_stats_every_n:
+                            logger.warning("Round %d: minimal tracker probe done", round_index)
+                    if config.leader_postprocess_sleep_sec > 0:
+                        if config.engine.debug_stats_every_n:
+                            logger.warning(
+                                "Round %d: leader postprocess sleep start (%.3fs)",
+                                round_index,
+                                config.leader_postprocess_sleep_sec,
+                            )
+                        time.sleep(config.leader_postprocess_sleep_sec)
+                        if config.engine.debug_stats_every_n:
+                            logger.warning("Round %d: leader postprocess sleep done", round_index)
+                if is_leader and config.skip_leader_postprocess and config.engine.debug_stats_every_n:
+                    logger.warning("Round %d: leader postprocess skipped by config", round_index)
+                if config.emit_minimal_tracker_probe_all_hosts:
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: all-host minimal tracker probe start", round_index)
+                    all_host_probe_payload: dict[str, object] = {
+                        "sample/minimal_probe_all_hosts": float(round_index),
+                        "sample/minimal_probe_all_hosts_process_index": int(jax.process_index()),
+                    }
+                    if config.defer_tracker_logs_until_end:
+                        deferred_tracker_logs.append((round_index, all_host_probe_payload))
+                    else:
+                        levanter.tracker.log(all_host_probe_payload, step=round_index)
+                    if config.engine.debug_stats_every_n:
+                        logger.warning("Round %d: all-host minimal tracker probe done", round_index)
+                if is_multihost and not config.skip_round_barrier and not config.barrier_before_leader_postprocess:
+                    barrier_sync_with_tag(f"sample_lm_multihost_round_{round_index}")
         finally:
             if is_multihost:
                 barrier_sync_with_tag("sample_lm_multihost_done")
+
+        if is_leader and config.defer_tracker_logs_until_end:
+            if config.engine.debug_stats_every_n:
+                logger.warning("Deferred tracker log flush start (%d entries)", len(deferred_tracker_logs))
+            for step, payload in deferred_tracker_logs:
+                levanter.tracker.log(payload, step=step)
+            if config.engine.debug_stats_every_n:
+                logger.warning("Deferred tracker log flush done")
 
         del engine
         gc.collect()

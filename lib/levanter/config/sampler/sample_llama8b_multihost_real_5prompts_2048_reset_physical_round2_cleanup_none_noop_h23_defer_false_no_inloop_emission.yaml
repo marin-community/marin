@@ -4,8 +4,10 @@ max_new_tokens: 2048
 temperature: 0.7
 n_rounds: 2
 n_generations: 1
-# Keep tracker emission deferred for stable multi-host multi-round execution.
-defer_tracker_logs_until_end: true
+defer_tracker_logs_until_end: false
+skip_metrics_log: true
+skip_samples_table: true
+emit_minimal_tracker_probe: false
 trainer:
   tracker:
     type: wandb

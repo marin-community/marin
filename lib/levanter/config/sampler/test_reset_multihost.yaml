@@ -1,0 +1,40 @@
+# Minimal config for testing reset between generate() calls
+# Used with scripts/test_reset_multihost.py
+
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+
+prompt: "Hello, world! Tell me a short joke."
+max_new_tokens: 64
+temperature: 0.7
+seed: 42
+
+trainer:
+  tracker:
+    type: wandb
+    project: levanter-reset-test
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: false
+
+engine:
+  max_seq_len: 512
+  max_pages: 16
+  page_size: 64
+  max_seqs: 2
+  max_seqs_in_prefill: 2
+  max_prefill_size: 64
+  max_queued_tokens: 16
+  max_rounds: 32
+  debug_stats_every_n: 1
+  reset_mode: physical
+  cleanup_mode: end
+  max_stop_seqs: 0
+  max_stop_tokens: 0
+  seed: 42

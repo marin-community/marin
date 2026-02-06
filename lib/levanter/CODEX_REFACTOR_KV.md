@@ -330,168 +330,69 @@ Validation runs:
 Rollback:
 - Disable incremental cleanup (`cleanup_mode: end`), keep end-of-generation cleanup only.
 
-### M5 - Multi-Prompt Admission: Pick One Strategy and Make It Boring
+### M5 - Multi-Prompt Admission: Make Multi-Round Stable and Predictable
 
-Status: IN PROGRESS (2026-02-05)
+Status: DONE (2026-02-06)
 
-Goal: eliminate the "multi-prompt fails with exit status 1" class by reducing complexity in orchestration.
+Goal:
+Eliminate the multi-host multi-round crash class that surfaced as TPU worker exit status 1
+with no Python traceback.
 
-Preferred strategy:
-- Build one `requests` list and call `engine.generate(requests)` once per round.
-- Avoid batching prompts at the Python level unless we have a proven reason.
+Chosen strategy:
+- Keep per-round `engine.generate()` orchestration.
+- Make round-boundary tracker behavior safe by default.
+- Reject known-unsafe configurations at startup.
 
-If batching is required (memory/time), we must ensure:
-- `engine.generate()` boundaries are safe:
-  - reset runs
-  - slots/pages are truly free
-  - no host/device divergence
+Critical cause (what actually broke):
+- The main trigger was **asymmetric in-loop tracker emission at round boundaries**
+  (especially leader-side in-loop `tracker.log(...)`) when
+  `defer_tracker_logs_until_end=false`.
+- This can produce launch-group failure / TPU runtime halt symptoms (`exit status 1`) even
+  when decode/page stats look healthy.
+- Reset mode (`physical` vs `logical`) was not the discriminating factor.
 
-Deliverables:
-- Simplify `sample_lm_multihost.py` to one of:
-  - single `engine.generate(...)` per round, or
-  - explicit batch loop with mandatory reset between batches and explicit assertions after reset
-- Add a "batch boundary assertion" helper that checks:
-  - `page_ref_counts` are all zero after reset
-  - `used_mask` is all false after reset
+Prevention (what now keeps it stable):
+1. Default to deferred tracker emission:
+   - `defer_tracker_logs_until_end: true`
+   - Emit metrics/tables after rounds complete instead of at in-loop round boundaries.
+2. Add startup guardrails:
+   - Reject known-unsafe multi-host multi-round configs that combine
+     `defer_tracker_logs_until_end=false` with leader-side in-loop tracker emission.
+3. Keep safe exceptions explicit:
+   - `defer=false` is only allowed for validated non-leader-emission diagnostic paths.
 
 Exit criteria:
-- v5p-16 multi-prompt config runs to completion with diagnostics that identify which batch is active.
+- Multi-host multi-round configs complete consistently without the prior crash class.
+- Unsafe legacy modes fail fast with explicit config validation errors instead of TPU slice death.
+
+Validation evidence (full matrix in `CODEX_FIX_M5.2.md`):
+- 5 prompts x 2048 x 2 rounds: PASS in deferred mode; unsafe legacy mode is fast-rejected.
+- 20 prompts x 2048 x 2 rounds (`noop`, `wandb`): PASS.
+- 20 prompts x 4096 x 2 rounds (`wandb`): PASS.
+- Representative logs:
+  - `/tmp/levanter_run_m52_final_20prompts_2048_lockin.log`
+  - `/tmp/levanter_run_m52_final_20prompts_2048_lockin_wandb.log`
+  - `/tmp/levanter_run_m52_final_20prompts_4096_lockin_wandb.log`
+
+Operational note:
+- Inference is still slow for long generations (for example, ~55 minutes/round for
+  20 prompts x 4096 on v5p-16), but behavior is now consistent and reproducible.
 
 Rollback:
-- Revert to known-good single-request mode; keep diagnostics.
-
-Progress so far:
-- Multi-prompt (5 prompts, 2048 tokens, reset_mode=physical, cleanup_mode=end) with `n_rounds: 5`
-  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical.yaml`
-  - Log: `/tmp/levanter_run_m5_5prompts_reset_physical.log`
-  - Log evidence (2026-02-05):
-    - After reset: `active=0 pages_in_use=0 free=240 max_refcount=0` (00:50:44).
-    - After prefill: `active=5 pages_in_use=5 free=235 max_refcount=1` (00:51:22).
-    - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (00:55:29).
-    - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (00:55:30).
-    - `launch.py` reports `Command execution on worker {0,1} failed with exit status 1` immediately after cleanup.
-- One-round diagnostic run to isolate multi-round behavior:
-  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round1.yaml`
-  - Log: `/tmp/levanter_run_m5_5prompts_round1.log`
-  - Log evidence (2026-02-05):
-    - After reset: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:03:36).
-    - After prefill: `active=5 pages_in_use=5 free=235 max_refcount=1` (01:04:14).
-    - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (01:08:21).
-    - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:08:22).
-    - `Job finished with no error`.
-- Two-round diagnostic run:
-  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2.yaml`
-  - Log: `/tmp/levanter_run_m5_5prompts_round2.log`
-  - Log evidence (2026-02-05):
-    - After reset: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:25:35).
-    - After prefill: `active=5 pages_in_use=5 free=235 max_refcount=1` (01:26:16).
-    - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (01:30:23).
-    - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (01:30:24).
-    - `launch.py` reports `Command execution on worker {0,1} failed with exit status 1` immediately after cleanup.
-- Two-round run with round-boundary diagnostics:
-  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2.yaml`
-  - Log: `/tmp/levanter_run_m5_5prompts_round2_with_roundstats.log`
-  - Result: failed before any `RoundStats[...]` logs. The last visible activity is model shard reads
-    (`model-00003-of-00004.safetensors`), followed by `Command execution on worker {0,1} failed with exit status 1`.
-- RoundStats instrumentation fix (all-host stats call, leader-only logging):
-  - Change: `_log_decode_stats` now calls `jax.device_get(engine.gen_state.decode_state.stats())` on **all hosts**
-    and only the leader logs the values.
-  - Log: `/tmp/levanter_run_m3_after_only_allhosts_run2.log`
-  - Run id: `7rkia52d`
-  - W&B run name: `sparkling-bush-218`
-  - Result: **success**, `Job finished with no error.` This removes the leader-only stats call crash/hang.
-- Two-round run after fixing RoundStats logging:
-  - Config: `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2.yaml`
-  - Log: `/tmp/levanter_run_m5_5prompts_round2_roundstats_allhosts.log`
-  - Run id: `rc47ssbz`
-  - W&B run name: `deep-hill-219`
-  - Log evidence (2026-02-05):
-    - After reset: `active=0 pages_in_use=0 free=240 max_refcount=0` (06:36:33).
-    - After prefill: `active=5 pages_in_use=5 free=235 max_refcount=1` (06:37:11).
-    - After decode: `active=5 pages_in_use=165 free=75 max_refcount=1` (06:41:18).
-    - After cleanup: `active=0 pages_in_use=0 free=240 max_refcount=0` (06:41:19).
-    - **Immediate failure after cleanup**: `Command execution on worker {0,1} failed with exit status 1`.
-- Multi-round failure is **not reset-mode dependent** (physical/logical) and happens even with 1 prompt / 256 tokens:
-  - 5 prompts, physical reset: `/tmp/levanter_run_m5_5prompts_round2_cleanup_none_noop_zero_mul.log`
-  - 5 prompts, logical reset: `/tmp/levanter_run_m5_5prompts_round2_cleanup_none_noop_reset_logical.log`
-  - 1 prompt, 256 tokens: `/tmp/levanter_run_m5_1prompt_256_round2.log` (fast repro)
-  - All cases: **Round 0 completes, process dies before Round 1** (no Python traceback).
-- TPU debug logs (extra env `TPU_STDERR_LOG_LEVEL=0`, `TPU_MIN_LOG_LEVEL=0`, `JAX_ASYNC_ERROR_CHECKING=1`)
-  show a TPU runtime failure:
-  - Log: `/tmp/levanter_run_m5_1prompt_256_round2_debuglogs.log`
-  - Errors include: `program continuator has halted unexpectedly`, slice health check failed, slice failure/core dump.
-  - This points to a TPU runtime/slice failure rather than a Python-level bug.
-
-Guardrail: Multi-host logging safety (from `CODEX_REFACTOR_KV_M5_DEBUG.md`)
-- Never call `jax.device_get(...)` on a **globally sharded** array from a single host only.
-  - Failure modes observed: **immediate exit status 1** or **hang after cleanup**.
-  - Safe pattern: run the `device_get` on **all hosts**, and log only on the leader.
-  - If you need leader-only stats, use an all-host gather (e.g., `multihost_utils.process_allgather`) or
-    compute locally per-host and reduce, but do not single-host `device_get` a sharded array.
-
-Latest update (2026-02-05):
-- Batched-rounds workaround is now the **current stable path** for `n_rounds > 1`:
-  - `sample_lm_multihost.py` batches all rounds into a single `engine.generate()` when `n_rounds > 1`.
-  - `_validate_engine_config` now scales `max_seqs`, `max_seqs_in_prefill`, and `max_prefill_size`
-    by `n_rounds` for the batched path.
-  - 1 prompt / 256 tokens, `n_rounds=2`: **success**.
-    - Config: `config/sampler/sample_llama8b_multihost_real_1prompt_256_round2.yaml`
-    - Log: `/tmp/levanter_run_m5_1prompt_256_round2_batched3.log`
-  - 5 prompts / 2048 tokens, `n_rounds=2`: **success after increasing page budget**.
-    - First attempt failed with `Out of free pages during allocation` at `max_pages=240`.
-      - Log: `/tmp/levanter_run_m5_5prompts_2048_round2_batched1.log`
-    - Fixed by `max_pages=336` (required pages ≈ 330 for 10 sequences @ `page_size=64`).
-      - Log: `/tmp/levanter_run_m5_5prompts_2048_round2_batched2.log`
-      - `DecodeStats[after_decode]: pages_in_use=330 free=6`.
-- Multi-round **per-round reset** path is still failing (TPU slice/runtime halt). For now, treat
-  batched rounds as the supported multi-round workflow; deeper reset fixes remain a follow-up.
-- We are **forgoing multi-round per-call resets** for now because they reliably trigger TPU slice/runtime
-  failures between rounds on v5p-16 (no Python traceback). The only supported options are:
-  - Batched rounds in a single `engine.generate()` call (with correct `max_pages` sizing).
-  - Separate jobs per round if batched capacity is too large.
-- Clarification (2026-02-05):
-  - `n_rounds > 1` **only works** when all rounds are **batched into a single** `engine.generate()` call.
-    The per-round reset loop (multiple generate calls in one job) is still unstable on TPU.
-  - If you only want **one response per prompt**, use `n_rounds=1`.
-  - Very large prompt sets (e.g., 100k prompts) **cannot** fit in a single call; they require batching.
-    Today the safe option is **separate jobs per batch** until the reset path is fixed.
-
-Note: We are committing **partial M5 progress** with the batched-rounds workaround + hard `max_pages`
-validation; the per-round reset instability remains an open follow-up.
-
-M5 failure modes and strategies (clarified):
-1. **Multi-round reset failure (TPU slice halt).**
-   - Symptom: `n_rounds > 1` in a single job crashes between rounds with TPU runtime errors
-     (no Python traceback; slice health check failure).
-   - Strategy A: **Per-round reset** (legacy loop). Currently unstable on TPU.
-   - Strategy B: **Batched rounds** (current workaround). Combine all rounds into a single
-     `engine.generate()` call and avoid repeated resets inside one job.
-   - Strategy C: **External orchestration**. Run one round per job (no multi-rounds inside a job).
-
-2. **Out-of-free-pages failure (KV capacity).**
-   - Symptom: `Out of free pages during allocation` during batched rounds.
-   - Cause: `engine.max_pages` too small for the total sequences and tokens.
-   - Strategy A: **Increase `max_pages`** using the estimate (now enforced as a hard error):
-     `required_pages ≈ ceil((max_prompt_len + max_new_tokens) / page_size) * (num_prompts * n_rounds * n_generations)`.
-   - Strategy B: **Reduce load** by lowering `n_rounds`, `num_prompts`, or `max_new_tokens`,
-     or by splitting into multiple jobs.
-
-Next steps for M5:
-- Decide whether we want to keep the batched-rounds mode as the **official** path for `n_rounds > 1`,
-  or keep investigating the per-round reset TPU slice failure as a deeper runtime issue.
-- Consider adding a helper that recommends a safe **batch size** given `max_pages` + prompt lengths,
-  so large prompt sets can be chunked without trial-and-error.
+- Keep startup guard enabled and force deferred logging (`defer_tracker_logs_until_end=true`)
+  for all multi-host multi-round runs.
 
 ### M5.1 - Very Large Prompt Sets (Design + Tradeoffs)
 
-Status: DESIGN NOTES (2026-02-05)
+Status: DEFERRED (post-M5 scaling)
 
 Problem statement:
 We need a safe, repeatable way to handle very large prompt sets (e.g., 10k–100k prompts)
 without silent TPU failures or KV cache exhaustion.
 
-Known constraints and failure modes (from `CODEX_REFACTOR_KV_M5_DEBUG.md`):
-1. Multi-round/per-batch resets in a **single job** are unstable on v5p-16 and can trigger TPU slice failures.
+Known constraints and failure modes:
+1. Unsafe in-loop leader tracker emission at round boundaries (`defer_tracker_logs_until_end=false`)
+   can reintroduce launch-group failures; deferred logging should remain the default.
 2. Single-call overfill hits `Out of free pages during allocation` when `max_pages` is undersized.
 3. Leader-only `jax.device_get` of globally sharded arrays can crash/hang; all-host reads are required.
 4. Large batched runs can saturate `max_prefill_size` and `max_seqs_in_prefill` (both scale with total prompts).
@@ -506,14 +407,14 @@ Strategies for very large prompt sets:
 | --- | --- | --- | --- |
 | Single giant batch (`n_rounds=1`, all prompts in one call) | Avoids per-call reset; simplest operationally | Usually exceeds `max_pages`/HBM; large prefill; W&B tables huge | Only if prompt count is small enough to fit in one call |
 | Batched rounds (single call with `n_rounds>1`) | Avoids per-round resets; stable in current TPU setup | Multiplies capacity requirements; still limited by `max_pages` | When you need repeated samples per prompt and can fit capacity |
-| Multiple generate calls inside one job (prompt chunking) | Amortizes model load; best throughput if reset were stable | **Currently unstable** due to TPU slice failure on reset | Future option once reset path is fixed |
+| Multiple generate calls inside one job (prompt chunking) | Amortizes model load; avoids repeated startup | Requires strict deferred logging safety and careful boundary validation | Use when orchestration simplicity matters and run time is acceptable |
 | Separate jobs per batch (external orchestration) | Most reliable today; no in-process reset; easy to parallelize | Repeated model load overhead; higher cost/latency; more complex bookkeeping | **Recommended now** for 10k–100k prompts |
 | Persistent service / queue (future) | Best long-run throughput and latency | Requires robust in-process reset and admission control; not implemented | Long-term target, not for M5 |
 
 Current recommendation (M5.1):
 Use **external orchestration** to split large prompt sets into batches, each run as a **single job**
-with `n_rounds=1` (or batched rounds if repeated sampling is needed). This avoids the TPU reset failure
-until we fix multi-call stability. Batch size should be chosen using the `required_pages` estimate and
+with `n_rounds=1` (or batched rounds if repeated sampling is needed). This keeps retries and failure
+recovery simple at very large scales. Batch size should be chosen using the `required_pages` estimate and
 `max_prefill_size` constraints.
 
 External orchestration sketch (detailed plan, tied to `KV_CACHING_RESTRUCTURE.MD`):
@@ -538,13 +439,13 @@ External orchestration sketch (detailed plan, tied to `KV_CACHING_RESTRUCTURE.MD
 4. Emit one config per batch.
    - Base on a template sampler config (same model/engine settings).
    - Replace `prompts:` with the batch’s prompt subset.
-   - Keep `n_rounds=1` (or `n_rounds>1` batched) to avoid multi-call reset instability.
+  - Keep `defer_tracker_logs_until_end: true` for multi-host multi-round safety.
    - Keep `tracker.type=wandb` and set tags that include batch index and size.
 
 5. Launch one job per batch (external orchestration).
    - Each job is a **fresh process**: new `DecodeState`, `PageTable`, `SequenceTable`, `TokenQueue`
      are created during `InferenceEngine` initialization.
-   - This avoids the in-process reset path that triggers TPU slice failures.
+  - This limits blast radius and simplifies retries for long-running workloads.
    - Logs per batch: `/tmp/levanter_run_m5_batch_<idx>.log`.
 
 6. Track completion and resume safely.
@@ -570,86 +471,28 @@ Notes:
 - Avoid leader-only `jax.device_get` on sharded arrays; all-host stats calls only.
 - If you must increase throughput, add TPUs and run batches in parallel (one TPU per batch).
 
-### M5.2 - Per-Round Reset Failure (Root-Cause Sketch + Visibility Plan)
+### M5.2 - Crash Mechanism (Closed)
 
-Status: INVESTIGATION PLAN (2026-02-05)
+Status: CLOSED (2026-02-06)
 
-Problem statement:
-Multi-round **per-call** reset (multiple `engine.generate()` calls inside one job) fails on TPU
-with a runtime slice failure between rounds. We need to understand **why reset fails** and
-add visibility so the failure is observable before the TPU halts.
+Final root-cause summary:
+- The M5 crash class was not primarily a reset-mode failure.
+- The critical trigger was **asymmetric in-loop tracker emission at round boundaries**
+  (especially leader-side in-loop tracker logging) when
+  `defer_tracker_logs_until_end=false`.
+- This produced TPU/launch-group failure symptoms (`exit status 1`, sometimes TPU continuator/slice-health
+  errors) without a useful Python traceback.
 
-Observed failure signature:
-- `launch.py` reports: `Command execution on worker {0,1} failed with exit status 1`.
-- With TPU debug logs (see `CODEX_REFACTOR_KV_M5_DEBUG.md`):
-  - `FAILED_PRECONDITION: The program continuator has halted unexpectedly.`
-  - `INTERNAL: *** Halt is unexpected, all pending programs will fail.`
-  - `Slice health check failed ... Worker connection ... failed.`
-  - `Detected slice failure, core dump will begin.`
-- No Python traceback; indicates TPU runtime instability or invalid program state between rounds.
+How we prevent it now:
+1. Keep `defer_tracker_logs_until_end=true` as the default for multi-host multi-round sampling.
+2. Use startup validation to fail fast on known-unsafe `defer=false` leader-side emission combinations.
+3. Keep multi-host debug/stats reads all-host safe for sharded arrays.
 
-Configs that reliably trigger the failure (per-round reset path):
-- `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_physical_round2_cleanup_none_noop.yaml`
-- `config/sampler/sample_llama8b_multihost_real_5prompts_2048_reset_logical_round2_cleanup_none_noop.yaml`
-- `config/sampler/sample_llama8b_multihost_real_1prompt_256_round2.yaml` (fast repro)
-All fail after Round 0 completes and before Round 1 starts.
-
-What does **not** fix it:
-- Physical vs logical reset mode.
-- Engine recreation between rounds.
-- Per-round request rebuild (new keys, new `SeqDecodingParams`).
-- Skipping round barrier (`skip_round_barrier: true`).
-- Skipping samples table (`skip_samples_table: true`).
-- KV cache zeroing change (multiply-by-zero to encourage reuse).
-
-What is **not** the cause:
-- Leader-only stats read: fixed separately (leader-only `device_get` of sharded arrays was a **different** failure).
-- Model load and engine creation: both succeed and logs show the first round running normally.
-
-Hypotheses (ordered by likelihood):
-1. **Reset path triggers invalid device state** after a full decode run.
-   - `InferenceEngine.reset()` → `GenState.reset_*()` → `PageCache.zero()`.
-   - Potentially invalid donation / aliasing across JAX buffers on TPU in multi-host.
-2. **Dangling in-flight work / program state** at reset boundary.
-   - TPU may still have pending programs at round boundary; reset might clobber buffers.
-3. **Cross-host synchronization mismatch** around reset.
-   - If one host reaches reset earlier, a sharded operation could leave TPU in inconsistent state.
-
-Visibility plan (increase signal before the TPU halts):
-1. Add **explicit reset boundary logging** on all hosts:
-   - `Generate reset: start` / `Generate reset: done` already exists.
-   - Add log markers inside `GenState.reset_*` (pre/post) on all hosts (not just leader).
-2. Add **JAX async error checking** in a dedicated debug config:
-   - `JAX_ASYNC_ERROR_CHECKING=1`
-   - `TPU_STDERR_LOG_LEVEL=0`, `TPU_MIN_LOG_LEVEL=0`
-3. Add **post-round invariant checks** before reset:
-   - `DecodeState.stats()` (all-host).
-   - Validate `used_mask` and `page_ref_counts` are zeroed after cleanup.
-4. Add **explicit device sync** before reset:
-   - `jax.block_until_ready` on relevant state (tokens/logprobs or decode state).
-   - This may surface the failure earlier with a clearer error.
-5. Minimal reproducer:
-   - Use `sample_llama8b_multihost_real_1prompt_256_round2.yaml`.
-   - Reduce logs to just reset markers + async error checking to keep signal clear.
-   - Command (with tee logging):
-     `python lib/levanter/infra/launch.py --foreground --zone us-central1-a --tpu_name simpo_worker_2 --tpu_type v5p-16 --capacity_type on-demand -- -e TPU_STDERR_LOG_LEVEL 0 -e TPU_MIN_LOG_LEVEL 0 -e JAX_ASYNC_ERROR_CHECKING 1 -- uv run src/levanter/main/sample_lm_multihost.py --config_path config/sampler/sample_llama8b_multihost_real_1prompt_256_round2.yaml 2>&1 | tee /tmp/levanter_run_m5_1prompt_256_round2_debuglogs.log`
-
-Plan to isolate the root cause:
-1. Verify the failure is **deterministic** with the fast repro config.
-2. Add reset boundary markers inside `GenState.reset_*` to locate exact crash point.
-3. Try `jax.block_until_ready` **before** `reset_*` to see if the failure moves earlier.
-4. If failure persists, bisect: disable `PageCache.zero()` and only reset metadata
-   (if safe) to see whether physical KV zeroing is the trigger.
-5. If physical zeroing is the trigger, attempt a **donation-safe** reset path
-   (new buffers vs in-place) to avoid TPU aliasing.
-
-Baseline per-round failure command (non-debug, tee):
-`python lib/levanter/infra/launch.py --foreground --zone us-central1-a --tpu_name simpo_worker_2 --tpu_type v5p-16 --capacity_type on-demand -- uv run src/levanter/main/sample_lm_multihost.py --config_path config/sampler/sample_llama8b_multihost_real_1prompt_256_round2.yaml 2>&1 | tee /tmp/levanter_run_m5_1prompt_256_round2.log`
-
-Exit criteria for M5.2:
-- We can run `n_rounds=2` with **per-round reset** without TPU slice failure.
-- Or, we can provide a clear minimal reproducer and a narrowed root cause
-  that can be handed off to TPU runtime / JAX maintainers.
+Validation references:
+- Full experiment matrix and logs: `CODEX_FIX_M5.2.md`.
+- Representative passing stress runs:
+  - `/tmp/levanter_run_m52_final_20prompts_2048_lockin_wandb.log`
+  - `/tmp/levanter_run_m52_final_20prompts_4096_lockin_wandb.log`
 
 ### M6 - Performance Work: Reference Attention and KV Update
 
