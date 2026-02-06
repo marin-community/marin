@@ -56,8 +56,8 @@ mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 # Training configuration
 # Using v5p-16 (8 chips)
 TARGET_EPOCHS = 8
-TRAIN_BATCH_SIZE = 128  # 16 per device on v5p-16 (8 chips)
-MICROBATCH_SIZE = 128  # No gradient accumulation
+TRAIN_BATCH_SIZE = 64  # 8 per device on v5p-16 (8 chips), reduced for memory
+MICROBATCH_SIZE = 64  # No gradient accumulation
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 
 RESOURCES = ResourceConfig.with_tpu("v5p-16")
@@ -69,7 +69,7 @@ mixture_sft_config = SimpleSFTConfig(
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=5e-5,  # Higher LR for smaller model (vs 3e-5 for 4B)
+    learning_rate=3e-5,
     max_seq_len=32768,  # 32K context length
     seed=42,
     steps_per_checkpoint=int((DATASET_SIZE / TRAIN_BATCH_SIZE) // 4),  # Every quarter epoch
