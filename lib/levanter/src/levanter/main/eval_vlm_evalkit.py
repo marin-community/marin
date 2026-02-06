@@ -486,6 +486,7 @@ def main(config: EvalVLMEvalKitConfig):
                 processed_indices = set()
                 batch_size = max(1, config.vlm_batch_size)
                 num_batches = (len(data) + batch_size - 1) // batch_size
+                results_since_last_checkpoint = 0
 
                 # Try to load checkpoint for resume
                 checkpoint_path = _get_checkpoint_path(output_dir, eval_checkpoint_name, benchmark)
@@ -564,11 +565,12 @@ def main(config: EvalVLMEvalKitConfig):
                         logger.warning(f"Batch {batch_idx}: No valid VLM requests created")
 
                     processed = len(processed_indices)
+                    results_since_last_checkpoint += len(batch_indices)
                     if processed % 50 == 0 or processed == len(data):
                         logger.info(f"Processed {processed}/{len(data)} samples")
 
-                    # Save checkpoint periodically
-                    if config.checkpoint_interval > 0 and processed % config.checkpoint_interval == 0:
+                    # Save checkpoint periodically (use >= to avoid skipping when batch_size doesn't align with interval)
+                    if config.checkpoint_interval > 0 and results_since_last_checkpoint >= config.checkpoint_interval:
                         _save_eval_checkpoint(
                             checkpoint_path=checkpoint_path,
                             benchmark=benchmark,
@@ -576,6 +578,7 @@ def main(config: EvalVLMEvalKitConfig):
                             processed_indices=list(processed_indices),
                             total_samples=len(data),
                         )
+                        results_since_last_checkpoint = 0
 
                 # Save predictions to Excel file
                 result_file = os.path.join(local_work_dir, f'{model_name}_{dataset_name}.xlsx')
