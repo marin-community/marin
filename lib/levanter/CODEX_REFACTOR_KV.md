@@ -339,7 +339,7 @@ Eliminate the multi-host multi-round crash class that surfaced as TPU worker exi
 with no Python traceback.
 
 Chosen strategy:
-- Keep per-round `engine.generate()` orchestration.
+- Keep per-round `engine.generate()` orchestration for a fixed prompt set.
 - Make round-boundary tracker behavior safe by default.
 - Reject known-unsafe configurations at startup.
 
@@ -373,6 +373,18 @@ Validation evidence (full matrix in `CODEX_FIX_M5.2.md`):
   - `/tmp/levanter_run_m52_final_20prompts_2048_lockin.log`
   - `/tmp/levanter_run_m52_final_20prompts_2048_lockin_wandb.log`
   - `/tmp/levanter_run_m52_final_20prompts_4096_lockin_wandb.log`
+
+M5 guarantees (in scope):
+- Multi-host multi-round runs are stable for configs that fit one-round engine capacity and use safe tracker settings.
+- Unsafe legacy tracker modes are rejected at startup with explicit errors.
+- The previous "exit status 1 between rounds" class is removed for the validated config families above.
+
+M5 does not do (out of scope):
+- It does **not** chunk an arbitrary prompt set `N` automatically inside one run.
+- `n_rounds` means repeat sampling over the same prompt set; it is not prompt batching.
+- It does **not** guarantee that very large `N` fits in one call; `max_seqs`, `max_pages`, and `max_prefill_size` still bound admission.
+- It does **not** improve throughput; long generations remain slow on the current reference path.
+- It does **not** implement dynamic host-side prompt replacement/eviction during a single `generate()` call.
 
 Operational note:
 - Inference is still slow for long generations (for example, ~55 minutes/round for
