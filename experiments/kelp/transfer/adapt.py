@@ -54,7 +54,7 @@ def load_llama_weights(model_path: str) -> dict[str, Any]:
     import fsspec
     from safetensors import safe_open
 
-    fs = fsspec.filesystem(model_path.split(":")[0] if "://" in model_path else "file")
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(model_path))
 
     weight_files = fs.glob(f"{model_path}/*.safetensors")
     if not weight_files:

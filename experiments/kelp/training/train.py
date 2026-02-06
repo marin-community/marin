@@ -242,7 +242,7 @@ def save_checkpoint(
         checkpoint_dir = f"{config.output_dir}/final"
 
     model = TreeDiffusionModel(state.params, config.model, schedule)
-    save_model(model, checkpoint_dir)
+    save_model(model, checkpoint_dir, step=int(state.step))
     logger.info(f"Saved checkpoint to {checkpoint_dir}")
 
 
