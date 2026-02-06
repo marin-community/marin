@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""
+Data Quality Checker for VLM Training Dataset
+
+Checks for common data quality issues that can cause training crashes:
+- Messages referencing images but images list is empty/null
+- Corrupt or unloadable images
+- Images with unusual dimensions
+- Null/None entries in images list
+
+Usage:
+    # Check first 5 shards
+    python experiments/VLM/check_data_quality.py \
+        --data_path "gs://marin-vlm/stage3_sharded_full/*.parquet" \
+        --start_shard 0 --end_shard 5
+
+    # Check all shards (slow)
+    python experiments/VLM/check_data_quality.py \
+        --data_path "gs://marin-vlm/stage3_sharded_full/*.parquet"
+
+    # Skip image loading (fast metadata-only check)
+    python experiments/VLM/check_data_quality.py \
+        --data_path "gs://marin-vlm/stage3_sharded_full/*.parquet" \
+        --skip_image_load
+"""
+
+import argparse
+import json
+import logging
+import time
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import fsspec
+import numpy as np
+import pyarrow.parquet as pq
+from PIL import Image
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    force=True,
+)
+# Force unbuffered output so progress shows immediately
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+logger = logging.getLogger(__name__)
+
+
+def list_parquet_files(data_path: str) -> List[str]:
+    """List all parquet files matching the given path pattern.
+
+    Uses gcsfs.ls() for GCS paths (much faster than glob on large dirs).
+    """
+    t0 = time.time()
+
+    if data_path.startswith("gs://"):
+        import gcsfs
+        gfs = gcsfs.GCSFileSystem()
+        # Strip glob pattern - just list the directory
+        # e.g. "gs://bucket/path/*.parquet" -> "bucket/path"
+        dir_path = data_path.replace("gs://", "")
+        if "*" in dir_path:
+            dir_path = dir_path[:dir_path.index("*")].rstrip("/")
+        print(f"  Listing GCS directory: gs://{dir_path} ...", flush=True)
+        all_files = gfs.ls(dir_path, detail=False)
+        # Filter to .parquet files only
+        paths = sorted(f for f in all_files if f.endswith(".parquet"))
+        elapsed = time.time() - t0
+        print(f"Found {len(paths)} parquet files in {elapsed:.1f}s", flush=True)
+        return [f"gs://{p}" for p in paths]
+    else:
+        # Local filesystem - use glob
+        import glob as glob_module
+        paths = sorted(glob_module.glob(data_path))
+        elapsed = time.time() - t0
+        print(f"Found {len(paths)} parquet files in {elapsed:.1f}s", flush=True)
+        return paths
+
+
+def count_image_refs_in_messages(messages: List[Dict]) -> int:
+    """Count the number of image references in a messages list."""
+    count = 0
+    if not messages:
+        return 0
+    for msg in messages:
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "image":
+                    count += 1
+        elif isinstance(content, str):
+            # Some formats use <image> in text
+            count += content.count("<image>")
+    return count
+
+
+def try_load_image(image_data: Any) -> tuple[Optional[Image.Image], Optional[str]]:
+    """Try to load an image, returning (image, error_message)."""
+    try:
+        if image_data is None:
+            return None, "image_data is None"
+        if isinstance(image_data, Image.Image):
+            return image_data.convert("RGB"), None
+        elif isinstance(image_data, str):
+            if image_data.startswith(("http://", "https://")):
+                import requests
+                response = requests.get(image_data, timeout=30)
+                response.raise_for_status()
+                img = Image.open(BytesIO(response.content)).convert("RGB")
+                return img, None
+            elif image_data.startswith(("gs://", "s3://")):
+                with fsspec.open(image_data, "rb") as f:
+                    img = Image.open(f)
+                    img.load()
+                    return img.convert("RGB"), None
+            else:
+                img = Image.open(image_data).convert("RGB")
+                return img, None
+        elif isinstance(image_data, np.ndarray):
+            img = Image.fromarray(image_data).convert("RGB")
+            return img, None
+        elif isinstance(image_data, dict):
+            if "bytes" in image_data and image_data["bytes"] is not None:
+                img = Image.open(BytesIO(image_data["bytes"])).convert("RGB")
+                return img, None
+            elif "path" in image_data and image_data["path"] is not None:
+                return try_load_image(image_data["path"])
+            else:
+                return None, f"Unknown image dict format: {list(image_data.keys())}"
+        elif isinstance(image_data, bytes):
+            img = Image.open(BytesIO(image_data)).convert("RGB")
+            return img, None
+        else:
+            return None, f"Unsupported image type: {type(image_data).__name__}"
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:200]}"
+
+
+def check_image_dimensions(img: Image.Image) -> Optional[str]:
+    """Check if image dimensions are unusual. Returns warning message or None."""
+    w, h = img.size
+    if w < 10 or h < 10:
+        return f"Very small image: {w}x{h}"
+    if w > 0 and h > 0:
+        ratio = max(w, h) / min(w, h)
+        if ratio > 20:
+            return f"Extreme aspect ratio ({ratio:.1f}:1): {w}x{h}"
+    return None
+
+
+def check_row(
+    row: Dict[str, Any],
+    shard_name: str,
+    row_idx: int,
+    messages_key: str = "messages",
+    images_key: str = "images",
+    skip_image_load: bool = False,
+) -> List[Dict]:
+    """Check a single row for data quality issues. Returns list of issues."""
+    issues = []
+    base_info = {"shard": shard_name, "row": row_idx}
+
+    messages = row.get(messages_key)
+    images = row.get(images_key)
+
+    # Count image references in messages
+    num_image_refs = count_image_refs_in_messages(messages) if messages else 0
+
+    # Check images field
+    if images is None:
+        num_images = 0
+    elif isinstance(images, (list, tuple)):
+        num_images = len(images)
+    else:
+        num_images = 1  # Single image
+
+    # Issue A: Messages reference images but images list is empty/null
+    if num_image_refs > 0 and num_images == 0:
+        issues.append({
+            **base_info,
+            "issue": "image_ref_but_no_images",
+            "detail": f"Messages reference {num_image_refs} image(s) but images list is empty/null",
+        })
+
+    # Issue A2: Image count mismatch
+    if num_image_refs > 0 and num_images > 0 and num_image_refs != num_images:
+        issues.append({
+            **base_info,
+            "issue": "image_count_mismatch",
+            "detail": f"Messages reference {num_image_refs} image(s) but images has {num_images} entries",
+        })
+
+    # Issue D: Null entries in images list
+    if isinstance(images, (list, tuple)):
+        for img_idx, img_data in enumerate(images):
+            if img_data is None:
+                issues.append({
+                    **base_info,
+                    "issue": "null_image_entry",
+                    "detail": f"images[{img_idx}] is None",
+                })
+
+    # Issue B & C: Try loading images
+    if not skip_image_load and isinstance(images, (list, tuple)):
+        for img_idx, img_data in enumerate(images):
+            img, error = try_load_image(img_data)
+            if error:
+                issues.append({
+                    **base_info,
+                    "issue": "image_load_failed",
+                    "detail": f"images[{img_idx}]: {error}",
+                })
+            elif img is not None:
+                dim_warning = check_image_dimensions(img)
+                if dim_warning:
+                    issues.append({
+                        **base_info,
+                        "issue": "unusual_dimensions",
+                        "detail": f"images[{img_idx}]: {dim_warning}",
+                    })
+
+    return issues
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Check VLM training data quality")
+    parser.add_argument("--data_path", required=True, help="GCS path pattern to parquet files (e.g., gs://bucket/path/*.parquet)")
+    parser.add_argument("--start_shard", type=int, default=0, help="Start shard index (inclusive)")
+    parser.add_argument("--end_shard", type=int, default=None, help="End shard index (exclusive)")
+    parser.add_argument("--messages_key", default="messages", help="Key for messages field")
+    parser.add_argument("--images_key", default="images", help="Key for images field")
+    parser.add_argument("--skip_image_load", action="store_true", help="Skip actual image loading (fast metadata-only check)")
+    parser.add_argument("--output", default="data_quality_report.json", help="Output JSON file for results")
+    parser.add_argument("--max_issues_per_shard", type=int, default=100, help="Max issues to report per shard")
+    args = parser.parse_args()
+
+    # List parquet files
+    print(f"Listing parquet files from {args.data_path} ...", flush=True)
+    parquet_files = list_parquet_files(args.data_path)
+    if not parquet_files:
+        logger.error("No parquet files found!")
+        return
+
+    # Apply shard range
+    end_shard = args.end_shard if args.end_shard is not None else len(parquet_files)
+    parquet_files = parquet_files[args.start_shard:end_shard]
+    logger.info(f"Checking shards {args.start_shard} to {end_shard} ({len(parquet_files)} shards)")
+
+    # Collect all issues
+    all_issues: List[Dict] = []
+    issue_counts = {
+        "image_ref_but_no_images": 0,
+        "image_count_mismatch": 0,
+        "null_image_entry": 0,
+        "image_load_failed": 0,
+        "unusual_dimensions": 0,
+    }
+    total_rows = 0
+    total_with_images = 0
+
+    for shard_idx, shard_path in enumerate(parquet_files):
+        shard_name = Path(shard_path).stem
+        global_shard_idx = args.start_shard + shard_idx
+        t0 = time.time()
+        print(f"[{shard_idx+1}/{len(parquet_files)}] Reading shard {global_shard_idx} ({shard_name})...", end=" ", flush=True)
+
+        try:
+            # Read parquet file
+            with fsspec.open(shard_path, "rb") as f:
+                table = pq.read_table(f)
+            rows = table.to_pydict()
+            num_rows = len(rows.get(args.messages_key, []))
+
+            shard_issues = []
+            for row_idx in range(num_rows):
+                row = {k: v[row_idx] for k, v in rows.items()}
+                row_issues = check_row(
+                    row,
+                    shard_name=shard_name,
+                    row_idx=row_idx,
+                    messages_key=args.messages_key,
+                    images_key=args.images_key,
+                    skip_image_load=args.skip_image_load,
+                )
+                shard_issues.extend(row_issues)
+
+                # Count images
+                images = row.get(args.images_key)
+                if images and len(images) > 0:
+                    total_with_images += 1
+
+                # Early stop per shard
+                if len(shard_issues) >= args.max_issues_per_shard:
+                    logger.warning(f"Shard {global_shard_idx} ({shard_name}): hit max issues limit ({args.max_issues_per_shard}), stopping early")
+                    break
+
+            total_rows += num_rows
+
+            # Count issues by type
+            for issue in shard_issues:
+                issue_type = issue["issue"]
+                if issue_type in issue_counts:
+                    issue_counts[issue_type] += 1
+
+            all_issues.extend(shard_issues)
+
+            elapsed = time.time() - t0
+            if shard_issues:
+                print(f"{num_rows} rows, {len(shard_issues)} ISSUES in {elapsed:.1f}s", flush=True)
+            else:
+                print(f"{num_rows} rows, OK ({elapsed:.1f}s)", flush=True)
+
+        except Exception as e:
+            print(f"FAILED: {e}", flush=True)
+            all_issues.append({
+                "shard": shard_name,
+                "row": -1,
+                "issue": "shard_read_failed",
+                "detail": str(e)[:500],
+            })
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print("DATA QUALITY CHECK SUMMARY")
+    print("=" * 70)
+    print(f"Total shards checked: {len(parquet_files)}")
+    print(f"Total rows: {total_rows}")
+    print(f"Rows with images: {total_with_images}")
+    print(f"Total issues found: {len(all_issues)}")
+    print()
+    print("Issues by type:")
+    for issue_type, count in sorted(issue_counts.items(), key=lambda x: -x[1]):
+        if count > 0:
+            print(f"  {issue_type}: {count}")
+    print()
+
+    if all_issues:
+        print("First 20 issues:")
+        for issue in all_issues[:20]:
+            print(f"  [{issue['shard']}:row{issue['row']}] {issue['issue']}: {issue['detail']}")
+
+    # Save full report
+    report = {
+        "summary": {
+            "total_shards": len(parquet_files),
+            "shard_range": [args.start_shard, end_shard],
+            "total_rows": total_rows,
+            "rows_with_images": total_with_images,
+            "total_issues": len(all_issues),
+            "issue_counts": issue_counts,
+        },
+        "issues": all_issues,
+    }
+    with open(args.output, "w") as f:
+        json.dump(report, f, indent=2, default=str)
+    print(f"\nFull report saved to: {args.output}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,33 @@
+{
+  "summary": {
+    "total_shards": 10,
+    "shard_range": [
+      0,
+      10
+    ],
+    "total_rows": 49438,
+    "rows_with_images": 16059,
+    "total_issues": 2,
+    "issue_counts": {
+      "image_ref_but_no_images": 0,
+      "image_count_mismatch": 0,
+      "null_image_entry": 0,
+      "image_load_failed": 0,
+      "unusual_dimensions": 2
+    }
+  },
+  "issues": [
+    {
+      "shard": "train-00002",
+      "row": 3270,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (43.3:1): 11097x256"
+    },
+    {
+      "shard": "train-00003",
+      "row": 4189,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (154.0:1): 39424x256"
+    }
+  ]
+}
