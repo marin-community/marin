@@ -17,9 +17,8 @@
 import dataclasses
 import haliax as hax
 
-from experiments.anneal_config import AnnealConfig
 from experiments.audio.qwen3 import qwen3_135m
-from experiments.audio.audio_defaults import default_audio_anneal
+from experiments.audio.audio_defaults import AnnealConfig, default_audio_anneal
 from experiments.audio.exp1699_marin_audio_all import train_135m_model
 from experiments.audio.tokenize_yodas import yodas2_tokenized_steps
 from experiments.audio.tokenize_emilia import tokenize_emilia_fix_steps

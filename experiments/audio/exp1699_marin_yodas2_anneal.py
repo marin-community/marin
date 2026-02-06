@@ -18,8 +18,7 @@ from experiments.audio.tokenize_mls_en import mls_en_data_config
 from experiments.audio.tokenize_emilia import emilia_english_mixture_config
 from experiments.audio.tokenize_yodas import yodas2_english_data_config
 from experiments.audio.data_mixes import mix3_v1_english_mixture_config, mix2_v1_english_mixture_config
-from experiments.anneal_config import AnnealConfig
-from experiments.audio.audio_defaults import default_audio_anneal
+from experiments.audio.audio_defaults import AnnealConfig, default_audio_anneal
 from experiments.audio.exp1699_marin_yodas2 import yodas_1b_model
 
 from marin.execution.executor import executor_main

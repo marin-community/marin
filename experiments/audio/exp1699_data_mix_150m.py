@@ -38,10 +38,10 @@ from experiments.audio.tokenize_emilia import emilia_english_mixture_config
 from experiments.audio.tokenize_mls_en import mls_en_data_config
 from experiments.defaults import SimpleTrainConfig, default_train
 from marin.processing.tokenize.data_configs import lm_data_config
-from experiments.audio.tokenize_cooldown import tokenize_peoples_speech_steps
-from experiments.audio.tokenize_cooldown import tokenize_common_voice_17_steps
-from experiments.audio.tokenize_cooldown import tokenize_librispeech_steps
-from experiments.audio.tokenize_cooldown import tokenize_libritts_steps
+from experiments.audio.tokenize_finetune import tokenize_peoples_speech_steps
+from experiments.audio.tokenize_finetune import tokenize_common_voice_17_steps
+from experiments.audio.tokenize_finetune import tokenize_librispeech_steps
+from experiments.audio.tokenize_finetune import tokenize_libritts_steps
 
 from marin.execution.executor import executor_main
 from fray.cluster import ResourceConfig

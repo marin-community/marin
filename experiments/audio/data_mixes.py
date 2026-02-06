@@ -20,7 +20,7 @@ from experiments.audio.tokenize_emilia import (
 )
 from experiments.audio.tokenize_mls_en import tokenize_mls_en_steps, tokenize_mls_en_tts0_steps
 from experiments.audio.tokenize_nemotron import tokenize_nemotron_hq_actual_step
-from experiments.audio.tokenize_cooldown import (
+from experiments.audio.tokenize_finetune import (
     tokenize_peoples_speech_steps,
     tokenize_common_voice_17_steps,
     tokenize_librispeech_steps,
