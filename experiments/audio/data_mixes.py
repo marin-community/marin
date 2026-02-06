@@ -26,7 +26,8 @@ from experiments.audio.tokenize_finetune import (
     tokenize_librispeech_steps,
     tokenize_libritts_steps,
 )
-from marin.processing.tokenize.data_configs import lm_mixture_data_config, LMMixtureDatasetConfig
+from experiments.audio.audio_defaults import LMMixtureDatasetConfig
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 
 def mix3_v1_english_mixture_config() -> LMMixtureDatasetConfig:

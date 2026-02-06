@@ -18,7 +18,7 @@ import dataclasses
 import haliax as hax
 from math import ceil
 
-from levanter.data.text import LMMixtureDatasetConfig
+from experiments.audio.audio_defaults import LMMixtureDatasetConfig
 from levanter.optim import CautiousConfig
 
 from experiments.audio.qwen3 import qwen3_150m

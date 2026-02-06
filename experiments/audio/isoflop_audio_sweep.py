@@ -23,7 +23,7 @@ import dataclasses
 import math
 from dataclasses import dataclass, replace
 
-from levanter.data.text import LMMixtureDatasetConfig
+from experiments.audio.audio_defaults import LMMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig

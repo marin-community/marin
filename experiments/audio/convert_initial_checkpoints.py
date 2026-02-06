@@ -26,10 +26,7 @@ from dataclasses import dataclass
 from experiments.audio.exp1699_marin_yodas2 import yodas_1b_model, yodas_qwen
 from levanter.models.qwen import QwenConfig
 from levanter.trainer import TrainerConfig
-from marin.export.levanter_checkpoint import (
-    CheckpointConversionRequest,
-    build_checkpoint_export_steps,
-)
+from marin.export import convert_checkpoint_to_hf_step
 from marin.execution.executor import ExecutorStep, executor_main
 from fray.cluster import ResourceConfig
 
@@ -81,8 +78,8 @@ def _model_config() -> QwenConfig:
 
 
 def create_conversion_steps() -> Sequence[ExecutorStep]:
-    requests = [
-        CheckpointConversionRequest(
+    steps = [
+        convert_checkpoint_to_hf_step(
             name=f"marin-yodas2-{spec.name}",
             checkpoint_path=spec.checkpoint_path,
             model=_model_config(),
@@ -92,7 +89,7 @@ def create_conversion_steps() -> Sequence[ExecutorStep]:
         )
         for spec in CHECKPOINT_EXPORTS
     ]
-    return build_checkpoint_export_steps(requests)
+    return steps
 
 
 if __name__ == "__main__":

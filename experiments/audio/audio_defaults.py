@@ -15,14 +15,18 @@
 """Audio-specific default configurations."""
 
 from dataclasses import dataclass, field
+from typing import TypeAlias
 
 from fray.cluster import ResourceConfig
+from levanter.data.text import LmDataConfig
 from levanter.models.qwen import Qwen3Config
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from marin.execution import InputName
 from marin.execution.executor import ExecutorStep
-from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
+
+# Local type alias to avoid circular imports with levanter
+LMMixtureDatasetConfig: TypeAlias = LmDataConfig
 
 
 @dataclass(frozen=True)

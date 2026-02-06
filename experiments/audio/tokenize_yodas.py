@@ -16,8 +16,7 @@
 
 from collections.abc import Mapping
 
-from levanter.data.text import LMMixtureDatasetConfig
-
+from experiments.audio.audio_defaults import LMMixtureDatasetConfig
 from experiments.defaults import default_tokenize
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution import executor_main, versioned
