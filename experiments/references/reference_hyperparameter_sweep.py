@@ -36,37 +36,79 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
-# Sweep knobs (easy to edit in one place)
-NUM_LOOPS = 10
-SUGGESTIONS_PER_LOOP = 10
-VIZIER_STUDY_OWNER = "marin"
-VIZIER_STUDY_ID = "ref-sweep-vizier-v3"
-VIZIER_STUDY_RESOURCE_NAME = f"owners/{VIZIER_STUDY_OWNER}/studies/{VIZIER_STUDY_ID}"
-VIZIER_CLIENT_ID_PREFIX = "ref-sweep-vizier-v3"
-VIZIER_ALGORITHM = "DEFAULT"
+FloatRange = tuple[float, float]
 
-LEARNING_RATE_RANGE = (0.005, 0.03)
-BETA1_RANGE = (0.85, 0.999)
-ADAM_LEARNING_RATE_RANGE = (0.005, 0.03)
-BETA2_RANGE = (0.85, 0.999)
-EPSILON_RANGE = (1e-15, 1e-6)
-MAX_GRAD_NORM_RANGE = (0.1, 5.0)
-FIXED_BATCH_SIZE = 64
-TARGET_TOKENS = 1_000_000_000
-SEQ_LEN = 4096
-METRIC_FILE = "tracker_metrics.jsonl"
-METRIC_KEY = "eval/uncheatable_eval/macro_loss"
-METRIC_MODE = "min"
-LR_SCHEDULE = "linear"
-WARMUP_FRACTION = 0.1
-DECAY_FRACTION = 0.2
+
+@dataclass(frozen=True)
+class SweepSettings:
+    """User-editable sweep settings.
+
+    Edit only this block for routine sweep changes.
+    """
+
+    experiment_name: str
+    study_owner: str
+    num_loops: int
+    suggestions_per_loop: int
+    search_space: Mapping[str, FloatRange]
+    fixed_batch_size: int
+    target_tokens: int
+    seq_len: int
+    metric_file: str
+    metric_key: str
+    metric_mode: str
+    vizier_algorithm: str
+    lr_schedule: str
+    warmup_fraction: float
+    decay_fraction: float
+    base_train_tags: tuple[str, ...]
+
+    @property
+    def study_id(self) -> str:
+        return self.experiment_name
+
+    @property
+    def study_resource_name(self) -> str:
+        return f"owners/{self.study_owner}/studies/{self.study_id}"
+
+    @property
+    def client_id_prefix(self) -> str:
+        return self.experiment_name
+
+
+# Edit this single object to tune the sweep.
+SWEEP = SweepSettings(
+    # Common edits.
+    experiment_name="ref-sweep-qwen3-130m-vizier-v3",
+    num_loops=10,
+    suggestions_per_loop=10,
+    search_space={
+        "lr": (0.005, 0.03),
+        "beta1": (0.85, 0.999),
+        "adam_lr": (0.005, 0.03),
+        "beta2": (0.85, 0.999),
+        "epsilon": (1e-15, 1e-6),
+        "max_grad_norm": (0.1, 5.0),
+    },
+    fixed_batch_size=64,
+    target_tokens=1_000_000_000,
+    metric_key="eval/uncheatable_eval/macro_loss",
+    metric_mode="min",
+    # Rare edits.
+    study_owner="marin",
+    seq_len=4096,
+    metric_file="tracker_metrics.jsonl",
+    vizier_algorithm="DEFAULT",
+    lr_schedule="linear",
+    warmup_fraction=0.1,
+    decay_fraction=0.2,
+    base_train_tags=("sweep", "qwen3", "130m", "adamh"),
+)
 
 SUGGESTIONS_FILENAME = "vizier_suggestions.json"
 UPDATE_FILENAME = "vizier_update.json"
 RESOURCE_FILENAME = "vizier_resource.json"
 VIZIER_DB_FILENAME = "vizier.db"
-
-BASE_TRAIN_TAGS = ["sweep", "qwen3", "130m", "adamh"]
 
 qwen3_130m = Qwen3Config(
     max_seq_len=4096,
@@ -83,19 +125,14 @@ qwen3_130m = Qwen3Config(
 class VizierSuggestConfig:
     study_owner: str
     study_id: str
-    study_resource_name: str
     input_db_path: str | None
     output_path: str
     num_suggestions: int
     client_id: str
     metric_key: str
     mode: str
-    learning_rate_range: tuple[float, float]
-    beta1_range: tuple[float, float]
-    adam_learning_rate_range: tuple[float, float]
-    beta2_range: tuple[float, float]
-    epsilon_range: tuple[float, float]
-    max_grad_norm_range: tuple[float, float]
+    algorithm: str
+    search_space: Mapping[str, FloatRange]
     loop_index: int
 
 
@@ -106,6 +143,7 @@ class VizierTrainConfig:
     base_pod_config: TrainLmOnPodConfig
     target_tokens: int
     seq_len: int
+    fixed_batch_size: int
     loop_index: int
 
 
@@ -115,7 +153,7 @@ class VizierUpdateConfig:
     study_resource_name: str
     input_db_path: str | None
     suggestions_path: str
-    run_paths: list
+    run_paths: list[str]
     metric_file: str
     metric_key: str
     mode: str
@@ -195,6 +233,14 @@ def _metric_goal(mode: str) -> vz.ObjectiveMetricGoal:
     raise ValueError(f"Unsupported metric mode: {mode}")
 
 
+def _extract_adamh_hparams(suggestion: dict[str, object]) -> dict[str, float]:
+    parameters = suggestion["parameters"]
+    if not isinstance(parameters, Mapping):
+        raise ValueError(f"Expected suggestion parameters mapping, got {type(parameters)!r}")
+    required = ("lr", "beta1", "adam_lr", "beta2", "epsilon", "max_grad_norm")
+    return {name: float(parameters[name]) for name in required}
+
+
 def _build_adamh_config(
     *,
     learning_rate: float,
@@ -208,9 +254,9 @@ def _build_adamh_config(
         learning_rate=learning_rate,
         adam_lr=adam_learning_rate,
         min_lr_ratio=0.0,
-        warmup=WARMUP_FRACTION,
-        decay=DECAY_FRACTION,
-        lr_schedule=LR_SCHEDULE,
+        warmup=SWEEP.warmup_fraction,
+        decay=SWEEP.decay_fraction,
+        lr_schedule=SWEEP.lr_schedule,
         beta1=beta1,
         beta2=beta2,
         epsilon=epsilon,
@@ -220,21 +266,21 @@ def _build_adamh_config(
 
 
 def _build_base_pod_config() -> TrainLmOnPodConfig:
-    placeholder_lr = LEARNING_RATE_RANGE[0]
-    placeholder_beta1 = BETA1_RANGE[0]
-    placeholder_adam_lr = ADAM_LEARNING_RATE_RANGE[0]
-    placeholder_beta2 = BETA2_RANGE[0]
-    placeholder_epsilon = EPSILON_RANGE[0]
-    placeholder_max_grad_norm = MAX_GRAD_NORM_RANGE[0]
-    placeholder_batch_size = FIXED_BATCH_SIZE
-    placeholder_steps = TARGET_TOKENS // (placeholder_batch_size * SEQ_LEN)
+    placeholder_lr = SWEEP.search_space["lr"][0]
+    placeholder_beta1 = SWEEP.search_space["beta1"][0]
+    placeholder_adam_lr = SWEEP.search_space["adam_lr"][0]
+    placeholder_beta2 = SWEEP.search_space["beta2"][0]
+    placeholder_epsilon = SWEEP.search_space["epsilon"][0]
+    placeholder_max_grad_norm = SWEEP.search_space["max_grad_norm"][0]
+    placeholder_batch_size = SWEEP.fixed_batch_size
+    placeholder_steps = SWEEP.target_tokens // (placeholder_batch_size * SWEEP.seq_len)
 
     train_config = SimpleTrainConfig(
         resources=ResourceConfig.with_tpu("v5p-8"),
         train_batch_size=placeholder_batch_size,
         num_train_steps=placeholder_steps,
         learning_rate=placeholder_lr,
-        train_seq_len=SEQ_LEN,
+        train_seq_len=SWEEP.seq_len,
         z_loss_weight=5e-6,
         optimizer_config=_build_adamh_config(
             learning_rate=placeholder_lr,
@@ -248,11 +294,11 @@ def _build_base_pod_config() -> TrainLmOnPodConfig:
     )
 
     base_step = default_train(
-        name="ref-sweep-qwen3-130m-vizier-v3-base",
+        name=f"{SWEEP.experiment_name}-base",
         tokenized=nemotron_mix,
         model_config=qwen3_130m,
         train_config=train_config,
-        tags=BASE_TRAIN_TAGS,
+        tags=list(SWEEP.base_train_tags),
         eval_harness_tasks=[],
     )
     return base_step.config
@@ -266,14 +312,10 @@ def run_vizier_suggest(config: VizierSuggestConfig) -> None:
         _sync_vizier_db_from_gcs(config.input_db_path, local_db_path)
     _configure_vizier_local_db(local_db_path)
 
-    study_config = vz.StudyConfig(algorithm=VIZIER_ALGORITHM)
+    study_config = vz.StudyConfig(algorithm=config.algorithm)
     root = study_config.search_space.root
-    root.add_float_param("lr", *config.learning_rate_range)
-    root.add_float_param("beta1", *config.beta1_range)
-    root.add_float_param("adam_lr", *config.adam_learning_rate_range)
-    root.add_float_param("beta2", *config.beta2_range)
-    root.add_float_param("epsilon", *config.epsilon_range)
-    root.add_float_param("max_grad_norm", *config.max_grad_norm_range)
+    for parameter_name, parameter_range in config.search_space.items():
+        root.add_float_param(parameter_name, *parameter_range)
     study_config.metric_information.append(vz.MetricInformation(config.metric_key, goal=_metric_goal(config.mode)))
 
     study = clients.Study.from_study_config(
@@ -281,10 +323,9 @@ def run_vizier_suggest(config: VizierSuggestConfig) -> None:
         owner=config.study_owner,
         study_id=config.study_id,
     )
-    if study.resource_name != config.study_resource_name:
-        raise ValueError(
-            f"Study resource name mismatch: expected {config.study_resource_name}, got {study.resource_name}"
-        )
+    expected_resource_name = f"owners/{config.study_owner}/studies/{config.study_id}"
+    if study.resource_name != expected_resource_name:
+        raise ValueError(f"Study resource name mismatch: expected {expected_resource_name}, got {study.resource_name}")
 
     suggestions = study.suggest(count=config.num_suggestions, client_id=config.client_id)
     output = {
@@ -310,13 +351,8 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
         raise IndexError(f"Suggestion index {config.suggestion_index} out of range")
 
     suggestion = suggestions[config.suggestion_index]
-    lr = float(suggestion["parameters"]["lr"])
-    beta1 = float(suggestion["parameters"]["beta1"])
-    adam_lr = float(suggestion["parameters"]["adam_lr"])
-    beta2 = float(suggestion["parameters"]["beta2"])
-    epsilon = float(suggestion["parameters"]["epsilon"])
-    max_grad_norm = float(suggestion["parameters"]["max_grad_norm"])
-    batch_size = FIXED_BATCH_SIZE
+    hparams = _extract_adamh_hparams(suggestion)
+    batch_size = config.fixed_batch_size
     num_steps = config.target_tokens // (batch_size * config.seq_len)
 
     base_pod_config = config.base_pod_config
@@ -327,13 +363,13 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
     trial_id = int(suggestion["trial_id"])
     new_tags.extend(
         [
-            f"lr={lr}",
-            f"beta1={beta1}",
-            f"adam_lr={adam_lr}",
-            f"beta2={beta2}",
-            f"eps={epsilon}",
-            f"mgn={max_grad_norm}",
-            f"bs={FIXED_BATCH_SIZE}",
+            f"lr={hparams['lr']}",
+            f"beta1={hparams['beta1']}",
+            f"adam_lr={hparams['adam_lr']}",
+            f"beta2={hparams['beta2']}",
+            f"eps={hparams['epsilon']}",
+            f"mgn={hparams['max_grad_norm']}",
+            f"bs={batch_size}",
             f"trial={trial_id}",
             f"loop={config.loop_index}",
         ]
@@ -351,12 +387,12 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
         base_train_config,
         trainer=trainer,
         optimizer=_build_adamh_config(
-            learning_rate=lr,
-            beta1=beta1,
-            adam_learning_rate=adam_lr,
-            beta2=beta2,
-            epsilon=epsilon,
-            max_grad_norm=max_grad_norm,
+            learning_rate=hparams["lr"],
+            beta1=hparams["beta1"],
+            adam_learning_rate=hparams["adam_lr"],
+            beta2=hparams["beta2"],
+            epsilon=hparams["epsilon"],
+            max_grad_norm=hparams["max_grad_norm"],
         ),
     )
     pod_config = replace(base_pod_config, train_config=train_config)
@@ -437,26 +473,21 @@ def _build_suggest_step(
     loop_index: int,
     input_db_path: str | None,
 ) -> ExecutorStep:
-    client_id = f"{VIZIER_CLIENT_ID_PREFIX}-loop-{loop_index}"
+    client_id = f"{SWEEP.client_id_prefix}-loop-{loop_index}"
     return ExecutorStep(
-        name=f"ref-sweep-qwen3-130m-vizier-v3-suggest-loop{loop_index}",
+        name=f"{SWEEP.experiment_name}-suggest-loop{loop_index}",
         fn=run_vizier_suggest,
         config=VizierSuggestConfig(
-            study_owner=VIZIER_STUDY_OWNER,
-            study_id=VIZIER_STUDY_ID,
-            study_resource_name=VIZIER_STUDY_RESOURCE_NAME,
+            study_owner=SWEEP.study_owner,
+            study_id=SWEEP.study_id,
             input_db_path=input_db_path,
             output_path=this_output_path(),
-            num_suggestions=SUGGESTIONS_PER_LOOP,
+            num_suggestions=SWEEP.suggestions_per_loop,
             client_id=client_id,
-            metric_key=METRIC_KEY,
-            mode=METRIC_MODE,
-            learning_rate_range=LEARNING_RATE_RANGE,
-            beta1_range=BETA1_RANGE,
-            adam_learning_rate_range=ADAM_LEARNING_RATE_RANGE,
-            beta2_range=BETA2_RANGE,
-            epsilon_range=EPSILON_RANGE,
-            max_grad_norm_range=MAX_GRAD_NORM_RANGE,
+            metric_key=SWEEP.metric_key,
+            mode=SWEEP.metric_mode,
+            algorithm=SWEEP.vizier_algorithm,
+            search_space=SWEEP.search_space,
             loop_index=loop_index,
         ),
     )
@@ -472,15 +503,16 @@ def _build_train_step(
     return ExecutorStep(
         name=os.path.join(
             "checkpoints",
-            f"{VIZIER_CLIENT_ID_PREFIX}-loop{loop_index}-trial{suggestion_index}",
+            f"{SWEEP.client_id_prefix}-loop{loop_index}-trial{suggestion_index}",
         ),
         fn=run_vizier_train,
         config=VizierTrainConfig(
             suggestions_path=suggestions_path,
             suggestion_index=suggestion_index,
             base_pod_config=base_pod_config,
-            target_tokens=TARGET_TOKENS,
-            seq_len=SEQ_LEN,
+            target_tokens=SWEEP.target_tokens,
+            seq_len=SWEEP.seq_len,
+            fixed_batch_size=SWEEP.fixed_batch_size,
             loop_index=loop_index,
         ),
     )
@@ -495,17 +527,17 @@ def _build_update_step(
     training_steps: list[ExecutorStep],
 ) -> ExecutorStep:
     return ExecutorStep(
-        name=f"ref-sweep-qwen3-130m-vizier-v3-update-loop{loop_index}",
+        name=f"{SWEEP.experiment_name}-update-loop{loop_index}",
         fn=run_vizier_update,
         config=VizierUpdateConfig(
-            study_id=VIZIER_STUDY_ID,
+            study_id=SWEEP.study_id,
             study_resource_name=study_resource_name,
             input_db_path=input_db_path,
             suggestions_path=suggestions_path,
             run_paths=[step.as_input_name() for step in training_steps],
-            metric_file=METRIC_FILE,
-            metric_key=METRIC_KEY,
-            mode=METRIC_MODE,
+            metric_file=SWEEP.metric_file,
+            metric_key=SWEEP.metric_key,
+            mode=SWEEP.metric_mode,
             output_path=this_output_path(),
             loop_index=loop_index,
         ),
@@ -517,7 +549,7 @@ if __name__ == "__main__":
     previous_update_step: ExecutorStep | None = None
     base_pod_config = _build_base_pod_config()
 
-    for loop_index in range(NUM_LOOPS):
+    for loop_index in range(SWEEP.num_loops):
         input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
         suggest_step = _build_suggest_step(loop_index=loop_index, input_db_path=input_db_path)
 
@@ -529,12 +561,12 @@ if __name__ == "__main__":
                 suggestions_path=suggestions_path,
                 base_pod_config=base_pod_config,
             )
-            for suggestion_index in range(SUGGESTIONS_PER_LOOP)
+            for suggestion_index in range(SWEEP.suggestions_per_loop)
         ]
 
         update_step = _build_update_step(
             loop_index=loop_index,
-            study_resource_name=VIZIER_STUDY_RESOURCE_NAME,
+            study_resource_name=SWEEP.study_resource_name,
             input_db_path=suggest_step / VIZIER_DB_FILENAME,
             suggestions_path=suggestions_path,
             training_steps=training_steps,
