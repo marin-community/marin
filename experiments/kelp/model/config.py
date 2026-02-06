@@ -15,7 +15,6 @@
 """Configuration for Kelp tree diffusion models."""
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 
 @dataclass(frozen=True)

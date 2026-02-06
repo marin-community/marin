@@ -15,7 +15,6 @@
 """Tests for Kelp AR-to-tree-diffusion transfer."""
 
 import jax.numpy as jnp
-import pytest
 from jax import random
 
 from experiments.kelp.transfer.adapt import (
