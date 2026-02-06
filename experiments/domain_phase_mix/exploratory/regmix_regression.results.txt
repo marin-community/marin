@@ -1,0 +1,108 @@
+Total runs: 105
+Completed runs: 105
+
+Feature matrix shape: (105, 9)
+Features: ['phase_0_nemotron_full', 'phase_0_dolmino', 'phase_0_openthoughts_sft', 'phase_1_nemotron_full', 'phase_1_dolmino', 'phase_1_openthoughts_sft', 'phase_2_nemotron_full', 'phase_2_dolmino', 'phase_2_openthoughts_sft']
+
+Train size: 84, Test size: 21
+
+============================================================
+FITTING REGRESSION MODELS
+============================================================
+eval/loss                                     Spearman r = 0.9351
+eval/paloma/c4_en/bpb                         Spearman r = 0.9545
+lm_eval/hellaswag_0shot/acc_norm              Spearman r = 0.7909
+lm_eval/arc_challenge/acc_norm                Spearman r = 0.7704
+lm_eval/piqa/acc                              Spearman r = 0.7072
+lm_eval/boolq/acc                             Spearman r = 0.3851
+lm_eval/averages/macro_avg_acc                Spearman r = 0.7420
+
+============================================================
+OPTIMIZING MIXTURE WEIGHTS
+============================================================
+
+Generated 100000 random mixture samples using mixed strategy
+
+Predicting on random samples...
+
+============================================================
+OPTIMAL MIXTURES BY METRIC
+============================================================
+
+eval/loss:
+  Predicted value: 3.5640 ± 0.0006
+  phase_0: nemotron_full=0.711 dolmino=0.240 openthoughts_sft=0.049 
+  phase_1: nemotron_full=0.398 dolmino=0.545 openthoughts_sft=0.057 
+  phase_2: nemotron_full=0.574 dolmino=0.326 openthoughts_sft=0.100 
+
+eval/paloma/c4_en/bpb:
+  Predicted value: 1.1231 ± 0.0004
+  phase_0: nemotron_full=0.561 dolmino=0.396 openthoughts_sft=0.043 
+  phase_1: nemotron_full=0.722 dolmino=0.217 openthoughts_sft=0.061 
+  phase_2: nemotron_full=0.663 dolmino=0.240 openthoughts_sft=0.097 
+
+lm_eval/hellaswag_0shot/acc_norm:
+  Predicted value: 0.2911 ± 0.0000
+  phase_0: nemotron_full=0.564 dolmino=0.387 openthoughts_sft=0.049 
+  phase_1: nemotron_full=0.531 dolmino=0.399 openthoughts_sft=0.070 
+  phase_2: nemotron_full=0.245 dolmino=0.683 openthoughts_sft=0.072 
+
+lm_eval/arc_challenge/acc_norm:
+  Predicted value: 0.2292 ± 0.0000
+  phase_0: nemotron_full=0.331 dolmino=0.297 openthoughts_sft=0.372 
+  phase_1: nemotron_full=0.232 dolmino=0.686 openthoughts_sft=0.083 
+  phase_2: nemotron_full=0.200 dolmino=0.714 openthoughts_sft=0.086 
+
+lm_eval/piqa/acc:
+  Predicted value: 0.6134 ± 0.0000
+  phase_0: nemotron_full=0.839 dolmino=0.118 openthoughts_sft=0.043 
+  phase_1: nemotron_full=0.435 dolmino=0.492 openthoughts_sft=0.073 
+  phase_2: nemotron_full=0.777 dolmino=0.171 openthoughts_sft=0.052 
+
+lm_eval/boolq/acc:
+  Predicted value: 0.5420 ± 0.0000
+  phase_0: nemotron_full=0.339 dolmino=0.325 openthoughts_sft=0.337 
+  phase_1: nemotron_full=0.313 dolmino=0.368 openthoughts_sft=0.318 
+  phase_2: nemotron_full=0.073 dolmino=0.022 openthoughts_sft=0.905 
+
+lm_eval/averages/macro_avg_acc:
+  Predicted value: 0.3760 ± 0.0000
+  phase_0: nemotron_full=0.256 dolmino=0.697 openthoughts_sft=0.048 
+  phase_1: nemotron_full=0.431 dolmino=0.503 openthoughts_sft=0.066 
+  phase_2: nemotron_full=0.220 dolmino=0.704 openthoughts_sft=0.075 
+
+============================================================
+FINAL RECOMMENDATION: OPTIMIZED FOR eval/paloma/c4_en/bpb
+============================================================
+
+Optimal mixture weights (predicted bpb: 1.1231):
+
+phase_0:
+  nemotron_full       : 0.5608
+  dolmino             : 0.3962
+  openthoughts_sft    : 0.0430
+
+phase_1:
+  nemotron_full       : 0.7221
+  dolmino             : 0.2168
+  openthoughts_sft    : 0.0611
+
+phase_2:
+  nemotron_full       : 0.6633
+  dolmino             : 0.2397
+  openthoughts_sft    : 0.0969
+
+
+============================================================
+COMPARISON WITH BASELINE RUNS
+============================================================
+
+Baseline runs (excluding run 90000 which diverged):
+  run_id=90001: macro_avg_acc=0.3803
+  run_id=90002: macro_avg_acc=0.3671
+  run_id=90003: macro_avg_acc=0.3817
+  run_id=90004: macro_avg_acc=0.3749
+  run_id=90005: macro_avg_acc=0.3829
+
+Best observed macro_avg_acc in training data: 0.3836
+Predicted optimal macro_avg_acc: 1.1231

@@ -527,6 +527,16 @@ class Trainer:
         """
         Performs training until the number of steps is reached.
         """
+        # Handle case where training is already complete (e.g., resuming from final checkpoint)
+        if int(state.step) >= self.num_train_steps:
+            logger.info(
+                f"Training already complete at step {state.step} (target: {self.num_train_steps}). "
+                "Running final hooks only."
+            )
+            info = StepInfo(state, jnp.nan, 0.0)
+            self.run_hooks(info, force=True)
+            return info
+
         info: Optional[StepInfo[S]] = None
         for info in self.training_steps(state, train_loader):
             pass
