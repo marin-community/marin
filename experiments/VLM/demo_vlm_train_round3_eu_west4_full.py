@@ -172,8 +172,8 @@ data_config = ImageMixtureDatasetConfig(
 # 4. TRAINING CONFIGURATION
 # ============================================================================
 # Dataset size: 558K samples
-# DATASET_SIZE = 47141442
-DATASET_SIZE=10*1000*1000
+DATASET_SIZE = 47141442
+# DATASET_SIZE=10*1000*1000
 NUM_EPOCHS = 1
 NUM_TRAIN_STEPS = (DATASET_SIZE // BATCH_SIZE) * NUM_EPOCHS
 
