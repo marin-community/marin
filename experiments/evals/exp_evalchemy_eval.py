@@ -58,11 +58,19 @@ from experiments.evals.evalchemy_task_configs import (  # noqa: F401
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
+
+# =============================================================================
+# Which machine to run evals on
+# =============================================================================
+RESOURCE = ResourceConfig.with_tpu("v5p-16")
+
 # =============================================================================
 # Model Configuration
 # =============================================================================
-MODEL_NAME_OR_GCS_PATH = "gs://marin-us-central1/checkpoints/exp_instilloracle_sft_qwen3_4b_openthoughts4_math-d5c87e/hf/step-500"
-# MODEL_NAME_OR_GCS_PATH = "gs://marin-us-central1/checkpoints/exp_instilloracle_sft_qwen3_4b_mixtureofthoughts_math-263ee5/hf/step-1000"
+# MODEL_NAME_OR_GCS_PATH = "gs://marin-us-central1/checkpoints/exp_instilloracle_sft_qwen3_4b_openthoughts4_math-d5c87e/hf/step-500"
+MODEL_NAME_OR_GCS_PATH = "gs://marin-us-central1/checkpoints/exp_instilloracle_sft_qwen3_4b_mixtureofthoughts_math-263ee5/hf/step-1000"
+MODEL_NAME_OR_GCS_PATH = "marin-us-central1/checkpoints/exp_instilloracle_sft_qwen3_1_7b_openthoughts4_math-b1e329/hf/step-500"
+MODEL_NAME_OR_GCS_PATH = "Qwen/Qwen3-1.7B-Base"
 
 # Whether to auto-discover the latest checkpoint in a training run directory.
 # Set to True when MODEL_NAME_OR_GCS_PATH points to a training output directory
@@ -157,7 +165,7 @@ if __name__ == "__main__":
 
         step = default_evalchemy_eval(
             step=MODEL_NAME_OR_GCS_PATH,
-            resource_config=ResourceConfig.with_tpu("v5p-8"),
+            resource_config=RESOURCE,
             evals=EVAL_TASKS,
             engine_kwargs=ENGINE_KWARGS,
             generation_params=generation_params,
