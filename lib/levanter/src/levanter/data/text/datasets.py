@@ -497,11 +497,6 @@ def dataset_for_component(
             block_cross_document_attention=block_cross_document_attention,
         )
     else:
-        # Check for preference format (imported lazily to avoid circular imports)
-        from .preference import PreferenceChatLmDatasetFormat, dataset_for_preference_format
-
-        if isinstance(fmt, PreferenceChatLmDatasetFormat):
-            return dataset_for_preference_format(fmt, Pos, cache)  # type: ignore
         raise ValueError(f"Unknown format {fmt}")
 
 
@@ -816,11 +811,8 @@ LMMixtureDatasetConfig: TypeAlias = LmDataConfig
 
 def _get_token_key_for_component(component: DatasetComponentBase) -> str:
     """Get the appropriate token key based on component format."""
-    from .preference import PreferenceChatLmDatasetFormat
-
     if isinstance(component, DatasetComponent):
-        if isinstance(component.format, PreferenceChatLmDatasetFormat):
-            return "chosen_input_ids"
+        return component.format.token_data_key
     return "input_ids"
 
 

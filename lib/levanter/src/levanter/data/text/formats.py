@@ -19,6 +19,10 @@ class LmDatasetFormatBase(ChoiceRegistry):
     def default_choice_name(cls) -> str | None:
         return "text"
 
+    @property
+    def token_data_key(self) -> str:
+        return "input_ids"
+
 
 @LmDatasetFormatBase.register_subclass("text")
 @dataclass(frozen=True)
@@ -55,6 +59,10 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     input_ids_key: str = "input_ids"
     loss_weights_key: str | None = None
     loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None
+
+    @property
+    def token_data_key(self) -> str:
+        return self.input_ids_key
 
 
 class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):

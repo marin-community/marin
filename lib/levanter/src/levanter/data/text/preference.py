@@ -65,6 +65,10 @@ class PreferenceChatLmDatasetFormat(LmDatasetFormatBase):
     mask_user_turns: bool = True
     slice_strategy: Literal["left", "right", "raise", "drop"] = "raise"
 
+    @property
+    def token_data_key(self) -> str:
+        return "chosen_input_ids"
+
 
 class PreferenceChatProcessor(BatchProcessor[dict, ProcessedPreferenceChatDict]):
     """

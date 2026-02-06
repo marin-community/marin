@@ -19,6 +19,7 @@ from levanter.data.text import (
     ChatDataset,
     DatasetComponent,
     LmDataConfig,
+    PreferenceChatLmDatasetFormat,
     PrebuiltLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
@@ -171,6 +172,19 @@ def test_prebuilt_cache_without_loss_weights(tmp_path):
     example = ds[0]
     expected_loss_weight = np.array([1.0, 1.0, 1.0, 0.0], dtype=example.loss_weight.array.dtype)
     np.testing.assert_array_equal(example.loss_weight.array, expected_loss_weight)
+
+
+def test_dataset_for_component_rejects_preference_format():
+    component = DatasetComponent(format=PreferenceChatLmDatasetFormat())
+    Pos = hax.Axis("position", 8)
+    with pytest.raises(ValueError, match="Unknown format"):
+        dataset_for_component(
+            component,
+            Pos,
+            None,  # type: ignore[arg-type]
+            eos_id=None,
+            block_cross_document_attention=True,
+        )
 
 
 @pytest.fixture
