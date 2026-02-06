@@ -162,6 +162,10 @@ for j in sorted(jobs, key=lambda x: x.get("start_time", 0) or 0, reverse=True)[:
 PY
 ```
 
+Notes:
+- On macOS, piping `uv run python scripts/ray/cluster.py ... list-jobs | head` can crash with `BlockingIOError`. Prefer
+  `... list-jobs > /tmp/ray_jobs.json` and then `rg` the file.
+
 4) **One-command monitoring + optional auto-resubmit**
 
 For long sweeps, it’s useful to have an hourly heartbeat that also summarizes Ray task state (RUNNING vs pending). This helper prints a compact line per job and can optionally re-run a user-provided “resume” command if the job leaves `RUNNING`:
@@ -409,5 +413,31 @@ TMPDIR=/tmp RAY_TMPDIR=/tmp uv run python -m marin.run.ray_run \
     --eval-suite core --eval-suite-mode both --steps-per-task-eval 5000 \
     --wandb-project mixtral_vs_dense --wandb-group "$GROUP" --run-suffix "$SUFFIX"
 ```
+
+#### Handoff (2026-02-05)
+
+- Code fixes (branch `pranshu`, commit `759b0102e`):
+  - `lib/haliax/src/haliax/nn/normalization.py`: use `hax.auto_sharded(self.weight)` / `hax.auto_sharded(self.bias)`
+    inside LayerNorm/RmsNorm to avoid `jax._src.core.ShardingTypeError` from illegal elementwise sharding.
+  - `lib/haliax/src/haliax/random.py`: add a shard-map fast path for large `truncated_normal` (>= 1GiB) to avoid Mixtral
+    init-time `RESOURCE_EXHAUSTED` HBM OOM from huge unsharded temporaries.
+- Previous failure: `ray-run-pc0618-python-20260205-014858` (job_id `90000000`) failed with the LayerNorm sharding error +
+  Mixtral init OOM.
+- Current from-scratch v5p-32 run (bs=192, seq=4096, token_target=100B, feistel, eval-suite core both):
+  - Ray submission id: `ray-run-pc0618-python-20260205-100515` (RUNNING as of 2026-02-05).
+  - Run suffix: `v5p32_s4096_b192_759b0102e_t20260205_020515`
+  - Ray dashboard (after `uv run python scripts/ray/cluster.py --config infra/marin-us-central1.yaml dashboard`): usually
+    `http://127.0.0.1:8265/#/jobs/ray-run-pc0618-python-20260205-100515`
+  - W&B: `marin-community/mixtral_vs_dense`, group `mixtral_vs_dense_100b_v5p32_s4096_b192_759b0102e_t20260205_020515`
+    - Mixtral: `https://wandb.ai/marin-community/mixtral_vs_dense/runs/v5p32_s4096_b192_759b0102e_t20260205_020515-54decb`
+    - Llama: `https://wandb.ai/marin-community/mixtral_vs_dense/runs/v5p32_s4096_b192_759b0102e_t20260205_020515-ddb98d`
+  - GCS output roots:
+    - Llama: `gs://marin-us-central1/checkpoints/mixtral_vs_dense/llama_13b/v5p32_s4096_b192_759b0102e_t20260205_020515-ddb98d`
+    - Mixtral: `gs://marin-us-central1/checkpoints/mixtral_vs_dense/mixtral_8x7b/v5p32_s4096_b192_759b0102e_t20260205_020515-54decb`
+- Monitoring commands (avoid stdout `BlockingIOError`):
+  - `uv run python scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs > /tmp/ray_jobs.json`
+  - `rg "ray-run-pc0618-python-20260205-100515" /tmp/ray_jobs.json`
+  - `uv run python scripts/ray/cluster.py --config infra/marin-us-central1.yaml job-logs ray-run-pc0618-python-20260205-100515 -n 2000 > /tmp/job.log`
+  - `rg "Progress on:train|Progress on:eval|RESOURCE_EXHAUSTED|ShardingTypeError" /tmp/job.log`
 
 > This file will be expanded as agent workflows and best practices evolve.
