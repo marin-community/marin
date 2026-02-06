@@ -175,6 +175,7 @@ install_gcloud:
 
 # get secret ssh key from gcp secrets
 get_secret_key: install_gcloud
+	mkdir -p ~/.ssh
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
 	chmod 600 ~/.ssh/marin_ray_cluster.pem
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
