@@ -56,7 +56,7 @@ from experiments.self_instill.prompts import REASONING_INSTRUCTION
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 
 # TPU resource type for inference steps
-RESOURCE_TYPE = "v5p-16"
+RESOURCE_TYPE = "v5p-8"
 
 # Tensor parallel size for vLLM inference
 TENSOR_PARALLEL_SIZE = 4
