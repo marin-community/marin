@@ -354,7 +354,7 @@ class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
     ) -> NamedArray:
         key_proj, key_o = maybe_rng_split(key, 2)
 
-        q, k, v, _ = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
+        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
         q = q.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
         k = k.rearrange((..., "kv_head", "position", "head_size"))
