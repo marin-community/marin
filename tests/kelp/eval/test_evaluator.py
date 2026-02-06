@@ -14,10 +14,8 @@
 
 """Tests for Kelp evaluation metrics."""
 
-import pytest
 
 from experiments.kelp.eval.metrics import (
-    PassAtKResult,
     ValidityResult,
     check_python_syntax,
     compute_pass_at_k,

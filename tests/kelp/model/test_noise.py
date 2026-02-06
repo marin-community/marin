@@ -15,7 +15,6 @@
 """Tests for Kelp noise schedules and diffusion utilities."""
 
 import jax.numpy as jnp
-import pytest
 from jax import random
 
 from experiments.kelp.model.noise import (
