@@ -512,28 +512,33 @@ def test_health_endpoint_empty_cluster(client):
 # =============================================================================
 
 
-def test_get_task_logs_not_found_for_missing_job(client):
-    """GetTaskLogs returns NOT_FOUND when the job doesn't exist."""
+def test_get_task_logs_for_missing_task_returns_empty(client):
+    """GetTaskLogs returns empty batch when the task doesn't exist."""
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"taskId": JobName.root("nonexistent").task(0).to_wire()},
+        json={"id": JobName.root("nonexistent").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
-    assert resp.status_code != 200
-    assert "not found" in resp.text.lower()
+    # With batch API, nonexistent task returns empty task_logs, not an error
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("taskLogs", []) == []
 
 
-def test_get_task_logs_failed_precondition_for_unassigned_task(client, state, job_request):
-    """GetTaskLogs returns FAILED_PRECONDITION when the task has no worker assigned."""
+def test_get_task_logs_error_for_unassigned_task(client, state, job_request):
+    """GetTaskLogs returns batch with error when the task has no worker assigned."""
     submit_job(state, "pending-job", job_request)
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"taskId": JobName.root("pending-job").task(0).to_wire()},
+        json={"id": JobName.root("pending-job").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
-    assert resp.status_code != 200
-    assert "no assigned worker" in resp.text.lower()
+    # Batch API returns 200 with error in batch
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data.get("taskLogs", [])) == 1
+    assert "no assigned worker" in data["taskLogs"][0].get("error", "").lower()
 
 
 # =============================================================================
