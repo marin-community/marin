@@ -24,14 +24,27 @@ Unlike base models, we do NOT need a separate summarization step.
 
 Pipeline:
 1. Preprocess: Extract user message from conversations[0]["value"]
-2. Generate 4 samples per prompt, select longest that passes static check
+2. Generate 4 samples per prompt, select first that passes static check
    - Static check: must have <think>...</think> format AND \\boxed{}
 3. (SKIPPED for instruction-tuned) Summarization - model already outputs summary
-4. Validate via LLM (using longer prompts for thinking models):
+4. Validate via LLM with EARLY EXIT optimization:
    - Cycle consistency: Infer question from answer, compare to original
+     → If fails, skip factual and correctness (early exit)
    - Factual error: Check for math/logic errors
+     → If fails, skip correctness (early exit)
    - Total correctness: Verify complete and correct solution
 5. Format final output
+
+Early Exit Optimization:
+- Each validation check filters passed/failed rows BEFORE running the next check
+- Rows that fail cycle skip factual and correctness entirely
+- Rows that fail factual skip correctness entirely
+- This saves ~30-50% compute compared to running all checks on all rows
+
+Iterative UQ:
+- For each row, try sample 0 first through all validation
+- If fails, try sample 1, etc. up to sample 3
+- First sample to pass all validation is used
 
 Usage:
     python experiments/self_instill/sdg_qwen3_4b_openthoughts4_math_round1.py
@@ -459,29 +472,26 @@ def extract_sample_for_round(config: ExtractSampleConfig):
 
 
 @dataclass
-class CheckUQResultsConfig:
-    """Configuration for checking UQ results and splitting passed/failed."""
+class CheckAndFilterConfig:
+    """Configuration for checking one validation result and splitting passed/failed."""
     input_path: str
     passed_output_path: str
     failed_output_path: str
+    result_column: str  # "cycle_results", "factual_results", or "correctness_results"
+    check_name: str     # "cycle", "factual", "correctness" (for logging)
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def check_uq_and_split(config: CheckUQResultsConfig):
+def check_and_filter(config: CheckAndFilterConfig):
     """
-    Check UQ results and split into passed/failed rows.
+    Check unanimous [[Y]] voting on a single result column and split into passed/failed.
 
-    A row passes if ALL of:
-    - cycle_results: unanimous [[Y]]
-    - factual_results: unanimous [[Y]]
-    - correctness_results: unanimous [[Y]]
-
-    Passed rows get their final output formatted.
-    Failed rows continue to the next round (if more samples available).
+    This enables early exit: if a row fails cycle check, we skip factual and correctness.
+    Failed rows are collected for the next round (to try the next sample).
+    Passed rows continue to the next validation step.
     """
     import re
     import ray.data
-    from experiments.self_instill.prompts import REASONING_INSTRUCTION
 
     _DECISION_RE = re.compile(r"\[\[\s*([YN])\s*\]\]", re.IGNORECASE)
 
@@ -505,45 +515,140 @@ def check_uq_and_split(config: CheckUQResultsConfig):
         decisions = [extract_decision_robust(s) for s in samples]
         return all(decisions) if decisions else False
 
-    def check_and_format(row):
-        cycle_samples = row.get("cycle_results", [])
-        factual_samples = row.get("factual_results", [])
-        correctness_samples = row.get("correctness_results", [])
-
-        cycle_pass = check_unanimous(cycle_samples)
-        factual_pass = check_unanimous(factual_samples)
-        correctness_pass = check_unanimous(correctness_samples)
-
-        row["cycle_passed"] = cycle_pass
-        row["factual_passed"] = factual_pass
-        row["correctness_passed"] = correctness_pass
-        row["all_passed"] = cycle_pass and factual_pass and correctness_pass
-
-        if row["all_passed"]:
-            # Format final output
-            current_sample = row.get("current_sample", "")
-            instruction_seed = row.get("instruction_seed", "")
-            user_prompt = instruction_seed.strip() + "\n" + REASONING_INSTRUCTION + "\n"
-            row["user_content"] = user_prompt
-            row["assistant_content"] = current_sample
-            row["final_sample_idx"] = row.get("current_sample_idx", 0)
-
+    def add_check_result(row):
+        samples = row.get(config.result_column, [])
+        row[f"{config.check_name}_passed"] = check_unanimous(samples)
         return row
 
     ds = ray.data.read_parquet(config.input_path)
-    ds = ds.map(check_and_format)
+    ds = ds.map(add_check_result)
 
     total = ds.count()
-    ds_passed = ds.filter(lambda x: x.get("all_passed", False))
-    ds_failed = ds.filter(lambda x: not x.get("all_passed", False))
+    ds_passed = ds.filter(lambda x: x.get(f"{config.check_name}_passed", False))
+    ds_failed = ds.filter(lambda x: not x.get(f"{config.check_name}_passed", False))
 
     passed_count = ds_passed.count()
     failed_count = ds_failed.count()
 
-    print(f"UQ Results: {passed_count} passed, {failed_count} failed out of {total}")
+    print(f"{config.check_name.upper()}: {passed_count} passed, {failed_count} failed out of {total}")
 
-    ds_passed.write_parquet(config.passed_output_path)
-    ds_failed.write_parquet(config.failed_output_path)
+    # Write outputs (handle empty case gracefully)
+    if passed_count > 0:
+        ds_passed.write_parquet(config.passed_output_path)
+    else:
+        # Write empty marker file so downstream steps can detect no data
+        print(f"  No rows passed {config.check_name} check - skipping passed output")
+
+    if failed_count > 0:
+        ds_failed.write_parquet(config.failed_output_path)
+
+    return passed_count
+
+
+@dataclass
+class MergeFailedConfig:
+    """Configuration for merging failed rows from all validation stages."""
+    cycle_failed_path: str
+    factual_failed_path: str
+    correctness_failed_path: str
+    output_path: str
+
+
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
+def merge_all_failed(config: MergeFailedConfig):
+    """
+    Merge failed rows from cycle, factual, and correctness checks.
+
+    These rows will be used as input for the next round, where we try
+    the next valid sample for each row.
+    """
+    import ray.data
+
+    datasets = []
+    for path, name in [
+        (config.cycle_failed_path, "cycle"),
+        (config.factual_failed_path, "factual"),
+        (config.correctness_failed_path, "correctness"),
+    ]:
+        try:
+            ds = ray.data.read_parquet(path)
+            count = ds.count()
+            if count > 0:
+                datasets.append(ds)
+                print(f"  {name}_failed: {count} rows")
+        except Exception as e:
+            print(f"  {name}_failed: 0 rows (no file or empty)")
+
+    if not datasets:
+        print("No failed rows to merge - all rows passed!")
+        return 0
+
+    combined = datasets[0]
+    for ds in datasets[1:]:
+        combined = combined.union(ds)
+
+    total = combined.count()
+    print(f"Total failed rows for next round: {total}")
+    combined.write_parquet(config.output_path)
+    return total
+
+
+def check_path_has_data(path: str) -> bool:
+    """Check if a GCS/local path has parquet files with data."""
+    import fsspec
+
+    try:
+        fs, path_without_protocol = fsspec.core.url_to_fs(path)
+        # Check if path exists and has parquet files
+        if not fs.exists(path_without_protocol):
+            return False
+        files = fs.glob(f"{path_without_protocol}/*.parquet")
+        return len(files) > 0
+    except Exception:
+        return False
+
+
+@dataclass
+class FormatPassedConfig:
+    """Configuration for formatting passed rows with final output."""
+    input_path: str
+    output_path: str
+
+
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
+def format_passed_output(config: FormatPassedConfig):
+    """
+    Format rows that passed all validation checks into final output format.
+
+    Adds user_content and assistant_content columns for training.
+    """
+    import ray.data
+    from experiments.self_instill.prompts import REASONING_INSTRUCTION
+
+    def format_row(row):
+        current_sample = row.get("current_sample", "")
+        instruction_seed = row.get("instruction_seed", "")
+        user_prompt = instruction_seed.strip() + "\n" + REASONING_INSTRUCTION + "\n"
+        row["user_content"] = user_prompt
+        row["assistant_content"] = current_sample
+        row["final_sample_idx"] = row.get("current_sample_idx", 0)
+        row["all_passed"] = True
+        return row
+
+    try:
+        ds = ray.data.read_parquet(config.input_path)
+        count = ds.count()
+        if count > 0:
+            ds = ds.map(format_row)
+            ds.write_parquet(config.output_path)
+            print(f"Formatted {count} passed rows")
+            return count
+        else:
+            print("No rows to format (empty input)")
+            return 0
+    except Exception as e:
+        print(f"No rows to format: {e}")
+        return 0
 
 
 @dataclass
@@ -775,175 +880,17 @@ def prep_cycle_compare_prompts(config: PrepCycleCompareConfig):
 
 
 # =============================================================================
-# STEP 9: FILTER VALIDATION RESULTS AND FORMAT OUTPUT
+# MAIN EXECUTION - ITERATIVE UQ WITH EARLY EXIT
 # =============================================================================
-
-
-@dataclass
-class FilterValidationConfig:
-    """Configuration for filtering based on validation results."""
-    input_path: str
-    output_path: str
-    is_instruction_tuned: bool = True
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def filter_and_format_output(config: FilterValidationConfig):
-    """
-    Filter based on unanimous validation and select first passing sample per original ms_id.
-
-    Since we exploded rows (one per valid sample), we now need to:
-    1. Check which samples passed all UQ validation
-    2. For each original ms_id, pick the first sample (lowest sample_idx) that passed
-    3. Format the final output
-    """
-    import re
-    import ray.data
-    from experiments.self_instill.prompts import REASONING_INSTRUCTION
-
-    # ==========================================================================
-    # Decision extraction for thinking models
-    # ==========================================================================
-    # Thinking models output reasoning before the verdict, so we need robust
-    # extraction that finds [[Y]] or [[N]] anywhere in the output (prefer last).
-
-    _DECISION_RE = re.compile(r"\[\[\s*([YN])\s*\]\]", re.IGNORECASE)
-
-    def extract_decision_robust(text: str) -> bool:
-        """
-        Robustly extract Y/N decision from judge output.
-
-        Priority:
-          1) Last occurrence of [[Y]] / [[N]]
-          2) Last occurrence of a standalone Y/N token
-          3) Last occurrence of YES/NO
-
-        Returns True for Y, False otherwise.
-        """
-        if not text:
-            return False
-
-        # 1) [[Y]] / [[N]] (prefer the last one)
-        matches = list(_DECISION_RE.finditer(text))
-        if matches:
-            return matches[-1].group(1).upper() == "Y"
-
-        # 2) Standalone Y/N token (common when small models ignore brackets)
-        yn_tokens = re.findall(r"(?<![A-Za-z])([YN])(?![A-Za-z])", text.strip(), flags=re.IGNORECASE)
-        if yn_tokens:
-            return yn_tokens[-1].upper() == "Y"
-
-        # 3) YES/NO
-        yesno = re.findall(r"\b(YES|NO)\b", text.strip(), flags=re.IGNORECASE)
-        if yesno:
-            return yesno[-1].upper() == "YES"
-
-        return False
-
-    def check_unanimous(samples: list) -> bool:
-        """Check if all samples have Y decision (unanimous voting)."""
-        if not samples or not isinstance(samples, list):
-            return False
-        decisions = [extract_decision_robust(s) for s in samples]
-        return all(decisions) if decisions else False
-
-    def check_validation_and_format(row):
-        """Check all validation results and format output if passed."""
-        # Extract decisions from sample lists
-        cycle_samples = row.get("cycle_results", [])
-        factual_samples = row.get("factual_results", [])
-        correctness_samples = row.get("correctness_results", [])
-
-        # Check unanimous voting for each validation type
-        cycle_pass = check_unanimous(cycle_samples)
-        factual_pass = check_unanimous(factual_samples)
-        correctness_pass = check_unanimous(correctness_samples)
-
-        row["cycle_passed"] = cycle_pass
-        row["factual_passed"] = factual_pass
-        row["correctness_passed"] = correctness_pass
-        row["all_validation_passed"] = cycle_pass and factual_pass and correctness_pass
-
-        # Format final output if all validations passed
-        if row["all_validation_passed"]:
-            generated_text = row.get("generated_text")
-            instruction_seed = row.get("instruction_seed")
-
-            if not generated_text or not isinstance(generated_text, str):
-                raise ValueError(f"Missing generated_text in validated row")
-            if not instruction_seed or not isinstance(instruction_seed, str):
-                raise ValueError(f"Missing instruction_seed in validated row")
-
-            if config.is_instruction_tuned:
-                # For instruction-tuned models, the output is already in the format:
-                # <think> REASONING </think> SUMMARY
-                # So we use it directly
-                output_text = generated_text
-            else:
-                # For base models, we would combine reasoning and summary
-                summary = row.get("summary", "")
-                output_text = f"<think>\n{generated_text}\n</think>\n\n{summary}"
-
-            # Store as separate columns instead of nested dict (PyArrow compatible)
-            user_prompt = instruction_seed.strip() + "\n" + REASONING_INSTRUCTION + "\n"
-            row["user_content"] = user_prompt
-            row["assistant_content"] = output_text
-        else:
-            row["user_content"] = None
-            row["assistant_content"] = None
-
-        return row
-
-    ds = ray.data.read_parquet(config.input_path)
-
-    # First, check validation for all rows
-    ds = ds.map(check_validation_and_format)
-
-    # Log stats before selection
-    total = ds.count()
-    ds_passed = ds.filter(lambda x: x.get("all_validation_passed", False))
-    passed_count = ds_passed.count()
-
-    print(f"Validation results: {passed_count}/{total} sample-rows passed all validation")
-
-    # Collect to pandas for global groupby (data size is manageable at ~100k rows max)
-    import pandas as pd
-    df_passed = ds_passed.to_pandas()
-
-    if len(df_passed) == 0:
-        print("No samples passed all validation!")
-        # Write empty dataset
-        ds_passed.write_parquet(config.output_path)
-        return
-
-    # Count unique ms_ids that have at least one passing sample
-    unique_passed = df_passed["ms_id"].nunique()
-    print(f"Unique original samples with at least one passing: {unique_passed}")
-
-    # Sort by ms_id and sample_idx, then take first per ms_id
-    # This selects the first sample (lowest sample_idx) that passed for each original input
-    df_passed = df_passed.sort_values(["ms_id", "sample_idx"])
-    df_selected = df_passed.groupby("ms_id").first().reset_index()
-
-    final_count = len(df_selected)
-    print(f"Final output: {final_count} rows (one per original sample that had a passing generation)")
-
-    # Write back to parquet
-    ray.data.from_pandas(df_selected).write_parquet(config.output_path)
-
-
-# NOTE: filter_validation and upload_self_instill ExecutorSteps are created dynamically
-# in the main execution section below
-
-
-# =============================================================================
-# MAIN EXECUTION - ITERATIVE UQ APPROACH
-# =============================================================================
-# New design: Process samples iteratively. For each original input:
-# - Try sample 0 first, run full UQ
-# - If passes, keep it, done with this input
-# - If fails, try sample 1, etc.
-# This is more efficient than running UQ on all samples upfront.
+# Process samples iteratively with early exit optimization:
+# - For each round, try sample N for all pending rows
+# - Run validation checks sequentially: cycle → factual → correctness
+# - EARLY EXIT: If a row fails cycle, skip factual & correctness (saves compute)
+# - EARLY EXIT: If a row fails factual, skip correctness (saves compute)
+# - Rows that pass all checks → final output
+# - Rows that fail → merge all failures and try next sample in next round
+#
+# This is more efficient than running all checks on all samples upfront.
 
 if __name__ == "__main__":
     # Stage 1: Download dataset (model downloaded via HF Hub on workers)
@@ -1090,94 +1037,186 @@ if __name__ == "__main__":
         )
         executor_main([cycle_compare_step])
 
-        # Step 6: Factual error check
-        print(f"Try {round_idx} - Step 6: Factual error check...")
-        factual_step = ExecutorStep(
-            name=f"{round_base}/factual",
-            fn=run_generation_inference,
-            config=TextGenerationInferenceConfig(
-                input_path=cycle_compare_step,  # Use step reference
-                output_path=this_output_path(),
-                model_name=QWEN3_4B_HF_ID,
-                engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
-                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
-                template="{example}",
-                prompt_column="factual_prompt",
-                apply_chat_template=True,
-                save_templated_prompt=False,
-                max_doc_tokens=32768,
-                num_instances=(1, 256),
-                batch_size=BATCH_SIZE,
-                tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-                preserve_order=False,
-                filetype="parquet",
-                output_filetype_override="parquet",
-                resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-                generated_text_column_name="factual_results",
-                checkpoint_id_column="ms_id",
-                save_samples_as_list=True,
-                max_task_retries=10,
+        # ======================================================================
+        # EARLY EXIT: Check cycle results before running factual
+        # ======================================================================
+        print(f"Try {round_idx} - Step 5b: Checking cycle results (early exit)...")
+        cycle_passed_path = f"gs://marin-us-central1/{round_base}/cycle-passed"
+        cycle_failed_path = f"gs://marin-us-central1/{round_base}/cycle-failed"
+
+        check_cycle_step = ExecutorStep(
+            name=f"{round_base}/check-cycle",
+            fn=check_and_filter,
+            config=CheckAndFilterConfig(
+                input_path=cycle_compare_step,
+                passed_output_path=cycle_passed_path,
+                failed_output_path=cycle_failed_path,
+                result_column="cycle_results",
+                check_name="cycle",
             ),
             pip_dependency_groups=["vllm"],
         )
-        executor_main([factual_step])
+        executor_main([check_cycle_step])
 
-        # Step 7: Total correctness check
-        print(f"Try {round_idx} - Step 7: Correctness check...")
-        correctness_step = ExecutorStep(
-            name=f"{round_base}/correctness",
-            fn=run_generation_inference,
-            config=TextGenerationInferenceConfig(
-                input_path=factual_step,  # Use step reference
-                output_path=this_output_path(),
-                model_name=QWEN3_4B_HF_ID,
-                engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
-                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
-                template="{example}",
-                prompt_column="correctness_prompt",
-                apply_chat_template=True,
-                save_templated_prompt=False,
-                max_doc_tokens=32768,
-                num_instances=(1, 256),
-                batch_size=BATCH_SIZE,
-                tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-                preserve_order=False,
-                filetype="parquet",
-                output_filetype_override="parquet",
-                resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-                generated_text_column_name="correctness_results",
-                checkpoint_id_column="ms_id",
-                save_samples_as_list=True,
-                max_task_retries=10,
-            ),
-            pip_dependency_groups=["vllm"],
-        )
-        executor_main([correctness_step])
+        # Step 6: Factual error check - ONLY on cycle-passed rows
+        # Skip if no rows passed cycle check (early exit optimization)
+        if check_path_has_data(cycle_passed_path):
+            print(f"Try {round_idx} - Step 6: Factual error check (only cycle-passed)...")
+            factual_step = ExecutorStep(
+                name=f"{round_base}/factual",
+                fn=run_generation_inference,
+                config=TextGenerationInferenceConfig(
+                    input_path=cycle_passed_path,  # Only rows that passed cycle check!
+                    output_path=this_output_path(),
+                    model_name=QWEN3_4B_HF_ID,
+                    engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
+                    generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                    template="{example}",
+                    prompt_column="factual_prompt",
+                    apply_chat_template=True,
+                    save_templated_prompt=False,
+                    max_doc_tokens=32768,
+                    num_instances=(1, 256),
+                    batch_size=BATCH_SIZE,
+                    tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+                    preserve_order=False,
+                    filetype="parquet",
+                    output_filetype_override="parquet",
+                    resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
+                    generated_text_column_name="factual_results",
+                    checkpoint_id_column="ms_id",
+                    save_samples_as_list=True,
+                    max_task_retries=10,
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([factual_step])
+        else:
+            print(f"Try {round_idx} - Step 6: SKIPPED (no rows passed cycle check)")
 
-        # Step 8: Check UQ results and split passed/failed
-        # Use explicit paths for passed/failed since we need to reference them later
-        print(f"Try {round_idx} - Step 8: Checking results and splitting...")
+        # ======================================================================
+        # EARLY EXIT: Check factual results before running correctness
+        # ======================================================================
+        factual_passed_path = f"gs://marin-us-central1/{round_base}/factual-passed"
+        factual_failed_path = f"gs://marin-us-central1/{round_base}/factual-failed"
+
+        # Only run check_factual if factual_step ran (i.e., cycle_passed had data)
+        if check_path_has_data(cycle_passed_path):
+            print(f"Try {round_idx} - Step 6b: Checking factual results (early exit)...")
+            check_factual_step = ExecutorStep(
+                name=f"{round_base}/check-factual",
+                fn=check_and_filter,
+                config=CheckAndFilterConfig(
+                    input_path=factual_step,
+                    passed_output_path=factual_passed_path,
+                    failed_output_path=factual_failed_path,
+                    result_column="factual_results",
+                    check_name="factual",
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([check_factual_step])
+        else:
+            print(f"Try {round_idx} - Step 6b: SKIPPED (no factual results to check)")
+
+        # Step 7: Total correctness check - ONLY on factual-passed rows
+        # Skip if no rows passed factual check
+        if check_path_has_data(factual_passed_path):
+            print(f"Try {round_idx} - Step 7: Correctness check (only factual-passed)...")
+            correctness_step = ExecutorStep(
+                name=f"{round_base}/correctness",
+                fn=run_generation_inference,
+                config=TextGenerationInferenceConfig(
+                    input_path=factual_passed_path,  # Only rows that passed factual check!
+                    output_path=this_output_path(),
+                    model_name=QWEN3_4B_HF_ID,
+                    engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
+                    generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                    template="{example}",
+                    prompt_column="correctness_prompt",
+                    apply_chat_template=True,
+                    save_templated_prompt=False,
+                    max_doc_tokens=32768,
+                    num_instances=(1, 256),
+                    batch_size=BATCH_SIZE,
+                    tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+                    preserve_order=False,
+                    filetype="parquet",
+                    output_filetype_override="parquet",
+                    resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
+                    generated_text_column_name="correctness_results",
+                    checkpoint_id_column="ms_id",
+                    save_samples_as_list=True,
+                    max_task_retries=10,
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([correctness_step])
+        else:
+            print(f"Try {round_idx} - Step 7: SKIPPED (no rows passed factual check)")
+
+        # ======================================================================
+        # EARLY EXIT: Check correctness results
+        # ======================================================================
+        correctness_passed_path = f"gs://marin-us-central1/{round_base}/correctness-passed"
+        correctness_failed_path = f"gs://marin-us-central1/{round_base}/correctness-failed"
         passed_path = f"gs://marin-us-central1/{round_base}/passed"
-        failed_path = f"gs://marin-us-central1/{round_base}/failed"
 
-        check_split_step = ExecutorStep(
-            name=f"{round_base}/check-split",
-            fn=check_uq_and_split,
-            config=CheckUQResultsConfig(
-                input_path=correctness_step,  # Use step reference
-                passed_output_path=passed_path,
-                failed_output_path=failed_path,
-            ),
-            pip_dependency_groups=["vllm"],
-        )
-        executor_main([check_split_step])
+        # Only run check_correctness if correctness_step ran
+        if check_path_has_data(factual_passed_path):
+            print(f"Try {round_idx} - Step 7b: Checking correctness results...")
+            check_correctness_step = ExecutorStep(
+                name=f"{round_base}/check-correctness",
+                fn=check_and_filter,
+                config=CheckAndFilterConfig(
+                    input_path=correctness_step,
+                    passed_output_path=correctness_passed_path,
+                    failed_output_path=correctness_failed_path,
+                    result_column="correctness_results",
+                    check_name="correctness",
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([check_correctness_step])
+
+            # Step 8: Format passed rows with final output columns
+            # format_passed_output handles empty input gracefully
+            print(f"Try {round_idx} - Step 8: Formatting passed rows...")
+            format_passed_step = ExecutorStep(
+                name=f"{round_base}/format-passed",
+                fn=format_passed_output,
+                config=FormatPassedConfig(
+                    input_path=correctness_passed_path,
+                    output_path=passed_path,
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([format_passed_step])
+        else:
+            print(f"Try {round_idx} - Step 7b & 8: SKIPPED (no correctness results to check)")
 
         # Track passed path for final combination
         passed_paths.append(passed_path)
 
-        # Update input for next round to be the failed rows from this round
-        # Use string path since check_uq_and_split writes to explicit paths
-        current_input = failed_path
+        # Step 9: Merge all failed rows for next round
+        print(f"Try {round_idx} - Step 9: Merging failed rows for next round...")
+        failed_merged_path = f"gs://marin-us-central1/{round_base}/failed-merged"
+
+        merge_failed_step = ExecutorStep(
+            name=f"{round_base}/merge-failed",
+            fn=merge_all_failed,
+            config=MergeFailedConfig(
+                cycle_failed_path=cycle_failed_path,
+                factual_failed_path=factual_failed_path,
+                correctness_failed_path=correctness_failed_path,
+                output_path=failed_merged_path,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([merge_failed_step])
+
+        # Update input for next round to be the merged failed rows
+        current_input = failed_merged_path
 
         print(f"Try {round_idx} complete. Passed rows saved to {passed_path}")
 
