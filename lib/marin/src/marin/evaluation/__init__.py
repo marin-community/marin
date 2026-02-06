@@ -11,3 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from .evaluation_config import EvalTaskConfig, EvaluationConfig
+from .tasks import CORE_TASKS, convert_to_levanter_task_config
+
+__all__ = [
+    "EvalTaskConfig",
+    "EvaluationConfig",
+    "CORE_TASKS",
+    "convert_to_levanter_task_config",
+]

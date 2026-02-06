@@ -56,6 +56,9 @@ dependencies = [
 [project.license]
 file = "../../LICENSE"
 
+[project.scripts]
+marin = "marin.run.cli:main"
+
 [dependency-groups]
 test = [
     "pytest>=8.3.2",
