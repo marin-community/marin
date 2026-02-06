@@ -19,11 +19,10 @@ from transformers import AutoTokenizer
 
 import haliax as hax
 from haliax.quantization import apply_updates, partition_for_grad_overwrite
-from haliax.partitioning import pspec_for
 from haliax.jax_utils import is_jax_array_like
 
 from levanter.data.text import DpoExample, PreferenceChatProcessor, PreferencePairDataset
-from levanter.main.train_dpo import DpoModel, _bool_tree_like, _logp_sum, dpo_loss_from_logps
+from levanter.main.train_dpo import DpoModel, _logp_sum, dpo_loss_from_logps
 from levanter.metrics import Metric
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.lm_model import LmExample
@@ -69,6 +68,10 @@ def _namedarray_leaves(tree):
     ]
 
 
+def _bool_tree_like_for_test(tree, value: bool):
+    return jax.tree_util.tree_map(lambda _: value, tree, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+
+
 def _build_policy_reference(config: Gpt2Config):
     Vocab = hax.Axis("vocab", 32)
     policy = config.build(Vocab, key=jrandom.PRNGKey(0))
@@ -81,10 +84,7 @@ def test_dpo_trainable_filter_excludes_reference_params():
     _, policy, reference = _build_policy_reference(config)
     model = DpoModel(policy=policy, reference=reference)
 
-    trainable_filter = DpoModel(
-        policy=_bool_tree_like(policy, True),
-        reference=_bool_tree_like(reference, False),
-    )
+    trainable_filter = DpoModel(policy=True, reference=False)
     trainable = trainables_only(model, trainable_filter)
 
     assert parameter_count(trainable) == parameter_count(policy)
@@ -95,13 +95,31 @@ def test_dpo_trainable_filter_has_no_namedarray_nones():
     _, policy, reference = _build_policy_reference(config)
     model = DpoModel(policy=policy, reference=reference)
 
-    trainable_filter = DpoModel(
-        policy=_bool_tree_like(policy, True),
-        reference=_bool_tree_like(reference, False),
-    )
+    trainable_filter = DpoModel(policy=True, reference=False)
     trainable = trainables_only(model, trainable_filter)
 
     for leaf in _namedarray_leaves(trainable):
+        assert leaf.array is not None
+
+
+def test_dpo_trainable_filter_prefix_matches_explicit_tree():
+    config = _tiny_gpt2_config()
+    _, policy, reference = _build_policy_reference(config)
+    model = DpoModel(policy=policy, reference=reference)
+
+    explicit_filter = DpoModel(
+        policy=_bool_tree_like_for_test(policy, True),
+        reference=_bool_tree_like_for_test(reference, False),
+    )
+    prefix_filter = DpoModel(policy=True, reference=False)
+
+    explicit_trainable = trainables_only(model, explicit_filter)
+    prefix_trainable = trainables_only(model, prefix_filter)
+
+    assert parameter_count(prefix_trainable) == parameter_count(explicit_trainable)
+    assert parameter_count(prefix_trainable) == parameter_count(policy)
+
+    for leaf in _namedarray_leaves(prefix_trainable):
         assert leaf.array is not None
 
 
@@ -110,10 +128,7 @@ def test_trainer_state_init_with_dpo_model():
     _, policy, reference = _build_policy_reference(config)
     model = DpoModel(policy=policy, reference=reference)
 
-    trainable_filter = DpoModel(
-        policy=_bool_tree_like(policy, True),
-        reference=_bool_tree_like(reference, False),
-    )
+    trainable_filter = DpoModel(policy=True, reference=False)
 
     optimizer = AdamConfig(learning_rate=1e-3).build(num_train_steps=1)
     state = TrainerState.init(
@@ -271,17 +286,6 @@ def test_partition_for_grad_overwrite_preserves_namedarrays():
     assert hax.all(updated == model).scalar()
 
 
-def test_pspec_for_handles_filtered_namedarray():
-    Layers = hax.Axis("layers", 2)
-    Embed = hax.Axis("embed", 3)
-    arr = hax.zeros((Layers, Embed))
-    filtered = eqx.filter(arr, lambda _: False)
-
-    pspec = pspec_for(filtered, resource_mapping={"layers": "data", "embed": "model"})
-
-    assert pspec is None
-
-
 class _DummyModelAveraging(ModelAveraging[DpoModel]):
     model: DpoModel
 
@@ -297,10 +301,7 @@ def test_eval_model_fills_missing_namedarrays_from_model():
     config = _tiny_gpt2_config()
     _, policy, reference = _build_policy_reference(config)
     model = DpoModel(policy=policy, reference=reference)
-    trainable_filter = DpoModel(
-        policy=_bool_tree_like(policy, True),
-        reference=_bool_tree_like(reference, False),
-    )
+    trainable_filter = DpoModel(policy=True, reference=False)
 
     optimizer = AdamConfig(learning_rate=1e-3).build(num_train_steps=1)
     state = TrainerState.init(

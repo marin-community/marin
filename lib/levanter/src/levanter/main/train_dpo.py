@@ -10,7 +10,6 @@ from typing import Any, Optional, Union, cast
 
 import equinox as eqx
 import haliax as hax
-import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
@@ -49,44 +48,26 @@ def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
     return model.policy if isinstance(model, DpoModel) else model
 
 
-def _bool_tree_like(tree, value: bool):
-    return jax.tree_util.tree_map(lambda _: value, tree, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-
-
 def dpo_loss_from_logps(
-    delta_pi: hax.NamedArray | jnp.ndarray,
-    delta_ref: hax.NamedArray | jnp.ndarray,
+    delta_pi: hax.NamedArray,
+    delta_ref: hax.NamedArray,
     *,
     beta: float,
 ) -> tuple[jnp.ndarray, dict[str, Metric]]:
-    if isinstance(delta_pi, hax.NamedArray) or isinstance(delta_ref, hax.NamedArray):
-        if not isinstance(delta_pi, hax.NamedArray) or not isinstance(delta_ref, hax.NamedArray):
-            raise TypeError("delta_pi and delta_ref must both be NamedArray when using named computations.")
-        logits = (delta_pi - delta_ref) * beta
-        loss = hax.mean(hax.nn.softplus(-logits)).scalar()
-        metrics = {
-            "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-            "dpo_margin_policy": Metric.from_value(hax.mean(delta_pi).scalar(), ReductionType.MEAN),
-            "dpo_margin_ref": Metric.from_value(hax.mean(delta_ref).scalar(), ReductionType.MEAN),
-            "dpo_accuracy": Metric.from_value(hax.mean(logits > 0).scalar(), ReductionType.MEAN),
-        }
-        return loss, metrics
-
-    logits = beta * (delta_pi - delta_ref)
-    loss = jnp.mean(hax.nn.softplus(-logits))
+    logits = (delta_pi - delta_ref) * beta
+    loss = hax.mean(hax.nn.softplus(-logits)).scalar()
     metrics = {
         "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi), ReductionType.MEAN),
-        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref), ReductionType.MEAN),
-        "dpo_accuracy": Metric.from_value(jnp.mean(logits > 0), ReductionType.MEAN),
+        "dpo_margin_policy": Metric.from_value(hax.mean(delta_pi).scalar(), ReductionType.MEAN),
+        "dpo_margin_ref": Metric.from_value(hax.mean(delta_ref).scalar(), ReductionType.MEAN),
+        "dpo_accuracy": Metric.from_value(hax.mean(logits > 0).scalar(), ReductionType.MEAN),
     }
     return loss, metrics
 
 
 def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
-    nll = model.compute_next_token_loss(example, reduction=None, reduction_axis=(), key=key)
-    Pos = example.tokens.resolve_axis("position")
-    return -hax.sum(nll, axis=Pos)
+    nll = model.compute_next_token_loss(example, reduction=hax.sum, reduction_axis="position", key=key)
+    return -nll
 
 
 def _validate_preference_chat_formats(config: LmDataConfig) -> None:
@@ -322,12 +303,8 @@ def main(config: TrainDpoConfig):
         loss, metrics = dpo_loss_from_logps(delta_pi, delta_ref, beta=config.beta)
         chosen_reward = (logp_pi_chosen - logp_ref_chosen) * config.beta
         rejected_reward = (logp_pi_rejected - logp_ref_rejected) * config.beta
-        if isinstance(chosen_reward, hax.NamedArray):
-            metrics["dpo_chosen_reward"] = Metric.from_value(hax.mean(chosen_reward).scalar(), ReductionType.MEAN)
-            metrics["dpo_rejected_reward"] = Metric.from_value(hax.mean(rejected_reward).scalar(), ReductionType.MEAN)
-        else:
-            metrics["dpo_chosen_reward"] = Metric.from_value(jnp.mean(chosen_reward), ReductionType.MEAN)
-            metrics["dpo_rejected_reward"] = Metric.from_value(jnp.mean(rejected_reward), ReductionType.MEAN)
+        metrics["dpo_chosen_reward"] = Metric.from_value(hax.mean(chosen_reward).scalar(), ReductionType.MEAN)
+        metrics["dpo_rejected_reward"] = Metric.from_value(hax.mean(rejected_reward).scalar(), ReductionType.MEAN)
         return loss, metrics
 
     with Trainer(config.trainer, optimizer, loss_function) as trainer:
@@ -397,10 +374,7 @@ def main(config: TrainDpoConfig):
             policy=config.model.build(Vocab, key=init_policy_key),
             reference=config.model.build(Vocab, key=init_reference_key),
         )
-        trainable_filter = DpoModel(
-            policy=_bool_tree_like(initial_model.policy, True),
-            reference=_bool_tree_like(initial_model.reference, False),
-        )
+        trainable_filter = DpoModel(policy=True, reference=False)
         state = trainer.initial_state(training_key, model=initial_model, is_trainable=trainable_filter)
 
         policy_model = state.model.policy
