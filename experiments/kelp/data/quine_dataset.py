@@ -19,10 +19,9 @@ the model to learn from real-world Python code.
 """
 
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 import jax
 import jax.numpy as jnp
@@ -30,7 +29,7 @@ from jax import random
 from jaxtyping import Array
 
 from experiments.kelp.tokenizer import SimpleTokenizer
-from experiments.kelp.tree.parser import PythonTreeParser, extract_functions
+from experiments.kelp.tree.parser import extract_functions
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Iterator
+from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 

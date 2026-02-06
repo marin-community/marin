@@ -17,8 +17,7 @@
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import fsspec
