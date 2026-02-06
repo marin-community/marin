@@ -28,6 +28,7 @@ We can likely extract a bit more performance by:
 
 import dataclasses
 import logging
+import math
 import os
 import socket
 import threading
@@ -40,6 +41,7 @@ from functools import partial
 import haliax as hax
 import haliax.state_dict as hsd
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
@@ -133,7 +135,7 @@ def state_dict_to_batches(
             total_parts = 1
         else:
             assert value.ndim == 1, f"Expected flattened array for parameter {value.shape}"
-            splits = np.array_split(value, max(1, value.size // MAX_ELEMENTS_PER_RECORD))
+            splits = np.array_split(value, max(1, math.ceil(value.size / MAX_ELEMENTS_PER_RECORD)))
             total_parts = len(splits)
 
         # Create batches for each split
@@ -197,11 +199,11 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
         buffers = [part.as_buffer() for part in parts]
         buffer_parts = [np.frombuffer(buf, dtype=np.uint8) for buf in buffers]
         array_np = np.concatenate(buffer_parts)
-        array_np = array_np.view(dtype).reshape(shape)
+        res = array_np.view(dtype).reshape(shape)
         # Convert to JAX array directly
         # If we place on the TPU then we OOM. Need the context manager or default device is TPU
-        with jax.default_device(jax.devices("cpu")[0]):
-            res = jax.numpy.asarray(array_np)
+        # with jax.default_device(jax.devices("cpu")[0]):
+        #     res = jax.numpy.asarray(array_np)
         ed = time.time()
         if ed - st > 0.1:
             logger.debug(f"Deserialized param {param_name} of shape {shape} and dtype {dtype} in {ed - st:.2f}s")
@@ -211,12 +213,20 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
 class ArrowFlightCoordinator:
     """Ray actor for coordinating Arrow Flight weight transfers."""
 
-    _server_info = ServerInfo | None
+    _server_info: ServerInfo | None
 
     def __init__(self):
         self._server_info = None
 
     def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
+
+        # TODO(chris): how about when trainer dies? we should reset the server info.
+        # Only accept if newer than current
+        current_weight_id = self._server_info.weight_id if self._server_info is not None else None
+        if current_weight_id is not None and weight_id <= current_weight_id:
+            logger.warning(f"Ignoring stale weight update: {weight_id} <= {current_weight_id}")
+            return
+
         self._server_info = ServerInfo(
             weight_id=weight_id,
             server_addresses=[f"grpc://{host}:{port}" for host, port in server_locations],
@@ -305,12 +315,37 @@ class MarinFlightServer(flight.FlightServerBase):
             return self._latest_weight_id
 
 
-@jax.jit
-def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
-    """Convert `model` into a state with flattened arrays and shapes."""
+@partial(jax.jit, static_argnames=("convert_to_bfloat16",))
+def copy_and_flatten(
+    model: PyTree, convert_to_bfloat16: bool = True
+) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
+    """Convert `model` into a state with flattened arrays and shapes.
+
+    Optionally converts weights to bfloat16 for efficient transfer to inference workers.
+    This provides several benefits:
+    1. Reduces network transfer size by 50% (float32 -> bfloat16)
+    2. Reduces device-to-host copy bandwidth by 50%
+    3. Eliminates dtype conversion overhead in vLLM
+    4. Reduces memory fragmentation from temporary conversion buffers
+
+    The training model remains in float32 for numerical stability during optimization.
+    """
     state_dict = hsd.to_state_dict(model)
     shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
-    flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+
+    if convert_to_bfloat16:
+        # Convert to bfloat16 for inference - happens on GPU before device_get
+        # Only cast floating point arrays to avoid issues with integer/bool arrays
+        def maybe_cast_to_bf16(arr):
+            if jnp.issubdtype(arr.dtype, jnp.floating):
+                return arr.astype(jnp.bfloat16)
+            return arr
+
+        bf16_dict = jax.tree.map(maybe_cast_to_bf16, state_dict)
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), bf16_dict)
+    else:
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+
     return flat_dict, shape_dict
 
 
@@ -373,7 +408,11 @@ class ArrowFlightServer(WeightTransferServer):
         self.metrics = WeightTransferServerMetrics()
         self._ctx = get_default_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+            ArrowFlightCoordinator,
+            name=self.config.coordinator_name,
+            get_if_exists=True,
+            preemptible=False,
+            num_cpus=0,
         )
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
@@ -390,7 +429,7 @@ class ArrowFlightServer(WeightTransferServer):
 
             if jax.process_index() == 0:
                 # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
-                flat_dict, shape_dict = copy_and_flatten(model)
+                flat_dict, shape_dict = copy_and_flatten(model, self.config.convert_to_bfloat16)
                 state_dict_time = time.time()
                 flat_dict = jax.device_get(flat_dict)
                 copy_time = time.time()
@@ -426,9 +465,10 @@ class ArrowFlightServer(WeightTransferServer):
 
             barrier_sync()
 
-        except Exception as e:
+        except Exception:
             self.metrics.failed_transfers += 1
-            logger.error(f"Failed to serve weights {weight_id} via Arrow Flight: {e}")
+            logger.exception(f"Failed to serve weights {weight_id} via Arrow Flight")
+            raise
 
     def cleanup(self) -> None:
         """Cleanup Flight server resources."""
@@ -461,7 +501,7 @@ class ArrowFlightClient(WeightTransferClient):
         self.mesh = mesh
         self.axis_mapping = axis_mapping
 
-        self._last_weight_id = -1
+        self._last_weight_id = -2
         self._flight_clients = []
         self._server_locations = []
 
@@ -469,7 +509,11 @@ class ArrowFlightClient(WeightTransferClient):
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
         self._ctx = get_default_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+            ArrowFlightCoordinator,
+            name=self.config.coordinator_name,
+            get_if_exists=True,
+            preemptible=False,
+            num_cpus=0,
         )
 
     def _connect_to_servers(self, new_locations) -> bool:
@@ -520,8 +564,8 @@ class ArrowFlightClient(WeightTransferClient):
         """
         self.metrics.total_polls += 1
 
-        if old_model is None:
-            raise ValueError("old_model is required for Arrow Flight weight transfer to preserve model structure")
+        # if old_model is None:
+        #     raise ValueError("old_model is required for Arrow Flight weight transfer to preserve model structure")
 
         try:
             start_time = time.time()
@@ -560,8 +604,11 @@ class ArrowFlightClient(WeightTransferClient):
             fetch_time = time.time()
 
             # Convert back to model using state_dict and move to target device
-            with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
-                model = update_model(old_model, state_dict)
+            if old_model is not None:
+                with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
+                    model = update_model(old_model, state_dict)
+            else:
+                model = None
 
             decode_time = time.time()
 
@@ -577,7 +624,7 @@ class ArrowFlightClient(WeightTransferClient):
                 f"decode={decode_time - fetch_time:.2f}s)"
             )
 
-            return WeightUpdate(model=model, weight_id=server_info.weight_id)
+            return WeightUpdate(model=model, state_dict=state_dict, weight_id=server_info.weight_id)
 
         except Exception:
             self.metrics.failed_receives += 1

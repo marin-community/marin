@@ -26,6 +26,7 @@ from threading import Thread
 from fray.cluster.base import Cluster, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
 from fray.isolated_env import TemporaryVenv
 from fray.job.context import SyncContext, fray_default_job_ctx
+from fray.environment_context import temporary_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -115,21 +116,29 @@ class LocalCluster(Cluster):
         processes = []
         process_env = None
         if not self.config.use_isolated_env:
-            if request.environment.env_vars:
-                logger.warning(
-                    "LocalCluster does not support custom environment variables in non-isolated mode, ignored."
-                )
-
             # Run callable in parent process as a thread
             callable_ep = request.entrypoint.callable_entrypoint
             processes = []
-            for _ in range(replica_count):
+
+            # Wrap callable to apply environment variables
+            env_vars = dict(request.environment.env_vars) if request.environment.env_vars else {}
+            env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
+
+            for replica_id in range(replica_count):
+                replica_env = {
+                    **env_vars,
+                    "FRAY_REPLICA_ID": str(replica_id),
+                    "FRAY_REPLICA_COUNT": str(replica_count),
+                }
+
+                def run_with_env(_env=replica_env):
+                    with temporary_env_vars(_env):
+                        return callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+
                 logger.info(
                     f"Running callable in parent process with args={callable_ep.args}, kwargs={callable_ep.kwargs}"
                 )
-                process = FakeProcess(
-                    target=callable_ep.callable, args=callable_ep.args, kwargs=callable_ep.kwargs, daemon=True
-                )
+                process = FakeProcess(target=run_with_env, daemon=True)
                 process.start()
                 processes.append(process)
         else:

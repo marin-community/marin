@@ -42,7 +42,7 @@ from haliax.partitioning import ResourceMapping, named_jit
 from haliax.quantization import QuantizationConfig
 from haliax.types import Scalar
 from jax.experimental import multihost_utils
-from jax.sharding import Mesh
+from jax.sharding import AxisType, Mesh
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation
@@ -527,6 +527,16 @@ class Trainer:
         """
         Performs training until the number of steps is reached.
         """
+        # Handle case where training is already complete (e.g., resuming from final checkpoint)
+        if int(state.step) >= self.num_train_steps:
+            logger.info(
+                f"Training already complete at step {state.step} (target: {self.num_train_steps}). "
+                "Running final hooks only."
+            )
+            info = StepInfo(state, 0.0, 0.0)
+            self.run_hooks(info, force=True)
+            return info
+
         info: Optional[StepInfo[S]] = None
         for info in self.training_steps(state, train_loader):
             pass
@@ -650,7 +660,7 @@ class Trainer:
             self.loss_fn, model, *batch, **batch_kwargs, key=key
         )
 
-        # Sophia needs to be able to access the loss function in the optimizer
+        # Some optimizers need to be able to access the loss function
         def obj_fun(trainable_model):
             model = eqx.combine(trainable_model, state.model)
             with hax.axis_mapping(self.compute_axis_mapping):
@@ -783,6 +793,12 @@ class TrainerConfig:
 
     # config related to partitioning
     mesh: MeshConfig = MeshConfig()
+    use_explicit_mesh_axes: bool = False
+    """If True, build the device mesh with `AxisType.Explicit` axes.
+
+    This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
+    because JAX disallows using named `PartitionSpec`s under `AxisType.Auto`/`AxisType.Manual` meshes.
+    """
 
     @property
     def batch_axis_name(self) -> str | None:
@@ -896,7 +912,11 @@ class TrainerConfig:
     @property
     def device_mesh(self) -> Mesh:
         ici, dcn = self.mesh.axis_shapes(jax.device_count(), self.num_slices)
-        return create_mesh_from_axis_specs(ici_axes=ici, dcn_axes=dcn)
+        axis_types = None
+        if self.use_explicit_mesh_axes:
+            axis_names = list(ici.keys()) + [k for k in dcn.keys() if k not in ici]
+            axis_types = tuple(AxisType.Explicit for _ in axis_names)
+        return create_mesh_from_axis_specs(ici_axes=ici, dcn_axes=dcn, axis_types=axis_types)
 
     def use_device_mesh(self) -> ContextManager[None]:
         """

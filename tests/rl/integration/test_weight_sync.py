@@ -33,7 +33,7 @@ from tests.rl.integration.config import (
     create_test_rollout_storage_config,
 )
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
+pytestmark = pytest.mark.skipif(os.environ.get("CI") is not None, reason="Skipping integration tests on CI environment")
 
 
 @pytest.mark.slow("Integration test.")

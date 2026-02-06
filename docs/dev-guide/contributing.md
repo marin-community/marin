@@ -17,7 +17,7 @@ cat <<'EOF' > .git/hooks/pre-commit
 #!/bin/sh
 set -e
 cd "$(git rev-parse --show-toplevel)"
-uv run python infra/pre-commit.py --fix
+./infra/pre-commit.py --fix
 EOF
 chmod +x .git/hooks/pre-commit
 ```
@@ -27,8 +27,8 @@ package with `make init`.
 
 ### Linting
 
-The Git hook configured above runs `uv run python infra/pre-commit.py` before each commit so that the repo-standard lint/format checks pass.
-You can also run them manually with `uv run python infra/pre-commit.py --all-files` or via `make lint`.
+The Git hook configured above runs `./infra/pre-commit.py` before each commit so that the repo-standard lint/format checks pass.
+You can also run them manually with `./infra/pre-commit.py --all-files` or via `make lint`.
 
 ### Testing
 
@@ -52,4 +52,4 @@ cd data_browser
 python server.py --config conf/local.conf
 ```
 
-For more information, see the [data browser README](https://github.com/marin-community/marin/blob/main/data_browser/README.md).
+For more information, see the [data browser](https://github.com/marin-community/marin/tree/main/data_browser).

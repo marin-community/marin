@@ -1,0 +1,43 @@
+name: Iris - Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    paths:
+      - lib/iris/**
+      - .github/workflows/iris-unit-tests.yaml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Test iris
+        env:
+          PYTHONASYNCIODEBUG: "1"
+        run: |
+          cd lib/iris && uv run --group dev python -X faulthandler -m pytest --durations=5 --tb=short -m 'not slow and not docker and not chaos' -v -s tests/

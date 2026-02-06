@@ -71,6 +71,72 @@ def _list_jobs(filters: list[str] | None = None) -> list[dict]:
         return []
 
 
+def _select_job(jobs: list[dict], job_id: str, match: bool) -> dict | None:
+    if match:
+        matches = [
+            job for job in jobs if job_id in (job.get("submission_id") or "") or job_id in (job.get("job_id") or "")
+        ]
+        if not matches:
+            return None
+        return max(
+            matches,
+            key=lambda job: (job.get("start_time") or 0, job.get("submission_id") or ""),
+        )
+
+    for job in jobs:
+        if job_id == job.get("submission_id") or job_id == job.get("job_id"):
+            return job
+    return None
+
+
+def _print_job_logs(job_id: str, tail: int | None = None, grep: str | None = None) -> None:
+    cmd = ["ray", "job", "logs", job_id]
+    ray_proc = None
+    grep_proc = None
+    if tail is not None or grep is not None:
+        try:
+            ray_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            if grep is not None:
+                grep_proc = subprocess.Popen(
+                    ["grep", grep],
+                    stdin=ray_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                ray_proc.stdout.close()
+                prev_proc = grep_proc
+            else:
+                prev_proc = ray_proc
+
+            if tail is not None:
+                tail_proc = subprocess.Popen(
+                    ["tail", f"-{tail}"],
+                    stdin=prev_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                prev_proc.stdout.close()
+                output, _ = tail_proc.communicate(timeout=120)
+            else:
+                output, _ = prev_proc.communicate(timeout=120)
+
+            print(output, end="")
+        finally:
+            if grep_proc is not None:
+                try:
+                    grep_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    grep_proc.kill()
+            if ray_proc is not None:
+                try:
+                    ray_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    ray_proc.kill()
+    else:
+        subprocess.run(cmd, check=False)
+
+
 def _submit_job(
     entrypoint: str,
     working_dir: str | None = None,
@@ -452,11 +518,24 @@ class Context:
     config_obj: RayClusterConfig | None = None
 
 
+def _maybe_add_ray_verbose(ctx: Context, cmd_args: list[str]) -> list[str]:
+    """Add `-v` to Ray CLI commands when cluster.py verbose mode is enabled.
+
+    Most Ray CLI invocations here are of the form `["ray", "<subcommand>", ...]`.
+    We insert `-v` after the subcommand (e.g. `ray up -v ...`) since Ray exposes per-subcommand verbose flags.
+    """
+    if ctx.verbose:
+        if len(cmd_args) < 2:
+            return cmd_args
+        return [*cmd_args[:2], "-v", *cmd_args[2:]]
+    return cmd_args
+
+
 # Context object to pass global options between commands
 @click.group()
 @click.option("--config", help="Path to Ray cluster config file (infra/marin-*.yaml)")
 @click.option("--cluster", help="Cluster name to connect to")
-@click.option("--verbose", is_flag=True, help="Enable verbose logging")
+@click.option("--verbose", is_flag=True, help="Enable verbose logging (also passes `-v` to Ray cluster commands).")
 @click.pass_context
 def cli(ctx, config, cluster, verbose):
     """Marin cluster management CLI."""
@@ -506,7 +585,7 @@ def start_cluster(ctx):
         print()
 
     print(f"Starting cluster {config_obj.cluster_name}...")
-    subprocess.run(["ray", "up", "-y", config_path], check=True)
+    subprocess.run(_maybe_add_ray_verbose(ctx.obj, ["ray", "up", "-y", config_path]), check=True)
 
 
 @cli.command("stop-cluster")
@@ -518,11 +597,11 @@ def stop_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-    _stop_cluster_internal(config_obj, config_path)
+    _stop_cluster_internal(ctx.obj, config_obj, config_path)
     print("Cluster stopped successfully!")
 
 
-def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
+def _stop_cluster_internal(ctx: Context, config_obj: RayClusterConfig, config_path: str):
     """Terminate a Ray cluster.
 
     N.B. We terminate the Ray coordinator node first to avoid restarting any new TPUs while
@@ -542,7 +621,10 @@ def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
         print(f"Terminated {len(terminated_tpus)} TPUs")
 
     print(f"Cleaning up Ray cluster state for {config_obj.cluster_name}...")
-    subprocess.run(["ray", "down", "-y", config_path], check=False)  # check=False since instances may already be gone
+    subprocess.run(
+        _maybe_add_ray_verbose(ctx, ["ray", "down", "-y", config_path]),
+        check=False,  # check=False since instances may already be gone
+    )
 
 
 @cli.command("restart-cluster")
@@ -579,10 +661,13 @@ def restart_cluster(ctx, preserve_jobs):
             print("Proceeding with cluster restart without job preservation.")
 
     print("Stopping cluster...")
-    _stop_cluster_internal(config_obj, config_path)
+    _stop_cluster_internal(ctx.obj, config_obj, config_path)
 
     print("Starting cluster...")
-    subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
+    subprocess.run(
+        _maybe_add_ray_verbose(ctx.obj, ["ray", "up", "-y", "--no-config-cache", config_path]),
+        check=True,
+    )
 
     if preserve_jobs:
         print("Restoring jobs...")
@@ -668,7 +753,7 @@ def ssh_connect(ctx, target, project, zone, extra_args):
 @click.pass_context
 def ssh_head(ctx, extra_args):
     """SSH to cluster head node using ray attach."""
-    cmd_args = ["ray", "attach", ctx.obj.config_file]
+    cmd_args = _maybe_add_ray_verbose(ctx.obj, ["ray", "attach", ctx.obj.config_file])
     if extra_args:
         cmd_args.extend(["--", *extra_args])
     subprocess.run(cmd_args, check=True)
@@ -718,6 +803,65 @@ def stop_job(ctx, job_id):
     with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
         _stop_job(job_id)
         print(f"Job {job_id} stop requested")
+
+
+@cli.command("job-logs")
+@click.argument("job_id")
+@click.option("--follow", "-f", is_flag=True, help="Follow the logs (stream in real-time)")
+@click.option("--tail", "-n", type=int, default=None, help="Show only the last N lines of logs")
+@click.option("--grep", "-g", type=str, default=None, help="Filter lines containing this pattern")
+@click.pass_context
+def job_logs(ctx, job_id, follow, tail, grep):
+    """View logs for a Ray job."""
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        if follow:
+            subprocess.run(["ray", "job", "logs", "--follow", job_id], check=False)
+            return
+        _print_job_logs(job_id, tail=tail, grep=grep)
+
+
+@cli.command("wait-job")
+@click.argument("job_id")
+@click.option("--match", is_flag=True, help="Match job_id as a substring of submission_id.")
+@click.option("--poll", type=float, default=5.0, show_default=True, help="Polling interval in seconds.")
+@click.option("--timeout", type=float, default=None, help="Timeout in seconds before exiting.")
+@click.option("--show-logs", is_flag=True, help="Print logs after completion.")
+@click.option("--tail", "-n", type=int, default=200, show_default=True, help="Show only the last N lines of logs.")
+@click.option("--grep", "-g", type=str, default=None, help="Filter lines containing this pattern.")
+@click.pass_context
+def wait_job(ctx, job_id, match, poll, timeout, show_logs, tail, grep):
+    """Wait for a Ray job to finish."""
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        if job_id == "latest":
+            print("Error: job_id must be an explicit submission id; 'latest' is not supported.", file=sys.stderr)
+            sys.exit(1)
+        start = time.time()
+        last_status = None
+
+        while True:
+            job = _select_job(_list_jobs(), job_id, match=match)
+            if job is None:
+                print(f"Job '{job_id}' not found.", file=sys.stderr)
+                sys.exit(1)
+
+            status = job.get("status")
+            message = job.get("message", "")
+            if status != last_status:
+                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                print(f"[{ts}] {job.get('submission_id')} status={status} {message}".rstrip())
+                last_status = status
+
+            if status in {"SUCCEEDED", "FAILED", "STOPPED"}:
+                break
+
+            if timeout is not None and (time.time() - start) > timeout:
+                print("Timeout reached while waiting for job completion.", file=sys.stderr)
+                sys.exit(2)
+
+            time.sleep(poll)
+
+        if show_logs:
+            _print_job_logs(job.get("submission_id") or job_id, tail=tail, grep=grep)
 
 
 # Top-level commands
@@ -887,7 +1031,10 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
 def show_logs(ctx, tail):
     """View cluster logs."""
     log_command = f"tail -n {tail} -f /tmp/ray/session_latest/logs/monitor*"
-    subprocess.run(["ray", "exec", ctx.obj.config_file, log_command], check=True)
+    subprocess.run(
+        _maybe_add_ray_verbose(ctx.obj, ["ray", "exec", ctx.obj.config_file, log_command]),
+        check=True,
+    )
 
 
 def main():

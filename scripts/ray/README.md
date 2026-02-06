@@ -96,6 +96,9 @@ uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml restart-clus
 - Starts the cluster with fresh configuration
 - Restores backed-up jobs
 
+>[!IMPORTANT]
+> Before restarting a shared cluster, follow the restart policy documented in `infra/README.md`.
+
 
 #### `add-worker`
 

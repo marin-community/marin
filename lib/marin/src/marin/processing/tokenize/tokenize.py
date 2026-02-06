@@ -21,20 +21,25 @@ them first then tokenizes the downloaded files.
 
 import abc
 import dataclasses
+import json
 import logging
 import os
 import re
 from collections.abc import Iterator, Sequence
+from typing import Any
+
+import fsspec
 
 import draccus
-import jax
+from fray.job.context import JobContext
+import humanfriendly
 import transformers
 from datasets import load_dataset_builder
-from fray.job import create_job_ctx, get_default_job_ctx
+from fray.job import create_job_ctx
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
-    LMDatasetSourceConfig,
+    LmDatasetSourceConfigBase,
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
     preprocessor_for_format,
@@ -63,7 +68,7 @@ class TokenizeConfigBase(abc.ABC):
     @abc.abstractmethod
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         """
         Create a Levanter dataset source config from this config and the actual output path.
         """
@@ -92,10 +97,13 @@ class TokenizeConfig(TokenizeConfigBase):
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
     'test' or 'validation' in the file names, but are not actually test or validation sets.
     """
+    # TODO (rav): remove this once there's better way to capture this in datakit
+    zephyr_num_cpus: int = 2
+    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         """
         For use in Levanter training runs with mixtures of datasets.
 
@@ -149,9 +157,13 @@ class HfTokenizeConfig(TokenizeConfigBase):
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
 
+    # TODO (rav): remove this once there's better way to capture this in datakit
+    zephyr_num_cpus: int = 2
+    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
+
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         return HfDatasetSourceConfig(
             id=self.id,
             name=self.name,
@@ -246,12 +258,11 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
         yield current_group
 
 
-def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
+def _tokenize_batches(
+    *, ctx: JobContext, tokenizer_ref: Any, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]
+) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    jax_devices = jax.devices()
-    assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    tokenizer: transformers.PreTrainedTokenizer = ctx.get(tokenizer_ref)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:
@@ -268,6 +279,8 @@ def tokenize(config: TokenizeConfigBase):
     if isinstance(config, TokenizeConfig):
         train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
         validation_paths = _get_filepaths_to_tokenize(config.validation_paths) if config.validation_paths else []
+        # Validate expanded paths to catch validation/test files that were inside directories
+        _validate_train_urls(train_paths, warn=config.allow_test_in_train)
     elif isinstance(config, HfTokenizeConfig):
         logger.info(f"Loading dataset metadata for {config.id}" + (f" (config: {config.name})" if config.name else ""))
 
@@ -322,13 +335,20 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
+        cluster_ctx = create_job_ctx(context_type="auto", num_cpus=config.zephyr_num_cpus, memory=config.zephyr_memory)
+        # NOTE: "broadcast" the tokenizer on the cluster context
+        tokenizer_ref = cluster_ctx.put(transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+
         temp_shards = (
             ds.window(64)
-            .map_shard(lambda batches: _tokenize_batches(config, batches))
+            .map_shard(
+                lambda batches: _tokenize_batches(
+                    ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=batches
+                )
+            )
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        cluster_ctx = get_default_job_ctx()
         shard_paths = Backend.execute(temp_shards, context=cluster_ctx)
 
         logger.info("Computing exemplar for cache consolidation")
@@ -336,14 +356,36 @@ def tokenize(config: TokenizeConfigBase):
             Dataset.from_list(paths[0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(lambda example: _tokenize_batches(config, [example])),
+            .map_shard(
+                lambda example: _tokenize_batches(
+                    ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=[example]
+                )
+            ),
             context=cluster_ctx,
+            verbose=False,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(
             shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, context=cluster_ctx
         )
+
+        # Aggregate token counts from shard stats
+        total_tokens = 0
+        total_elements = 0
+        for shard_path in shard_paths:
+            stats_path = f"{shard_path}/.stats.json"
+            with fsspec.open(stats_path) as f:
+                stats = json.load(f)
+                total_tokens += stats["token_count"]
+                total_elements += stats["count"]
+
+        stats_path = os.path.join(prefix, ".stats.json")
+        logger.info(
+            f"Writing total token count ({total_tokens:,}) and element count ({total_elements:,}) to {stats_path}"
+        )
+        with fsspec.open(stats_path, "w") as f:
+            json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
     if train_paths:
         run_pipeline(train_paths, "train")

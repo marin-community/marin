@@ -377,7 +377,6 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
         attn_backend=AttentionBackend.JAX_FLASH,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
-        cross_entropy_block_size=4096,  # avoid materializing full logits (batch*seq*vocab)
     )
     return {
         "130m": HackableTransformerConfig(
@@ -482,7 +481,7 @@ def _muon_presets() -> dict[str, MuonConfig]:
 # =========================
 # Resource presets (IMPORTANT!)
 # TODO: edit tpu_type or accelerator_type to match what you have available on your hardware
-# e.g., GpuConfig(gpu_count=8, accelerator_type="H100"),
+# e.g., ResourceConfig.with_gpu("H100", count=8),
 # If you ignore this and there is a mismatch, training cannot start if an unavailable resource is requested!
 # =========================
 

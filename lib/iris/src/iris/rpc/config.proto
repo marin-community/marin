@@ -1,0 +1,215 @@
+// Copyright 2025 The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package iris.config;
+
+import "time.proto";
+
+// Enable explicit presence tracking for all fields to support HasField on scalars
+option features.field_presence = EXPLICIT;
+
+// ============================================================================
+// PLATFORM CONFIGURATION
+// ============================================================================
+
+message GcpPlatformConfig {
+  string project_id = 1;
+  string region = 2;
+  string zone = 3;
+  repeated string default_zones = 4;
+}
+
+message ManualPlatformConfig {}
+
+message LocalPlatformConfig {}
+
+message PlatformConfig {
+  string label_prefix = 10;  // Default: "iris"
+  oneof platform {
+    GcpPlatformConfig gcp = 1;
+    ManualPlatformConfig manual = 2;
+    LocalPlatformConfig local = 3;
+  }
+}
+
+// ============================================================================
+// PROVIDER / GROUP CONFIGURATION
+// ============================================================================
+
+// Manual (pre-existing hosts) configuration for scale groups
+message ManualProvider {
+  repeated string hosts = 1;
+  string ssh_user = 2;           // Default: "root"
+  string ssh_key_file = 3;
+}
+
+// ============================================================================
+// SCALE GROUP CONFIGURATION
+// ============================================================================
+
+// Device/accelerator type for scale groups
+enum AcceleratorType {
+  ACCELERATOR_TYPE_UNSPECIFIED = 0;
+  ACCELERATOR_TYPE_CPU = 1;
+  ACCELERATOR_TYPE_GPU = 2;
+  ACCELERATOR_TYPE_TPU = 3;
+}
+
+// VM manager implementation for a scale group
+enum VmType {
+  VM_TYPE_UNSPECIFIED = 0;
+  VM_TYPE_TPU_VM = 1;
+  VM_TYPE_GCE_VM = 2;
+  VM_TYPE_MANUAL_VM = 3;
+  VM_TYPE_LOCAL_VM = 4;
+}
+
+// Resources available per slice in a scale group.
+message ScaleGroupResources {
+  int32 cpu = 1;
+  int64 memory_bytes = 2;
+  int64 disk_bytes = 3;
+  int32 gpu_count = 4;
+  int32 tpu_count = 5;
+}
+
+// Configuration for a scale group
+message ScaleGroupConfig {
+  string name = 1;
+  VmType vm_type = 2;
+  int32 min_slices = 3 [features.field_presence = EXPLICIT];
+  int32 max_slices = 4 [features.field_presence = EXPLICIT];
+
+  // Device configuration
+  AcceleratorType accelerator_type = 9;  // Device type: cpu, gpu, or tpu
+  string accelerator_variant = 10;       // Device variant: e.g., "v5litepod-16", "A100"
+  string topology = 11;                  // Optional topology override (e.g., "4x4")
+  string runtime_version = 12;
+  bool preemptible = 13 [features.field_presence = EXPLICIT];
+  ScaleGroupResources resources = 14;
+  int32 slice_size = 15 [features.field_presence = EXPLICIT];
+
+  // Zones to use (in priority order)
+  repeated string zones = 20;
+
+  // Priority for waterfall routing (lower = higher priority, default 100)
+  int32 priority = 30 [features.field_presence = EXPLICIT];
+
+  // Manual provider configuration (required for manual vm_type)
+  ManualProvider manual = 40;
+}
+
+// ============================================================================
+// BOOTSTRAP, TIMEOUT, AND SSH CONFIGURATION
+// ============================================================================
+
+// Bootstrap configuration passed to VmBootstrap
+message BootstrapConfig {
+  string controller_address = 1;  // Address workers use to connect (e.g., "10.0.0.1:10000")
+  string worker_id = 2;           // Auto-generated if empty
+  int32 worker_port = 3;          // Default: 10001
+  string docker_image = 4;        // Worker image to run
+  string cache_dir = 5;           // Default: /var/cache/iris
+  map<string, string> env_vars = 6;
+}
+
+// Timeout configuration for VM lifecycle (SSH timeout is in SshConfig)
+message TimeoutConfig {
+  iris.time.Duration boot_timeout = 1;        // Default: 300s (5 min)
+  iris.time.Duration init_timeout = 2;        // Default: 600s (10 min)
+  reserved 3;                                   // Was: ssh_connect_timeout_seconds (moved to SshConfig)
+  iris.time.Duration ssh_poll_interval = 4;   // Default: 5s
+}
+
+// SSH configuration for manual hosts
+message SshConfig {
+  string user = 1;                        // Default: "root"
+  string key_file = 2;                    // Path to SSH private key
+  iris.time.Duration connect_timeout = 4;  // Default: 30s
+}
+
+// ============================================================================
+// CONTROLLER CONFIGURATION
+// ============================================================================
+
+// GCP-managed controller configuration
+message GcpControllerConfig {
+  string machine_type = 2;      // Default: "n2-standard-4"
+  int32 boot_disk_size_gb = 3;  // Default: 50
+  int32 port = 4;               // Default: 10000
+}
+
+// Manually-managed controller configuration (SSH bootstrap)
+message ManualControllerConfig {
+  string host = 1;
+  int32 port = 3;               // Default: 10000
+}
+
+// Locally-managed controller configuration (in-process)
+message LocalControllerConfig {
+  int32 port = 1;               // 0 = auto-assign
+}
+
+// Controller configuration using oneof for type-safe dispatch
+message ControllerVmConfig {
+  string image = 10;            // Controller docker image (shared by all controller types)
+  string bundle_prefix = 11;    // URI prefix for job bundles (e.g., gs://bucket/path)
+  oneof controller {
+    GcpControllerConfig gcp = 1;
+    ManualControllerConfig manual = 2;
+    LocalControllerConfig local = 3;
+  }
+}
+
+// ============================================================================
+// DEFAULTS CONFIGURATION
+// ============================================================================
+
+message AutoscalerConfig {
+  iris.time.Duration evaluation_interval = 1;  // Default: 10s
+  iris.time.Duration requesting_timeout = 2;   // Default: 120s
+  iris.time.Duration scale_up_delay = 3;       // Default: 60s
+  iris.time.Duration scale_down_delay = 4;     // Default: 300s
+}
+
+message DefaultsConfig {
+  TimeoutConfig timeouts = 1;
+  SshConfig ssh = 2;
+  AutoscalerConfig autoscaler = 3;
+  BootstrapConfig bootstrap = 4;
+}
+
+// ============================================================================
+// ROOT CLUSTER CONFIGURATION
+// ============================================================================
+
+// Full cluster configuration - single source of truth
+message IrisClusterConfig {
+  reserved 1 to 4;
+
+  // Platform settings
+  PlatformConfig platform = 10;
+  DefaultsConfig defaults = 11;
+
+  // Controller settings
+  ControllerVmConfig controller = 31;
+
+  // Scale groups (name -> config)
+  map<string, ScaleGroupConfig> scale_groups = 50;
+
+  reserved 70;  // label_prefix (moved to PlatformConfig)
+  reserved 80 to 83;  // Duplicate fields removed (use defaults.* instead)
+}

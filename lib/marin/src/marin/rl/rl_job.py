@@ -23,7 +23,6 @@ import dataclasses
 import hashlib
 import json
 import logging
-import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Literal
@@ -39,7 +38,7 @@ from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig, 
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
+from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig, RolloutTrackerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.training.training import _add_run_env_variables
@@ -71,6 +70,9 @@ class RunConfig:
 
     max_retries_preemption: int = 100
     """Maximum retries on preemption"""
+
+    env_vars: dict[str, str] = field(default_factory=dict)
+    """Custom environment variables for workers"""
 
 
 @dataclass
@@ -110,6 +112,10 @@ class RLJobConfig:
 
     seed: int = 42
 
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
+
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
 
@@ -130,9 +136,21 @@ class RLJobConfig:
     inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
     """Configuration for inference context."""
 
+    system_prompt: str | None = None
+    """System prompt to use for inference."""
+
+    inflight_weight_updates: bool = False
+    """Whether to use inflight weight updates."""
+
     # Logging
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
     log_freq: int = 10
+
+    rollout_tracker: RolloutTrackerConfig | None = None
+    """Tracker configuration for rollout workers. Uses a standalone tracker to avoid JAX deadlocks."""
+
+    pip_dependency_groups: list[str] = field(default_factory=list)
+    """Extra pip dependency groups to include for all workers."""
 
     def with_on_policy_training(self) -> "RLJobConfig":
         """Configure for on-policy training.
@@ -179,7 +197,7 @@ class RLJob:
     # Helper, as Ray doesn't accept method instances
     @staticmethod
     def make_step_fn():
-        return lambda config: RLJob(config).run()
+        return lambda config: RLJob(config).run(config.run_id)
 
     def run(self, name: str):
         """Run with TPU pod deployment."""
@@ -201,20 +219,25 @@ class RLJob:
                 worker = TrainWorker(config=train_worker_config)
                 worker.train()
 
-        def inference_worker_task():
-            with remove_tpu_lockfile_on_exit():
-                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                # inject a different seed for each worker
+        def make_inference_task(worker_idx: int):
+            def inference_worker_task():
+                with remove_tpu_lockfile_on_exit():
+                    logging.basicConfig(
+                        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True
+                    )
+                    # use deterministic seed based on worker index
 
-                process_id = os.getpid()
-                config = dataclasses.replace(
-                    rollout_worker_config,
-                    seed=rollout_worker_config.seed + process_id,
-                    run_id=f"{rollout_worker_config.run_id}-{process_id}",
-                )
+                    config = dataclasses.replace(
+                        rollout_worker_config,
+                        seed=rollout_worker_config.seed + worker_idx,
+                        run_id=f"{rollout_worker_config.run_id}-rollout-{worker_idx}",
+                        worker_index=worker_idx,
+                    )
 
-                worker = RolloutWorker(config=config)
-                worker.run()
+                    worker = RolloutWorker(config=config)
+                    worker.run()
+
+            return inference_worker_task
 
         cluster = current_cluster()
         jobs = []
@@ -224,7 +247,7 @@ class RLJob:
                     name=f"rl-train-{name}-train",
                     resources=train_resources,
                     entrypoint=Entrypoint.from_callable(train_worker_task),
-                    environment=EnvironmentConfig.create(env_vars=env),
+                    environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
                 )
             )
         )
@@ -235,8 +258,8 @@ class RLJob:
                     JobRequest(
                         name=f"rl-train-{name}-rollout-{i}",
                         resources=rollout_resources,
-                        entrypoint=Entrypoint.from_callable(inference_worker_task),
-                        environment=EnvironmentConfig.create(env_vars=env),
+                        entrypoint=Entrypoint.from_callable(make_inference_task(i)),
+                        environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
                     )
                 )
             )
@@ -258,8 +281,8 @@ class RLJob:
             total_seqs = lesson.sampling_params.n_generations_per_prompt
             max_seqs = max(max_seqs, total_seqs)
 
-        max_tokens = self.config.curriculum.max_tokens
-        assert max_tokens > 0, "Max tokens must be positive across curriculum lessons."
+        max_seq_len = self.config.curriculum.max_seq_len
+        assert max_seq_len > 0, "Max seq len must be positive across curriculum lessons."
 
         # create a unique name for the weight-transfer coordinator based on our config hash
         # this ensures we get the same name across multiple calls
@@ -281,19 +304,19 @@ class RLJob:
                 temperature=1.0,
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
-                    max_seq_len=max_tokens,
+                    max_seq_len=max_seq_len,
                     page_size=128,
                     hbm_utilization=0.5,
                 ),
                 port=0,
             )
             logger.info(
-                "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
+                "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_seq_len=%d", max_seqs, max_seq_len
             )
             inference_config = LevanterInferenceContextConfig(
+                mesh=self.config.trainer.device_mesh,
                 inference_server_config=inference_server_config,
                 tokenizer=tokenizer,
-                mesh=self.config.trainer.device_mesh,
                 axis_mapping=self.config.trainer.compute_axis_mapping,
             )
         else:
@@ -311,6 +334,7 @@ class RLJob:
             tokenizer=tokenizer,
             replay_buffer=self.config.train_params.replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,
+            vocab_size=self.config.vocab_size,
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
             seed=self.config.seed,
@@ -325,12 +349,16 @@ class RLJob:
             log_freq=self.config.log_freq,
             max_rollouts=None,  # Run indefinitely by default
             initial_checkpoint=self.config.initial_checkpoint,
+            vocab_size=self.config.vocab_size,
             weight_transfer=weight_transfer_config,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
             seed=self.config.seed + 1000,
             inference_type=self.config.inference_type,
             inference_config=inference_config,
+            system_prompt=self.config.system_prompt,
+            inflight_weight_updates=self.config.inflight_weight_updates,
+            tracker_config=self.config.rollout_tracker,
         )
 
         return train_worker_config, rollout_worker_config

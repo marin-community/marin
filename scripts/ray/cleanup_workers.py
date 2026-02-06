@@ -32,6 +32,7 @@ from glob import glob
 
 import click
 import yaml
+from tabulate import tabulate
 from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -45,6 +46,8 @@ class WorkerDiskInfo:
     worker_ip: str
     free_pct: int
     available: str
+    is_preemptible: bool = False
+    topology: str = ""
 
 
 @dataclass
@@ -129,7 +132,7 @@ def cleanup_preempted_tpus(zone: str, project: str, dry_run: bool = False) -> li
     return preempted
 
 
-def list_cluster_workers(cluster_name: str, zone: str, project: str) -> list[str]:
+def list_cluster_workers(zone: str, project: str) -> list[str]:
     result = subprocess.run(
         [
             "gcloud",
@@ -145,7 +148,7 @@ def list_cluster_workers(cluster_name: str, zone: str, project: str) -> list[str
         text=True,
         check=True,
     )
-    return [name for name in result.stdout.strip().split("\n") if name and "worker-manual" in name]
+    return [name for name in result.stdout.strip().split("\n") if name]
 
 
 def get_tpu_workers(tpu_name: str, zone: str, project: str) -> list[dict]:
@@ -166,16 +169,32 @@ def get_tpu_workers(tpu_name: str, zone: str, project: str) -> list[dict]:
         check=True,
     )
     tpu_info = json.loads(result.stdout)
+    is_preemptible = tpu_info.get("schedulingConfig", {}).get("preemptible", False)
+    topology = tpu_info.get("acceleratorType", "")
     workers = []
     for idx, endpoint in enumerate(tpu_info.get("networkEndpoints", [])):
         if "ipAddress" not in endpoint:
             continue
-        workers.append({"tpu_name": tpu_name, "worker_id": idx, "worker_ip": endpoint["ipAddress"]})
+        workers.append(
+            {
+                "tpu_name": tpu_name,
+                "worker_id": idx,
+                "worker_ip": endpoint["ipAddress"],
+                "is_preemptible": is_preemptible,
+                "topology": topology,
+            }
+        )
     return workers
 
 
 def get_worker_disk_info(
-    tpu_name: str, worker_id: int, worker_ip: str, zone: str, project: str
+    tpu_name: str,
+    worker_id: int,
+    worker_ip: str,
+    zone: str,
+    project: str,
+    is_preemptible: bool = False,
+    topology: str = "",
 ) -> WorkerDiskInfo | None:
     try:
         result = run_gcloud_ssh(tpu_name, worker_id, zone, project, "df -h / | tail -n1")
@@ -184,10 +203,25 @@ def get_worker_disk_info(
         parts = result.stdout.strip().split()
         if len(parts) >= 5:
             used_pct = int(parts[4].rstrip("%"))
-            return WorkerDiskInfo(tpu_name, worker_id, worker_ip, 100 - used_pct, parts[3])
+            return WorkerDiskInfo(tpu_name, worker_id, worker_ip, 100 - used_pct, parts[3], is_preemptible, topology)
     except (subprocess.TimeoutExpired, ValueError, IndexError) as e:
         logger.error(f"Error checking {tpu_name} worker {worker_id}: {e}")
     return None
+
+
+def print_workers_table(workers: list[WorkerDiskInfo]) -> None:
+    """Print a table of all workers."""
+    if not workers:
+        return
+
+    headers = ["Worker Name", "Type", "Topology", "Free Disk"]
+    rows = []
+    for w in sorted(workers, key=lambda x: (x.free_pct, x.tpu_name, x.worker_id)):
+        worker_type = "preemptible" if w.is_preemptible else "on-demand"
+        rows.append([f"{w.tpu_name}:{w.worker_id}", worker_type, w.topology, f"{w.free_pct}% ({w.available})"])
+
+    table = tabulate(rows, headers=headers, tablefmt="simple")
+    logger.info(f"\nWorker Summary:\n{table}")
 
 
 def restart_worker(
@@ -233,7 +267,7 @@ def process_cluster(config_path: str, threshold: int, dry_run: bool, parallel: i
     if deleted:
         logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs")
 
-    tpu_names = list_cluster_workers(cluster_name, zone, project)
+    tpu_names = list_cluster_workers(zone, project)
     if not tpu_names:
         logger.info("No manual workers found")
         return True
@@ -254,7 +288,15 @@ def process_cluster(config_path: str, threshold: int, dry_run: bool, parallel: i
                 None,
                 tqdm(
                     executor.map(
-                        lambda w: get_worker_disk_info(w["tpu_name"], w["worker_id"], w["worker_ip"], zone, project),
+                        lambda w: get_worker_disk_info(
+                            w["tpu_name"],
+                            w["worker_id"],
+                            w["worker_ip"],
+                            zone,
+                            project,
+                            w["is_preemptible"],
+                            w["topology"],
+                        ),
                         all_workers,
                     ),
                     total=len(all_workers),
@@ -262,6 +304,9 @@ def process_cluster(config_path: str, threshold: int, dry_run: bool, parallel: i
                 ),
             )
         )
+
+    logger.info(f"Retrieved disk info for {len(disk_info)} workers")
+    print_workers_table(disk_info)
 
     low_disk = [w for w in disk_info if w.free_pct < threshold]
     if not low_disk:

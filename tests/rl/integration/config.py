@@ -248,6 +248,8 @@ def create_vllm_inference_config():
             max_tokens=16,
             logprobs=1,
             stop=None,
+            # Workaround for vllm-project/tpu-inference#1386: default top_k forces greedy sampling
+            top_k=4096,
         ),
     )
 
@@ -265,9 +267,12 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_tokens=32),
+                sampling_params=SamplingParams(
+                    temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_output_tokens=32
+                ),
             )
         },
+        max_seq_len=64,
         eval_frequency=100,
         eval_n_examples=4,
         micro_eval_frequency=10,

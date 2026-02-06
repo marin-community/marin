@@ -44,7 +44,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-
 import atexit
 import click
 import getpass
@@ -301,7 +300,12 @@ class TPUAllocationActor:
 
 
 def add_ssh_host_config(
-    hostname: str, ip_address: str, username: str, tpu_name: str, gcloud_tpu_name: str, gcloud_zone: str
+    hostname: str,
+    ip_address: str,
+    username: str,
+    tpu_name: str,
+    gcloud_tpu_name: str,
+    gcloud_zone: str,
 ) -> None:
     """Add SSH host configuration."""
     config_path = Path.home() / ".ssh" / "config"
@@ -440,7 +444,7 @@ source $HOME/.local/bin/env
 
 echo "Installing dependencies..."
 cd /home/$USER/marin
-uv sync --extra=tpu --python=3.11 || true
+    uv sync --all-packages --extra=tpu --python=3.11 || true
 """
     logger.info("Setting up remote environment...")
     run_logged(["ssh", target_host, "bash", "-c", setup_script], check=True)
@@ -525,6 +529,15 @@ def _infer_tpu_type_from_config(config_data: dict | None) -> str | None:
         return None
 
 
+def _default_tpu_name_from_config(config_data: dict | None, username: str) -> str | None:
+    if not config_data:
+        return None
+    cluster_name = config_data.get("cluster_name")
+    if not cluster_name:
+        return None
+    return f"dev-{cluster_name}-{username}"
+
+
 @click.group()
 @click.option("--config", help="Path to cluster config file")
 @click.option("--cluster", help="Cluster name to connect to")
@@ -538,7 +551,7 @@ def cli(ctx, config, cluster, tpu_name, verbose):
         config = find_config_by_region(cluster)
 
     ctx.obj.config_file = config
-    ctx.obj.tpu_name = tpu_name or getpass.getuser()
+    ctx.obj.tpu_name = tpu_name
     ctx.obj.verbose = verbose
 
     logging.basicConfig(
@@ -553,6 +566,9 @@ def cli(ctx, config, cluster, tpu_name, verbose):
         token_path = maybe_fetch_local_ray_token(gcp_project=gcp_project)
         os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
         os.environ["RAY_AUTH_MODE"] = "token"
+    if ctx.obj.tpu_name is None:
+        username = getpass.getuser()
+        ctx.obj.tpu_name = _default_tpu_name_from_config(ctx.obj.config_data, username) or username
 
 
 @cli.command("allocate")
@@ -584,7 +600,13 @@ def allocate(ctx, tpu_type, sync_path, username):
     print(f"Allocating development TPU '{tpu_name}' for {username}...")
     print(f"TPU type: {tpu_type}")
 
-    with hold_tpu_allocation(username, tpu_name, ctx.obj.config_file, sync_path, tpu_type):
+    with hold_tpu_allocation(
+        username,
+        tpu_name,
+        ctx.obj.config_file,
+        sync_path,
+        tpu_type,
+    ):
         print("\nTPU allocation is active. Press Ctrl-C to release...")
         try:
             while True:
@@ -666,7 +688,7 @@ def execute(ctx, command, username, sync_path, env, forward_all_env):
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
-    command_str = " ".join(command)
+    command_str = shlex.join(command)
     ssh_cmd = build_ssh_command(host_alias, command_str, env_dict)
 
     print(f"Running: {ssh_cmd}")
@@ -816,7 +838,7 @@ def watch(ctx, command, username, sync_path, debounce, env, forward_all_env):
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
-    command_str = " ".join(command)
+    command_str = shlex.join(command)
 
     process_mgr = RemoteProcessManager(host_alias, command_str, sync_path, env_dict)
     atexit.register(process_mgr.kill)  # ensure we clean up on exit
