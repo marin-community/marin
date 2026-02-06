@@ -34,11 +34,6 @@ def cli():
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=8080, type=int, help="Bind port")
 @click.option("--cache-dir", default="~/.cache/iris-worker", help="Cache directory")
-@click.option(
-    "--registry",
-    default="localhost:5000",
-    help="Docker registry for built images (optional for autoscaler-managed workers)",
-)
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
 @click.option(
     "--controller-address", default=None, help="Controller URL for auto-registration (e.g., http://controller:8080)"
@@ -48,7 +43,6 @@ def serve(
     host: str,
     port: int,
     cache_dir: str,
-    registry: str,
     port_range: str,
     controller_address: str | None,
     worker_id: str | None,
@@ -62,7 +56,6 @@ def serve(
         host=host,
         port=port,
         cache_dir=Path(cache_dir).expanduser(),
-        registry=registry,
         port_range=(port_start, port_end),
         controller_address=controller_address,
         worker_id=worker_id,
@@ -71,7 +64,6 @@ def serve(
     worker = Worker(config)
 
     click.echo(f"Starting Iris worker on {host}:{port}")
-    click.echo(f"  Registry: {registry}")
     click.echo(f"  Cache dir: {config.cache_dir}")
     if controller_address:
         click.echo(f"  Controller: {controller_address}")

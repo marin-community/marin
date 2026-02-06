@@ -18,6 +18,7 @@ This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
 
+import json
 import logging
 import shutil
 import socket
@@ -41,6 +42,12 @@ from iris.rpc.errors import format_exception_with_traceback
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+
+class TaskCancelled(Exception):
+    """Raised when a task is cancelled during execution."""
+
+    pass
 
 
 @dataclass
@@ -122,6 +129,12 @@ def build_iris_env(
     dockerfile = task.request.environment.dockerfile
     if dockerfile:
         env["IRIS_DOCKERFILE"] = dockerfile
+
+    # Serialize the explicit user env vars so child jobs can inherit them
+    # via JobInfo.env without picking up infrastructure vars from os.environ.
+    user_env_vars = dict(task.request.environment.env_vars)
+    if user_env_vars:
+        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
 
     # Inject allocated ports
     for name, port in task.ports.items():
@@ -287,13 +300,29 @@ class TaskAttempt:
 
         return proto
 
+    def _check_cancelled(self) -> None:
+        """Check if task has been cancelled and raise if so."""
+        if self.should_stop:
+            raise TaskCancelled("Task was cancelled")
+
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread."""
+        logger.info(
+            "TaskAttempt starting: task_id=%s attempt=%s num_tasks=%s",
+            self.task_id,
+            self.attempt_id,
+            self.num_tasks,
+        )
         try:
+            self._check_cancelled()
             self._download_bundle()
+            self._check_cancelled()
             self._build_image()
+            self._check_cancelled()
             container_id = self._start_container()
             self._monitor(container_id)
+        except TaskCancelled:
+            self.transition_to(cluster_pb2.TASK_STATE_KILLED)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             self.logs.add("error", f"Task failed:\n{error_msg}")
@@ -302,6 +331,13 @@ class TaskAttempt:
             if is_task_finished(self.status):
                 self._report_state()
             self._cleanup()
+            logger.info(
+                "TaskAttempt finished: task_id=%s attempt=%s state=%s exit_code=%s",
+                self.task_id,
+                self.attempt_id,
+                self.status,
+                self.exit_code,
+            )
 
     def _download_bundle(self) -> None:
         """Download the code bundle from GCS.
@@ -312,6 +348,7 @@ class TaskAttempt:
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
         self._report_state()  # Report BUILDING state to controller
+        download_start = time.monotonic()
 
         # Chaos injection for testing failures during download
         chaos_raise("worker.bundle_download")
@@ -329,6 +366,11 @@ class TaskAttempt:
             self.request.bundle_gcs_path,
             expected_hash=None,
         )
+        logger.info(
+            "Bundle downloaded for task %s in %.2fs",
+            self.task_id,
+            time.monotonic() - download_start,
+        )
 
     def _build_image(self) -> None:
         """Build the container image from the downloaded bundle.
@@ -339,6 +381,7 @@ class TaskAttempt:
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
         self.build_started = Timestamp.now()
         self._report_state()  # Report BUILDING state to controller
+        build_start = time.monotonic()
 
         env_config = self.request.environment
         dockerfile = env_config.dockerfile
@@ -366,6 +409,13 @@ class TaskAttempt:
         self.build_finished = Timestamp.now()
         self.build_from_cache = build_result.from_cache
         self.image_tag = build_result.image_tag
+        logger.info(
+            "Image build complete for task %s in %.2fs (cached=%s, tag=%s)",
+            self.task_id,
+            time.monotonic() - build_start,
+            build_result.from_cache,
+            build_result.image_tag,
+        )
 
         # Protect image from eviction while task is running
         self._image_provider.protect(build_result.image_tag)
@@ -427,6 +477,13 @@ class TaskAttempt:
                 container_id = self._runtime.create_container(config)
                 self.container_id = container_id
                 self._runtime.start_container(container_id)
+                logger.info(
+                    "Container started for task %s (container_id=%s, ports=%s, timeout=%s)",
+                    self.task_id,
+                    container_id,
+                    self.ports,
+                    timeout_seconds,
+                )
                 break
             except RuntimeError as e:
                 if "address already in use" in str(e) and attempt < max_port_retries - 1:
@@ -489,6 +546,8 @@ class TaskAttempt:
 
             # Check if we should stop
             if self.should_stop:
+                self._runtime.kill(container_id, force=True)
+                logger.info("Task %s requested stop; killing container %s", self.task_id, container_id)
                 self.transition_to(cluster_pb2.TASK_STATE_KILLED)
                 break
 
@@ -505,6 +564,13 @@ class TaskAttempt:
             # Check container status
             status = self._runtime.inspect(container_id)
             if not status.running:
+                logger.info(
+                    "Container exited for task %s (container_id=%s, exit_code=%s, error=%s)",
+                    self.task_id,
+                    container_id,
+                    status.exit_code,
+                    status.error,
+                )
                 # Final log fetch before container stops
                 last_log_time = self._stream_logs(container_id, last_log_time)
 

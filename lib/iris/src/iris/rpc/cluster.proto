@@ -394,10 +394,42 @@ message Controller {
     string job_id = 1;
   }
 
-  message ListJobsRequest {}
+  // Sort fields for job listing
+  enum JobSortField {
+    JOB_SORT_FIELD_UNSPECIFIED = 0;
+    JOB_SORT_FIELD_DATE = 1;     // submitted_at_ms
+    JOB_SORT_FIELD_NAME = 2;
+    JOB_SORT_FIELD_STATE = 3;
+    JOB_SORT_FIELD_FAILURES = 4;
+    JOB_SORT_FIELD_PREEMPTIONS = 5;
+  }
+
+  enum SortDirection {
+    SORT_DIRECTION_UNSPECIFIED = 0;  // Default to descending for date, ascending for others
+    SORT_DIRECTION_ASC = 1;
+    SORT_DIRECTION_DESC = 2;
+  }
+
+  message ListJobsRequest {
+    // Pagination
+    int32 offset = 1;   // Skip first N jobs (default: 0)
+    int32 limit = 2;    // Max jobs to return (default: 50, max: 500)
+
+    // Sorting (default: date descending)
+    JobSortField sort_field = 3;
+    SortDirection sort_direction = 4;
+
+    // Filtering
+    string name_filter = 5;  // Filter by job name (substring match)
+    string state_filter = 6; // Filter by state (exact match, e.g., "running")
+  }
 
   message ListJobsResponse {
     repeated JobStatus jobs = 1;
+
+    // Pagination info
+    int32 total_count = 2;  // Total jobs matching filters (before pagination)
+    bool has_more = 3;      // More jobs available after this page
   }
 
   // --- Task Operations ---
@@ -550,17 +582,25 @@ message Controller {
     repeated TransactionAction actions = 1;
   }
 
-  // --- Task Logs (proxied to worker) ---
+  // --- Task/Job Logs (batch fetching) ---
   message GetTaskLogsRequest {
+    string id = 1;                   // Job ID or Task ID (detected by trailing numeric)
+    bool include_children = 2;       // Include child jobs (only for job IDs)
+    int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
+    int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
+    string regex = 5;                // Regex filter (propagated to workers)
+  }
+
+  message TaskLogBatch {
     string task_id = 1;
-    int64 start_ms = 3;
-    int64 limit = 4;
-    int64 start_line = 5;  // Supports negative indexing: -1000 = last 1000 lines
+    repeated Worker.LogEntry logs = 2;
+    string error = 3;                // If fetch failed for this task
   }
 
   message GetTaskLogsResponse {
-    repeated Worker.LogEntry logs = 1;
-    string worker_address = 2;
+    repeated TaskLogBatch task_logs = 1;
+    int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
+    bool truncated = 3;              // True if max_total_lines hit
   }
 
   // --- Process Logs ---
