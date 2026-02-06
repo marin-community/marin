@@ -1075,19 +1075,19 @@ class LmEvalHarnessConfig:
     """
 
     # Inference engine configuration for generation tasks
-    inference_max_seqs: int = 64
+    inference_max_seqs: int = 16
     """
     Maximum concurrent sequences for generation. Lower values use less memory but
-    may be slower. Default reduced from 256 to 64 to avoid OOM on large models.
+    may be slower. Default reduced from 256 to 16 to avoid OOM on large models.
     """
 
-    inference_max_seqs_in_prefill: int = 16
+    inference_max_seqs_in_prefill: int = 4
     """
     Maximum number of sequences to batch together during prefill. Controls memory
     usage during the initial prompt processing phase.
     """
 
-    inference_hbm_utilization: float = 0.5
+    inference_hbm_utilization: float = 0.3
     """
     Fraction of HBM to use for KV cache. Lower values leave more room for the model
     and batch data. Range: 0.0 to 1.0.
