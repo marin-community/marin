@@ -94,12 +94,24 @@ def evaluate_lm_evaluation_harness(
 def _infer_model_name_for_path(model_path: str) -> str:
     """
     Infer model name from model path.
+
+    For checkpoint paths (containing "checkpoints/"), uses everything after "checkpoints/"
+    to create a unique identifier. This avoids conflicts when evaluating different models
+    that happen to have the same checkpoint step (e.g., step-500).
+
+    Examples:
+        gs://bucket/checkpoints/exp_foo-abc123/hf/step-500 -> exp_foo-abc123_hf_step-500
+        gs://bucket/some/other/path/model_name/step-1000 -> model_name_step-1000
     """
-    # path names are like gs://marin-us-central2/checkpoints/dclm_7b2x/hf/dclm_7b0828/dclm_7b0828/step-479999/
-    # we want something like: dclm_7b0828_step-479999
     if model_path.endswith("/"):
         model_path = model_path[:-1]
 
+    # If path contains "checkpoints/", use everything after it for uniqueness
+    if "checkpoints/" in model_path:
+        after_checkpoints = model_path.split("checkpoints/", 1)[1]
+        return "_".join(after_checkpoints.split("/"))
+
+    # Fallback: use last 2 path components
     return "_".join(model_path.split("/")[-2:])
 
 
