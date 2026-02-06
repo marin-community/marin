@@ -377,8 +377,8 @@ def tokenize(config: TokenizeConfigBase):
             stats_path = f"{shard_path}/.stats.json"
             with fsspec.open(stats_path) as f:
                 stats = json.load(f)
-                total_tokens += stats.get("token_count", 0)
-                total_elements += stats.get("num_rows", 0)
+                total_tokens += stats["token_count"]
+                total_elements += stats["count"]
 
         stats_path = os.path.join(prefix, ".stats.json")
         logger.info(
