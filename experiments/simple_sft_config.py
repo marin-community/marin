@@ -170,7 +170,7 @@ class SimpleSFTConfig:
 
     per_device_parallelism: int = -1
     """How many examples to process in parallel on each device. -1 (default) means
-    train_batch_size/num_devices (no gradient accumulation). Set to a smaller value
+    train_batch_size/num_devices (no gradient accumulation). Set to a positive value
     to enable gradient accumulation. For example, with 8 devices, batch_size=32, and
     per_device_parallelism=1, you get gradient accumulation of 4."""
 
