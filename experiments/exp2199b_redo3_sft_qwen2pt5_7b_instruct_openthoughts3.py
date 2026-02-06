@@ -30,6 +30,7 @@ import math
 import re
 
 from levanter.data.text import ChatLmDatasetFormat
+from experiments.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 
 from experiments.defaults import default_sft, default_tokenize
@@ -67,7 +68,7 @@ def create_tokenization_step(dataset_identifier: str, short_name: str) -> Execut
         name=f"{short_name}_qwen2_5_7b_instruct_tokenizer",
         dataset=dataset / "**/*.jsonl.gz",
         tokenizer=qwen2_5_7b_instruct_tokenizer,
-        format=ChatLmDatasetFormat(),
+        format=ChatLmDatasetFormat(chat_template=QWEN_2_5_INSTRUCT_CHAT_TEMPLATE),
     )
 
 
