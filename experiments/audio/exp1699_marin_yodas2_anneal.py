@@ -19,7 +19,7 @@ from experiments.audio.tokenize_emilia import emilia_english_mixture_config
 from experiments.audio.tokenize_yodas import yodas2_english_data_config
 from experiments.audio.data_mixes import mix3_v1_english_mixture_config, mix2_v1_english_mixture_config
 from experiments.audio.audio_defaults import AnnealConfig, default_audio_anneal
-from experiments.audio.exp1699_marin_yodas2 import yodas_1b_model
+from experiments.audio.exp1699_marin_yodas2 import yodas_1b_model, yodas_qwen
 
 from marin.execution.executor import executor_main
 from fray.cluster import ResourceConfig
@@ -51,7 +51,9 @@ annealing_mls_en_config = AnnealConfig(
     num_anneal_training_tokens=NUM_ANNEAL_TRAINING_TOKENS,
     resources=ResourceConfig.with_tpu("v5p-64"),
 )
-annealed_model_mls_en = default_audio_anneal(name="exp1699_anneal_mls_en", anneal_config=annealing_mls_en_config)
+annealed_model_mls_en = default_audio_anneal(
+    name="exp1699_anneal_mls_en", model_config=yodas_qwen, anneal_config=annealing_mls_en_config
+)
 
 # Annealing with Emilia English language only
 annealing_emilia_config = AnnealConfig(
@@ -65,7 +67,9 @@ annealing_emilia_config = AnnealConfig(
     num_anneal_training_tokens=NUM_ANNEAL_TRAINING_TOKENS,
     resources=ResourceConfig.with_tpu("v5p-64"),
 )
-annealed_model_emilia = default_audio_anneal(name="exp1699_anneal_emilia_en", anneal_config=annealing_emilia_config)
+annealed_model_emilia = default_audio_anneal(
+    name="exp1699_anneal_emilia_en", model_config=yodas_qwen, anneal_config=annealing_emilia_config
+)
 
 # Annealing with YODAS2 English only
 annealing_yodas_english_config = AnnealConfig(
@@ -80,7 +84,7 @@ annealing_yodas_english_config = AnnealConfig(
     resources=ResourceConfig.with_tpu("v5p-32"),
 )
 annealed_model_yodas_en = default_audio_anneal(
-    name="exp1699_anneal_yodas_en", anneal_config=annealing_yodas_english_config
+    name="exp1699_anneal_yodas_en", model_config=yodas_qwen, anneal_config=annealing_yodas_english_config
 )
 
 # Annealing with Mix3-v1 English
@@ -96,7 +100,7 @@ annealing_mix3_v1_en_config = AnnealConfig(
     resources=ResourceConfig.with_tpu("v5p-64"),
 )
 annealed_model_mix3_v1_en = default_audio_anneal(
-    name="exp1699_anneal_mix3_v1_en", anneal_config=annealing_mix3_v1_en_config
+    name="exp1699_anneal_mix3_v1_en", model_config=yodas_qwen, anneal_config=annealing_mix3_v1_en_config
 )
 
 # Annealing with Mix2-v1 English
@@ -112,7 +116,7 @@ annealing_mix2_v1_en_config = AnnealConfig(
     resources=ResourceConfig.with_tpu("v5p-32"),
 )
 annealed_model_mix2_v1_en = default_audio_anneal(
-    name="exp1699_anneal_mix2_v1_en", anneal_config=annealing_mix2_v1_en_config
+    name="exp1699_anneal_mix2_v1_en", model_config=yodas_qwen, anneal_config=annealing_mix2_v1_en_config
 )
 
 
