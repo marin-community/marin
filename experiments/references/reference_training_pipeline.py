@@ -28,7 +28,6 @@ from levanter.data.text import ChatLmDatasetFormat
 from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import llama3_tokenizer
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
