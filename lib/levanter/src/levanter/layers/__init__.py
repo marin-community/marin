@@ -8,6 +8,7 @@ __all__ = [
     "AttentionBackend",
     "AttentionConfig",
     "AttentionMask",
+    "GatedAttention",
     "dot_product_attention",
     # normalization
     "LayerNormConfig",
@@ -21,6 +22,7 @@ from .attention import (
     AttentionConfig,
     AttentionMask,
     AttentionWithSink,
+    GatedAttention,
     dot_product_attention,
 )
 from .normalization import LayerNormConfig, LayerNormConfigBase, RmsNormConfig
