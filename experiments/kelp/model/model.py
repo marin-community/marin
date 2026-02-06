@@ -31,6 +31,8 @@ from jax import random
 from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
+from levanter.grug.attention import apply_rotary_embedding as grug_apply_rotary, attention as grug_attention
+
 from experiments.kelp.model.config import TreeDiffusionConfig
 from experiments.kelp.model.noise import (
     NoiseSchedule,
@@ -136,70 +138,17 @@ def init_parameters(cfg: TreeDiffusionConfig, *, key: PRNGKeyArray) -> TreeDiffu
 
 
 def rms_norm(x: Float[Array, "... D"], weight: Float[Array, "D"], eps: float) -> Float[Array, "... D"]:
-    """RMS normalization."""
+    """RMS normalization.
+
+    Kept local rather than delegating to Grug's version because Grug's
+    calls unshard(weight) which requires a JAX mesh context.
+    """
     dtype = x.dtype
     x = x.astype(jnp.float32)
     variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
     normed = x * jax.lax.rsqrt(variance + eps)
     out = normed * weight
     return out.astype(dtype)
-
-
-def apply_rotary_embedding(
-    q: Float[Array, "B S N H"],
-    k: Float[Array, "B S M H"],
-    seq_len: int,
-    head_dim: int,
-    rope_base: float = 10000.0,
-) -> tuple[Float[Array, "B S N H"], Float[Array, "B S M H"]]:
-    """Apply rotary positional embeddings to Q and K.
-
-    Uses the "interleaved" rotary embedding formulation.
-    """
-    positions = jnp.arange(seq_len)
-    half_dim = head_dim // 2
-    dim_indices = jnp.arange(half_dim)
-    inv_freq = 1.0 / (rope_base ** (dim_indices * 2.0 / head_dim))
-    sinusoid = positions[:, None] * inv_freq[None, :]
-
-    sin = jnp.sin(sinusoid)
-    cos = jnp.cos(sinusoid)
-
-    sin = jnp.repeat(sin, 2, axis=-1)
-    cos = jnp.repeat(cos, 2, axis=-1)
-
-    sin = sin[None, :, None, :]
-    cos = cos[None, :, None, :]
-
-    def rotate_half(x):
-        x1, x2 = x[..., ::2], x[..., 1::2]
-        x_rotated = jnp.stack([-x2, x1], axis=-1)
-        return rearrange(x_rotated, "... d two -> ... (d two)")
-
-    return (q * cos + rotate_half(q) * sin), (k * cos + rotate_half(k) * sin)
-
-
-def attention(
-    q: Float[Array, "B S N H"],
-    k: Float[Array, "B S M H"],
-    v: Float[Array, "B S M H"],
-) -> Float[Array, "B S N H"]:
-    """Bidirectional scaled dot-product attention (no causal mask)."""
-    num_heads = q.shape[2]
-    num_kv_heads = k.shape[2]
-    head_dim = q.shape[3]
-
-    if num_heads != num_kv_heads:
-        repeats = num_heads // num_kv_heads
-        k = jnp.repeat(k, repeats, axis=2)
-        v = jnp.repeat(v, repeats, axis=2)
-
-    scale = 1.0 / jnp.sqrt(head_dim)
-    # scores shape: (B, N, S, T) where S=query pos, T=key pos
-    scores = jnp.einsum("bsnh,btnh->bnst", q, k) * scale
-    weights = jax.nn.softmax(scores, axis=-1)  # softmax over key positions (T)
-    out = jnp.einsum("bnst,btnh->bsnh", weights, v)
-    return out
 
 
 def mlp(block: TreeDiffusionBlockParams, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
@@ -227,25 +176,33 @@ def forward(
     Returns:
         Logits of shape (batch, seq, vocab).
     """
+    compute_dtype = jnp.dtype(cfg.compute_dtype)
     head_dim = cfg.inferred_head_dim
-    batch_size, seq_len = token_ids.shape
+    _batch_size, seq_len = token_ids.shape
 
-    hidden = params.token_embed[token_ids]
+    hidden = params.token_embed[token_ids].astype(compute_dtype)
 
     time_emb = params.timestep_embed[timesteps]
-    hidden = hidden + time_emb[:, None, :]
+    hidden = hidden + time_emb[:, None, :].astype(compute_dtype)
 
-    for block in params.blocks:
+    # Padding mask: prevent padding tokens from attending or being attended to.
+    # Shape (B, S) -> (B, S, S) via outer product. Grug's reference_attention
+    # expects (B, Q, K) where True = allowed.
+    not_pad = token_ids != cfg.pad_token_id
+    padding_mask = not_pad[:, :, None] & not_pad[:, None, :]
+
+    def _block_fn(hidden, block):
         attn_in = rms_norm(hidden, block.rms_attn, cfg.layer_norm_eps)
 
         q = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_q), "b s (n d) -> b s n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_k), "b s (m d) -> b s m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_v), "b s (m d) -> b s m d", d=head_dim)
 
-        if cfg.use_rope:
-            q, k = apply_rotary_embedding(q, k, seq_len, head_dim, cfg.rope_base)
+        q, k = grug_apply_rotary(q, k, seq_len=seq_len, head_dim=head_dim, rope=cfg.rope)
 
-        attn_out = attention(q, k, v)
+        # Bidirectional attention with padding mask.
+        # Passing a dense jax.Array mask uses reference_attention on all backends.
+        attn_out = grug_attention(q, k, v, mask=padding_mask)
         attn_out = rearrange(attn_out, "b s n d -> b s (n d)")
         attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o)
 
@@ -254,9 +211,17 @@ def forward(
         mlp_in = rms_norm(hidden, block.rms_mlp, cfg.layer_norm_eps)
         mlp_out = mlp(block, mlp_in)
         hidden = hidden + mlp_out
+        return hidden
 
+    block_fn = jax.checkpoint(_block_fn) if cfg.gradient_checkpointing else _block_fn
+
+    for block in params.blocks:
+        hidden = block_fn(hidden, block)
+
+    # Cast back to float32 for the final projection to ensure
+    # numerically stable logits for loss computation.
     hidden = rms_norm(hidden, params.final_norm, cfg.layer_norm_eps)
-    logits = jnp.einsum("bsh,hv->bsv", hidden, params.output_proj)
+    logits = jnp.einsum("bsh,hv->bsv", hidden.astype(jnp.float32), params.output_proj)
     return logits
 
 
@@ -413,11 +378,24 @@ def load_model(path: str) -> TreeDiffusionModel:
     import fsspec
     from levanter.checkpoint import load_checkpoint
 
+    from levanter.grug.attention import RotaryConfig
+
     fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
 
     config_path = f"{path}/config.json"
     with fs.open(config_path, "r") as f:
         config_dict = json.load(f)
+
+    # Migrate legacy configs that had use_rope/rope_base instead of rope.
+    if "use_rope" in config_dict or "rope_base" in config_dict:
+        rope_base = config_dict.pop("rope_base", 10000.0)
+        config_dict.pop("use_rope", None)
+        config_dict["rope"] = {"theta": rope_base}
+
+    # Deserialize nested RotaryConfig from dict.
+    if isinstance(config_dict.get("rope"), dict):
+        config_dict["rope"] = RotaryConfig(**config_dict["rope"])
+
     config = TreeDiffusionConfig(**config_dict)
 
     # Create an exemplar pytree with the correct shapes/dtypes.
