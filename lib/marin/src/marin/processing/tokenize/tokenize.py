@@ -107,6 +107,8 @@ class TokenizeConfig(TokenizeConfigBase):
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
+    zephyr_max_parallelism: int = 32
+    """Maximum number of concurrent Zephyr tasks per tokenization step. Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor."""
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -167,6 +169,8 @@ class HfTokenizeConfig(TokenizeConfigBase):
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
+    zephyr_max_parallelism: int = 32
+    """Maximum number of concurrent Zephyr tasks per tokenization step. Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor."""
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -383,7 +387,7 @@ def tokenize(config: TokenizeConfigBase):
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = Backend.execute(temp_shards, context=cluster_ctx)
+        shard_paths = Backend.execute(temp_shards, context=cluster_ctx, max_parallelism=config.zephyr_max_parallelism)
 
         logger.info("Computing exemplar for cache consolidation")
         exemplar = Backend.execute(
@@ -397,6 +401,7 @@ def tokenize(config: TokenizeConfigBase):
             ),
             context=cluster_ctx,
             verbose=False,
+            max_parallelism=config.zephyr_max_parallelism,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
