@@ -113,7 +113,8 @@ def run_kelp_training(config: KelpTrainingConfig) -> dict:
     key = random.PRNGKey(config.seed)
 
     if config.dataset == "toy":
-        from experiments.kelp.train_toy import SimpleTokenizer, create_toy_data_iter
+        from experiments.kelp.tokenizer import SimpleTokenizer
+        from experiments.kelp.train_toy import create_toy_data_iter
 
         tokenizer = SimpleTokenizer(vocab_size=model_config.vocab_size)
         data_iter = create_toy_data_iter(

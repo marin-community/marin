@@ -29,6 +29,7 @@ import jax.numpy as jnp
 from jax import random
 from jaxtyping import Array
 
+from experiments.kelp.tokenizer import SimpleTokenizer
 from experiments.kelp.tree.parser import PythonTreeParser, extract_functions
 
 logger = logging.getLogger(__name__)
@@ -167,37 +168,6 @@ def create_quine_dataset() -> list[dict]:
         }
         for ex in examples
     ]
-
-
-class SimpleTokenizer:
-    """Simple tokenizer for quine dataset (same as toy_dataset)."""
-
-    def __init__(self, vocab_size: int = 256):
-        self.vocab_size = vocab_size
-        self.pad_token_id = 0
-        self.mask_token_id = vocab_size - 1
-        self.unk_token_id = 1
-
-    def encode(self, text: str) -> list[int]:
-        ids = []
-        for c in text:
-            code = ord(c)
-            if code < self.vocab_size - 2:
-                ids.append(code + 2)
-            else:
-                ids.append(self.unk_token_id)
-        return ids
-
-    def decode(self, ids: list[int]) -> str:
-        chars = []
-        for i in ids:
-            if i == self.pad_token_id or i == self.mask_token_id:
-                continue
-            if i == self.unk_token_id:
-                chars.append("?")
-            elif i >= 2:
-                chars.append(chr(i - 2))
-        return "".join(chars)
 
 
 def create_quine_data_iter(

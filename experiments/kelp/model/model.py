@@ -195,9 +195,10 @@ def attention(
         v = jnp.repeat(v, repeats, axis=2)
 
     scale = 1.0 / jnp.sqrt(head_dim)
-    scores = jnp.einsum("bsnh,btnh->bstn", q, k) * scale
-    weights = jax.nn.softmax(scores, axis=-1)
-    out = jnp.einsum("bstn,btnh->bsnh", weights, v)
+    # scores shape: (B, N, S, T) where S=query pos, T=key pos
+    scores = jnp.einsum("bsnh,btnh->bnst", q, k) * scale
+    weights = jax.nn.softmax(scores, axis=-1)  # softmax over key positions (T)
+    out = jnp.einsum("bnst,btnh->bsnh", weights, v)
     return out
 
 
@@ -287,7 +288,8 @@ def loss_fn(
     logits = forward(params, corrupted_ids, timesteps, cfg)
 
     is_masked = corrupted_ids == cfg.effective_mask_token_id
-    loss_weight = is_masked.astype(jnp.float32)
+    is_padding = token_ids == cfg.pad_token_id
+    loss_weight = is_masked.astype(jnp.float32) * (1 - is_padding.astype(jnp.float32))
 
     if prefix_len is not None:
         seq_len = token_ids.shape[1]
@@ -397,53 +399,64 @@ class TreeDiffusionModel:
 def load_model(path: str) -> TreeDiffusionModel:
     """Load a model from a checkpoint path.
 
+    Uses Levanter's tensorstore-based checkpoint system.
+
     Args:
-        path: Path to checkpoint directory.
+        path: Path to checkpoint directory containing config.json and
+              tensorstore parameter data (with metadata.json).
 
     Returns:
         Loaded TreeDiffusionModel.
     """
     import json
-    import pickle
 
     import fsspec
+    from levanter.checkpoint import load_checkpoint
 
-    fs = fsspec.filesystem(path.split(":")[0] if "://" in path else "file")
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
 
     config_path = f"{path}/config.json"
     with fs.open(config_path, "r") as f:
         config_dict = json.load(f)
     config = TreeDiffusionConfig(**config_dict)
 
-    params_path = f"{path}/params.pkl"
-    with fs.open(params_path, "rb") as f:
-        params = pickle.load(f)
+    # Create an exemplar pytree with the correct shapes/dtypes.
+    # Using eval_shape avoids allocating real arrays for large models.
+    # Config must be captured as a closure since it's not a JAX type.
+    exemplar = jax.eval_shape(lambda key: init_parameters(config, key=key), random.PRNGKey(0))
+
+    # Levanter's tensorstore deserialization needs a mesh for sharding.
+    # Use a single-device mesh for fully-replicated loading.
+    mesh = jax.sharding.Mesh(jax.devices(), ("batch",))
+    params = load_checkpoint(exemplar, path, discover_latest=False, mesh=mesh)
 
     return TreeDiffusionModel(params, config)
 
 
-def save_model(model: TreeDiffusionModel, path: str) -> None:
+def save_model(model: TreeDiffusionModel, path: str, *, step: int = 0) -> None:
     """Save a model to a checkpoint path.
+
+    Uses Levanter's tensorstore-based checkpoint system. Saves the config
+    as JSON and the parameters via tensorstore with OCDBT format.
 
     Args:
         model: Model to save.
         path: Path to checkpoint directory.
+        step: Training step number for checkpoint metadata.
     """
     import json
-    import pickle
     from dataclasses import asdict
 
     import fsspec
+    from levanter.checkpoint import save_checkpoint as levanter_save_checkpoint
 
-    fs = fsspec.filesystem(path.split(":")[0] if "://" in path else "file")
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
     fs.makedirs(path, exist_ok=True)
 
     config_path = f"{path}/config.json"
     with fs.open(config_path, "w") as f:
         json.dump(asdict(model.config), f, indent=2)
 
-    params_path = f"{path}/params.pkl"
-    with fs.open(params_path, "wb") as f:
-        pickle.dump(model.params, f)
+    levanter_save_checkpoint(model.params, step=step, checkpoint_path=path, is_temporary=False)
 
     logger.info(f"Saved model to {path}")

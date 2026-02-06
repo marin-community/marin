@@ -111,7 +111,7 @@ def process_stack_edu(config: StackEduProcessingConfig) -> dict:
 
     import fsspec
 
-    fs = fsspec.filesystem(config.input_path.split(":")[0] if "://" in config.input_path else "file")
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(config.input_path))
 
     file_pattern = f"{config.input_path}/stack-edu-*.json.gz"
     files = fs.glob(file_pattern)
@@ -157,7 +157,7 @@ def process_stack_edu(config: StackEduProcessingConfig) -> dict:
             logger.warning(f"Error processing {file_path}: {e}")
             continue
 
-    out_fs = fsspec.filesystem(config.output_path.split(":")[0] if "://" in config.output_path else "file")
+    out_fs = fsspec.filesystem(fsspec.utils.get_protocol(config.output_path))
     out_fs.makedirs(config.output_path, exist_ok=True)
 
     output_file = f"{config.output_path}/stack_edu_functions.jsonl.gz"
@@ -214,7 +214,7 @@ def load_processed_stack_edu(path: str) -> list[dict]:
 
     import fsspec
 
-    fs = fsspec.filesystem(path.split(":")[0] if "://" in path else "file")
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
 
     examples = []
     with fs.open(path, "rb") as f:
@@ -265,7 +265,7 @@ def create_stack_edu_data_iter(
     if use_llama_tokenizer:
         tokenizer = LlamaTokenizer()
     else:
-        from experiments.kelp.data.quine_dataset import SimpleTokenizer
+        from experiments.kelp.tokenizer import SimpleTokenizer
 
         tokenizer = SimpleTokenizer()
 

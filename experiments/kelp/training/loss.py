@@ -67,7 +67,8 @@ def tree_diffusion_loss(
     logits = forward(params, corrupted, timesteps, config)
 
     is_masked = corrupted == config.effective_mask_token_id
-    loss_weight = is_masked.astype(jnp.float32)
+    is_padding = tokens == config.pad_token_id
+    loss_weight = is_masked.astype(jnp.float32) * (1 - is_padding.astype(jnp.float32))
 
     log_probs = jax.nn.log_softmax(logits, axis=-1)
     target_log_probs = jnp.take_along_axis(log_probs, tokens[..., None], axis=-1).squeeze(-1)
@@ -117,7 +118,8 @@ def tree_diffusion_loss_with_metrics(
     logits = forward(params, corrupted, timesteps, config)
 
     is_masked = corrupted == config.effective_mask_token_id
-    loss_weight = is_masked.astype(jnp.float32)
+    is_padding = tokens == config.pad_token_id
+    loss_weight = is_masked.astype(jnp.float32) * (1 - is_padding.astype(jnp.float32))
     num_masked = jnp.sum(loss_weight)
 
     log_probs = jax.nn.log_softmax(logits, axis=-1)

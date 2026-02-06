@@ -33,12 +33,6 @@ class ARToTreeDiffusionTransferConfig:
     timestep_embed_std: float = 0.02
     """Standard deviation for random timestep embedding init."""
 
-    freeze_embeddings: bool = False
-    """Whether to freeze token embeddings during fine-tuning."""
-
-    freeze_attention: bool = False
-    """Whether to freeze attention weights during fine-tuning."""
-
     remove_causal_mask: bool = True
     """Whether to remove the causal attention mask (for bidirectional attention)."""
 
