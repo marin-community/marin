@@ -14,7 +14,10 @@
 
 """Configuration for Kelp tree diffusion models."""
 
+import dataclasses
 from dataclasses import dataclass
+
+from levanter.grug.attention import RotaryConfig
 
 
 @dataclass(frozen=True)
@@ -64,11 +67,16 @@ class TreeDiffusionConfig:
     initializer_std: float = 0.02
     """Standard deviation for weight initialization."""
 
-    use_rope: bool = True
-    """Whether to use rotary positional embeddings."""
+    rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    """Rotary positional embedding configuration."""
 
-    rope_base: float = 10000.0
-    """Base for rotary embeddings."""
+    compute_dtype: str = "float32"
+    """Dtype for forward/backward computation ('float32', 'bfloat16').
+    Loss accumulation always uses float32 for numerical stability."""
+
+    gradient_checkpointing: bool = False
+    """If True, recompute activations during backward pass to save memory.
+    Essential for large models (>1B params) but increases compute by ~33%."""
 
     pad_token_id: int = 0
     """Token ID for padding."""
