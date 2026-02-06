@@ -29,6 +29,8 @@ from jaxtyping import Array, PRNGKeyArray
 
 from experiments.kelp.model.config import TreeDiffusionConfig
 from experiments.kelp.model.model import (
+    TreeDiffusionAttentionParams,
+    TreeDiffusionBlockParams,
     TreeDiffusionModel,
     TreeDiffusionModelParams,
     init_parameters,
@@ -85,9 +87,50 @@ class TrainingConfig:
     output_dir: str = "checkpoints/kelp"
     """Output directory for checkpoints."""
 
+    wandb_project: str | None = None
+    """W&B project name. If set, enables W&B logging."""
+
+    wandb_run_name: str | None = None
+    """W&B run name. If None, W&B auto-generates one."""
+
+
+def _weight_decay_mask(params: TreeDiffusionModelParams) -> TreeDiffusionModelParams:
+    """Create a mask that excludes norms and embeddings from weight decay.
+
+    Returns a pytree of the same structure as params where True means
+    "apply weight decay" and False means "skip weight decay".
+    """
+    masked_blocks = tuple(
+        TreeDiffusionBlockParams(
+            attn=TreeDiffusionAttentionParams(
+                w_q=True,
+                w_k=True,
+                w_v=True,
+                w_o=True,
+            ),
+            rms_attn=False,  # norm weight — no decay
+            rms_mlp=False,  # norm weight — no decay
+            mlp_gate=True,
+            mlp_up=True,
+            mlp_down=True,
+        )
+        for _ in params.blocks
+    )
+    return TreeDiffusionModelParams(
+        token_embed=False,  # embedding — no decay
+        timestep_embed=False,  # embedding — no decay
+        output_proj=True,
+        blocks=masked_blocks,
+        final_norm=False,  # norm weight — no decay
+    )
+
 
 def create_optimizer(config: TrainingConfig) -> optax.GradientTransformation:
-    """Create optimizer with warmup and cosine decay."""
+    """Create optimizer with warmup, cosine decay, and weight decay masking.
+
+    Weight decay is not applied to normalization weights or embeddings,
+    following standard practice for transformer training.
+    """
     warmup_steps = min(config.warmup_steps, max(config.total_steps // 2, 1))
     decay_steps = max(config.total_steps, warmup_steps + 1)
 
@@ -101,7 +144,11 @@ def create_optimizer(config: TrainingConfig) -> optax.GradientTransformation:
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adamw(learning_rate=schedule, weight_decay=config.weight_decay),
+        optax.adamw(
+            learning_rate=schedule,
+            weight_decay=config.weight_decay,
+            mask=_weight_decay_mask,
+        ),
     )
 
     return optimizer
@@ -186,6 +233,23 @@ def train(
     schedule = get_schedule(config.model.noise_schedule, config.model.num_diffusion_steps)
     optimizer = create_optimizer(config)
 
+    # Initialize W&B if configured.
+    wandb_run = None
+    if config.wandb_project is not None:
+        try:
+            import wandb
+
+            from dataclasses import asdict
+
+            wandb_run = wandb.init(
+                project=config.wandb_project,
+                name=config.wandb_run_name,
+                config=asdict(config),
+            )
+            logger.info(f"W&B logging enabled: {wandb_run.url}")
+        except ImportError:
+            logger.warning("wandb_project set but wandb not installed; skipping W&B logging")
+
     if initial_params is None:
         key, init_key = jax.random.split(key)
         params = init_parameters(config.model, key=init_key)
@@ -205,6 +269,11 @@ def train(
 
         if step % config.log_interval == 0:
             log_metrics(step, metrics)
+            if wandb_run is not None:
+                wandb_run.log(
+                    {k: float(v) for k, v in metrics.items()},
+                    step=step,
+                )
             if log_callback is not None:
                 log_callback(step, metrics)
 
@@ -212,6 +281,9 @@ def train(
             save_checkpoint(state, config, schedule)
 
     save_checkpoint(state, config, schedule, final=True)
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
     return TreeDiffusionModel(state.params, config.model, schedule)
 
