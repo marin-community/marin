@@ -73,7 +73,7 @@ class TextGenerationInferenceConfig:
     prompt_column: str = "text"
 
     # Hardware specific
-    resource_config: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v6e-8"))
+    resource_config: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v5p-8"))
     generated_text_column_name: str = "text"
 
     # Checkpoint specific
