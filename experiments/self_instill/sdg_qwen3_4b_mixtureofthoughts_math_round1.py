@@ -23,14 +23,27 @@ Unlike base models, we do NOT need a separate summarization step.
 
 Pipeline:
 1. Preprocess: Extract user message from messages[0]["content"]
-2. Generate 4 samples per prompt, select longest that passes static check
+2. Generate 4 samples per prompt, select first that passes static check
    - Static check: must have <think>...</think> format AND \\boxed{}
 3. (SKIPPED for instruction-tuned) Summarization - model already outputs summary
-4. Validate via LLM (using longer prompts for thinking models):
+4. Validate via LLM with EARLY EXIT optimization:
    - Cycle consistency: Infer question from answer, compare to original
+     → If fails, skip factual and correctness (early exit)
    - Factual error: Check for math/logic errors
+     → If fails, skip correctness (early exit)
    - Total correctness: Verify complete and correct solution
 5. Format final output
+
+Early Exit Optimization:
+- Each validation check filters passed/failed rows BEFORE running the next check
+- Rows that fail cycle skip factual and correctness entirely
+- Rows that fail factual skip correctness entirely
+- This saves ~30-50% compute compared to running all checks on all rows
+
+Iterative UQ:
+- For each row, try sample 0 first through all validation
+- If fails, try sample 1, etc. up to sample 3
+- First sample to pass all validation is used
 
 Usage:
     python experiments/self_instill/sdg_qwen3_4b_mixtureofthoughts_math_round1.py
@@ -48,109 +61,44 @@ from marin.export.hf_upload import upload_dir_to_hf
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
 from experiments.self_instill.prompts import REASONING_INSTRUCTION
+from experiments.self_instill.uq_verification import (
+    FilterCollectConfig,
+    filter_collect_valid_samples,
+    ExtractSampleConfig,
+    extract_sample_for_round,
+    PrepValidationConfig,
+    prep_validation_prompts,
+    PrepCycleCompareConfig,
+    prep_cycle_compare_prompts,
+    CheckAndFilterConfig,
+    check_and_filter,
+    MergeFailedConfig,
+    merge_all_failed,
+    FormatPassedConfig,
+    format_passed_output,
+    CombinePassedConfig,
+    combine_passed_rows,
+    check_path_has_data,
+)
 
 # =============================================================================
 # MODEL CONFIGURATION
 # =============================================================================
-# Model HuggingFace ID (using HF Hub directly instead of local gcsfuse path)
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
-
-# TPU resource type for inference steps
 RESOURCE_TYPE = "v5p-8"
-
-# Tensor parallel size for vLLM inference
 TENSOR_PARALLEL_SIZE = 4
-
-# Batch size for inference steps (smaller = less work lost on preemption)
-# With n=4 samples, batch_size=16 means 64 sequences per batch
 BATCH_SIZE = 16
-
-# Flag to indicate this is an instruction-tuned model
 IS_INSTRUCTION_TUNED = True
 
 # =============================================================================
 # ROUND CONFIGURATION
 # =============================================================================
-# Change this to run different rounds (e.g., "round1", "round2", etc.)
 ROUND = "round1"
 BASE_PATH = f"documents/self-instill/qwen3-4b/{ROUND}"
-
-
-# =============================================================================
-# PROMPTS FOR INSTRUCTION-TUNED MODELS (THINKING MODELS)
-# =============================================================================
-# These prompts are longer and allow the model to think before giving a verdict.
-# The model will output reasoning and then [[Y]] or [[N]] at the end.
-# =============================================================================
-
-# Cycle consistency - Step 1: Generate inferred question from answer
-# Used for: instruction-tuned models that can reason before responding
-CYCLE_QUESTION_GENERATION_PROMPT_INSTRUCT = """Given an answer, please generate the most likely question that would have prompted this answer. Focus on inferring the core question that this answer is addressing. Output only the inferred question, without any additional explanation.
-
-Answer:
-{answer}
-
-Inferred Question:"""
-
-# Cycle consistency - Step 2: Compare original and inferred questions
-# Used for: instruction-tuned models that can reason before responding
-CYCLE_COMPARISON_PROMPT_INSTRUCT = """You are evaluating whether an answer is relevant to the original question and touches the core of the question by comparing the original question with an inferred question derived only from the answer.
-
-Original Question: {original_question}
-Inferred Question: {inferred_question}
-
-Compare the two questions and determine:
-1. If the original question and inferred question are asking about the same core topic
-2. If the original question and inferred question share the same key elements and requirements
-3. If answering one question would effectively address the other question
-
-After your analysis, provide your decision: [[Y]] if the questions are semantically equivalent and address the same core problem, or [[N]] if they are asking about different things."""
-
-# Factual error check prompt
-# Used for: instruction-tuned models that can reason before responding
-FACTUAL_ERROR_PROMPT_INSTRUCT = """Please act as an impartial judge and carefully analyze the following answer for any factual errors, logical flaws, or misleading information.
-
-Question: {question}
-Answer: {answer}
-
-Consider the credibility of the claims made in the answer and determine if they align with established knowledge. Evaluate:
-1. Are there any incorrect facts, dates, numbers, formulas, or claims?
-2. Is there any faulty logic, reasoning, or problem-solving approach?
-3. Are there any misleading, incomplete, or ambiguous explanations?
-4. Does the answer introduce any misconceptions or propagate common errors?
-
-Minor typos or grammatical errors are acceptable. But be strict about any factual error, calculation error, or logical flaw. When unsure, lean toward accepting statements unless they contain clear errors.
-
-After a thorough analysis, provide your decision: [[Y]] if the answer has no factual errors or major flaws, or [[N]] if it contains important factual errors or logical flaws that would mislead the user."""
-
-# Total correctness check prompt
-# Used for: instruction-tuned models that can reason before responding
-TOTAL_CORRECTNESS_PROMPT_INSTRUCT = """Please act as an impartial judge and evaluate whether the response is completely correct in both process and conclusion.
-
-Question: {question}
-Answer: {answer}
-
-Consider correctness, usefulness, completeness and depth in your assessment. Consider whether this answer completely solves the question.
-
-You should rely on your own reasoning to form a reference solution and compare the answer to your reasoning.
-
-Begin your evaluation by giving a brief summary of your thoughts on the response. Focus on whether it is accurate, addresses the question well, and is reasonably detailed. Be precise about any errors or gaps you notice.
-
-Notes:
-1. If the answer is partial, high-level, or just states that this is an open problem, you should not accept it.
-2. If the answer lacks details or is not comprehensive, you should not accept it.
-3. If the answer contains any errors, you should not accept it.
-4. You should only accept the answer if it is at least 95% correct and solves the question.
-
-After providing your explanation, decide whether this answer is correct. Think twice about whether this answer solves the question.
-Format: Accepted: [[Y]] if you accept the answer or Accepted: [[N]] if you do not accept."""
-
 
 # =============================================================================
 # DATASET CONFIGURATION
 # =============================================================================
-
-# Define dataset config directly to avoid import issues
 MOT_MATH_HF_ID = "open-r1/Mixture-of-Thoughts"
 MOT_MATH_REVISION = "e55fa28"
 
@@ -200,7 +148,6 @@ def preprocess_mot_data(config: PreprocessConfig):
         row["instruction_seed"] = user_msg
         row["ms_id"] = ms_id
         # Drop the original messages column to avoid PyArrow serialization issues
-        # (nested dicts are not supported by PyArrow)
         if "messages" in row:
             del row["messages"]
         return row
@@ -232,19 +179,13 @@ preprocess_mot = ExecutorStep(
 # =============================================================================
 # STEP 1: GENERATION WITH MULTI-SAMPLE SELECTION
 # =============================================================================
-# Generate 4 samples per prompt, select longest that passes static validation
-# For instruction-tuned models: must have <think>...</think> format AND \boxed{}
-# For base models: must have \boxed{} and no non-English characters
 
 generate_with_selection = ExecutorStep(
     name=f"{BASE_PATH}/generated",
     fn=run_generation_inference,
     config=TextGenerationInferenceConfig(
-        # IO
         input_path=preprocess_mot,
         output_path=this_output_path(),
-
-        # Model
         model_name=QWEN3_4B_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
@@ -254,43 +195,27 @@ generate_with_selection = ExecutorStep(
             "temperature": 0.8,
             "top_p": 0.95,
             "max_tokens": 32768,
-            "n": 4,  # Generate 4 samples per prompt
+            "n": 4,
         },
-
-        # Prompting - use instruction_seed column with reasoning instruction
         template="{example}\n" + REASONING_INSTRUCTION + "\n",
         prompt_column="instruction_seed",
         apply_chat_template=True,
         save_templated_prompt=False,
         max_doc_tokens=32768,
-
-        # Ray Data
         num_instances=(1, 128),
         batch_size=BATCH_SIZE,
         tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         preserve_order=False,
-
-        # File
         filetype="parquet",
         output_filetype_override="parquet",
-
-        # Hardware
         resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-
-        # Output column
         generated_text_column_name="generated_text",
-
-        # Checkpointing
         checkpoint_id_column="ms_id",
-
-        # Multi-sample selection
         enable_multi_sample_selection=True,
-        save_all_samples=True,  # Save for debugging
+        save_all_samples=True,
         all_samples_column_name="all_samples",
-        static_check_type="boxed_only",  # Only require \boxed{}, allow non-English chars
-        selection_strategy="first",  # Pick first valid sample (no sorting by length)
-
-        # Retry settings
+        static_check_type="boxed_only",
+        selection_strategy="first",
         max_task_retries=10,
     ),
     pip_dependency_groups=["vllm"],
@@ -298,91 +223,8 @@ generate_with_selection = ExecutorStep(
 
 
 # =============================================================================
-# STEP 1.5: FILTER - Collect valid samples as ordered list (don't explode)
+# STEP 1.5: FILTER - Collect valid samples as ordered list
 # =============================================================================
-# For instruction-tuned models: check for <think>...</think> format AND \boxed{}
-# This ensures the model output is in the expected reasoning format.
-#
-# NEW DESIGN: Keep all valid samples together in one row as an ordered list.
-# This enables iterative UQ checking - try sample 0 first, if fails try sample 1, etc.
-
-
-@dataclass
-class FilterCollectConfig:
-    """Configuration for filtering and collecting valid samples."""
-    input_path: str
-    output_path: str
-    is_instruction_tuned: bool = True
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def filter_collect_valid_samples(config: FilterCollectConfig):
-    """
-    Collect samples that pass static checks into an ordered list per row.
-
-    For instruction-tuned models:
-        - Must have <think>...</think> format
-        - Must have \\boxed{} for final answer
-
-    Output row contains:
-        - valid_samples: list of samples that passed static check (in original order)
-        - valid_indices: list of original indices (0-3) for each valid sample
-        - num_valid_samples: count of valid samples
-    """
-    import re
-    import ray.data
-
-    # Regex patterns
-    THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
-    BOXED_PATTERN = re.compile(r"\\boxed\{[^}]+\}")
-
-    def passes_static_check(text: str, is_instruction_tuned: bool) -> bool:
-        """Check if text passes static validation."""
-        if not text or len(text) == 0:
-            return False
-
-        has_boxed = bool(BOXED_PATTERN.search(text))
-
-        if is_instruction_tuned:
-            has_think_format = bool(THINK_PATTERN.search(text))
-            return has_think_format and has_boxed
-        else:
-            has_non_english = any(ch.isalpha() and ord(ch) > 127 for ch in text)
-            return has_boxed and not has_non_english
-
-    is_instruct = config.is_instruction_tuned
-
-    def collect_valid_samples(row):
-        """Collect all valid samples into ordered lists."""
-        all_samples = row.get("all_samples", [])
-
-        valid_samples = []
-        valid_indices = []
-        for idx, sample in enumerate(all_samples):
-            if passes_static_check(sample, is_instruct):
-                valid_samples.append(sample)
-                valid_indices.append(idx)
-
-        # Keep only essential columns plus the new ones
-        return {
-            "ms_id": row.get("ms_id", ""),
-            "instruction_seed": row.get("instruction_seed", ""),
-            "valid_samples": valid_samples,
-            "valid_indices": valid_indices,
-            "num_valid_samples": len(valid_samples),
-        }
-
-    ds = ray.data.read_parquet(config.input_path)
-    ds = ds.map(collect_valid_samples)
-
-    # Filter out rows with no valid samples
-    ds = ds.filter(lambda x: x.get("num_valid_samples", 0) > 0)
-
-    total_rows = ds.count()
-    print(f"Rows with at least one valid sample: {total_rows} (is_instruction_tuned={is_instruct})")
-
-    ds.write_parquet(config.output_path)
-
 
 filter_collect = ExecutorStep(
     name=f"{BASE_PATH}/filtered-collected",
@@ -397,555 +239,11 @@ filter_collect = ExecutorStep(
 
 
 # =============================================================================
-# ITERATIVE UQ PROCESSING HELPERS
+# MAIN EXECUTION - ITERATIVE UQ WITH EARLY EXIT
 # =============================================================================
-# These functions support the iterative approach:
-# - Round 0: Try first valid sample for all rows
-# - Round 1: For rows that failed Round 0, try second valid sample
-# - Continue until a sample passes or no more samples
-
-
-@dataclass
-class ExtractSampleConfig:
-    """Configuration for extracting a specific sample for UQ testing."""
-    input_path: str
-    output_path: str
-    sample_round: int  # Which sample to extract (0 = first valid, 1 = second valid, etc.)
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def extract_sample_for_round(config: ExtractSampleConfig):
-    """
-    Extract the sample at the given round index for UQ testing.
-
-    For round N, extracts valid_samples[N] if it exists.
-    Rows without a sample at index N are filtered out.
-    """
-    import ray.data
-
-    round_idx = config.sample_round
-
-    def extract_sample(row):
-        valid_samples = row.get("valid_samples", [])
-        valid_indices = row.get("valid_indices", [])
-
-        if round_idx >= len(valid_samples):
-            return None  # No sample at this round index
-
-        return {
-            "ms_id": row.get("ms_id", ""),
-            "instruction_seed": row.get("instruction_seed", ""),
-            "current_sample": valid_samples[round_idx],
-            "current_sample_idx": valid_indices[round_idx],
-            "valid_samples": valid_samples,  # Keep for potential next round
-            "valid_indices": valid_indices,
-            "num_valid_samples": row.get("num_valid_samples", 0),
-            "current_round": round_idx,
-        }
-
-    ds = ray.data.read_parquet(config.input_path)
-    ds = ds.map(extract_sample)
-
-    # Filter out None rows (no sample at this round index)
-    ds = ds.filter(lambda x: x is not None)
-
-    count = ds.count()
-    print(f"Round {round_idx}: {count} rows have a sample at index {round_idx}")
-
-    ds.write_parquet(config.output_path)
-
-
-@dataclass
-class CheckUQResultsConfig:
-    """Configuration for checking UQ results and splitting passed/failed."""
-    input_path: str
-    passed_output_path: str
-    failed_output_path: str
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def check_uq_and_split(config: CheckUQResultsConfig):
-    """
-    Check UQ results and split into passed/failed rows.
-
-    A row passes if ALL of:
-    - cycle_results: unanimous [[Y]]
-    - factual_results: unanimous [[Y]]
-    - correctness_results: unanimous [[Y]]
-
-    Passed rows get their final output formatted.
-    Failed rows continue to the next round (if more samples available).
-    """
-    import re
-    import ray.data
-    from experiments.self_instill.prompts import REASONING_INSTRUCTION
-
-    _DECISION_RE = re.compile(r"\[\[\s*([YN])\s*\]\]", re.IGNORECASE)
-
-    def extract_decision_robust(text: str) -> bool:
-        if not text:
-            return False
-        matches = list(_DECISION_RE.finditer(text))
-        if matches:
-            return matches[-1].group(1).upper() == "Y"
-        yn_tokens = re.findall(r"(?<![A-Za-z])([YN])(?![A-Za-z])", text.strip(), flags=re.IGNORECASE)
-        if yn_tokens:
-            return yn_tokens[-1].upper() == "Y"
-        yesno = re.findall(r"\b(YES|NO)\b", text.strip(), flags=re.IGNORECASE)
-        if yesno:
-            return yesno[-1].upper() == "YES"
-        return False
-
-    def check_unanimous(samples: list) -> bool:
-        if not samples or not isinstance(samples, list):
-            return False
-        decisions = [extract_decision_robust(s) for s in samples]
-        return all(decisions) if decisions else False
-
-    def check_and_format(row):
-        cycle_samples = row.get("cycle_results", [])
-        factual_samples = row.get("factual_results", [])
-        correctness_samples = row.get("correctness_results", [])
-
-        cycle_pass = check_unanimous(cycle_samples)
-        factual_pass = check_unanimous(factual_samples)
-        correctness_pass = check_unanimous(correctness_samples)
-
-        row["cycle_passed"] = cycle_pass
-        row["factual_passed"] = factual_pass
-        row["correctness_passed"] = correctness_pass
-        row["all_passed"] = cycle_pass and factual_pass and correctness_pass
-
-        if row["all_passed"]:
-            # Format final output
-            current_sample = row.get("current_sample", "")
-            instruction_seed = row.get("instruction_seed", "")
-            user_prompt = instruction_seed.strip() + "\n" + REASONING_INSTRUCTION + "\n"
-            row["user_content"] = user_prompt
-            row["assistant_content"] = current_sample
-            row["final_sample_idx"] = row.get("current_sample_idx", 0)
-
-        return row
-
-    ds = ray.data.read_parquet(config.input_path)
-    ds = ds.map(check_and_format)
-
-    total = ds.count()
-    ds_passed = ds.filter(lambda x: x.get("all_passed", False))
-    ds_failed = ds.filter(lambda x: not x.get("all_passed", False))
-
-    passed_count = ds_passed.count()
-    failed_count = ds_failed.count()
-
-    print(f"UQ Results: {passed_count} passed, {failed_count} failed out of {total}")
-
-    ds_passed.write_parquet(config.passed_output_path)
-    ds_failed.write_parquet(config.failed_output_path)
-
-
-@dataclass
-class CombinePassedConfig:
-    """Configuration for combining passed rows from all rounds."""
-    input_paths: list  # List of paths to passed rows from each round
-    output_path: str
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def combine_passed_rows(config: CombinePassedConfig):
-    """Combine passed rows from all rounds into final output."""
-    import ray.data
-
-    datasets = []
-    for path in config.input_paths:
-        try:
-            ds = ray.data.read_parquet(path)
-            if ds.count() > 0:
-                datasets.append(ds)
-                print(f"Loaded {ds.count()} rows from {path}")
-        except Exception as e:
-            print(f"Could not read {path}: {e}")
-
-    if not datasets:
-        print("No passed rows from any round!")
-        # Write empty dataset
-        ray.data.from_items([]).write_parquet(config.output_path)
-        return
-
-    # Union all datasets
-    combined = datasets[0]
-    for ds in datasets[1:]:
-        combined = combined.union(ds)
-
-    final_count = combined.count()
-    print(f"Combined {final_count} total passed rows from {len(datasets)} rounds")
-
-    combined.write_parquet(config.output_path)
-
-
-# =============================================================================
-# STEP 2: SUMMARIZATION (SKIPPED FOR INSTRUCTION-TUNED MODELS)
-# =============================================================================
-# For instruction-tuned models, the output already contains:
-#   <think> REASONING </think> SUMMARY
-# So we skip the summarization step and go directly to validation.
-#
-# For base models, this step would summarize the raw reasoning into a clean output.
-# =============================================================================
-
-
-# =============================================================================
-# STEP 3: PREPARE VALIDATION PROMPTS
-# =============================================================================
-# Create columns with formatted validation prompts for each validation type
-# Uses longer prompts for instruction-tuned models (thinking models)
-
-
-@dataclass
-class PrepValidationConfig:
-    """Configuration for preparing validation prompts."""
-    input_path: str
-    output_path: str
-    is_instruction_tuned: bool = True
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def prep_validation_prompts(config: PrepValidationConfig):
-    """
-    Create validation prompt columns combining question and answer.
-
-    Uses different prompts based on model type:
-    - Instruction-tuned: Longer prompts that allow thinking before verdict
-    - Base models: Shorter prompts from experiments.self_instill.prompts
-    """
-    import ray.data
-
-    if config.is_instruction_tuned:
-        # Use longer prompts for instruction-tuned models (defined at module level)
-        cycle_gen_prompt_template = CYCLE_QUESTION_GENERATION_PROMPT_INSTRUCT
-        factual_prompt_template = FACTUAL_ERROR_PROMPT_INSTRUCT
-        correctness_prompt_template = TOTAL_CORRECTNESS_PROMPT_INSTRUCT
-    else:
-        # Use shorter prompts for base models
-        from experiments.self_instill.prompts import (
-            CYCLE_QUESTION_GENERATION_PROMPT,
-            FACTUAL_ERROR_PROMPT,
-            TOTAL_CORRECTNESS_PROMPT,
-        )
-        cycle_gen_prompt_template = CYCLE_QUESTION_GENERATION_PROMPT
-        factual_prompt_template = FACTUAL_ERROR_PROMPT
-        correctness_prompt_template = TOTAL_CORRECTNESS_PROMPT
-
-    def add_validation_prompts(row):
-        """Add validation prompt columns."""
-        # Drop messages column if present (nested dicts not supported by PyArrow)
-        if "messages" in row:
-            del row["messages"]
-
-        question = row.get("instruction_seed")
-        # Use current_sample (from iterative extraction) or fall back to generated_text
-        answer = row.get("current_sample") or row.get("generated_text")
-
-        # Fail explicitly if required fields are missing
-        if not question or not isinstance(question, str):
-            raise ValueError(f"Missing or invalid instruction_seed: {question}")
-        if not answer or not isinstance(answer, str):
-            raise ValueError(f"Missing or invalid current_sample/generated_text: {answer}")
-
-        question = question.strip()
-        answer = answer.strip()
-
-        # Extract final answer (after </think>) for UQ validation
-        # We only want to verify the conclusion, not the reasoning trace
-        if "</think>" in answer:
-            final_answer = answer.split("</think>")[-1].strip()
-        else:
-            final_answer = answer
-
-        # Cycle consistency - step 1: generate inferred question (uses final answer only)
-        row["cycle_gen_prompt"] = cycle_gen_prompt_template.format(answer=final_answer)
-
-        # Factual error prompt (uses final answer only, not reasoning trace)
-        row["factual_prompt"] = factual_prompt_template.format(
-            question=question,
-            answer=final_answer,
-        )
-
-        # Total correctness prompt (uses final answer only, not reasoning trace)
-        row["correctness_prompt"] = correctness_prompt_template.format(
-            question=question,
-            answer=final_answer,
-        )
-
-        return row
-
-    ds = ray.data.read_parquet(config.input_path)
-    ds = ds.map(add_validation_prompts)
-    print(f"Rows prepared for validation: {ds.count()}")
-    ds.write_parquet(config.output_path)
-
-
-# NOTE: prep_validation and cycle_gen_questions ExecutorSteps are created dynamically
-# in the main execution loop (see ITERATIVE UQ PROCESSING section below)
-
-
-
-
-# =============================================================================
-# STEP 5: CYCLE CONSISTENCY - Prepare comparison prompts
-# =============================================================================
-
-
-@dataclass
-class PrepCycleCompareConfig:
-    """Configuration for preparing cycle comparison prompts."""
-    input_path: str
-    output_path: str
-    is_instruction_tuned: bool = True
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def prep_cycle_compare_prompts(config: PrepCycleCompareConfig):
-    """Create cycle comparison prompts from inferred questions."""
-    import ray.data
-
-    if config.is_instruction_tuned:
-        # Use longer prompt for instruction-tuned models
-        comparison_template = CYCLE_COMPARISON_PROMPT_INSTRUCT
-    else:
-        from experiments.self_instill.prompts import CYCLE_COMPARISON_PROMPT
-        comparison_template = CYCLE_COMPARISON_PROMPT
-
-    def add_compare_prompts(row):
-        """Add cycle comparison prompt columns for each inferred question."""
-        original_question = row.get("instruction_seed")
-        if not original_question or not isinstance(original_question, str):
-            raise ValueError(f"Missing or invalid instruction_seed: {original_question}")
-        original_question = original_question.strip()
-
-        # inferred_questions is a list of 3 samples
-        inferred_questions = row.get("inferred_questions", [])
-        if not isinstance(inferred_questions, list):
-            inferred_questions = [inferred_questions] if inferred_questions else []
-
-        # Create comparison prompts for each inferred question
-        compare_prompts = []
-        cleaned_questions = []
-        for inferred_q in inferred_questions:
-            # Clean up - take first line only (or extract from thinking output)
-            if inferred_q:
-                # For thinking models, the question might be after </think>
-                if "</think>" in inferred_q:
-                    # Extract content after </think>
-                    parts = inferred_q.split("</think>")
-                    inferred_q_clean = parts[-1].strip().split('\n')[0].strip()
-                else:
-                    inferred_q_clean = inferred_q.strip().split('\n')[0].strip()
-            else:
-                inferred_q_clean = ""
-            cleaned_questions.append(inferred_q_clean)
-
-            # Create comparison prompt
-            prompt = comparison_template.format(
-                original_question=original_question,
-                inferred_question=inferred_q_clean,
-            )
-            compare_prompts.append(prompt)
-
-        row["cycle_compare_prompts"] = compare_prompts
-        row["inferred_questions_cleaned"] = cleaned_questions
-
-        # For the inference step, we'll use the first prompt
-        row["cycle_compare_prompt"] = compare_prompts[0] if compare_prompts else ""
-
-        return row
-
-    ds = ray.data.read_parquet(config.input_path)
-    ds = ds.map(add_compare_prompts)
-    print(f"Rows prepared for cycle comparison: {ds.count()}")
-    ds.write_parquet(config.output_path)
-
-
-# NOTE: prep_cycle_compare and cycle_compare ExecutorSteps are created dynamically
-# in the main execution loop (see ITERATIVE UQ PROCESSING section below)
-
-
-# NOTE: factual_check and correctness_check ExecutorSteps are created dynamically
-# in the main execution loop (see ITERATIVE UQ PROCESSING section below)
-
-
-# =============================================================================
-# STEP 9: FILTER VALIDATION RESULTS AND FORMAT OUTPUT
-# =============================================================================
-
-
-@dataclass
-class FilterValidationConfig:
-    """Configuration for filtering based on validation results."""
-    input_path: str
-    output_path: str
-    is_instruction_tuned: bool = True
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def filter_and_format_output(config: FilterValidationConfig):
-    """
-    Filter based on unanimous validation and select first passing sample per original ms_id.
-
-    Since we exploded rows (one per valid sample), we now need to:
-    1. Check which samples passed all UQ validation
-    2. For each original ms_id, pick the first sample (lowest sample_idx) that passed
-    3. Format the final output
-    """
-    import re
-    import ray.data
-    from experiments.self_instill.prompts import REASONING_INSTRUCTION
-
-    # ==========================================================================
-    # Decision extraction for thinking models
-    # ==========================================================================
-    # Thinking models output reasoning before the verdict, so we need robust
-    # extraction that finds [[Y]] or [[N]] anywhere in the output (prefer last).
-
-    _DECISION_RE = re.compile(r"\[\[\s*([YN])\s*\]\]", re.IGNORECASE)
-
-    def extract_decision_robust(text: str) -> bool:
-        """
-        Robustly extract Y/N decision from judge output.
-
-        Priority:
-          1) Last occurrence of [[Y]] / [[N]]
-          2) Last occurrence of a standalone Y/N token
-          3) Last occurrence of YES/NO
-
-        Returns True for Y, False otherwise.
-        """
-        if not text:
-            return False
-
-        # 1) [[Y]] / [[N]] (prefer the last one)
-        matches = list(_DECISION_RE.finditer(text))
-        if matches:
-            return matches[-1].group(1).upper() == "Y"
-
-        # 2) Standalone Y/N token (common when small models ignore brackets)
-        yn_tokens = re.findall(r"(?<![A-Za-z])([YN])(?![A-Za-z])", text.strip(), flags=re.IGNORECASE)
-        if yn_tokens:
-            return yn_tokens[-1].upper() == "Y"
-
-        # 3) YES/NO
-        yesno = re.findall(r"\b(YES|NO)\b", text.strip(), flags=re.IGNORECASE)
-        if yesno:
-            return yesno[-1].upper() == "YES"
-
-        return False
-
-    def check_unanimous(samples: list) -> bool:
-        """Check if all samples have Y decision (unanimous voting)."""
-        if not samples or not isinstance(samples, list):
-            return False
-        decisions = [extract_decision_robust(s) for s in samples]
-        return all(decisions) if decisions else False
-
-    def check_validation_and_format(row):
-        """Check all validation results and format output if passed."""
-        # Extract decisions from sample lists
-        cycle_samples = row.get("cycle_results", [])
-        factual_samples = row.get("factual_results", [])
-        correctness_samples = row.get("correctness_results", [])
-
-        # Check unanimous voting for each validation type
-        cycle_pass = check_unanimous(cycle_samples)
-        factual_pass = check_unanimous(factual_samples)
-        correctness_pass = check_unanimous(correctness_samples)
-
-        row["cycle_passed"] = cycle_pass
-        row["factual_passed"] = factual_pass
-        row["correctness_passed"] = correctness_pass
-        row["all_validation_passed"] = cycle_pass and factual_pass and correctness_pass
-
-        # Format final output if all validations passed
-        if row["all_validation_passed"]:
-            generated_text = row.get("generated_text")
-            instruction_seed = row.get("instruction_seed")
-
-            if not generated_text or not isinstance(generated_text, str):
-                raise ValueError(f"Missing generated_text in validated row")
-            if not instruction_seed or not isinstance(instruction_seed, str):
-                raise ValueError(f"Missing instruction_seed in validated row")
-
-            if config.is_instruction_tuned:
-                # For instruction-tuned models, the output is already in the format:
-                # <think> REASONING </think> SUMMARY
-                # So we use it directly
-                output_text = generated_text
-            else:
-                # For base models, we would combine reasoning and summary
-                summary = row.get("summary", "")
-                output_text = f"<think>\n{generated_text}\n</think>\n\n{summary}"
-
-            # Store as separate columns instead of nested dict (PyArrow compatible)
-            user_prompt = instruction_seed.strip() + "\n" + REASONING_INSTRUCTION + "\n"
-            row["user_content"] = user_prompt
-            row["assistant_content"] = output_text
-        else:
-            row["user_content"] = None
-            row["assistant_content"] = None
-
-        return row
-
-    ds = ray.data.read_parquet(config.input_path)
-
-    # First, check validation for all rows
-    ds = ds.map(check_validation_and_format)
-
-    # Log stats before selection
-    total = ds.count()
-    ds_passed = ds.filter(lambda x: x.get("all_validation_passed", False))
-    passed_count = ds_passed.count()
-
-    print(f"Validation results: {passed_count}/{total} sample-rows passed all validation")
-
-    # Collect to pandas for global groupby (data size is manageable at ~100k rows max)
-    import pandas as pd
-    df_passed = ds_passed.to_pandas()
-
-    if len(df_passed) == 0:
-        print("No samples passed all validation!")
-        # Write empty dataset
-        ds_passed.write_parquet(config.output_path)
-        return
-
-    # Count unique ms_ids that have at least one passing sample
-    unique_passed = df_passed["ms_id"].nunique()
-    print(f"Unique original samples with at least one passing: {unique_passed}")
-
-    # Sort by ms_id and sample_idx, then take first per ms_id
-    # This selects the first sample (lowest sample_idx) that passed for each original input
-    df_passed = df_passed.sort_values(["ms_id", "sample_idx"])
-    df_selected = df_passed.groupby("ms_id").first().reset_index()
-
-    final_count = len(df_selected)
-    print(f"Final output: {final_count} rows (one per original sample that had a passing generation)")
-
-    # Write back to parquet
-    ray.data.from_pandas(df_selected).write_parquet(config.output_path)
-
-
-# NOTE: filter_validation and upload_self_instill ExecutorSteps are created dynamically
-# in the main execution section below
-
-
-# =============================================================================
-# MAIN EXECUTION - ITERATIVE UQ APPROACH
-# =============================================================================
-# New design: Process samples iteratively. For each original input:
-# - Try sample 0 first, run full UQ
-# - If passes, keep it, done with this input
-# - If fails, try sample 1, etc.
-# This is more efficient than running UQ on all samples upfront.
 
 if __name__ == "__main__":
-    # Stage 1: Download dataset (model downloaded via HF Hub on workers)
+    # Stage 1: Download dataset
     print("Stage 1: Downloading dataset...")
     executor_main([download_mot_math])
 
@@ -953,34 +251,26 @@ if __name__ == "__main__":
     print("Stage 2: Preprocessing...")
     executor_main([preprocess_mot])
 
-    # Stage 3: Generate with multi-sample selection (CACHED)
+    # Stage 3: Generate with multi-sample selection
     print("Stage 3: Generating with multi-sample selection...")
     executor_main([generate_with_selection])
 
-    # Stage 4: Filter and collect valid samples (keep as ordered list, don't explode)
+    # Stage 4: Filter and collect valid samples
     print("Stage 4: Filtering and collecting valid samples...")
     executor_main([filter_collect])
 
     # ==========================================================================
     # ITERATIVE UQ PROCESSING
     # ==========================================================================
-    # For each round (0-3), process the current sample index for all pending rows
-    # Rows that pass move to final output, rows that fail continue to next round
-
-    MAX_ROUNDS = 4  # Maximum number of samples to try (0, 1, 2, 3)
-    passed_paths = []  # Collect paths to passed rows from each round
-
-    # Track the input for each round
-    # Round 0 input: filter_collect step (executor resolves the path)
-    # Round N input: failed rows from round N-1
-    current_input = filter_collect  # Start with the filter_collect step
+    MAX_ROUNDS = 4
+    passed_paths = []
+    current_input = filter_collect
 
     for round_idx in range(MAX_ROUNDS):
         print(f"\n{'='*60}")
         print(f"TRY {round_idx}: Processing sample index {round_idx}")
         print(f"{'='*60}")
 
-        # Define paths for this round
         round_base = f"{BASE_PATH}/try{round_idx}"
 
         # Step 1: Extract sample for this round
@@ -989,7 +279,7 @@ if __name__ == "__main__":
             name=f"{round_base}/extract",
             fn=extract_sample_for_round,
             config=ExtractSampleConfig(
-                input_path=current_input,  # Step for round 0, string path for round 1+
+                input_path=current_input,
                 output_path=this_output_path(),
                 sample_round=round_idx,
             ),
@@ -1003,7 +293,7 @@ if __name__ == "__main__":
             name=f"{round_base}/prep-validation",
             fn=prep_validation_prompts,
             config=PrepValidationConfig(
-                input_path=extract_step,  # Use step reference
+                input_path=extract_step,
                 output_path=this_output_path(),
                 is_instruction_tuned=IS_INSTRUCTION_TUNED,
             ),
@@ -1017,7 +307,7 @@ if __name__ == "__main__":
             name=f"{round_base}/cycle-gen",
             fn=run_generation_inference,
             config=TextGenerationInferenceConfig(
-                input_path=prep_val_step,  # Use step reference
+                input_path=prep_val_step,
                 output_path=this_output_path(),
                 model_name=QWEN3_4B_HF_ID,
                 engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
@@ -1049,7 +339,7 @@ if __name__ == "__main__":
             name=f"{round_base}/prep-cycle-compare",
             fn=prep_cycle_compare_prompts,
             config=PrepCycleCompareConfig(
-                input_path=cycle_gen_step,  # Use step reference
+                input_path=cycle_gen_step,
                 output_path=this_output_path(),
                 is_instruction_tuned=IS_INSTRUCTION_TUNED,
             ),
@@ -1063,7 +353,7 @@ if __name__ == "__main__":
             name=f"{round_base}/cycle-compare",
             fn=run_generation_inference,
             config=TextGenerationInferenceConfig(
-                input_path=prep_compare_step,  # Use step reference
+                input_path=prep_compare_step,
                 output_path=this_output_path(),
                 model_name=QWEN3_4B_HF_ID,
                 engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
@@ -1089,94 +379,169 @@ if __name__ == "__main__":
         )
         executor_main([cycle_compare_step])
 
-        # Step 6: Factual error check
-        print(f"Try {round_idx} - Step 6: Factual error check...")
-        factual_step = ExecutorStep(
-            name=f"{round_base}/factual",
-            fn=run_generation_inference,
-            config=TextGenerationInferenceConfig(
-                input_path=cycle_compare_step,  # Use step reference
-                output_path=this_output_path(),
-                model_name=QWEN3_4B_HF_ID,
-                engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
-                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
-                template="{example}",
-                prompt_column="factual_prompt",
-                apply_chat_template=True,
-                save_templated_prompt=False,
-                max_doc_tokens=32768,
-                num_instances=(1, 256),
-                batch_size=BATCH_SIZE,
-                tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-                preserve_order=False,
-                filetype="parquet",
-                output_filetype_override="parquet",
-                resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-                generated_text_column_name="factual_results",
-                checkpoint_id_column="ms_id",
-                save_samples_as_list=True,
-                max_task_retries=10,
+        # EARLY EXIT: Check cycle results before running factual
+        print(f"Try {round_idx} - Step 5b: Checking cycle results (early exit)...")
+        cycle_passed_path = f"gs://marin-us-central1/{round_base}/cycle-passed"
+        cycle_failed_path = f"gs://marin-us-central1/{round_base}/cycle-failed"
+
+        check_cycle_step = ExecutorStep(
+            name=f"{round_base}/check-cycle",
+            fn=check_and_filter,
+            config=CheckAndFilterConfig(
+                input_path=cycle_compare_step,
+                passed_output_path=cycle_passed_path,
+                failed_output_path=cycle_failed_path,
+                result_column="cycle_results",
+                check_name="cycle",
             ),
             pip_dependency_groups=["vllm"],
         )
-        executor_main([factual_step])
+        executor_main([check_cycle_step])
 
-        # Step 7: Total correctness check
-        print(f"Try {round_idx} - Step 7: Correctness check...")
-        correctness_step = ExecutorStep(
-            name=f"{round_base}/correctness",
-            fn=run_generation_inference,
-            config=TextGenerationInferenceConfig(
-                input_path=factual_step,  # Use step reference
-                output_path=this_output_path(),
-                model_name=QWEN3_4B_HF_ID,
-                engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
-                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
-                template="{example}",
-                prompt_column="correctness_prompt",
-                apply_chat_template=True,
-                save_templated_prompt=False,
-                max_doc_tokens=32768,
-                num_instances=(1, 256),
-                batch_size=BATCH_SIZE,
-                tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-                preserve_order=False,
-                filetype="parquet",
-                output_filetype_override="parquet",
-                resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
-                generated_text_column_name="correctness_results",
-                checkpoint_id_column="ms_id",
-                save_samples_as_list=True,
-                max_task_retries=10,
-            ),
-            pip_dependency_groups=["vllm"],
-        )
-        executor_main([correctness_step])
+        # Step 6: Factual error check - ONLY on cycle-passed rows
+        factual_passed_path = f"gs://marin-us-central1/{round_base}/factual-passed"
+        factual_failed_path = f"gs://marin-us-central1/{round_base}/factual-failed"
 
-        # Step 8: Check UQ results and split passed/failed
-        # Use explicit paths for passed/failed since we need to reference them later
-        print(f"Try {round_idx} - Step 8: Checking results and splitting...")
+        if check_path_has_data(cycle_passed_path):
+            print(f"Try {round_idx} - Step 6: Factual error check (only cycle-passed)...")
+            factual_step = ExecutorStep(
+                name=f"{round_base}/factual",
+                fn=run_generation_inference,
+                config=TextGenerationInferenceConfig(
+                    input_path=cycle_passed_path,
+                    output_path=this_output_path(),
+                    model_name=QWEN3_4B_HF_ID,
+                    engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
+                    generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                    template="{example}",
+                    prompt_column="factual_prompt",
+                    apply_chat_template=True,
+                    save_templated_prompt=False,
+                    max_doc_tokens=32768,
+                    num_instances=(1, 256),
+                    batch_size=BATCH_SIZE,
+                    tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+                    preserve_order=False,
+                    filetype="parquet",
+                    output_filetype_override="parquet",
+                    resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
+                    generated_text_column_name="factual_results",
+                    checkpoint_id_column="ms_id",
+                    save_samples_as_list=True,
+                    max_task_retries=10,
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([factual_step])
+
+            # EARLY EXIT: Check factual results before running correctness
+            print(f"Try {round_idx} - Step 6b: Checking factual results (early exit)...")
+            check_factual_step = ExecutorStep(
+                name=f"{round_base}/check-factual",
+                fn=check_and_filter,
+                config=CheckAndFilterConfig(
+                    input_path=factual_step,
+                    passed_output_path=factual_passed_path,
+                    failed_output_path=factual_failed_path,
+                    result_column="factual_results",
+                    check_name="factual",
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([check_factual_step])
+        else:
+            print(f"Try {round_idx} - Step 6: SKIPPED (no rows passed cycle check)")
+
+        # Step 7: Total correctness check - ONLY on factual-passed rows
+        correctness_passed_path = f"gs://marin-us-central1/{round_base}/correctness-passed"
+        correctness_failed_path = f"gs://marin-us-central1/{round_base}/correctness-failed"
         passed_path = f"gs://marin-us-central1/{round_base}/passed"
-        failed_path = f"gs://marin-us-central1/{round_base}/failed"
 
-        check_split_step = ExecutorStep(
-            name=f"{round_base}/check-split",
-            fn=check_uq_and_split,
-            config=CheckUQResultsConfig(
-                input_path=correctness_step,  # Use step reference
-                passed_output_path=passed_path,
-                failed_output_path=failed_path,
-            ),
-            pip_dependency_groups=["vllm"],
-        )
-        executor_main([check_split_step])
+        if check_path_has_data(factual_passed_path):
+            print(f"Try {round_idx} - Step 7: Correctness check (only factual-passed)...")
+            correctness_step = ExecutorStep(
+                name=f"{round_base}/correctness",
+                fn=run_generation_inference,
+                config=TextGenerationInferenceConfig(
+                    input_path=factual_passed_path,
+                    output_path=this_output_path(),
+                    model_name=QWEN3_4B_HF_ID,
+                    engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
+                    generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                    template="{example}",
+                    prompt_column="correctness_prompt",
+                    apply_chat_template=True,
+                    save_templated_prompt=False,
+                    max_doc_tokens=32768,
+                    num_instances=(1, 256),
+                    batch_size=BATCH_SIZE,
+                    tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+                    preserve_order=False,
+                    filetype="parquet",
+                    output_filetype_override="parquet",
+                    resource_config=ResourceConfig.with_tpu(RESOURCE_TYPE),
+                    generated_text_column_name="correctness_results",
+                    checkpoint_id_column="ms_id",
+                    save_samples_as_list=True,
+                    max_task_retries=10,
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([correctness_step])
+
+            # Check correctness results
+            print(f"Try {round_idx} - Step 7b: Checking correctness results...")
+            check_correctness_step = ExecutorStep(
+                name=f"{round_base}/check-correctness",
+                fn=check_and_filter,
+                config=CheckAndFilterConfig(
+                    input_path=correctness_step,
+                    passed_output_path=correctness_passed_path,
+                    failed_output_path=correctness_failed_path,
+                    result_column="correctness_results",
+                    check_name="correctness",
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([check_correctness_step])
+
+            # Step 8: Format passed rows
+            print(f"Try {round_idx} - Step 8: Formatting passed rows...")
+            format_passed_step = ExecutorStep(
+                name=f"{round_base}/format-passed",
+                fn=format_passed_output,
+                config=FormatPassedConfig(
+                    input_path=correctness_passed_path,
+                    output_path=passed_path,
+                ),
+                pip_dependency_groups=["vllm"],
+            )
+            executor_main([format_passed_step])
+        else:
+            print(f"Try {round_idx} - Step 7 & 8: SKIPPED (no rows passed factual check)")
 
         # Track passed path for final combination
         passed_paths.append(passed_path)
 
-        # Update input for next round to be the failed rows from this round
-        # Use string path since check_uq_and_split writes to explicit paths
-        current_input = failed_path
+        # Step 9: Merge all failed rows for next round
+        print(f"Try {round_idx} - Step 9: Merging failed rows for next round...")
+        failed_merged_path = f"gs://marin-us-central1/{round_base}/failed-merged"
+
+        merge_failed_step = ExecutorStep(
+            name=f"{round_base}/merge-failed",
+            fn=merge_all_failed,
+            config=MergeFailedConfig(
+                cycle_failed_path=cycle_failed_path,
+                factual_failed_path=factual_failed_path,
+                correctness_failed_path=correctness_failed_path,
+                output_path=failed_merged_path,
+            ),
+            pip_dependency_groups=["vllm"],
+        )
+        executor_main([merge_failed_step])
+
+        # Update input for next round
+        current_input = failed_merged_path
 
         print(f"Try {round_idx} complete. Passed rows saved to {passed_path}")
 

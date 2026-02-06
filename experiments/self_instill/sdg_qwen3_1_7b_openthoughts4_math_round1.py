@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Self-Instill: OpenThoughts4 Math Experiment (Qwen3-4B Instruction-Tuned)
+Self-Instill: OpenThoughts4 Math Experiment (Qwen3-1.7B Instruction-Tuned)
 
 This experiment generates high-quality synthetic reasoning data from the
 marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens dataset
 using the self-instill pipeline.
 
-NOTE: This is for INSTRUCTION-TUNED models (Qwen3-4B), which output in the format:
+NOTE: This is for INSTRUCTION-TUNED models (Qwen3-1.7B), which output in the format:
     <think> REASONING </think> SUMMARY
 Unlike base models, we do NOT need a separate summarization step.
 
@@ -47,7 +47,7 @@ Iterative UQ:
 - First sample to pass all validation is used
 
 Usage:
-    python experiments/self_instill/sdg_qwen3_4b_openthoughts4_math_round1.py
+    python experiments/self_instill/sdg_qwen3_1_7b_openthoughts4_math_round1.py
 """
 
 from dataclasses import dataclass, replace
@@ -85,7 +85,7 @@ from experiments.self_instill.uq_verification import (
 # =============================================================================
 # MODEL CONFIGURATION
 # =============================================================================
-QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
+QWEN3_1_7B_HF_ID = "Qwen/Qwen3-1.7B"
 RESOURCE_TYPE = "v5p-8"
 TENSOR_PARALLEL_SIZE = 4
 BATCH_SIZE = 16
@@ -95,7 +95,7 @@ IS_INSTRUCTION_TUNED = True
 # ROUND CONFIGURATION
 # =============================================================================
 ROUND = "round1"
-BASE_PATH = f"documents/self-instill/qwen3-4b-openthoughts4/{ROUND}"
+BASE_PATH = f"documents/self-instill/qwen3-1_7b-openthoughts4/{ROUND}"
 
 # =============================================================================
 # DATASET CONFIGURATION
@@ -189,7 +189,7 @@ generate_with_selection = ExecutorStep(
     config=TextGenerationInferenceConfig(
         input_path=preprocess_ot4,
         output_path=this_output_path(),
-        model_name=QWEN3_4B_HF_ID,
+        model_name=QWEN3_1_7B_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
             "max_model_len": 32768,
@@ -312,7 +312,7 @@ if __name__ == "__main__":
             config=TextGenerationInferenceConfig(
                 input_path=prep_val_step,
                 output_path=this_output_path(),
-                model_name=QWEN3_4B_HF_ID,
+                model_name=QWEN3_1_7B_HF_ID,
                 engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
                 generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
                 template="{example}",
@@ -358,7 +358,7 @@ if __name__ == "__main__":
             config=TextGenerationInferenceConfig(
                 input_path=prep_compare_step,
                 output_path=this_output_path(),
-                model_name=QWEN3_4B_HF_ID,
+                model_name=QWEN3_1_7B_HF_ID,
                 engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
                 generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
                 template="{example}",
@@ -413,7 +413,7 @@ if __name__ == "__main__":
                 config=TextGenerationInferenceConfig(
                     input_path=cycle_passed_path,
                     output_path=this_output_path(),
-                    model_name=QWEN3_4B_HF_ID,
+                    model_name=QWEN3_1_7B_HF_ID,
                     engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
                     generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
                     template="{example}",
@@ -468,7 +468,7 @@ if __name__ == "__main__":
                 config=TextGenerationInferenceConfig(
                     input_path=factual_passed_path,
                     output_path=this_output_path(),
-                    model_name=QWEN3_4B_HF_ID,
+                    model_name=QWEN3_1_7B_HF_ID,
                     engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
                     generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
                     template="{example}",
@@ -574,7 +574,7 @@ if __name__ == "__main__":
 
     upload_step = upload_dir_to_hf(
         input_path=combined_output,
-        repo_id=f"marin-community/self-instill-ot4-math-qwen3-4b-{ROUND}",
+        repo_id=f"marin-community/self-instill-ot4-math-qwen3-1_7b-{ROUND}",
         repo_type="dataset",
     )
     upload_step = replace(upload_step, pip_dependency_groups=["vllm"])

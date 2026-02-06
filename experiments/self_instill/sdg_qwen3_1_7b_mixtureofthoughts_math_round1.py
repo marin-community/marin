@@ -12,18 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Self-Instill: OpenThoughts4 Math Experiment (Qwen3-4B Instruction-Tuned)
+Self-Instill: Mixture-of-Thoughts Math Experiment (Qwen3-1.7B Instruction-Tuned)
 
 This experiment generates high-quality synthetic reasoning data from the
-marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens dataset
-using the self-instill pipeline.
+open-r1/Mixture-of-Thoughts dataset using the self-instill pipeline.
 
-NOTE: This is for INSTRUCTION-TUNED models (Qwen3-4B), which output in the format:
+NOTE: This is for INSTRUCTION-TUNED models (Qwen3-1.7B), which output in the format:
     <think> REASONING </think> SUMMARY
 Unlike base models, we do NOT need a separate summarization step.
 
 Pipeline:
-1. Preprocess: Extract user message from conversations[0]["value"]
+1. Preprocess: Extract user message from messages[0]["content"]
 2. Generate 4 samples per prompt, select first that passes static check
    - Static check: must have <think>...</think> format AND \\boxed{}
 3. (SKIPPED for instruction-tuned) Summarization - model already outputs summary
@@ -47,7 +46,7 @@ Iterative UQ:
 - First sample to pass all validation is used
 
 Usage:
-    python experiments/self_instill/sdg_qwen3_4b_openthoughts4_math_round1.py
+    python experiments/self_instill/sdg_qwen3_1_7b_mixtureofthoughts_math_round1.py
 """
 
 from dataclasses import dataclass, replace
@@ -85,7 +84,7 @@ from experiments.self_instill.uq_verification import (
 # =============================================================================
 # MODEL CONFIGURATION
 # =============================================================================
-QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
+QWEN3_1_7B_HF_ID = "Qwen/Qwen3-1.7B"
 RESOURCE_TYPE = "v5p-8"
 TENSOR_PARALLEL_SIZE = 4
 BATCH_SIZE = 16
@@ -95,64 +94,62 @@ IS_INSTRUCTION_TUNED = True
 # ROUND CONFIGURATION
 # =============================================================================
 ROUND = "round1"
-BASE_PATH = f"documents/self-instill/qwen3-4b-openthoughts4/{ROUND}"
+BASE_PATH = f"documents/self-instill/qwen3-1_7b-mixtureofthoughts-math/{ROUND}"
 
 # =============================================================================
 # DATASET CONFIGURATION
 # =============================================================================
-OT4_MATH_HF_ID = "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens"
-OT4_MATH_REVISION = "6a05237"
+MOT_MATH_HF_ID = "open-r1/Mixture-of-Thoughts"
+MOT_MATH_REVISION = "e55fa28"
 
-download_ot4_math = ExecutorStep(
-    name="raw/marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens",
+download_mot_math = ExecutorStep(
+    name="raw/open-r1/Mixture-of-Thoughts-math",
     fn=download_hf,
     config=DownloadConfig(
-        hf_dataset_id=OT4_MATH_HF_ID,
-        revision=versioned(OT4_MATH_REVISION),
+        hf_dataset_id=MOT_MATH_HF_ID,
+        revision=versioned(MOT_MATH_REVISION),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path=f"raw/marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens-{OT4_MATH_REVISION}",
+    override_output_path=f"raw/open-r1/Mixture-of-Thoughts-math-{MOT_MATH_REVISION}",
     pip_dependency_groups=["vllm"],
-)
+).cd("math")
 
 
 # =============================================================================
-# STEP 0: PREPROCESS - Extract user message from conversations format
+# STEP 0: PREPROCESS - Extract user message from messages format
 # =============================================================================
 
 
 @dataclass
 class PreprocessConfig:
-    """Configuration for preprocessing OpenThoughts4 data."""
+    """Configuration for preprocessing MoT data."""
     input_path: str
     output_path: str
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def preprocess_ot4_data(config: PreprocessConfig):
-    """Extract user message from conversations[0]['value'] and add instruction_seed column."""
+def preprocess_mot_data(config: PreprocessConfig):
+    """Extract user message from messages[0]['content'] and add instruction_seed column."""
     import hashlib
     import ray.data
 
     def extract_user_message(row):
         """Extract user message and create instruction_seed column."""
-        # OpenThoughts4 uses "conversations" with "from"/"value" format
-        conversations = row.get("conversations", [])
-        if conversations and len(conversations) > 0:
-            # First message should be from "human"
-            user_msg = conversations[0].get("value", "")
+        messages = row.get("messages", [])
+        if messages and len(messages) > 0:
+            user_msg = messages[0].get("content", "")
         else:
             user_msg = ""
 
-        # Create a unique ID based on the user message (use existing ms_id if available)
-        ms_id = row.get("ms_id", hashlib.md5(user_msg.encode()).hexdigest()[:16])
+        # Create a unique ID based on the user message
+        ms_id = hashlib.md5(user_msg.encode()).hexdigest()[:16]
 
         row["instruction_seed"] = user_msg
         row["ms_id"] = ms_id
-        # Drop the original conversations column to avoid PyArrow serialization issues
-        if "conversations" in row:
-            del row["conversations"]
+        # Drop the original messages column to avoid PyArrow serialization issues
+        if "messages" in row:
+            del row["messages"]
         return row
 
     # Read and transform
@@ -168,11 +165,11 @@ def preprocess_ot4_data(config: PreprocessConfig):
     ds.write_parquet(config.output_path)
 
 
-preprocess_ot4 = ExecutorStep(
+preprocess_mot = ExecutorStep(
     name=f"{BASE_PATH}/preprocessed",
-    fn=preprocess_ot4_data,
+    fn=preprocess_mot_data,
     config=PreprocessConfig(
-        input_path=download_ot4_math,
+        input_path=download_mot_math,
         output_path=this_output_path(),
     ),
     pip_dependency_groups=["vllm"],
@@ -187,9 +184,9 @@ generate_with_selection = ExecutorStep(
     name=f"{BASE_PATH}/generated",
     fn=run_generation_inference,
     config=TextGenerationInferenceConfig(
-        input_path=preprocess_ot4,
+        input_path=preprocess_mot,
         output_path=this_output_path(),
-        model_name=QWEN3_4B_HF_ID,
+        model_name=QWEN3_1_7B_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
             "max_model_len": 32768,
@@ -248,11 +245,11 @@ filter_collect = ExecutorStep(
 if __name__ == "__main__":
     # Stage 1: Download dataset
     print("Stage 1: Downloading dataset...")
-    executor_main([download_ot4_math])
+    executor_main([download_mot_math])
 
     # Stage 2: Preprocess - extract user message
     print("Stage 2: Preprocessing...")
-    executor_main([preprocess_ot4])
+    executor_main([preprocess_mot])
 
     # Stage 3: Generate with multi-sample selection
     print("Stage 3: Generating with multi-sample selection...")
@@ -312,7 +309,7 @@ if __name__ == "__main__":
             config=TextGenerationInferenceConfig(
                 input_path=prep_val_step,
                 output_path=this_output_path(),
-                model_name=QWEN3_4B_HF_ID,
+                model_name=QWEN3_1_7B_HF_ID,
                 engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
                 generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
                 template="{example}",
@@ -358,7 +355,7 @@ if __name__ == "__main__":
             config=TextGenerationInferenceConfig(
                 input_path=prep_compare_step,
                 output_path=this_output_path(),
-                model_name=QWEN3_4B_HF_ID,
+                model_name=QWEN3_1_7B_HF_ID,
                 engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
                 generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
                 template="{example}",
@@ -413,7 +410,7 @@ if __name__ == "__main__":
                 config=TextGenerationInferenceConfig(
                     input_path=cycle_passed_path,
                     output_path=this_output_path(),
-                    model_name=QWEN3_4B_HF_ID,
+                    model_name=QWEN3_1_7B_HF_ID,
                     engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
                     generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
                     template="{example}",
@@ -468,7 +465,7 @@ if __name__ == "__main__":
                 config=TextGenerationInferenceConfig(
                     input_path=factual_passed_path,
                     output_path=this_output_path(),
-                    model_name=QWEN3_4B_HF_ID,
+                    model_name=QWEN3_1_7B_HF_ID,
                     engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
                     generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
                     template="{example}",
@@ -574,7 +571,7 @@ if __name__ == "__main__":
 
     upload_step = upload_dir_to_hf(
         input_path=combined_output,
-        repo_id=f"marin-community/self-instill-ot4-math-qwen3-4b-{ROUND}",
+        repo_id=f"marin-community/self-instill-mot-math-qwen3-1_7b-{ROUND}",
         repo_type="dataset",
     )
     upload_step = replace(upload_step, pip_dependency_groups=["vllm"])

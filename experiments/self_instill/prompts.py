@@ -200,6 +200,84 @@ Used as a basic relevance filter before more detailed validation.
 
 
 # =============================================================================
+# VALIDATION PROMPTS FOR INSTRUCTION-TUNED MODELS (THINKING MODELS)
+# =============================================================================
+# These prompts are longer and allow the model to think before giving a verdict.
+# The model will output reasoning and then [[Y]] or [[N]] at the end.
+# =============================================================================
+
+CYCLE_QUESTION_GENERATION_PROMPT_INSTRUCT = """Given an answer, please generate the most likely question that would have prompted this answer. Focus on inferring the core question that this answer is addressing. Output only the inferred question, without any additional explanation.
+
+Answer:
+{answer}
+
+Inferred Question:"""
+"""
+Instruction-tuned version of cycle question generation.
+Used for models that can reason before responding.
+"""
+
+CYCLE_COMPARISON_PROMPT_INSTRUCT = """You are evaluating whether an answer is relevant to the original question and touches the core of the question by comparing the original question with an inferred question derived only from the answer.
+
+Original Question: {original_question}
+Inferred Question: {inferred_question}
+
+Compare the two questions and determine:
+1. If the original question and inferred question are asking about the same core topic
+2. If the original question and inferred question share the same key elements and requirements
+3. If answering one question would effectively address the other question
+
+After your analysis, provide your decision: [[Y]] if the questions are semantically equivalent and address the same core problem, or [[N]] if they are asking about different things."""
+"""
+Instruction-tuned version of cycle comparison.
+Allows the model to reason before giving verdict.
+"""
+
+FACTUAL_ERROR_PROMPT_INSTRUCT = """Please act as an impartial judge and carefully analyze the following answer for any factual errors, logical flaws, or misleading information.
+
+Question: {question}
+Answer: {answer}
+
+Consider the credibility of the claims made in the answer and determine if they align with established knowledge. Evaluate:
+1. Are there any incorrect facts, dates, numbers, formulas, or claims?
+2. Is there any faulty logic, reasoning, or problem-solving approach?
+3. Are there any misleading, incomplete, or ambiguous explanations?
+4. Does the answer introduce any misconceptions or propagate common errors?
+
+Minor typos or grammatical errors are acceptable. But be strict about any factual error, calculation error, or logical flaw. When unsure, lean toward accepting statements unless they contain clear errors.
+
+After a thorough analysis, provide your decision: [[Y]] if the answer has no factual errors or major flaws, or [[N]] if it contains important factual errors or logical flaws that would mislead the user."""
+"""
+Instruction-tuned version of factual error check.
+Allows the model to reason before giving verdict.
+"""
+
+TOTAL_CORRECTNESS_PROMPT_INSTRUCT = """Please act as an impartial judge and evaluate whether the response is completely correct in both process and conclusion.
+
+Question: {question}
+Answer: {answer}
+
+Consider correctness, usefulness, completeness and depth in your assessment. Consider whether this answer completely solves the question.
+
+You should rely on your own reasoning to form a reference solution and compare the answer to your reasoning.
+
+Begin your evaluation by giving a brief summary of your thoughts on the response. Focus on whether it is accurate, addresses the question well, and is reasonably detailed. Be precise about any errors or gaps you notice.
+
+Notes:
+1. If the answer is partial, high-level, or just states that this is an open problem, you should not accept it.
+2. If the answer lacks details or is not comprehensive, you should not accept it.
+3. If the answer contains any errors, you should not accept it.
+4. You should only accept the answer if it is at least 95% correct and solves the question.
+
+After providing your explanation, decide whether this answer is correct. Think twice about whether this answer solves the question.
+Format: Accepted: [[Y]] if you accept the answer or Accepted: [[N]] if you do not accept."""
+"""
+Instruction-tuned version of total correctness check.
+Allows the model to reason before giving verdict.
+"""
+
+
+# =============================================================================
 # OUTPUT FORMATTING
 # =============================================================================
 
