@@ -21,7 +21,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import Entrypoint, JobName, generate_dockerfile, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
+from iris.time_utils import Deadline, Duration, ExponentialBackoff
 
 
 class RemoteClusterClient:
@@ -83,9 +83,11 @@ class RemoteClusterClient:
             else:
                 dockerfile = generate_dockerfile(python_version=f"{sys.version_info.major}.{sys.version_info.minor}")
 
+        env_vars = dict(environment.env_vars) if environment else {}
+
         env_config = cluster_pb2.EnvironmentConfig(
             pip_packages=list(environment.pip_packages) if environment else [],
-            env_vars=dict(environment.env_vars) if environment else {},
+            env_vars=env_vars,
             extras=list(environment.extras) if environment else [],
             python_version=environment.python_version if environment else "",
             dockerfile=dockerfile,
@@ -241,30 +243,30 @@ class RemoteClusterClient:
 
     def fetch_task_logs(
         self,
-        task_name: JobName,
-        start: Timestamp | None = None,
-        max_lines: int = 0,
-    ) -> list[cluster_pb2.Worker.LogEntry]:
-        """Fetch logs for a specific task.
-
-        Uses the controller as a proxy to fetch logs from the worker.
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        """Fetch logs for a task or all tasks in a job.
 
         Args:
-            task_name: Full task name in format "/job/.../index"
-            start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = unlimited)
-
-        Returns:
-            List of LogEntry protos from the worker
+            target: Task ID or Job ID (detected by trailing numeric)
+            include_children: Include logs from child jobs (job ID only)
+            since_ms: Only return logs after this timestamp (exclusive)
+            max_total_lines: Maximum total lines (0 = default 10000)
+            regex: Regex filter for log content
         """
         request = cluster_pb2.Controller.GetTaskLogsRequest(
-            task_id=task_name.to_wire(),
-            start_ms=start.epoch_ms() if start else 0,
-            limit=max_lines,
-            start_line=0,
+            id=target.to_wire(),
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_total_lines,
+            regex=regex or "",
         )
-        response = self._client.get_task_logs(request)
-        return list(response.logs)
+        return self._client.get_task_logs(request)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

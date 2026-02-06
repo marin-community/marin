@@ -23,10 +23,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-scripts = [
-    "pillow>=10.0.0",
-    "playwright>=1.49.0",
-]
 
 [project.scripts]
 iris = "iris.cli:iris"

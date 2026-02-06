@@ -56,6 +56,7 @@ class ActorClient:
         resolver: Resolver,
         name: str,
         timeout: float = 30.0,
+        call_timeout: float | None = None,
         initial_backoff: float = 0.1,
         max_backoff: float = 2.0,
         backoff_factor: float = 2.0,
@@ -68,6 +69,8 @@ class ActorClient:
             name: Name of the actor to invoke
             timeout: Total timeout in seconds for resolution + RPC calls.
                 When resolving, retries continue until this timeout is reached.
+            call_timeout: Timeout in seconds for RPC calls. Defaults to `timeout`
+                when not specified.
             initial_backoff: Initial retry delay in seconds
             max_backoff: Maximum delay between retries in seconds
             backoff_factor: Multiplier for exponential backoff
@@ -76,6 +79,7 @@ class ActorClient:
         self._resolver = resolver
         self._name = name
         self._timeout = timeout
+        self._call_timeout = timeout if call_timeout is None else call_timeout
         self._initial_backoff = initial_backoff
         self._max_backoff = max_backoff
         self._backoff_factor = backoff_factor
@@ -143,7 +147,7 @@ class ActorClient:
         if self._client is None or self._client_url != url:
             self._client = ActorServiceClientSync(
                 address=url,
-                timeout_ms=int(self._timeout * 1000),
+                timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
             )
             self._client_url = url
         return self._client

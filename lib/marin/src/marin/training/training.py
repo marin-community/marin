@@ -432,6 +432,7 @@ def _add_run_env_variables(env: dict):
     Specifically:
     - GIT_COMMIT
     - HF_DATASETS_TRUST_REMOTE_CODE
+    - HF_ALLOW_CODE_EVAL (for code evaluation tasks like HumanEval)
     """
     env = deepcopy(env)
 
@@ -451,6 +452,10 @@ def _add_run_env_variables(env: dict):
     # required for internal evals to run some tasks
     if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:
         env["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
+
+    # required for code evaluation tasks like HumanEval
+    if "HF_ALLOW_CODE_EVAL" not in env:
+        env["HF_ALLOW_CODE_EVAL"] = "1"
 
     if "TOKENIZERS_PARALLELISM" not in env:
         env["TOKENIZERS_PARALLELISM"] = "false"

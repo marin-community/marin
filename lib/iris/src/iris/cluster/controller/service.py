@@ -46,6 +46,7 @@ from iris.time_utils import Timestamp
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
+DEFAULT_MAX_TOTAL_LINES = 10000
 
 
 class AutoscalerProtocol(Protocol):
@@ -273,9 +274,35 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListJobsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListJobsResponse:
-        """List all jobs."""
-        jobs = []
+        """List jobs with server-side pagination, sorting, and filtering."""
+        # State priority order for sorting (active states first)
+        STATE_ORDER = {
+            cluster_pb2.JOB_STATE_RUNNING: 0,
+            cluster_pb2.JOB_STATE_BUILDING: 1,
+            cluster_pb2.JOB_STATE_PENDING: 2,
+            cluster_pb2.JOB_STATE_SUCCEEDED: 3,
+            cluster_pb2.JOB_STATE_FAILED: 4,
+            cluster_pb2.JOB_STATE_KILLED: 5,
+            cluster_pb2.JOB_STATE_WORKER_FAILED: 6,
+            cluster_pb2.JOB_STATE_UNSCHEDULABLE: 7,
+        }
+
+        # Build all job status objects
+        all_jobs: list[cluster_pb2.JobStatus] = []
+        name_filter = request.name_filter.lower() if request.name_filter else ""
+        state_filter = request.state_filter.lower() if request.state_filter else ""
+
         for j in self._state.list_all_jobs():
+            # Apply name filter
+            job_name = j.request.name if j.request else ""
+            if name_filter and name_filter not in job_name.lower():
+                continue
+
+            # Apply state filter (convert state enum to friendly name)
+            job_state_name = cluster_pb2.JobState.Name(j.state).replace("JOB_STATE_", "").lower()
+            if state_filter and state_filter != job_state_name:
+                continue
+
             # Aggregate counts from all tasks in single pass
             tasks = self._state.get_job_tasks(j.job_id)
             total_failure_count = 0
@@ -292,8 +319,6 @@ class ControllerServiceImpl:
                 if state_name in ("TASK_STATE_SUCCEEDED", "TASK_STATE_KILLED"):
                     completed_count += 1
 
-            # Job-level diagnostic uses the job error; per-task scheduling
-            # diagnostics are computed in list_tasks where they belong.
             pending_reason = j.error or ""
 
             proto_job = cluster_pb2.JobStatus(
@@ -303,7 +328,7 @@ class ControllerServiceImpl:
                 exit_code=j.exit_code or 0,
                 failure_count=total_failure_count,
                 preemption_count=total_preemption_count,
-                name=j.request.name if j.request else "",
+                name=job_name,
                 resources=j.request.resources if j.request else cluster_pb2.ResourceSpecProto(),
                 task_state_counts=task_state_counts,
                 task_count=len(tasks),
@@ -316,8 +341,52 @@ class ControllerServiceImpl:
                 proto_job.finished_at.CopyFrom(j.finished_at.to_proto())
             if j.submitted_at:
                 proto_job.submitted_at.CopyFrom(j.submitted_at.to_proto())
-            jobs.append(proto_job)
-        return cluster_pb2.Controller.ListJobsResponse(jobs=jobs)
+            all_jobs.append(proto_job)
+
+        total_count = len(all_jobs)
+
+        # Sorting
+        sort_field = request.sort_field or cluster_pb2.Controller.JOB_SORT_FIELD_DATE
+        sort_dir = request.sort_direction
+        # Default direction: descending for date, ascending for others
+        if sort_dir == cluster_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
+            sort_dir = (
+                cluster_pb2.Controller.SORT_DIRECTION_DESC
+                if sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_DATE
+                else cluster_pb2.Controller.SORT_DIRECTION_ASC
+            )
+        reverse = sort_dir == cluster_pb2.Controller.SORT_DIRECTION_DESC
+
+        def sort_key(job: cluster_pb2.JobStatus):
+            if sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_DATE:
+                return job.submitted_at.epoch_ms if job.submitted_at.epoch_ms else 0
+            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_NAME:
+                return job.name.lower()
+            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_STATE:
+                return STATE_ORDER.get(job.state, 99)
+            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES:
+                return job.failure_count
+            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS:
+                return job.preemption_count
+            return job.submitted_at.epoch_ms if job.submitted_at.epoch_ms else 0
+
+        all_jobs.sort(key=sort_key, reverse=reverse)
+
+        # Pagination (limit=0 means return all jobs)
+        offset = max(request.offset, 0)
+        if request.limit > 0:
+            limit = min(request.limit, 500)
+            paginated_jobs = all_jobs[offset : offset + limit]
+            has_more = offset + limit < total_count
+        else:
+            paginated_jobs = all_jobs[offset:]
+            has_more = False
+
+        return cluster_pb2.Controller.ListJobsResponse(
+            jobs=paginated_jobs,
+            total_count=total_count,
+            has_more=has_more,
+        )
 
     # --- Task Management ---
 
@@ -586,12 +655,37 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetAutoscalerStatusRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
-        """Get current autoscaler status."""
+        """Get current autoscaler status with worker info populated."""
         autoscaler = self._scheduler.autoscaler
         if not autoscaler:
             return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
 
-        return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=autoscaler.get_status())
+        status = autoscaler.get_status()
+
+        # Build a map of VM address -> worker info for enriching VmInfo
+        # Workers register with vm_address in metadata which matches VM's address
+        workers = self._state.list_all_workers()
+        vm_address_to_worker: dict[str, tuple[str, bool]] = {}
+        for w in workers:
+            # worker_id is derived from vm_address, use it to match
+            if w.metadata and w.metadata.vm_address:
+                vm_address_to_worker[w.metadata.vm_address] = (w.worker_id, w.healthy)
+            elif w.address:
+                # Fallback: match by worker address (without port) if no vm_address
+                host = w.address.split(":")[0] if ":" in w.address else w.address
+                vm_address_to_worker[host] = (w.worker_id, w.healthy)
+
+        # Enrich VmInfo objects with worker information
+        for group in status.groups:
+            for slice_info in group.slices:
+                for vm in slice_info.vms:
+                    if vm.address:
+                        worker_info = vm_address_to_worker.get(vm.address)
+                        if worker_info:
+                            vm.worker_id = worker_info[0]
+                            vm.worker_healthy = worker_info[1]
+
+        return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
     # --- VM Logs ---
 
@@ -618,42 +712,94 @@ class ControllerServiceImpl:
             state=vm_info.state,
         )
 
-    # --- Task Logs (proxied to worker) ---
+    # --- Task/Job Logs (batch fetching) ---
 
     def get_task_logs(
         self,
         request: cluster_pb2.Controller.GetTaskLogsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Get task logs by proxying the request to the worker that owns the task."""
-        task_id = JobName.from_wire(request.task_id)
-        task_id.require_task()
-        task = self._state.get_task(task_id)
-        if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
+        """Get logs for a task or all tasks in a job.
 
-        if not task.worker_id:
-            raise ConnectError(Code.FAILED_PRECONDITION, "Task has no assigned worker")
+        If request.id ends in a numeric index, treat as single task.
+        Otherwise treat as job ID and fetch logs from all tasks.
+        """
+        job_name = JobName.from_wire(request.id)
+        max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
 
-        worker = self._state.get_worker(task.worker_id)
-        if not worker:
-            raise ConnectError(Code.NOT_FOUND, f"Worker {task.worker_id} not found")
+        # Detect if this is a task ID (ends in /N) or job ID and collect tasks
+        if job_name.is_task:
+            task = self._state.get_task(job_name)
+            tasks = [task] if task else []
+        else:
+            tasks: list[ControllerTask] = []
+            prefix = job_name.to_wire()
+            if request.include_children:
+                for job in self._state.list_all_jobs():
+                    job_wire = job.job_id.to_wire()
+                    if job_wire == prefix or job_wire.startswith(prefix + "/"):
+                        tasks.extend(self._state.get_job_tasks(job.job_id))
+            else:
+                tasks.extend(self._state.get_job_tasks(job_name))
 
-        log_filter = cluster_pb2.Worker.FetchLogsFilter(
-            start_line=request.start_line,
-            start_ms=request.start_ms,
-            max_lines=request.limit,
-        )
-        worker_client = WorkerServiceClientSync(f"http://{worker.address}")
-        worker_resp = worker_client.fetch_task_logs(
-            cluster_pb2.Worker.FetchTaskLogsRequest(
-                task_id=task.task_id.to_wire(),
-                filter=log_filter,
-            )
-        )
+        # Fetch logs from workers
+        task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
+        total_lines = 0
+        truncated = False
+        last_timestamp_ms = request.since_ms
+
+        for task in tasks:
+            if truncated:
+                break
+
+            task_id_wire = task.task_id.to_wire()
+            batch = cluster_pb2.Controller.TaskLogBatch(task_id=task_id_wire)
+
+            if not task.worker_id:
+                batch.error = "Task has no assigned worker"
+                task_logs.append(batch)
+                continue
+
+            worker = self._state.get_worker(task.worker_id)
+            if not worker:
+                batch.error = f"Worker {task.worker_id} not found"
+                task_logs.append(batch)
+                continue
+
+            try:
+                log_filter = cluster_pb2.Worker.FetchLogsFilter(
+                    start_ms=request.since_ms,
+                    max_lines=max_lines - total_lines,
+                    regex=request.regex,
+                )
+                worker_client = WorkerServiceClientSync(f"http://{worker.address}")
+                worker_resp = worker_client.fetch_task_logs(
+                    cluster_pb2.Worker.FetchTaskLogsRequest(
+                        task_id=task_id_wire,
+                        filter=log_filter,
+                    )
+                )
+
+                logs = list(worker_resp.logs)
+                batch.logs.extend(logs)
+                total_lines += len(logs)
+
+                # Track max timestamp for response cursor
+                for log in logs:
+                    if log.timestamp.epoch_ms > last_timestamp_ms:
+                        last_timestamp_ms = log.timestamp.epoch_ms
+
+                if total_lines >= max_lines:
+                    truncated = True
+            except Exception as e:
+                batch.error = str(e)
+
+            task_logs.append(batch)
+
         return cluster_pb2.Controller.GetTaskLogsResponse(
-            logs=list(worker_resp.logs),
-            worker_address=worker.address,
+            task_logs=task_logs,
+            last_timestamp_ms=last_timestamp_ms,
+            truncated=truncated,
         )
 
     # --- Transactions ---
