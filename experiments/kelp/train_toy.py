@@ -25,7 +25,7 @@ Usage:
 import argparse
 import logging
 import sys
-from typing import Iterator
+from collections.abc import Iterator
 
 import jax
 import jax.numpy as jnp
@@ -85,10 +85,12 @@ def create_toy_data_iter(
         code_ids = tokenizer.encode(prog.full_code)
 
         if len(code_ids) <= max_seq_len:
-            encoded_examples.append({
-                "tokens": code_ids,
-                "prefix_len": len(prompt_ids),
-            })
+            encoded_examples.append(
+                {
+                    "tokens": code_ids,
+                    "prefix_len": len(prompt_ids),
+                }
+            )
 
     logger.info(f"Created {len(encoded_examples)} examples from toy dataset")
 
@@ -186,7 +188,7 @@ def main():
             target_len=args.max_seq_len,
         )
 
-        logger.info(f"Generated:")
+        logger.info("Generated:")
         logger.info(generated)
 
 
