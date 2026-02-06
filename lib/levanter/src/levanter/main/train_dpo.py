@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import gc
 import logging
 import os
 from dataclasses import dataclass, field
@@ -376,10 +375,6 @@ def main(config: TrainDpoConfig):
         )
         trainable_filter = DpoModel(policy=True, reference=False)
         state = trainer.initial_state(training_key, model=initial_model, is_trainable=trainable_filter)
-
-        policy_model = state.model.policy
-        state = dataclasses.replace(state, model=None)
-        gc.collect()
 
         if int(state.step) == 0:
             if config.initialize_from_hf:
