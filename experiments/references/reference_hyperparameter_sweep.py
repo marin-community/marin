@@ -140,10 +140,10 @@ class VizierSuggestConfig:
 class VizierTrainConfig:
     suggestions_path: str
     suggestion_index: int
+    base_pod_config: TrainLmOnPodConfig
     target_tokens: int
     seq_len: int
     fixed_batch_size: int
-    output_path: str
     loop_index: int
 
 
@@ -265,7 +265,7 @@ def _build_adamh_config(
     )
 
 
-def _build_base_pod_config(output_path: str) -> TrainLmOnPodConfig:
+def _build_base_pod_config() -> TrainLmOnPodConfig:
     placeholder_lr = SWEEP.search_space["lr"][0]
     placeholder_beta1 = SWEEP.search_space["beta1"][0]
     placeholder_adam_lr = SWEEP.search_space["adam_lr"][0]
@@ -301,16 +301,7 @@ def _build_base_pod_config(output_path: str) -> TrainLmOnPodConfig:
         tags=list(SWEEP.base_train_tags),
         eval_harness_tasks=[],
     )
-    base_config = base_step.config
-    return TrainLmOnPodConfig(
-        train_config=base_config.train_config,
-        resources=base_config.resources,
-        output_path=output_path,
-        impute_run_id_from_output_path=base_config.impute_run_id_from_output_path,
-        allow_out_of_region=base_config.allow_out_of_region,
-        env_vars=base_config.env_vars,
-        auto_build_caches=base_config.auto_build_caches,
-    )
+    return base_step.config
 
 
 def run_vizier_suggest(config: VizierSuggestConfig) -> None:
@@ -364,9 +355,7 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
     batch_size = config.fixed_batch_size
     num_steps = config.target_tokens // (batch_size * config.seq_len)
 
-    # Build the base pod config inside the worker step to avoid duplicating a large
-    # nested config object in every ExecutorStep config on the head node.
-    base_pod_config = _build_base_pod_config(output_path=config.output_path)
+    base_pod_config = config.base_pod_config
     base_train_config = base_pod_config.train_config
     base_trainer = base_train_config.trainer
 
@@ -509,6 +498,7 @@ def _build_train_step(
     loop_index: int,
     suggestion_index: int,
     suggestions_path: str,
+    base_pod_config: TrainLmOnPodConfig,
 ) -> ExecutorStep:
     return ExecutorStep(
         name=os.path.join(
@@ -519,10 +509,10 @@ def _build_train_step(
         config=VizierTrainConfig(
             suggestions_path=suggestions_path,
             suggestion_index=suggestion_index,
+            base_pod_config=base_pod_config,
             target_tokens=SWEEP.target_tokens,
             seq_len=SWEEP.seq_len,
             fixed_batch_size=SWEEP.fixed_batch_size,
-            output_path=this_output_path(),
             loop_index=loop_index,
         ),
     )
@@ -556,6 +546,7 @@ def _build_update_step(
 
 if __name__ == "__main__":
     previous_update_step: ExecutorStep | None = None
+    base_pod_config = _build_base_pod_config()
 
     for loop_index in range(SWEEP.num_loops):
         input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
@@ -567,6 +558,7 @@ if __name__ == "__main__":
                 loop_index=loop_index,
                 suggestion_index=suggestion_index,
                 suggestions_path=suggestions_path,
+                base_pod_config=base_pod_config,
             )
             for suggestion_index in range(SWEEP.suggestions_per_loop)
         ]
