@@ -27,6 +27,8 @@ warnings.filterwarnings("ignore")
 logging.getLogger().setLevel(logging.ERROR)  # Root logger
 
 import os
+import json
+import fsspec
 
 from experiments.isoflop_sweep import MARIN_SCALING_SUITES
 from marin.execution.executor import executor_main, output_path_of, versioned
@@ -143,6 +145,27 @@ def get_isoflop_hf_model(isoflop_step: ExecutorStep, prefix: str):
     return sorted(checkpoints, key=get_step)[-1]
 
 
+def exists_correct_and_incorrect(eval_step: ExecutorStep) -> tuple[bool, bool]:
+    eval_output_path = get_step_output_path(eval_step, prefix="gs://marin-us-central1")
+    results_file = os.path.join(eval_output_path, "results.json.gz")
+
+    with fsspec.open(results_file, "rt", compression="gzip") as f:
+        eval_results = json.load(f)
+
+        has_correct = any(
+            sample["correct"]
+            for result in eval_results["results"]
+            for sample in result["samples"]
+        )
+        has_incorrect = any(
+            not sample["correct"]
+            for result in eval_results["results"]
+            for sample in result["samples"]
+        )
+
+        return has_correct, has_incorrect
+
+
 def math500_rollouts_tokenized(tokenizer: str, prompt_format: str = "question_only") -> dict[str, ExecutorStep]:
     result = {}
 
@@ -150,7 +173,13 @@ def math500_rollouts_tokenized(tokenizer: str, prompt_format: str = "question_on
     for eval_step in hf_steps:
         name = eval_step.name.split("/")[-1]
 
+        has_correct, has_incorrect = exists_correct_and_incorrect(eval_step)
         for filter_type in ["all", "correct", "incorrect"]:
+            if filter_type == "correct" and not has_correct:
+                continue
+            if filter_type == "incorrect" and not has_incorrect:
+                continue
+
             process_step = ExecutorStep(
                 name=f"documents/math500_rollouts/{name}/{filter_type}",
                 fn=process_math500_data,
