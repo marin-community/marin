@@ -33,6 +33,7 @@ from jax import random
 
 from experiments.kelp.data.toy_dataset import TOY_PROGRAMS
 from experiments.kelp.model.config import TreeDiffusionConfig
+from experiments.kelp.tokenizer import SimpleTokenizer
 from experiments.kelp.training.train import TrainingConfig, train
 
 logging.basicConfig(
@@ -59,43 +60,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-interval", type=int, default=10, help="Steps between logging")
     parser.add_argument("--checkpoint-interval", type=int, default=500, help="Steps between checkpoints")
     return parser.parse_args()
-
-
-class SimpleTokenizer:
-    """A simple character-level tokenizer for the toy dataset.
-
-    This avoids dependency on external tokenizers for initial testing.
-    In practice, you would use the LLaMA-3 tokenizer.
-    """
-
-    def __init__(self, vocab_size: int = 256):
-        self.vocab_size = vocab_size
-        self.pad_token_id = 0
-        self.mask_token_id = vocab_size - 1
-        self.unk_token_id = 1
-
-    def encode(self, text: str) -> list[int]:
-        """Encode text to token IDs (character-level)."""
-        ids = []
-        for c in text:
-            code = ord(c)
-            if code < self.vocab_size - 2:  # Reserve 0 for pad, vocab_size-1 for mask
-                ids.append(code + 2)  # Offset by 2
-            else:
-                ids.append(self.unk_token_id)
-        return ids
-
-    def decode(self, ids: list[int]) -> str:
-        """Decode token IDs to text."""
-        chars = []
-        for i in ids:
-            if i == self.pad_token_id or i == self.mask_token_id:
-                continue
-            if i == self.unk_token_id:
-                chars.append("?")
-            elif i >= 2:
-                chars.append(chr(i - 2))
-        return "".join(chars)
 
 
 def create_toy_data_iter(

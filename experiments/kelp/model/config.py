@@ -65,14 +65,14 @@ class TreeDiffusionConfig:
     initializer_std: float = 0.02
     """Standard deviation for weight initialization."""
 
-    dropout_rate: float = 0.0
-    """Dropout rate (0.0 for no dropout)."""
-
     use_rope: bool = True
     """Whether to use rotary positional embeddings."""
 
     rope_base: float = 10000.0
     """Base for rotary embeddings."""
+
+    pad_token_id: int = 0
+    """Token ID for padding."""
 
     mask_token_id: int | None = None
     """Token ID for [MASK] token. If None, uses vocab_size - 1."""

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 import fsspec
 
 from experiments.kelp.eval.config import KelpEvalTaskConfig, KelpEvaluationConfig
+from experiments.kelp.tokenizer import SimpleTokenizer
 from experiments.kelp.eval.metrics import (
     PassAtKResult,
     ValidityResult,
@@ -74,39 +75,6 @@ class EvaluationResults:
                     "total_problems": metric.total_problems,
                 }
         return result
-
-
-class SimpleTokenizer:
-    """Simple byte-level tokenizer for evaluation."""
-
-    def __init__(self, vocab_size: int = 256):
-        self.vocab_size = vocab_size
-        self.pad_token_id = 0
-        self.mask_token_id = vocab_size - 1
-        self.unk_token_id = 1
-
-    def encode(self, text: str) -> list[int]:
-        """Encode text to token IDs."""
-        ids = []
-        for c in text:
-            code = ord(c)
-            if code < self.vocab_size - 2:
-                ids.append(code + 2)
-            else:
-                ids.append(self.unk_token_id)
-        return ids
-
-    def decode(self, ids: list[int]) -> str:
-        """Decode token IDs to text."""
-        chars = []
-        for i in ids:
-            if i == self.pad_token_id or i == self.mask_token_id:
-                continue
-            if i == self.unk_token_id:
-                chars.append("?")
-            elif i >= 2:
-                chars.append(chr(i - 2))
-        return "".join(chars)
 
 
 class TreeDiffusionEvaluator:
@@ -353,7 +321,7 @@ def save_results(results: EvaluationResults, output_path: str) -> None:
     results_dict = results.to_dict()
     results_json = json.dumps(results_dict, indent=2)
 
-    fs = fsspec.filesystem(output_path.split(":")[0] if "://" in output_path else "file")
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(output_path))
     output_dir = os.path.dirname(output_path)
     if output_dir:
         fs.makedirs(output_dir, exist_ok=True)
