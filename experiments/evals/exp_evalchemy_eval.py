@@ -61,7 +61,13 @@ from marin.execution.executor import executor_main
 # =============================================================================
 # Model Configuration
 # =============================================================================
-MODEL_PATH = "gs://marin-us-central2/models/OpenThinker3-7B/"
+MODEL_NAME_OR_GCS_PATH = "Qwen/Qwen3-4B"
+
+# Whether to auto-discover the latest checkpoint in a training run directory.
+# Set to True when MODEL_NAME_OR_GCS_PATH points to a training output directory
+# (e.g., gs://bucket/training/run-name/) that contains step-N subdirectories.
+# Set to False when using a direct HuggingFace model ID (e.g., "Qwen/Qwen3-8B").
+DISCOVER_LATEST_CHECKPOINT = False
 
 # =============================================================================
 # Evaluation Configuration
@@ -77,7 +83,7 @@ SEEDS = [42]  # Single seed for quick testing
 # -----------------------------------------------------------------------------
 
 # === Math Benchmarks ===
-EVAL_TASKS = [AIME25]  # Current selection
+EVAL_TASKS = [AIME25]
 # EVAL_TASKS = [AIME24]  # AIME 2024 (30 problems)
 # EVAL_TASKS = [AIME25]  # AIME 2025 (30 problems)
 # EVAL_TASKS = [AMC23]  # AMC 2023
@@ -150,12 +156,13 @@ if __name__ == "__main__":
         generation_params = {**BASE_GENERATION_PARAMS, "seed": seed}
 
         step = default_evalchemy_eval(
-            step=MODEL_PATH,
+            step=MODEL_NAME_OR_GCS_PATH,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
             evals=EVAL_TASKS,
             engine_kwargs=ENGINE_KWARGS,
             generation_params=generation_params,
             apply_chat_template=True,
+            discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
         )
         all_steps.append(step)
 

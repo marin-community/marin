@@ -58,9 +58,14 @@ __all__ = [
 # =============================================================================
 # Note: Evalchemy task names are case-sensitive and match the directory names.
 # task_alias is set explicitly for clarity in logs/wandb, even when identical to name.
-AIME24 = EvalTaskConfig(name="AIME24", num_fewshot=0, task_alias="AIME24")
-AIME25 = EvalTaskConfig(name="AIME25", num_fewshot=0, task_alias="AIME25")
-AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23")
+#
+# For AIME/AMC benchmarks, we set n_repeat=1 by default. Evalchemy's originally hardcoded
+# n_repeat=10 (running each problem 10 times with different seeds for averaged accuracy),
+# Here we run once but control the number of seeds from Marin.
+AIME24 = EvalTaskConfig(name="AIME24", num_fewshot=0, task_alias="AIME24", task_kwargs={"n_repeat": 1})
+AIME25 = EvalTaskConfig(name="AIME25", num_fewshot=0, task_alias="AIME25", task_kwargs={"n_repeat": 1})
+AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23", task_kwargs={"n_repeat": 1})
+
 MATH500 = EvalTaskConfig(name="MATH500", num_fewshot=0, task_alias="MATH500")
 HMMT = EvalTaskConfig(name="HMMT", num_fewshot=0, task_alias="HMMT")  # Harvard-MIT Math Tournament
 

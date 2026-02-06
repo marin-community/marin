@@ -28,6 +28,9 @@ class EvalTaskConfig:
     task_alias: str | None = None
     """Alias for the task name."""
 
+    task_kwargs: dict | None = None
+    """Additional keyword arguments specifically for this task."""
+
 
 @dataclass(frozen=True)
 class EvaluationConfig:
