@@ -394,6 +394,7 @@ def main(config: EvalVLMConfig):
                         mp=mp,
                         max_examples=config.eval_harness.max_examples,
                         generation_kwargs=config.eval_harness.generation_kwargs,
+                        vlm_batch_size=config.eval_harness.vlm_batch_size,
                         checkpoint_interval=config.eval_harness.checkpoint_interval,
                         checkpoint_dir=config.eval_harness.checkpoint_dir,
                         resume_from_checkpoint=config.eval_harness.resume_from_checkpoint,
@@ -491,7 +492,7 @@ def main(config: EvalVLMConfig):
         }
 
         with fs.open(results_file, "w") as f:
-            json.dump(results_data, f, indent=2, default=str)
+            json.dump(results_data, f, indent=2, default=_json_default)
         display_path = f"{output_dir.rstrip('/')}/results_{task_names}_{timestamp}.json"
         logger.info(f"Results saved to: {display_path}")
         print(f"\nResults saved to: {display_path}")
@@ -500,7 +501,7 @@ def main(config: EvalVLMConfig):
         if config.save_samples and sample_outputs:
             samples_file = os.path.join(plain_path, f"samples_{task_names}_{timestamp}.json")
             with fs.open(samples_file, "w") as f:
-                json.dump(sample_outputs, f, indent=2, default=str)
+                json.dump(sample_outputs, f, indent=2, default=_json_default)
             samples_display_path = f"{output_dir.rstrip('/')}/samples_{task_names}_{timestamp}.json"
             logger.info(f"Sample outputs saved to: {samples_display_path}")
             print(f"Sample outputs saved to: {samples_display_path}")
@@ -520,6 +521,24 @@ def main(config: EvalVLMConfig):
                     print()
 
         return {"results": all_results, "sample_outputs": sample_outputs}
+
+
+def _json_default(obj):
+    """JSON serialization fallback that handles DataFrames, numpy types, etc."""
+    try:
+        import pandas as pd
+        if isinstance(obj, pd.DataFrame):
+            records = obj.to_dict(orient='records')
+            return records[0] if len(records) == 1 else records
+        if isinstance(obj, pd.Series):
+            return obj.to_dict()
+    except ImportError:
+        pass
+    if hasattr(obj, 'item'):  # numpy scalar
+        return obj.item()
+    if hasattr(obj, 'tolist'):  # numpy array
+        return obj.tolist()
+    return str(obj)
 
 
 if __name__ == "__main__":

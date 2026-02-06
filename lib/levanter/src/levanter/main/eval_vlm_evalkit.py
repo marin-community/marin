@@ -599,6 +599,14 @@ def main(config: EvalVLMEvalKitConfig):
 
                 # Run evaluation
                 eval_result = EVAL(dataset_name, result_file)
+                # Convert DataFrame to dict for proper JSON serialization
+                # VLMEvalKit's EVAL() often returns pandas DataFrames which get
+                # truncated with "..." when serialized via str()/repr()
+                if isinstance(eval_result, pd.DataFrame):
+                    records = eval_result.to_dict(orient='records')
+                    eval_result = records[0] if len(records) == 1 else records
+                elif isinstance(eval_result, pd.Series):
+                    eval_result = eval_result.to_dict()
                 all_results[benchmark] = eval_result
                 logger.info(f"{benchmark} results: {eval_result}")
 
@@ -703,7 +711,7 @@ def main(config: EvalVLMEvalKitConfig):
         results_file = os.path.join(plain_path, results_filename)
 
         with fs.open(results_file, "w") as f:
-            json.dump(results_data, f, indent=2, default=str)
+            json.dump(results_data, f, indent=2, default=_json_default)
 
         # Log with the original output_dir prefix for user reference
         display_path = f"{output_dir.rstrip('/')}/{results_filename}"
@@ -715,12 +723,26 @@ def main(config: EvalVLMEvalKitConfig):
             samples_filename = f"samples_{benchmark_names}_{checkpoint_name}.json"
             samples_file = os.path.join(plain_path, samples_filename)
             with fs.open(samples_file, "w") as f:
-                json.dump(all_predictions, f, indent=2, default=str)
+                json.dump(all_predictions, f, indent=2, default=_json_default)
             samples_display_path = f"{output_dir.rstrip('/')}/{samples_filename}"
             logger.info(f"Sample outputs saved to: {samples_display_path}")
             print(f"Sample outputs saved to: {samples_display_path}")
 
         return all_results
+
+
+def _json_default(obj):
+    """JSON serialization fallback that handles DataFrames, numpy types, etc."""
+    if isinstance(obj, pd.DataFrame):
+        records = obj.to_dict(orient='records')
+        return records[0] if len(records) == 1 else records
+    if isinstance(obj, pd.Series):
+        return obj.to_dict()
+    if hasattr(obj, 'item'):  # numpy scalar
+        return obj.item()
+    if hasattr(obj, 'tolist'):  # numpy array
+        return obj.tolist()
+    return str(obj)
 
 
 if __name__ == "__main__":

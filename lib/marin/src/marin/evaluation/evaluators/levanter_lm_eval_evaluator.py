@@ -163,10 +163,27 @@ def _json_default(value):
     if isinstance(value, set):
         return list(value)
 
+    # Handle pandas DataFrames/Series before generic to_dict check
+    try:
+        import pandas as pd
+        if isinstance(value, pd.DataFrame):
+            records = value.to_dict(orient='records')
+            return records[0] if len(records) == 1 else records
+        if isinstance(value, pd.Series):
+            return value.to_dict()
+    except ImportError:
+        pass
+
     if hasattr(value, "to_dict") and callable(value.to_dict):
         try:
             return value.to_dict()
         except Exception:
             pass
+
+    # Handle numpy scalars and arrays
+    if hasattr(value, 'item'):
+        return value.item()
+    if hasattr(value, 'tolist'):
+        return value.tolist()
 
     return repr(value)

@@ -1059,6 +1059,7 @@ def run_vlm_benchmark_direct(
     mp: jmp.Policy | None = None,
     max_examples: int | None = None,
     generation_kwargs: dict | None = None,
+    vlm_batch_size: int = 1,
     checkpoint_interval: int = 100,
     checkpoint_dir: str | None = None,
     resume_from_checkpoint: str | None = None,
@@ -1084,6 +1085,7 @@ def run_vlm_benchmark_direct(
         mp: Mixed precision policy
         max_examples: Maximum examples to evaluate
         generation_kwargs: Generation parameters
+        vlm_batch_size: Number of VLM requests to process in parallel. Default: 1.
         checkpoint_interval: Save checkpoint every N examples. Set to 0 to disable.
         checkpoint_dir: Directory for checkpoint files. Defaults to {output_dir}/checkpoints/.
         resume_from_checkpoint: Path to checkpoint file to resume from.
@@ -1229,56 +1231,73 @@ def run_vlm_benchmark_direct(
         axis_resources=axis_resources,
         mp=mp,
         generation_kwargs=gen_kwargs,
+        vlm_batch_size=vlm_batch_size,
     )
 
-    # Run evaluation on remaining indices only
-    for idx in tqdm(remaining_indices, desc=f"Evaluating {benchmark_name}"):
-        example = dataset[idx]
+    # Mock Instance class for generate_until interface
+    class MockInstance:
+        def __init__(self, args):
+            self.args = args
 
-        # Get image
-        image = example.get(config["image_key"])
-        if image is None:
+    # Run evaluation on remaining indices in batches
+    batch_size = max(1, vlm_batch_size)
+    num_batches = (len(remaining_indices) + batch_size - 1) // batch_size
+    pbar = tqdm(total=len(remaining_indices), desc=f"Evaluating {benchmark_name}")
+
+    for batch_start in range(0, len(remaining_indices), batch_size):
+        batch_indices = remaining_indices[batch_start:batch_start + batch_size]
+
+        # Build batch of instances
+        instances = []
+        batch_meta = []  # (idx, reference) for each valid instance
+        for idx in batch_indices:
+            example = dataset[idx]
+
+            # Get image
+            image = example.get(config["image_key"])
+            if image is None:
+                continue
+
+            # Format prompt
+            question = example.get(config["question_key"], "")
+            prompt = config["prompt_template"].format(question=question)
+
+            # Add choices if applicable
+            if config.get("has_choices"):
+                choices = example.get("choices", example.get("choice_list", []))
+                if choices:
+                    choice_text = "\n".join([f"{chr(ord('A')+i)}. {c}" for i, c in enumerate(choices)])
+                    prompt = prompt.replace("{question}", f"{question}\n\n{choice_text}")
+
+            reference = example.get(config["answer_key"], "")
+            instances.append(MockInstance((prompt, gen_kwargs, {"visual": [image]})))
+            batch_meta.append((idx, reference))
+
+        if not instances:
+            pbar.update(len(batch_indices))
             continue
 
-        # Format prompt
-        question = example.get(config["question_key"], "")
-        prompt = config["prompt_template"].format(question=question)
-
-        # Add choices if applicable
-        if config.get("has_choices"):
-            choices = example.get("choices", example.get("choice_list", []))
-            if choices:
-                choice_text = "\n".join([f"{chr(ord('A')+i)}. {c}" for i, c in enumerate(choices)])
-                prompt = prompt.replace("{question}", f"{question}\n\n{choice_text}")
-
-        # Get reference answer
-        reference = example.get(config["answer_key"], "")
-
-        # Generate
+        # Generate for entire batch at once
         try:
-            # Create a mock Instance for generate_until
-            class MockInstance:
-                def __init__(self, args):
-                    self.args = args
-
-            instance = MockInstance((prompt, gen_kwargs, {"visual": [image]}))
-            outputs = vlm_lm.generate_until([instance], disable_tqdm=True)
-            prediction = outputs[0] if outputs else ""
+            outputs = vlm_lm.generate_until(instances, disable_tqdm=True)
         except Exception as e:
-            logger.warning(f"Generation failed: {e}")
-            prediction = ""
+            logger.warning(f"Batch generation failed: {e}")
+            outputs = [""] * len(instances)
 
-        # Evaluate
-        is_correct = _evaluate_answer(prediction, reference, benchmark_name)
+        # Process results
+        for (idx, reference), prediction in zip(batch_meta, outputs):
+            is_correct = _evaluate_answer(prediction, reference, benchmark_name)
+            result = {
+                "prediction": prediction,
+                "reference": str(reference),
+                "correct": is_correct,
+                "index": idx,
+            }
+            checkpoint_manager.add_result(idx, result)
 
-        # Save result to checkpoint manager
-        result = {
-            "prediction": prediction,
-            "reference": str(reference),
-            "correct": is_correct,
-            "index": idx,
-        }
-        checkpoint_manager.add_result(idx, result)
+        pbar.update(len(batch_indices))
+
+    pbar.close()
 
     # Finalize checkpoint and get aggregated results
     final_results = checkpoint_manager.finalize()
