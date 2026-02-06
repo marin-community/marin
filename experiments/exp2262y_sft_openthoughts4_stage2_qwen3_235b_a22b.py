@@ -24,7 +24,7 @@ from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 
 from experiments.defaults import default_sft, default_tokenize
-from experiments.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
+from experiments.chat_templates.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
 from experiments.evals.evals import default_sft_eval
 from experiments.exp2262g_sft_openthoughts4_qwen3_32b import exp2262g_sft_qwen2pt5_7b_instruct_openthoughts3
 from experiments.qwen3 import qwen2_5_7b_instruct, qwen2_5_7b_instruct_tokenizer

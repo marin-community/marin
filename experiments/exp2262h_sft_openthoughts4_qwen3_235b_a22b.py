@@ -21,7 +21,7 @@ import math
 import re
 
 from levanter.data.text import ChatLmDatasetFormat
-from experiments.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
+from experiments.chat_templates.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 
 from experiments.defaults import default_sft, default_tokenize

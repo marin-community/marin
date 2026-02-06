@@ -25,7 +25,7 @@ from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
 from experiments.qwen3 import qwen3_8b, qwen3_8b_tokenizer
-from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
+from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,

@@ -26,7 +26,7 @@ from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
 from experiments.llama import llama_3_1_8b_instruct, llama_3_1_8b_instruct_tokenizer
-from experiments.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
+from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
 from experiments.qwen3 import qwen3_4b
 from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
