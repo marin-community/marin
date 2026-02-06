@@ -13,7 +13,6 @@ import jax
 import jax.numpy as jnp
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
-from jax import lax
 
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 
@@ -169,10 +168,18 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
     """
     kv_ev = _interleave_kv(new_k.astype(kv_pages.dtype), new_v.astype(kv_pages.dtype))  # [T, 2H, D]
 
-    def body(i, buf):
-        p = t_pages[i]
-        s = t_slots[i]
-        ins = kv_ev[i][None, None, :, :]
-        return lax.dynamic_update_slice(buf, ins, (p, s, 0, 0))
+    # Only the prefix [0, K) is valid; masked entries keep zero delta.
+    # We use scatter-add with per-index deltas so invalid tail updates are true no-ops.
+    total_tokens = kv_ev.shape[0]
+    clipped_k = jnp.clip(K, 0, total_tokens)
+    token_idx = jnp.arange(total_tokens, dtype=jnp.int32)
+    valid_mask = token_idx < clipped_k
 
-    return lax.fori_loop(0, K, body, kv_pages)
+    safe_pages = jnp.where(valid_mask, t_pages, 0)
+    safe_slots = jnp.where(valid_mask, t_slots, 0)
+
+    current = kv_pages[safe_pages, safe_slots, :, :]
+    deltas = (kv_ev - current).astype(kv_pages.dtype)
+    deltas = jnp.where(valid_mask[:, None, None], deltas, jnp.zeros_like(deltas))
+
+    return kv_pages.at[safe_pages, safe_slots, :, :].add(deltas)

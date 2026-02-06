@@ -508,7 +508,7 @@ Validation references:
 
 ### M6 - Performance Work: Reference Attention and KV Update
 
-Status: IN PROGRESS (M6.1-M6.3 completed on 2026-02-06; M6.4 next)
+Status: M6 FINALIZED for 10x2048 baseline (M6.1-M6.6 completed on 2026-02-06)
 
 Goal: improve throughput without introducing correctness risk.
 
@@ -634,12 +634,136 @@ M6.3 implementation (completed):
   - Major M6 speed issue was the tiny hardcoded reference attention block sizes; larger chunking gives a step-function throughput gain.
   - Keep M6.3 defaults at `q=16`, `kv_pages=16` for now.
 
+M6.4 implementation (completed):
+- Code changes:
+  - `src/levanter/layers/kv_cache.py`
+    - Replaced token-by-token `lax.fori_loop` + `lax.dynamic_update_slice` writes in `kv_update_unified_prefix` with a masked vectorized scatter-add delta path over the valid prefix `[0, K)`.
+    - Kept donation semantics (`donate_argnums=(0,)`) and explicit prefix clipping (`K` clipped to token axis size).
+  - `tests/inference/test_kv_cache.py` (new)
+    - `test_kv_update_unified_prefix_updates_only_valid_prefix`
+    - `test_kv_update_unified_prefix_noop_when_k_zero`
+    - `test_kv_update_unified_prefix_clips_k_to_token_count`
+- Local validation:
+  - `uv run ruff check src/levanter/layers/kv_cache.py tests/inference/test_kv_cache.py`
+  - `uv run pytest tests/inference/test_kv_cache.py`
+  - `uv run pytest tests/inference/test_kv_cache.py tests/inference/test_paged_attention.py`
+  - all PASS
+- Real TPU validation run A:
+  - Log:
+    - `/tmp/levanter_run_m6_baseline_10prompts_2048_round1_m64.log`
+  - Outcome:
+    - PASS (`Job finished with no error.`)
+  - Comparison vs M6.3 baseline (`m63`):
+    - End-to-end wall time: `4:24.67` -> `4:23.15` (`-1.52s`, `-0.57%`)
+    - Round time: `164.534s` -> `161.859s` (`-2.675s`, `-1.63%`)
+    - Decode total: `120.182s` -> `116.668s` (`-2.92%`)
+- Real TPU validation run B (follow-up confirm):
+  - Log:
+    - `/tmp/levanter_run_m6_baseline_10prompts_2048_round1_m64_castfix.log`
+  - Outcome:
+    - PASS (`Job finished with no error.`)
+  - Comparison vs M6.3 baseline (`m63`):
+    - End-to-end wall time: `4:24.67` -> `4:28.62` (slightly slower)
+    - Round time: `164.534s` -> `163.379s` (`-1.155s`, `-0.70%`)
+    - Decode total: `120.182s` -> `116.814s` (`-2.80%`)
+- Notes:
+  - A `jax/_src/ops/scatter.py` `FutureWarning` about `float32 -> bfloat16` scatter casting appears during generation in this environment; a local isolated `kv_update_unified_prefix` warning-as-error repro does not trigger it, so the warning source is likely elsewhere in the broader decode path.
+- Takeaway:
+  - M6.4 improves throughput relative to M6.3 on the target config and does not regress stability.
+  - The gain is incremental versus M6.3 (single-digit percent), but positive and repeatable at round level.
+
+M6.5 implementation (completed):
+- Scope:
+  - Scheduler/decode batch sweep of `engine.max_rounds` while keeping all other M6.4 settings fixed.
+- Sweep configs:
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_m65_r64.yaml`
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_m65_r96.yaml`
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_m65_r128.yaml`
+- Real TPU validation (`v5p-16`, foreground):
+  - `r64` log: `/tmp/levanter_run_m6_m65_r64.log`
+    - PASS (`Job finished with no error.`)
+    - `round_total_s=161.337s`, `decode_total_s=115.506s`, `decode_iters=32`
+  - `r96` log: `/tmp/levanter_run_m6_m65_r96.log`
+    - PASS (`Job finished with no error.`)
+    - `round_total_s=161.564s`, `decode_total_s=115.648s`, `decode_iters=22`
+  - `r128` log: `/tmp/levanter_run_m6_m65_r128.log`
+    - PASS (`Job finished with no error.`)
+    - `round_total_s=162.752s`, `decode_total_s=116.038s`, `decode_iters=16`
+    - End-to-end shell wall: `5:00.64` total
+- Comparison (lower is better):
+  - `r64` vs `r96`: `-0.227s` on `round_total_s` (`~0.14%` faster).
+  - `r64` vs `r128`: `-1.414s` on `round_total_s` (`~0.87%` faster).
+- Takeaway:
+  - For the M6 baseline workload (`10 prompts x 2048`, single round), `max_rounds=64` is the fastest point among tested values.
+  - `max_rounds=128` is consistently slower; reducing decode iteration count alone does not improve round time.
+  - Lock M6 default benchmarking on `r64` and keep this as the regression reference for further M6 tuning.
+
+M6.6 implementation (completed):
+- Scope:
+  - Additional scheduler sweep around M6.5 winner (`max_rounds=64`).
+  - Concrete available knobs in current code are `engine.max_tokens_per_round` and `engine.max_queued_tokens` (not `max_tokens_per_step` / `max_docs_per_round`).
+- Sweep configs:
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_m66_tpr10_mqt64.yaml`
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_m66_tpr10_mqt128.yaml`
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_m66_tpr12_mqt64.yaml`
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_m66_tpr8_mqt64.yaml`
+- Real TPU validation (`v5p-16`, foreground):
+  - M6.5 reference (`r64`) log: `/tmp/levanter_run_m6_m65_r64.log`
+    - `round_total_s=161.337s`, `decode_total_s=115.506s`, `round_total_generated=20480`
+  - `tpr10/mqt64` log: `/tmp/levanter_run_m6_m66_tpr10_mqt64.log`
+    - `round_total_s=160.436s`, `decode_total_s=115.146s`, `round_total_generated=20480`
+    - vs M6.5 reference: `-0.901s` on round time (`-0.56%`)
+  - `tpr10/mqt128` log: `/tmp/levanter_run_m6_m66_tpr10_mqt128.log`
+    - `round_total_s=161.317s`, `decode_total_s=115.710s`, `round_total_generated=20480`
+    - vs M6.5 reference: `-0.021s` on round time (`-0.01%`, noise-level)
+  - `tpr12/mqt64` log: `/tmp/levanter_run_m6_m66_tpr12_mqt64.log`
+    - `round_total_s=161.113s`, `decode_total_s=115.889s`, `round_total_generated=20480`
+    - vs M6.5 reference: `-0.224s` on round time (`-0.14%`)
+  - `tpr8/mqt64` log: `/tmp/levanter_run_m6_m66_tpr8_mqt64.log`
+    - `round_total_s=152.841s`, `decode_total_s=106.870s`, `round_total_generated=18440`
+    - Not comparable for round-time winner selection because generated tokens are lower than the 20480-token target.
+- Takeaway:
+  - Best M6.6 point is `max_tokens_per_round=10`, `max_queued_tokens=64`.
+  - Reducing queue capacity from `512 -> 64` yields a small but repeatable gain at fixed generation workload.
+  - `max_tokens_per_round=8` is not a safe default for this benchmark; it changes generation workload (fewer total tokens produced in this run) and has lower decode throughput.
+- M6 final config (recommended):
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6.yaml`
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_final.yaml` (same settings, compatibility alias)
+  - Rationale:
+    - Keeps M5 correctness/stability semantics unchanged (`physical` reset, `cleanup_mode=none`, reference attention path).
+    - Uses the fastest comparable scheduler settings from M6 (`max_rounds=64`, `max_tokens_per_round=10`, `max_queued_tokens=64`).
+    - Does not change sampling behavior knobs (`temperature`, stop handling, generations), so output quality/distribution intent is preserved.
+
+M6 speedup tracking (round-time, milestone-to-milestone):
+- Metric:
+  - Uses `round_total_s` (lower is better) and one canonical run per milestone.
+- Canonical round times:
+  - M6.1: `505.266s`
+  - M6.2: `505.000s`
+  - M6.3: `164.534s`
+  - M6.4: `161.859s` (run A)
+  - M6.5: `161.337s` (`max_rounds=64`)
+  - M6.6: `160.436s` (`max_tokens_per_round=10`, `max_queued_tokens=64`)
+- Sequential speedups:
+  - M6.1 -> M6.2: `0.05%`
+  - M6.2 -> M6.3: `67.42%`
+  - M6.3 -> M6.4: `1.63%`
+  - M6.4 -> M6.5: `0.32%`
+  - M6.5 -> M6.6: `0.56%`
+- Cumulative speedups:
+  - M6.2 -> M6.5: `68.05%` faster (`505.000s` -> `161.337s`)
+  - M6.1 -> M6.5: `68.07%` faster (`505.266s` -> `161.337s`)
+  - M6.2 -> M6.6: `68.23%` faster (`505.000s` -> `160.436s`)
+  - M6.1 -> M6.6: `68.25%` faster (`505.266s` -> `160.436s`)
+
 Updated M6 priorities:
 1. M6.1 instrumentation: DONE.
 2. M6.2 host-path hardening: DONE.
 3. M6.3 reference attention block tuning: DONE (locked to `q=16`, `kv=16`).
-4. M6.4: Optimize KV update path. (NEXT)
-5. M6.5: Scheduler/decode batch sweep after M6.4.
+4. M6.4 KV update optimization: DONE.
+5. M6.5: Scheduler/decode batch sweep. DONE (lock `max_rounds=64` for this workload).
+6. M6.6: Scheduler sweep (`max_tokens_per_round`, `max_queued_tokens`). DONE.
+7. M6.7: Fine-grained queue/pack sweep around `tpr10/mqt64` and validate on lock-in long-gen configs. (OPTIONAL/FUTURE)
 
 Rules:
 - Performance changes must land separately from correctness changes.
