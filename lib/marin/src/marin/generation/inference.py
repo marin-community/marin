@@ -308,13 +308,13 @@ def run_inference(config: TextGenerationInferenceConfig):
             output_filetype = config.filetype
         finished_ids = find_all_finished_ids(config.output_path, output_filetype, config.checkpoint_id_column)
         if len(finished_ids) > 0:
+            print(f"Found {len(finished_ids)} finished IDs to filter out")
             if isinstance(config.checkpoint_id_column, dict):
                 dataset_column = next(iter(config.checkpoint_id_column.keys()))
                 metadata_key_column = next(iter(config.checkpoint_id_column.values()))
                 ds = ds.filter(lambda x: x[dataset_column][metadata_key_column] not in finished_ids)
             else:
                 ds = ds.filter(lambda x: x[config.checkpoint_id_column] not in finished_ids)
-            print("Dataset count after checkpoint filter:", ds.count())
 
     # Choose pipeline class based on multi-sample selection mode
     if config.enable_multi_sample_selection:
