@@ -154,9 +154,9 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
-    # Empty JAX_PLATFORMS allows auto-detection of all backends (CPU + TPU)
-    # tpu_inference needs CPU backend for weight loading before transfer to TPU
-    runtime_env = {"env_vars": {"JAX_PLATFORMS": "tpu"}}
+    # Allow both TPU and CPU backends. CPU is needed for weight loading.
+    # TPU validation happens in pipeline.py to fail fast if TPU unavailable.
+    runtime_env = {"env_vars": {"JAX_PLATFORMS": ""}}
 
     # Request TPU resources - use the tensor_parallel_size from config
     # which should match the number of TPU chips needed

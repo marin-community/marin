@@ -162,6 +162,27 @@ class TextGeneration:
         return self._update_batch(batch, generated_text, prompts)
 
 
+def _validate_tpu_available():
+    """Validate that TPU is available, fail fast if not.
+
+    This prevents silent CPU fallback which would cause errors later
+    (e.g., 'TpuDevice' object has no attribute 'coords').
+    """
+    import jax
+
+    devices = jax.devices()
+    tpu_devices = [d for d in devices if "tpu" in str(d.platform).lower()]
+
+    if not tpu_devices:
+        device_info = [f"{d.platform}:{d.device_kind}" for d in devices]
+        raise RuntimeError(
+            f"TPU required but not available. This worker will be restarted on a different node. "
+            f"Available devices: {device_info}"
+        )
+
+    logger.info(f"TPU validation passed. Found {len(tpu_devices)} TPU device(s): {tpu_devices}")
+
+
 class vLLMTextGeneration(TextGeneration):
     def __init__(
         self,
@@ -197,6 +218,10 @@ class vLLMTextGeneration(TextGeneration):
             save_samples_as_list: If True and n>1 in generation_kwargs, saves samples as a list
                 instead of joining with space. Useful for multi-sample voting/validation.
         """
+        # Validate TPU is available before proceeding. This prevents silent CPU
+        # fallback which would cause cryptic errors later in tpu_inference.
+        _validate_tpu_available()
+
         # Initialize the LLM Provider here for the pipeline since we need the model
         # to be placed in the same placement group as the pipeline
         llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
