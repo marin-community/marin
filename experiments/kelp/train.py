@@ -35,7 +35,7 @@ import sys
 from dataclasses import dataclass
 
 from experiments.kelp.model.presets import PRESETS, get_preset
-from experiments.kelp.training.train import TrainingConfig
+from experiments.kelp.training.train import TrainingConfig, train
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
 logging.basicConfig(
@@ -151,8 +151,6 @@ def run_kelp_training(config: KelpTrainingConfig) -> dict:
             config.transfer_from,
             model_config,
         )
-
-    from experiments.kelp.training.train import train
 
     model = train(training_config, data_iter, initial_params=initial_params)
 
