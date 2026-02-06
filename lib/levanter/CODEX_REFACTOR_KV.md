@@ -508,19 +508,148 @@ Validation references:
 
 ### M6 - Performance Work: Reference Attention and KV Update
 
+Status: IN PROGRESS (M6.1-M6.3 completed on 2026-02-06; M6.4 next)
+
 Goal: improve throughput without introducing correctness risk.
 
-Work items (in priority order):
-1. Reference attention block size tuning (`default_ragged_paged_attention`).
-2. Reduce KV update overhead (vectorize writes if possible, or improve `PageBatchInfo` layout).
+Baseline (real TPU, single round):
+- Config:
+  - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_baseline.yaml`
+- Log:
+  - `/tmp/levanter_run_m6_baseline_10prompts_2048_round1.log`
+- Command:
+  - `python infra/launch.py --foreground --zone us-central1-a --tpu_name simpo_worker_2 --tpu_type v5p-16 --capacity_type on-demand -- uv run src/levanter/main/sample_lm_multihost.py --config_path config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_baseline.yaml`
+- Outcome:
+  - PASS (`Job finished with no error.`)
+  - End-to-end wall time (launcher + container + run): `10:22.20` (`622.2s`)
+  - Round time (`Round 0` start to `Round 0` done): `506s` (`20:05:21` -> `20:13:47`)
+  - Generated tokens: `20480` total
+  - Effective throughput:
+    - `40.5 tok/s` at round level (`20480 / 506`)
+    - `32.9 tok/s` end-to-end (`20480 / 622.2`)
+  - Decode-loop-only profile (`engine.py:1225`, host 0):
+    - `64` decode iterations, `461.588s` summed decode time
+    - `20470` tokens from decode loop (`+10` from prefill/extraction -> `20480` total)
+    - `44.35 tok/s` decode-loop average
+  - Behavior trend:
+    - Early decode iterations: up to ~`290 tok/s`
+    - Tail decode iterations: down to ~`25 tok/s`
+    - `DecodeStats`: `pages_in_use` grows `10 -> 330`
+
+M6.1 implementation (completed):
+- Code changes:
+  - `src/levanter/inference/engine.py`
+    - Added `InferenceEngineConfig.log_decode_perf_summary` (default `true`).
+    - Added low-overhead `_DecodePerfSamples` accumulator.
+    - Collects per-iteration timings in memory only (`iter_total`, `submit`, `extract`, `host`, `device`, `new_tokens`).
+    - Emits one aggregate log line per `generate()` call:
+      - `Decode perf summary: {...}`
+      - Includes `p50/p90/max` for key timings plus decode/round throughput.
+- Safety/perf constraints:
+  - No additional in-loop tracker calls.
+  - No extra cross-host synchronization.
+  - Only one end-of-round summary log emission.
+- Unit coverage:
+  - `tests/inference/test_engine.py`:
+    - `test_decode_perf_samples_summary_aggregates_timings`
+    - `test_decode_perf_samples_summary_handles_empty`
+
+M6.1 validation rerun (same real TPU baseline config):
+- Log:
+  - `/tmp/levanter_run_m6_baseline_10prompts_2048_round1_m61.log`
+- Outcome:
+  - PASS (`Job finished with no error.`)
+  - New aggregate summary emitted as expected:
+    - `Decode perf summary: {'decode_iters': 64, ...}`
+- Comparison vs pre-M6.1 baseline:
+  - End-to-end wall time:
+    - before: `622.2s` (`10:22.20`)
+    - after: `618.28s` (`10:18.28`)
+    - delta: `-3.92s` (`-0.63%`)
+  - Round time:
+    - before: `~506s`
+    - after: `505.266s`
+    - delta: `~ -0.7s`
+  - Decode-loop aggregate (host 0 parse):
+    - before: `461.588s`, `44.347 tok/s`
+    - after: `461.145s`, `44.390 tok/s`
+    - delta: effectively noise-level
+- Takeaway:
+  - M6.1 instrumentation is performance-neutral within run-to-run variance and does not reintroduce M5-style instability.
+
+M6.2 implementation (completed):
+- Code changes:
+  - `src/levanter/inference/engine.py`
+    - `_extract_outputs` now pulls only used token slices (`[:num_tokens]`) instead of full backing buffers.
+    - Added one-time per-call `slot_results` mapping to avoid repeated nested dict churn per token append.
+    - Avoided duplicate final decode work for already-finished requests (`if dr.done: continue`).
+    - Guarded final-text decode logging behind `logger.isEnabledFor(logging.DEBUG)`.
+    - Converted debug/error log calls to lazy logging args to avoid formatting overhead when disabled.
+- Validation:
+  - Log:
+    - `/tmp/levanter_run_m6_baseline_10prompts_2048_round1_m62.log`
+  - Outcome:
+    - PASS (`Job finished with no error.`)
+  - Comparison vs M6.1:
+    - End-to-end wall time: `10:18.28` -> `10:04.86` (`-13.42s`, `-2.17%`)
+    - Round time: `505.266s` -> `505.000s` (`-0.266s`, noise-level)
+    - Decode total: `461.142s` -> `460.971s` (noise-level)
+- Takeaway:
+  - Host-path hardening is safe and slightly reduces end-to-end overhead, but does not move round throughput materially.
+
+M6.3 implementation (completed):
+- Code changes:
+  - `src/levanter/layers/attention.py`
+    - Added tunables for reference ragged paged attention:
+      - `ragged_paged_q_block_size` (default `16`)
+      - `ragged_paged_kv_block_pages` (default `16`)
+    - Threaded these through `Attention.paged_decode` -> `ragged_paged_attention` -> `default_ragged_paged_attention`.
+    - Added validation for positive block sizes.
+    - Replaced hardcoded tiny blocks (`Q_BS=min(1, ...)`, `KV_BS=min(2, ...)`) with tunable values.
+  - `src/levanter/models/llama.py`
+    - Exposed model config fields:
+      - `ragged_paged_q_block_size`
+      - `ragged_paged_kv_block_pages`
+- Validation run A (new defaults `q=16`, `kv_pages=16`):
+  - Log:
+    - `/tmp/levanter_run_m6_baseline_10prompts_2048_round1_m63.log`
+  - Outcome:
+    - PASS (`Job finished with no error.`)
+  - Comparison vs M6.2:
+    - End-to-end wall time: `10:04.86` -> `4:24.67` (`-56.2%`, `2.29x` faster)
+    - Round time: `504.999s` -> `164.534s` (`-67.4%`, `3.07x` faster)
+    - Decode total: `460.971s` -> `120.182s` (`-73.9%`)
+- Validation run B (sweep point `q=32`, `kv_pages=16`):
+  - Config:
+    - `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m6_m63_q32_kv16.yaml`
+  - Log:
+    - `/tmp/levanter_run_m6_baseline_10prompts_2048_round1_m63_q32_kv16.log`
+  - Outcome:
+    - PASS (`Job finished with no error.`)
+  - Comparison vs run A (`q=16`, `kv=16`):
+    - End-to-end wall time: `4:24.67` -> `4:27.47` (slightly slower)
+    - Round time: `164.534s` -> `165.267s` (slightly slower)
+    - Decode total: `120.182s` -> `120.521s` (slightly slower)
+- Takeaway:
+  - Major M6 speed issue was the tiny hardcoded reference attention block sizes; larger chunking gives a step-function throughput gain.
+  - Keep M6.3 defaults at `q=16`, `kv_pages=16` for now.
+
+Updated M6 priorities:
+1. M6.1 instrumentation: DONE.
+2. M6.2 host-path hardening: DONE.
+3. M6.3 reference attention block tuning: DONE (locked to `q=16`, `kv=16`).
+4. M6.4: Optimize KV update path. (NEXT)
+5. M6.5: Scheduler/decode batch sweep after M6.4.
 
 Rules:
 - Performance changes must land separately from correctness changes.
-- Every performance change must include a benchmark script and a regression guard (even if approximate).
+- Every performance change must include a benchmark run and regression guard.
+- Keep M5 lock-in safety semantics unchanged while doing M6.
 
 Exit criteria:
-- Tok/s improves or stays flat across the known-good configs.
-- No new vmem failures on TPU.
+- Median round throughput improves by >=15% on the baseline config above.
+- No regressions on known-good lock-in configs (`20 prompts x 2048`, `20 prompts x 4096`).
+- No new vmem failures or multi-host synchronization failures.
 
 Rollback:
 - Revert perf patch only.

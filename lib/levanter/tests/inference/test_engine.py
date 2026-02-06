@@ -7,9 +7,10 @@ import dataclasses
 import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp
+import pytest
 from haliax import Axis
 
-from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, _DecodePerfSamples
 from levanter.inference.page_table import PageTableSpec
 from levanter.layers.kv_cache import KvPageCache
 
@@ -80,3 +81,35 @@ def test_engine_reset_logical_clears_metadata():
     ds_after = service.gen_state.decode_state
     assert int(ds_after.sequences.used_mask.array.sum()) == 0
     assert int(ds_after.page_table.page_ref_counts.array.sum()) == 0
+
+
+def test_decode_perf_samples_summary_aggregates_timings():
+    samples = _DecodePerfSamples()
+    samples.record(iter_total_s=1.0, submit_s=0.1, extract_s=0.2, host_s=0.9, device_s=0.1, new_tokens=10)
+    samples.record(iter_total_s=2.0, submit_s=0.2, extract_s=0.4, host_s=1.9, device_s=0.1, new_tokens=20)
+    samples.record(iter_total_s=3.0, submit_s=0.3, extract_s=0.6, host_s=2.9, device_s=0.1, new_tokens=30)
+
+    summary = samples.to_summary(prefill_extract_s=4.0, assembly_s=0.5, total_generated=80, round_time_s=10.0)
+
+    assert summary["decode_iters"] == 3
+    assert summary["decode_new_tokens"] == 60
+    assert summary["decode_total_s"] == pytest.approx(6.0)
+    assert summary["decode_avg_tok_s"] == pytest.approx(10.0)
+    assert summary["round_avg_tok_s"] == pytest.approx(8.0)
+    assert summary["iter_total_s_p50"] == pytest.approx(2.0)
+    assert summary["iter_total_s_p90"] == pytest.approx(2.8)
+    assert summary["iter_total_s_max"] == pytest.approx(3.0)
+    assert summary["extract_s_p50"] == pytest.approx(0.4)
+    assert summary["host_s_max"] == pytest.approx(2.9)
+
+
+def test_decode_perf_samples_summary_handles_empty():
+    summary = _DecodePerfSamples().to_summary(
+        prefill_extract_s=0.0, assembly_s=0.0, total_generated=0, round_time_s=0.0
+    )
+    assert summary["decode_iters"] == 0
+    assert summary["decode_new_tokens"] == 0
+    assert summary["decode_total_s"] == pytest.approx(0.0)
+    assert summary["decode_avg_tok_s"] == pytest.approx(0.0)
+    assert summary["iter_total_s_p50"] == pytest.approx(0.0)
+    assert summary["submit_s_p90"] == pytest.approx(0.0)

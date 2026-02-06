@@ -64,6 +64,9 @@ class InferenceEngineConfig:
     debug_stats_every_n: int | None = 10
     """Log decode stats every N iterations. Set to None or 0 to disable."""
 
+    log_decode_perf_summary: bool = True
+    """Emit one aggregate decode performance summary per generate() call."""
+
     reset_mode: ResetMode = "physical"
     """Reset behavior for the KV cache: "logical" resets metadata only; "physical" also zeros KV pages."""
 
@@ -287,6 +290,88 @@ class DecodeResult:
     tokens_decoded: int = 0
     done: bool = False
     logprobs: list[float] = field(default_factory=list)
+
+
+@dataclasses.dataclass
+class _DecodePerfSamples:
+    """Accumulate decode timings and compute one aggregate summary."""
+
+    iter_total_s: list[float] = field(default_factory=list)
+    submit_s: list[float] = field(default_factory=list)
+    extract_s: list[float] = field(default_factory=list)
+    host_s: list[float] = field(default_factory=list)
+    device_s: list[float] = field(default_factory=list)
+    new_tokens: list[int] = field(default_factory=list)
+
+    def record(
+        self,
+        *,
+        iter_total_s: float,
+        submit_s: float,
+        extract_s: float,
+        host_s: float,
+        device_s: float,
+        new_tokens: int,
+    ) -> None:
+        self.iter_total_s.append(float(iter_total_s))
+        self.submit_s.append(float(submit_s))
+        self.extract_s.append(float(extract_s))
+        self.host_s.append(float(host_s))
+        self.device_s.append(float(device_s))
+        self.new_tokens.append(int(new_tokens))
+
+    @staticmethod
+    def _summary_stats(values: list[float]) -> tuple[float, float, float]:
+        if not values:
+            return 0.0, 0.0, 0.0
+        array = np.asarray(values, dtype=np.float64)
+        return float(np.percentile(array, 50)), float(np.percentile(array, 90)), float(np.max(array))
+
+    def to_summary(
+        self,
+        *,
+        prefill_extract_s: float,
+        assembly_s: float,
+        total_generated: int,
+        round_time_s: float,
+    ) -> dict[str, int | float]:
+        decode_total_s = float(np.sum(np.asarray(self.iter_total_s, dtype=np.float64))) if self.iter_total_s else 0.0
+        decode_new_tokens = int(np.sum(np.asarray(self.new_tokens, dtype=np.int64))) if self.new_tokens else 0
+        avg_decode_toks_per_s = (decode_new_tokens / decode_total_s) if decode_total_s > 0 else 0.0
+        avg_round_toks_per_s = (total_generated / round_time_s) if round_time_s > 0 else 0.0
+
+        iter_p50, iter_p90, iter_max = self._summary_stats(self.iter_total_s)
+        submit_p50, submit_p90, submit_max = self._summary_stats(self.submit_s)
+        extract_p50, extract_p90, extract_max = self._summary_stats(self.extract_s)
+        host_p50, host_p90, host_max = self._summary_stats(self.host_s)
+        device_p50, device_p90, device_max = self._summary_stats(self.device_s)
+
+        return {
+            "decode_iters": len(self.iter_total_s),
+            "decode_new_tokens": decode_new_tokens,
+            "decode_total_s": decode_total_s,
+            "decode_avg_tok_s": avg_decode_toks_per_s,
+            "round_total_generated": int(total_generated),
+            "round_total_s": float(round_time_s),
+            "round_avg_tok_s": avg_round_toks_per_s,
+            "prefill_extract_s": float(prefill_extract_s),
+            "assembly_s": float(assembly_s),
+            "iter_total_s_p50": iter_p50,
+            "iter_total_s_p90": iter_p90,
+            "iter_total_s_max": iter_max,
+            "submit_s_p50": submit_p50,
+            "submit_s_p90": submit_p90,
+            "submit_s_max": submit_max,
+            "extract_s_p50": extract_p50,
+            "extract_s_p90": extract_p90,
+            "extract_s_max": extract_max,
+            "host_s_p50": host_p50,
+            "host_s_p90": host_p90,
+            "host_s_max": host_max,
+            "device_s_p50": device_p50,
+            "device_s_p90": device_p90,
+            "device_s_max": device_max,
+        }
 
 
 class GenState(eqx.Module):
@@ -1155,6 +1240,7 @@ class InferenceEngine:
                 )
 
         time_in = time.time()
+        perf_samples = _DecodePerfSamples() if self.config.log_decode_perf_summary else None
         # Initial admission from queue and extract prompt tokens
         decode_outputs = self._prefill_batch(requests)
         self._ingest_outputs(decode_outputs)
@@ -1229,6 +1315,15 @@ class InferenceEngine:
                     f"{tps_total:.2f} tok/s, {new_tokens} new"
                     f" (extract {extract_time:.3f}s"
                 )
+            if perf_samples is not None:
+                perf_samples.record(
+                    iter_total_s=iter_time,
+                    submit_s=submit_time,
+                    extract_s=extract_time,
+                    host_s=host_time,
+                    device_s=device_time,
+                    new_tokens=new_tokens,
+                )
 
             if self.config.debug_stats_every_n:
                 if decode_iteration % self.config.debug_stats_every_n == 0:
@@ -1252,6 +1347,7 @@ class InferenceEngine:
 
         if self.config.debug_stats_every_n:
             logger.info("Assembling outputs: start")
+        assembly_start = time.time()
         # Assemble outputs in the order of the requests for this call
         try:
             outputs_list: list[list[int]] = []
@@ -1281,10 +1377,19 @@ class InferenceEngine:
         except Exception:
             logger.exception("Output assembly failed before totals computation")
             raise
+        assembly_time = time.time() - assembly_start
         total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
         total_time = time.time() - time_in
         tps_overall = (total_generated / total_time) if total_time > 0 else 0.0
         logger.debug(f"Batch generated in {total_time:.2f}s, {total_generated} tokens, {tps_overall:.2f} tok/s")
+        if perf_samples is not None:
+            perf_summary = perf_samples.to_summary(
+                prefill_extract_s=initial_prefill_out - time_in,
+                assembly_s=assembly_time,
+                total_generated=total_generated,
+                round_time_s=total_time,
+            )
+            logger.info("Decode perf summary: %s", perf_summary)
         if self.config.debug_stats_every_n:
             logger.info("Assembling outputs: total_generated=%d", total_generated)
         # Clear results for these requests now that we've assembled outputs
@@ -1381,29 +1486,63 @@ class InferenceEngine:
         if pending_outputs is None:
             return 0
 
-        # Pull the entire buffer in one host op
-        pending_outputs = jax.device_get(pending_outputs)
-        n = int(pending_outputs.num_tokens)
-        fins = pending_outputs.finished.array
-        toks_arr = pending_outputs.tokens.array
-        sids_arr = pending_outputs.slot_ids.array
+        # Pull only the used token slices instead of the full backing buffers.
+        n = int(jax.device_get(pending_outputs.num_tokens))
+        fins = np.asarray(jax.device_get(pending_outputs.finished.array), dtype=np.bool_)
+        if n > 0:
+            toks_arr = np.asarray(jax.device_get(pending_outputs.tokens.array[:n]), dtype=np.int32)
+            sids_arr = np.asarray(jax.device_get(pending_outputs.slot_ids.array[:n]), dtype=np.int32)
+            logprobs_arr = (
+                None
+                if pending_outputs.logprobs is None
+                else np.asarray(jax.device_get(pending_outputs.logprobs.array[:n]), dtype=np.float32)
+            )
+        else:
+            toks_arr = np.empty((0,), dtype=np.int32)
+            sids_arr = np.empty((0,), dtype=np.int32)
+            logprobs_arr = None
 
         appended = 0
         unmapped = 0
-        for i in range(n):
-            local_slot = int(sids_arr[i])
-            tok = int(toks_arr[i])
-            info = self.local_map.get(local_slot)
-            if info is None:
-                unmapped += 1
+        max_slots = int(self.gen_state.decode_state.max_seqs)
+        slot_results: list[DecodeResult | None] = [None] * max_slots
+        for slot_id, (rid, cid) in self.local_map.items():
+            if slot_id < 0 or slot_id >= max_slots:
                 continue
-            rid, cid = info
-            dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
-            dr.token_list.append(tok)
-            if pending_outputs.logprobs is not None:
-                dr.logprobs.append(float(pending_outputs.logprobs.array[i]))
-            dr.tokens_decoded += 1
-            appended += 1
+            kid_map = self.results.get(rid)
+            if kid_map is None:
+                continue
+            dr = kid_map.get(cid)
+            if dr is None:
+                dr = DecodeResult(id=rid, choice=cid, token_list=[])
+                kid_map[cid] = dr
+            slot_results[slot_id] = dr
+
+        if logprobs_arr is None:
+            for local_slot, tok in zip(sids_arr, toks_arr, strict=False):
+                if local_slot < 0 or local_slot >= max_slots:
+                    unmapped += 1
+                    continue
+                dr = slot_results[local_slot]
+                if dr is None:
+                    unmapped += 1
+                    continue
+                dr.token_list.append(int(tok))
+                dr.tokens_decoded += 1
+                appended += 1
+        else:
+            for local_slot, tok, lp in zip(sids_arr, toks_arr, logprobs_arr, strict=False):
+                if local_slot < 0 or local_slot >= max_slots:
+                    unmapped += 1
+                    continue
+                dr = slot_results[local_slot]
+                if dr is None:
+                    unmapped += 1
+                    continue
+                dr.token_list.append(int(tok))
+                dr.logprobs.append(float(lp))
+                dr.tokens_decoded += 1
+                appended += 1
 
             # # Print accumulated decoded text as it is generated -- For debugging
             # print_every_n = 10
@@ -1419,22 +1558,40 @@ class InferenceEngine:
         for local_slot, is_done in enumerate(fins):
             if not bool(is_done):
                 continue
-            info = self.local_map.get(local_slot)
-            if info is None:
+            if local_slot >= max_slots:
                 continue
-            rid, cid = info
-            dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
+            dr = slot_results[local_slot]
+            if dr is None or dr.done:
+                continue
             dr.done = True
 
             # Print final complete text when sequence is finished
-            try:
-                full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
-                logger.debug(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): '{full_text}'")
-            except Exception as e:
-                logger.error(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>")
+            if logger.isEnabledFor(logging.DEBUG):
+                try:
+                    full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
+                    logger.debug(
+                        "[Request %d, Choice %d] FINAL (%d tokens): '%s'",
+                        dr.id,
+                        dr.choice,
+                        dr.tokens_decoded,
+                        full_text,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[Request %d, Choice %d] FINAL (%d tokens): <decode_error>",
+                        dr.id,
+                        dr.choice,
+                        dr.tokens_decoded,
+                    )
 
-        num_finished = int(fins.sum()) if hasattr(fins, "sum") else 0
-        logger.debug(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
+        num_finished = int(np.sum(fins, dtype=np.int32))
+        logger.debug(
+            "extract: appended=%d (drained=%d) unmapped=%d finished_count=%d",
+            appended,
+            n,
+            unmapped,
+            num_finished,
+        )
 
         return appended
 
