@@ -247,12 +247,6 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
             # this happens when we filter out params for things like lora.
             # could use eqx.partition to avoid this, but eh
             return named
-        if getattr(named.array, "batch_dim", None) is not None:
-            # Batched tracers from vmap can't be safely device_put with axis-mapped sharding
-            # because the leading batch axis isn't represented in the NamedArray axes.
-            # We'll shard after vmap adds the axis.
-            return named
-
         pspec = pspec_for(named, mapping)
         assert isinstance(pspec, PartitionSpec)
         if _is_jit_tracer(named.array):
