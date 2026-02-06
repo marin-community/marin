@@ -207,7 +207,7 @@ generate_with_selection = ExecutorStep(
         all_samples_column_name="all_samples",
 
         # Retry settings
-        max_task_retries=10,
+        max_task_retries=-1,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -303,7 +303,7 @@ summarize_selected = ExecutorStep(
         checkpoint_id_column="ms_id",
 
         # Retry settings
-        max_task_retries=10,
+        max_task_retries=-1,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -426,7 +426,7 @@ cycle_gen_questions = ExecutorStep(
         save_samples_as_list=True,
 
         # Retry settings
-        max_task_retries=10,
+        max_task_retries=-1,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -556,7 +556,7 @@ cycle_compare = ExecutorStep(
         save_samples_as_list=True,
 
         # Retry settings
-        max_task_retries=10,
+        max_task_retries=-1,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -617,7 +617,7 @@ factual_check = ExecutorStep(
         save_samples_as_list=True,
 
         # Retry settings
-        max_task_retries=10,
+        max_task_retries=-1,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -678,7 +678,7 @@ correctness_check = ExecutorStep(
         save_samples_as_list=True,
 
         # Retry settings
-        max_task_retries=10,
+        max_task_retries=-1,
     ),
     pip_dependency_groups=["vllm"],
 )

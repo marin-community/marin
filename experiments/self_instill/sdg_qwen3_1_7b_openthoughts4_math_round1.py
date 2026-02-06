@@ -219,7 +219,7 @@ generate_with_selection = ExecutorStep(
         all_samples_column_name="all_samples",
         static_check_type="boxed_only",
         selection_strategy="first",
-        max_task_retries=10,
+        max_task_retries=-1,
     ),
     pip_dependency_groups=["vllm"],
 )
@@ -330,7 +330,7 @@ if __name__ == "__main__":
                 generated_text_column_name="inferred_questions",
                 checkpoint_id_column="ms_id",
                 save_samples_as_list=True,
-                max_task_retries=10,
+                max_task_retries=-1,
             ),
             pip_dependency_groups=["vllm"],
         )
@@ -376,7 +376,7 @@ if __name__ == "__main__":
                 generated_text_column_name="cycle_results",
                 checkpoint_id_column="ms_id",
                 save_samples_as_list=True,
-                max_task_retries=10,
+                max_task_retries=-1,
             ),
             pip_dependency_groups=["vllm"],
         )
@@ -431,7 +431,7 @@ if __name__ == "__main__":
                     generated_text_column_name="factual_results",
                     checkpoint_id_column="ms_id",
                     save_samples_as_list=True,
-                    max_task_retries=10,
+                    max_task_retries=-1,
                 ),
                 pip_dependency_groups=["vllm"],
             )
@@ -486,7 +486,7 @@ if __name__ == "__main__":
                     generated_text_column_name="correctness_results",
                     checkpoint_id_column="ms_id",
                     save_samples_as_list=True,
-                    max_task_retries=10,
+                    max_task_retries=-1,
                 ),
                 pip_dependency_groups=["vllm"],
             )
