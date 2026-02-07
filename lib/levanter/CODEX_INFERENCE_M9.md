@@ -105,6 +105,30 @@ Phase D (boundary isolation):
   - Practical stable ceiling for this setup is currently `max_seqs=56`.
 - Next M9 step: investigate the first-decode `Anomalies` failure at `57+` (runtime/collective behavior) and test whether scheduler knob changes can recover stability above `56`.
 
+## Scheduler Explainer (What It Is, Why It Matters)
+
+The scheduler here is a bounded decode work planner:
+- `max_tokens_per_round`: how many queued tokens can be packed per decode step.
+- `max_rounds`: max decode steps per device-side generation loop invocation.
+- `max_queued_tokens`: queue capacity between token updates and packing.
+
+This is not the mechanism that creates "variable length" outputs. Variable-length behavior comes from per-sequence finish checks (`max_new_tokens` and optional stop sequences).
+
+Useful decode-budget approximation per `generate()` call:
+- `decode_budget ~= floor(max_seq_len / max_rounds) * max_rounds * min(max_tokens_per_round, max_seqs)`
+
+For the M9 scaled-page default regime (`max_seq_len=2560`, `max_rounds=64`, `max_tokens_per_round=10`):
+- `decode_budget ~= 2560 * 10 = 25,600` decode-generated tokens.
+- Reported totals around `~25.6k` are therefore expected.
+- Round totals can be slightly above this because prefill can contribute up to ~1 sampled token per active prompt.
+
+Practical consequence:
+- If your target is full `2048` outputs for many prompts in one round, page capacity alone is insufficient.
+- You also need scheduler budget high enough for total target decode tokens.
+- Necessary (not sufficient) check:
+  - `decode_budget >= num_prompts * target_new_tokens`
+- In practice, this is why the length-fixed path uses much larger scheduler knobs than the scaled-page default path.
+
 ## Phase E (Length-Fixed 2048 Sweep)
 
 Objective:

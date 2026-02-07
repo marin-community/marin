@@ -902,6 +902,22 @@ Current interpretation:
 - Isolation run (`max_seqs=60`, 56 prompts) still fails, so the issue tracks configured `max_seqs` shape beyond 56 rather than only the number of active prompts.
 - Next M9 step is failure analysis/recovery for `57+` at runtime/collective level (beyond basic scheduler retuning).
 
+Scheduler explainer (why `56` vs `124/128` both appear in M9):
+- The scheduler is a bounded decode work planner, not a "variable-length mode".
+- Variable-length stopping comes from per-sequence finish checks (`max_new_tokens` and optional stop tokens), not from the scheduler itself.
+- For each host-side decode call, the decode work budget is approximately:
+  - `decode_budget ~= floor(max_seq_len / max_rounds) * max_rounds * min(max_tokens_per_round, max_seqs)`
+- In the M9 scaled-page sweep defaults (`max_seq_len=2560`, `max_rounds=64`, `max_tokens_per_round=10`), this gives:
+  - `decode_budget ~= 2560 * 10 = 25,600` decode-generated tokens/call.
+- Round totals near `~25.6k` are expected under that scheduler; plus up to ~one prefill-sampled token per active prompt can appear in totals (for example `25,656` at `56` prompts).
+- Practical implication:
+  - If your goal is "many prompts with full `2048` outputs each", you must tune scheduler capacity (not just pages).
+  - Necessary condition (not sufficient): pick `max_tokens_per_round` so decode budget can cover target total tokens.
+  - Also set `max_queued_tokens >= max(max_seqs, max_tokens_per_round, max_seqs_in_prefill)` and keep page/prefill constraints satisfied.
+- This is exactly why M9 has two regimes:
+  - Default scheduler regime: stable concurrency boundary currently `max_seqs=56`, but per-prompt lengths shrink.
+  - Length-fixed tuned regime: higher scheduler budgets can preserve full `2048`/prompt at much larger prompt counts (with separate runtime stability constraints).
+
 Tracking:
 - Detailed M9 experiment log: `CODEX_INFERENCE_M9.md`.
 
