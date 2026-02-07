@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Evaluator for Kelp tree diffusion models."""
+"""Evaluator for Kelp tree diffusion edit models."""
 
 import json
 import logging
@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING
 import fsspec
 
 from experiments.kelp.eval.config import KelpEvalTaskConfig, KelpEvaluationConfig
-from experiments.kelp.tokenizer import SimpleTokenizer
 from experiments.kelp.eval.metrics import (
     PassAtKResult,
     ValidityResult,
@@ -33,7 +32,9 @@ from experiments.kelp.eval.metrics import (
 )
 
 if TYPE_CHECKING:
-    from experiments.kelp.model.model import TreeDiffusionModel
+    from experiments.kelp.model.config import TreeDiffusionConfig
+    from experiments.kelp.tree.edit_model import EditModelParams
+    from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -77,57 +78,80 @@ class EvaluationResults:
 
 
 class TreeDiffusionEvaluator:
-    """Evaluator for tree diffusion program synthesis models."""
+    """Evaluator for tree diffusion edit models.
+
+    Uses beam search to generate candidate programs from prompts.
+    """
 
     def __init__(
         self,
-        model: "TreeDiffusionModel",
-        config: KelpEvaluationConfig,
+        params: "EditModelParams",
+        model_config: "TreeDiffusionConfig",
+        tokenizer: "TreeDiffusionTokenizer",
+        eval_config: KelpEvaluationConfig,
     ):
-        self.model = model
-        self.config = config
-        self.tokenizer = SimpleTokenizer(vocab_size=model.config.vocab_size)
+        self.params = params
+        self.model_config = model_config
+        self.tokenizer = tokenizer
+        self.config = eval_config
 
     def generate(
         self,
         prompts: list[str],
         num_samples: int = 1,
-        max_iterations: int | None = None,
+        max_depth: int = 30,
         temperature: float = 1.0,
     ) -> list[list[str]]:
-        """Generate code samples for each prompt.
+        """Generate code samples for each prompt using beam search.
 
         Args:
             prompts: List of prompts (docstrings/signatures).
             num_samples: Number of samples to generate per prompt.
-            max_iterations: Maximum diffusion iterations (uses model default if None).
+            max_depth: Maximum edit depth for beam search.
             temperature: Sampling temperature.
 
         Returns:
             List of lists of generated code strings.
             results[i][j] = j-th sample for i-th prompt.
         """
+        import jax
+
+        from experiments.kelp.tree.beam_search import best_of_n
+
         all_samples = []
+        key = jax.random.PRNGKey(0)
+
         for i, prompt in enumerate(prompts):
             if (i + 1) % 5 == 0 or i == 0:
                 logger.info(f"  Generating samples for prompt {i + 1}/{len(prompts)}")
-            samples = []
-            for _ in range(num_samples):
-                code = self.model.sample(
-                    prompt,
-                    max_iterations=max_iterations or self.model.config.num_diffusion_steps,
-                    temperature=temperature,
-                    use_grammar_constraints=self.config.use_grammar_constraints,
-                    tokenizer=self.tokenizer,
-                )
-                samples.append(code)
+
+            key, sample_key = jax.random.split(key)
+
+            # Start from the prompt as the initial program.
+            # Beam search will try to refine it via edits.
+            candidates = best_of_n(
+                params=self.params,
+                source=prompt + "\n    pass\n",
+                cfg=self.model_config,
+                tokenizer=self.tokenizer,
+                key=sample_key,
+                n=num_samples,
+                max_depth=max_depth,
+                temperature=temperature,
+            )
+
+            samples = [c.source for c in candidates[:num_samples]]
+            # Pad with the initial prompt if fewer candidates generated.
+            while len(samples) < num_samples:
+                samples.append(prompt + "\n    pass\n")
+
             all_samples.append(samples)
         return all_samples
 
     def evaluate_syntactic_validity(
         self,
         prompts: list[str],
-        num_iterations: int | None = None,
+        max_depth: int = 30,
     ) -> ValidityResult:
         """Evaluate syntactic validity rate.
 
@@ -135,16 +159,15 @@ class TreeDiffusionEvaluator:
 
         Args:
             prompts: List of prompts to generate from.
-            num_iterations: Maximum diffusion iterations.
+            max_depth: Maximum edit depth.
 
         Returns:
             ValidityResult with validity rate and details.
         """
         logger.info(f"Evaluating syntactic validity on {len(prompts)} prompts")
-        samples = self.generate(prompts, num_samples=1, max_iterations=num_iterations)
+        samples = self.generate(prompts, num_samples=1, max_depth=max_depth)
         generated_codes = [s[0] for s in samples]
 
-        # Log sample outputs for debugging
         for i, (prompt, code) in enumerate(zip(prompts[:3], generated_codes[:3])):
             logger.info(f"--- Sample {i + 1} ---")
             logger.info(f"Prompt: {prompt[:60]}...")
@@ -180,7 +203,7 @@ class TreeDiffusionEvaluator:
             samples = self.generate(
                 [prompt],
                 num_samples=n_samples,
-                max_iterations=task_config.max_iterations,
+                max_depth=task_config.max_iterations or 30,
                 temperature=task_config.temperature,
             )[0]
 
@@ -209,7 +232,7 @@ class TreeDiffusionEvaluator:
                 prompts = self._get_validity_prompts()
                 if self.config.max_eval_instances:
                     prompts = prompts[: self.config.max_eval_instances]
-                results.validity = self.evaluate_syntactic_validity(prompts, task.max_iterations)
+                results.validity = self.evaluate_syntactic_validity(prompts, task.max_iterations or 30)
                 logger.info(f"Validity rate: {results.validity.validity_rate:.2%}")
 
             elif task.name == "mbpp":
@@ -241,10 +264,7 @@ class TreeDiffusionEvaluator:
         return results
 
     def _get_validity_prompts(self) -> list[str]:
-        """Get prompts for validity evaluation.
-
-        Returns a mix of simple and complex prompts.
-        """
+        """Get prompts for validity evaluation."""
         return [
             'def add(a: int, b: int) -> int:\n    """Return the sum of two numbers."""',
             'def factorial(n: int) -> int:\n    """Compute factorial of n."""',
@@ -259,11 +279,7 @@ class TreeDiffusionEvaluator:
         ]
 
     def _load_mbpp(self) -> list[dict]:
-        """Load MBPP dataset.
-
-        Returns:
-            List of problems with 'prompt' and 'test_cases' keys.
-        """
+        """Load MBPP dataset."""
         try:
             from datasets import load_dataset
 
@@ -283,11 +299,7 @@ class TreeDiffusionEvaluator:
             return []
 
     def _load_humaneval(self) -> list[dict]:
-        """Load HumanEval dataset.
-
-        Returns:
-            List of problems with 'prompt' and 'test_cases' keys.
-        """
+        """Load HumanEval dataset."""
         try:
             from datasets import load_dataset
 

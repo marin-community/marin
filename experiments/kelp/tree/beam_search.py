@@ -236,7 +236,7 @@ def _find_span_end(source: str, start_offset: int) -> int | None:
     """
     import ast as _ast
 
-    from experiments.kelp.tree.mutation import _linecol_to_offset, _node_source_span
+    from experiments.kelp.tree.mutation import _node_source_span
     from experiments.kelp.tree.subtree_bank import EXTRACTABLE_TYPES
 
     try:
@@ -300,8 +300,7 @@ def beam_search(
     """
     # Initialize beam from starting programs.
     beam: list[BeamCandidate] = [
-        BeamCandidate(source=prog, score=0.0, depth=0, edits=())
-        for prog in initial_programs[:beam_size]
+        BeamCandidate(source=prog, score=0.0, depth=0, edits=()) for prog in initial_programs[:beam_size]
     ]
 
     for depth in range(max_depth):
@@ -350,10 +349,7 @@ def beam_search(
         if not beam:
             break
 
-        logger.debug(
-            f"Beam search depth={depth}: {len(beam)} candidates, "
-            f"best_score={beam[0].score:.4f}"
-        )
+        logger.debug(f"Beam search depth={depth}: {len(beam)} candidates, " f"best_score={beam[0].score:.4f}")
 
         # Early stopping: if no new edits were applied, all candidates are stale.
         all_unchanged = all(c.depth <= depth for c in beam)

@@ -20,7 +20,6 @@ import pytest
 
 from experiments.kelp.model.config import TreeDiffusionConfig
 from experiments.kelp.tree.edit_model import (
-    EditModelParams,
     _make_causal_mask,
     ar_loss,
     forward,
@@ -79,12 +78,14 @@ def test_init_params_block_shapes(params, tiny_cfg):
 
 def test_causal_mask():
     mask = _make_causal_mask(4)
-    expected = jnp.array([
-        [True, False, False, False],
-        [True, True, False, False],
-        [True, True, True, False],
-        [True, True, True, True],
-    ])
+    expected = jnp.array(
+        [
+            [True, False, False, False],
+            [True, True, False, False],
+            [True, True, True, False],
+            [True, True, True, True],
+        ]
+    )
     assert jnp.array_equal(mask, expected)
 
 

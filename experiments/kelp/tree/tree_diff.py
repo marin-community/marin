@@ -28,7 +28,7 @@ import ast
 import logging
 from dataclasses import dataclass
 
-from experiments.kelp.tree.mutation import Mutation, _linecol_to_offset, _node_source_span
+from experiments.kelp.tree.mutation import Mutation, _node_source_span
 from experiments.kelp.tree.subtree_bank import count_statements
 
 logger = logging.getLogger(__name__)
@@ -160,10 +160,7 @@ def _diff_nodes(
     if source_span is not None and target_span is not None:
         # Only emit if within the size limit, or as a last resort when
         # we couldn't decompose at all.
-        if (
-            source_stmts <= max_edit_stmts
-            and target_stmts <= max_edit_stmts
-        ) or not matched_any:
+        if (source_stmts <= max_edit_stmts and target_stmts <= max_edit_stmts) or not matched_any:
             target_text = target[target_span[0] : target_span[1]]
             edits.append(
                 Edit(

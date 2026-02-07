@@ -94,18 +94,12 @@ class TreeDiffusionTokenizer:
     def position_token_id(self, pos: int) -> int:
         """Get the token ID for <POS pos>."""
         if pos < 0 or pos >= self.num_position_tokens:
-            raise ValueError(
-                f"Position {pos} out of range [0, {self.num_position_tokens})"
-            )
+            raise ValueError(f"Position {pos} out of range [0, {self.num_position_tokens})")
         return self.position_token_offset + pos
 
     def is_position_token(self, token_id: int) -> bool:
         """Check if a token ID is a position token."""
-        return (
-            self.position_token_offset
-            <= token_id
-            < self.position_token_offset + self.num_position_tokens
-        )
+        return self.position_token_offset <= token_id < self.position_token_offset + self.num_position_tokens
 
     def position_from_token(self, token_id: int) -> int:
         """Extract the position index from a position token ID.
@@ -187,12 +181,7 @@ class TreeDiffusionTokenizer:
         replacement_tokens = self.encode_source(replacement_source)
         pos_token = self.position_token_id(edit_position_token_idx)
 
-        token_ids = (
-            context_tokens
-            + [self.sos_token_id, pos_token]
-            + replacement_tokens
-            + [self.eos_token_id]
-        )
+        token_ids = context_tokens + [self.sos_token_id, pos_token] + replacement_tokens + [self.eos_token_id]
 
         loss_mask = (
             [0] * len(context_tokens)  # Context: no loss.

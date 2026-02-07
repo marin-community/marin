@@ -12,29 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configuration for AR-to-tree-diffusion transfer."""
+"""Configuration for AR-to-edit-model transfer."""
 
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class ARToTreeDiffusionTransferConfig:
-    """Configuration for transferring AR weights to tree diffusion."""
+    """Configuration for transferring AR weights to the edit model."""
 
     source_model_path: str
     """Path to source AR model (HuggingFace format)."""
 
     source_model_type: str = "llama"
     """Type of source model ('llama', 'gpt2', etc.)."""
-
-    init_timestep_embed: str = "random"
-    """How to initialize timestep embeddings: 'random', 'zeros', or 'sinusoidal'."""
-
-    timestep_embed_std: float = 0.02
-    """Standard deviation for random timestep embedding init."""
-
-    remove_causal_mask: bool = True
-    """Whether to remove the causal attention mask (for bidirectional attention)."""
 
 
 # Default path to the Marin 8b model

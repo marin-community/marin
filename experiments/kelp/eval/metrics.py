@@ -171,6 +171,17 @@ def compute_pass_at_k(
     )
 
 
+def _run_test_in_subprocess(code: str, test: str, queue: "multiprocessing.Queue") -> None:
+    """Execute a single test in a subprocess. Must be module-level for pickling."""
+    try:
+        exec_globals: dict = {}
+        exec(code, exec_globals)
+        exec(test, exec_globals)
+        queue.put(True)
+    except Exception:
+        queue.put(False)
+
+
 def execute_python_with_tests(code: str, test_cases: list[str], timeout: float = 5.0) -> list[bool]:
     """Execute generated code with test cases.
 
@@ -184,20 +195,10 @@ def execute_python_with_tests(code: str, test_cases: list[str], timeout: float =
     """
     import multiprocessing
 
-    def run_test(code: str, test: str, queue: multiprocessing.Queue):
-        try:
-            exec_globals: dict = {}
-            exec(code, exec_globals)
-            exec(test, exec_globals)
-            queue.put(True)
-        except Exception as e:
-            logger.debug(f"Test failed: {e}")
-            queue.put(False)
-
     results = []
     for test in test_cases:
         queue: multiprocessing.Queue = multiprocessing.Queue()
-        process = multiprocessing.Process(target=run_test, args=(code, test, queue))
+        process = multiprocessing.Process(target=_run_test_in_subprocess, args=(code, test, queue))
         process.start()
         process.join(timeout=timeout)
 
