@@ -32,21 +32,27 @@ def test_entrypoint_from_callable_resolve_roundtrip():
 def test_entrypoint_proto_roundtrip_preserves_bytes():
     """Bytes survive to_proto -> from_proto without deserialization."""
     ep = Entrypoint.from_callable(_add, 1, 2)
-    original_bytes = ep.callable_bytes
+    original_files = ep.workdir_files
 
     proto = ep.to_proto()
     ep2 = Entrypoint.from_proto(proto)
 
-    assert ep2.callable_bytes == original_bytes
+    assert ep2.workdir_files == original_files
     fn, args, kwargs = ep2.resolve()
     assert fn(*args, **kwargs) == 3
 
 
 def test_entrypoint_command():
     ep = Entrypoint.from_command("echo", "hello")
-    assert ep.is_command
-    assert not ep.is_callable
+    assert not ep.workdir_files
     assert ep.command == ["echo", "hello"]
+
+
+def test_entrypoint_callable_has_workdir_files():
+    ep = Entrypoint.from_callable(_add, 1, 2)
+    assert "_callable.pkl" in ep.workdir_files
+    assert "_callable_runner.py" in ep.workdir_files
+    assert ep.command is not None
 
 
 def test_job_name_roundtrip_and_hierarchy():

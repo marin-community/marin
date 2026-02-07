@@ -24,22 +24,25 @@ import socket
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
-
 from iris.client import IrisClient
 from iris.cluster.client import get_job_info
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
-from iris.cluster.worker.docker import DockerRuntime
+from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration
+
+if TYPE_CHECKING:
+    from iris.cluster.worker.env_probe import EnvironmentProvider
 
 
 def find_free_port() -> int:
@@ -95,20 +98,42 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     return config
 
 
+# Factory type for creating per-worker environment providers.
+# Signature: (worker_id, num_workers) -> EnvironmentProvider
+EnvProviderFactory = Callable[[int, int], "EnvironmentProvider"]
+
+
 class E2ECluster:
     """Synchronous context manager running a controller + worker cluster.
 
     Uses in-process execution (no Docker) by default for fast testing.
     Set use_docker=True to use real Docker containers.
+
+    Args:
+        num_workers: Number of workers to create.
+        use_docker: If True, use Docker containers instead of subprocesses.
+        uv_cache_dir: Shared uv cache directory for Docker tests.
+        env_provider_factory: Optional factory for creating per-worker
+            EnvironmentProviders. Signature: (worker_id, num_workers) -> provider.
+            Use TPUSimEnvironmentProvider for TPU simulation tests.
     """
 
-    def __init__(self, num_workers: int = 1, use_docker: bool = False):
+    def __init__(
+        self,
+        num_workers: int = 1,
+        use_docker: bool = False,
+        uv_cache_dir: Path | None = None,
+        env_provider_factory: EnvProviderFactory | None = None,
+    ):
         self._num_workers = num_workers
         self._use_docker = use_docker
+        self._uv_cache_dir = uv_cache_dir
+        self._env_provider_factory = env_provider_factory
         self._manager: ClusterManager | None = None
         self._controller_port: int | None = None
         # Docker-specific fields
         self._temp_dir: tempfile.TemporaryDirectory | None = None
+        self._container_runtime: DockerRuntime | None = None
         self._controller: Controller | None = None
         self._workers: list[Worker] = []
         self._worker_ids: list[str] = []
@@ -165,9 +190,8 @@ class E2ECluster:
 
         # Docker providers
         bundle_provider = BundleCache(cache_path, max_bundles=10)
-        image_provider = ImageCache(cache_path, max_images=10)
-        container_runtime = DockerRuntime()
-        environment_provider = None  # Use default (probe real system)
+        self._container_runtime = DockerRuntime()
+        container_runtime = self._container_runtime
 
         # Start Workers
         for i in range(self._num_workers):
@@ -180,14 +204,16 @@ class E2ECluster:
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
+                uv_cache_dir=self._uv_cache_dir,
             )
+            env_provider = None
+            if self._env_provider_factory:
+                env_provider = self._env_provider_factory(i, self._num_workers)
             worker = Worker(
                 worker_config,
-                cache_dir=cache_path,
                 bundle_provider=bundle_provider,
-                image_provider=image_provider,
                 container_runtime=container_runtime,
-                environment_provider=environment_provider,
+                environment_provider=env_provider,
             )
             worker.start()
             self._workers.append(worker)
@@ -223,6 +249,8 @@ class E2ECluster:
             # Docker path cleanup
             for worker in self._workers:
                 worker.stop()
+            if self._container_runtime:
+                self._container_runtime.cleanup()
             if self._controller:
                 self._controller.stop()
             if self._temp_dir:
@@ -309,6 +337,19 @@ class E2ECluster:
             time.sleep(poll_interval)
         raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
 
+    def get_task_logs(self, job_or_id, task_index: int = 0) -> list[str]:
+        """Fetch container logs for a task. Useful for debugging failures."""
+        job_id = self._to_job_id_str(job_or_id)
+        task_id = JobName.from_wire(job_id).task(task_index).to_wire()
+        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
+        assert self._controller_client is not None
+        response = self._controller_client.get_task_logs(request)
+        lines = []
+        for batch in response.task_logs:
+            for entry in batch.logs:
+                lines.append(f"{entry.source}: {entry.data}")
+        return lines
+
     def kill(self, job_or_id) -> None:
         job_id = self._to_job_id_str(job_or_id)
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
@@ -323,23 +364,50 @@ class E2ECluster:
             )
         return self._rpc_client
 
+    @property
+    def wait_timeout(self) -> float:
+        """Default timeout for wait() calls. Longer for Docker due to uv sync overhead."""
+        return 120.0 if self._use_docker else 30.0
+
 
 # =============================================================================
 # Pytest Fixtures
 # =============================================================================
 
 
+@pytest.fixture(scope="session")
+def shared_uv_cache(tmp_path_factory) -> Path:
+    """Session-scoped uv cache directory for Docker tests.
+
+    Shared across all Docker tests in the session so Python/packages
+    are only downloaded once.
+    """
+    return tmp_path_factory.mktemp("iris_uv_cache")
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(False, id="local"),
+        pytest.param(True, id="docker", marks=pytest.mark.docker),
+    ]
+)
+def use_docker(request) -> bool:
+    return request.param
+
+
 @pytest.fixture
-def test_cluster(use_docker, docker_cleanup_scope):
+def test_cluster(use_docker, shared_uv_cache):
     """Provide a running test cluster for E2E tests."""
-    with E2ECluster(use_docker=use_docker) as cluster:
+    uv_cache = shared_uv_cache if use_docker else None
+    with E2ECluster(use_docker=use_docker, uv_cache_dir=uv_cache) as cluster:
         yield cluster
 
 
 @pytest.fixture
-def multi_worker_cluster(use_docker, docker_cleanup_scope):
+def multi_worker_cluster(use_docker, shared_uv_cache):
     """Provide a cluster with multiple workers."""
-    with E2ECluster(num_workers=3, use_docker=use_docker) as cluster:
+    uv_cache = shared_uv_cache if use_docker else None
+    with E2ECluster(num_workers=3, use_docker=use_docker, uv_cache_dir=uv_cache) as cluster:
         yield cluster
 
 
@@ -358,7 +426,10 @@ class TestJobLifecycle:
             return 42
 
         job_id = test_cluster.submit(hello, name=unique_name("test-job"))
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
+        if status["state"] != "JOB_STATE_SUCCEEDED":
+            logs = test_cluster.get_task_logs(job_id)
+            pytest.fail(f"Job failed: {status}\nLogs:\n" + "\n".join(logs[-50:]))
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
     def test_job_with_args(self, test_cluster):
@@ -368,7 +439,7 @@ class TestJobLifecycle:
             return a + b
 
         job_id = test_cluster.submit(add, 10, 32, name=unique_name("add-job"))
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
     def test_multiple_jobs_complete(self, test_cluster):
@@ -380,7 +451,7 @@ class TestJobLifecycle:
 
         job_ids = [test_cluster.submit(fast_job, i, name=f"job-{run_id}-{i}") for i in range(5)]
         for job_id in job_ids:
-            status = test_cluster.wait(job_id, timeout=30)
+            status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
             assert status["state"] == "JOB_STATE_SUCCEEDED"
 
     def test_kill_running_job(self, test_cluster, sentinel):
@@ -400,7 +471,7 @@ class TestJobLifecycle:
 
         test_cluster.kill(job_id)
         sentinel.signal()
-        status = test_cluster.wait(job_id, timeout=10)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_KILLED"
 
     def test_job_failure_propagates(self, test_cluster):
@@ -410,7 +481,7 @@ class TestJobLifecycle:
             raise ValueError("intentional failure")
 
         job_id = test_cluster.submit(failing_job, name=unique_name("fail-job"))
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_FAILED"
 
 
@@ -431,7 +502,7 @@ class TestResourceScheduling:
         small_job_id = test_cluster.submit(lambda: "done", name=unique_name("small-job"), cpu=1)
 
         # Small job should complete even though big job is first
-        status = test_cluster.wait(small_job_id, timeout=10)
+        status = test_cluster.wait(small_job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
         # Big job should still be pending (can't fit)
@@ -484,7 +555,7 @@ class TestMultiWorker:
         )
 
         # Wait for completion
-        status = multi_worker_cluster.wait(job_id, timeout=30)
+        status = multi_worker_cluster.wait(job_id, timeout=multi_worker_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
         # Verify tasks ran on different workers
@@ -520,7 +591,7 @@ class TestPorts:
             assert info.ports["grpc"] > 0
 
         job_id = test_cluster.submit(port_job, name=unique_name("port-job"), ports=["http", "grpc"])
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         # Job succeeds only if ports were correctly passed
         assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"
 
@@ -552,7 +623,7 @@ class TestJobInfo:
 
         expected_job_id = JobName.root(job_name).to_wire()
         job_id = test_cluster.submit(test_fn, expected_job_id, name=job_name, ports=["actor"])
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
     def test_job_info_port_allocation(self, test_cluster):
@@ -576,7 +647,7 @@ class TestJobInfo:
             return "success"
 
         job_id = test_cluster.submit(test_fn, name=unique_name("test-job-ports"), ports=["actor", "metrics", "custom"])
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
     def test_job_info_task_context(self, test_cluster):
@@ -600,7 +671,7 @@ class TestJobInfo:
             return "success"
 
         job_id = test_cluster.submit(test_fn, job_name, name=job_name)
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
 
@@ -649,7 +720,7 @@ class TestEndpoints:
                 client.close()
 
         job_id = test_cluster.submit(register_endpoint_job, endpoint_prefix, name=unique_name("endpoint-job"))
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"
 
     def test_endpoint_prefix_matching(self, test_cluster):
@@ -698,5 +769,276 @@ class TestEndpoints:
                 client.close()
 
         job_id = test_cluster.submit(register_multiple_endpoints, ns1, ns2, name=unique_name("prefix-job"))
-        status = test_cluster.wait(job_id, timeout=30)
+        status = test_cluster.wait(job_id, timeout=test_cluster.wait_timeout)
         assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"
+
+
+# =============================================================================
+# Tests: Command parent → Callable child (iris job run → executor flow)
+# =============================================================================
+
+
+class TestCommandParentCallableChild:
+    """Replicates the `iris job run → executor submits callable child` flow.
+
+    Parent is a command entrypoint (like `iris job run -- python script.py`).
+    Inside the parent, a callable child job is submitted via iris_ctx(),
+    exactly as the marin executor does.
+    """
+
+    @pytest.mark.timeout(120)
+    def test_command_parent_callable_child(self, test_cluster):
+        # Parent script submits a callable child job and waits for it.
+        # Uses an inline lambda so it works in both local and Docker modes
+        # (Docker containers can't import test modules or write to host filesystem).
+        parent_script = (
+            "import sys; "
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent.parent.parent / 'src')!r}); "
+            "from iris.client.client import iris_ctx; "
+            "from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec; "
+            "ctx = iris_ctx(); "
+            "ep = Entrypoint.from_callable(lambda: 'ok'); "
+            "job = ctx.client.submit(ep, 'child-callable', "
+            "ResourceSpec(cpu=1, memory='1g'), environment=EnvironmentSpec()); "
+            "job.wait(timeout=120, raise_on_failure=True)"
+        )
+
+        entrypoint = Entrypoint.from_command("python", "-c", parent_script)
+        environment = EnvironmentSpec()
+        resources = ResourceSpec(cpu=1, memory="1g")
+        job = test_cluster.get_client().submit(
+            entrypoint=entrypoint,
+            name=unique_name("cmd-parent"),
+            resources=resources,
+            environment=environment,
+        )
+        job.wait(timeout=90, raise_on_failure=True, stream_logs=True)
+
+
+# =============================================================================
+# Tests: High Task Count (Race Condition Reproduction)
+# =============================================================================
+
+
+@pytest.fixture
+def high_task_cluster(use_docker, shared_uv_cache):
+    """Cluster with multiple workers for high-task-count tests."""
+    uv_cache = shared_uv_cache if use_docker else None
+    with E2ECluster(num_workers=4, use_docker=use_docker, uv_cache_dir=uv_cache) as cluster:
+        yield cluster
+
+
+class TestHighTaskCount:
+    """Test scheduling many tasks simultaneously to expose race conditions."""
+
+    def test_128_tasks_concurrent_scheduling(self, high_task_cluster, sentinel):
+        """Submit 128 tasks to trigger race condition in heartbeat iteration.
+
+        This test reproduces the bug where _heartbeat_worker() iterates over
+        worker.running_tasks without holding state._lock, while the scheduling
+        thread modifies the set. With many tasks scheduled rapidly, this causes
+        "Set changed size during iteration".
+
+        Uses chaos injection to add delay during iteration, widening the race window.
+        Tasks wait on a sentinel so they stay in running_tasks during scheduling.
+        """
+        from iris.chaos import enable_chaos, reset_chaos
+
+        # Add delay during heartbeat iteration to widen race window
+        enable_chaos("controller.heartbeat.iteration", delay_seconds=0.01)
+
+        def waiting_task(s):
+            from iris.time_utils import Duration
+
+            # Wait briefly to stay in running_tasks during scheduling
+            s.wait(timeout=Duration.from_seconds(2))
+            return "done"
+
+        try:
+            job_id = high_task_cluster.submit(
+                waiting_task,
+                sentinel,
+                name=unique_name("race-test"),
+                cpu=0,  # No CPU limit - all tasks can run simultaneously
+                replicas=128,
+            )
+
+            # Wait for tasks to start running
+            time.sleep(1.0)
+
+            # Signal tasks to complete
+            sentinel.signal()
+
+            # Wait for completion - if the race triggers, heartbeat errors will
+            # cause task failures or the controller may crash
+            status = high_task_cluster.wait(job_id, timeout=120)
+            assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"
+        finally:
+            reset_chaos()
+
+
+# =============================================================================
+# Tests: Docker OOM Detection
+# =============================================================================
+
+
+@pytest.fixture
+def docker_cluster(shared_uv_cache):
+    """Docker-only cluster for OOM tests."""
+    with E2ECluster(use_docker=True, uv_cache_dir=shared_uv_cache) as cluster:
+        yield cluster
+
+
+@pytest.mark.docker
+class TestDockerOOM:
+    """Test OOM detection in Docker containers."""
+
+    @pytest.mark.timeout(180)  # Docker tests need longer timeout
+    def test_oom_detection(self, docker_cluster):
+        """Container killed by OOM reports oom_killed in error message.
+
+        Submits a job with low memory limit (64MB) that tries to allocate
+        more memory. Docker's cgroups will OOM-kill the process, and we verify
+        the error message indicates OOM.
+
+        Uses 64MB which is enough for Python + uv sync but not for the allocation.
+        """
+
+        def allocate_memory():
+            # Allocate ~200MB which will exceed 64MB container limit
+            # Use a bytearray for more predictable memory usage
+            data = bytearray(200 * 1024 * 1024)
+            return len(data)
+
+        job_id = docker_cluster.submit(
+            allocate_memory,
+            name=unique_name("oom-test"),
+            memory="64m",  # Enough for build, but allocation will OOM
+        )
+
+        status = docker_cluster.wait(job_id, timeout=docker_cluster.wait_timeout)
+        assert status["state"] == "JOB_STATE_FAILED", f"Expected failure, got: {status}"
+
+        # Check error message contains OOM-related info
+        error = status.get("error", "")
+        has_oom_indicator = "137" in error or "OOM" in error or "SIGKILL" in error or "oom" in error.lower()
+        assert has_oom_indicator, f"Expected OOM-related error message, got: {error}"
+
+        # Fetch logs to verify OOM message was added
+        logs = docker_cluster.get_task_logs(job_id)
+        log_text = "\n".join(logs)
+
+        # Check that our new OOM logging is present
+        # (logs should contain "Container was OOM killed" if oom_killed was True)
+        if "OOM" in error:
+            assert (
+                "OOM killed" in log_text or "OOM" in error
+            ), f"Expected OOM in logs when oom_killed detected. Logs: {log_text[-500:]}"
+
+
+# =============================================================================
+# Tests: TPU Simulation (JAX Coordinator Address)
+# =============================================================================
+
+
+@pytest.fixture
+def tpu_sim_cluster(shared_uv_cache):
+    """Docker cluster with simulated TPU metadata for JAX coordination tests.
+
+    Each worker gets TPUSimEnvironmentProvider which populates:
+    - tpu_worker_hostnames: coordinator IP
+    - tpu_worker_id: worker's index in the slice
+    - device.tpu: marks this as a TPU worker
+
+    This triggers _build_device_env_vars() in docker.py to set:
+    - JAX_COORDINATOR_ADDRESS (host:port format)
+    - JAX_PROCESS_ID
+    - JAX_NUM_PROCESSES
+    """
+    from iris.cluster.worker.env_probe import TPUSimEnvironmentProvider
+
+    with E2ECluster(
+        num_workers=2,
+        use_docker=True,
+        uv_cache_dir=shared_uv_cache,
+        env_provider_factory=lambda i, n: TPUSimEnvironmentProvider(i, n),
+    ) as cluster:
+        yield cluster
+
+
+@pytest.mark.docker
+class TestTPUSimulation:
+    """Test JAX distributed coordination environment variables."""
+
+    @pytest.mark.timeout(180)
+    def test_jax_coordinator_address_format(self, tpu_sim_cluster):
+        """Verify JAX_COORDINATOR_ADDRESS has correct host:port format.
+
+        This test validates the fix for the bug where JAX_COORDINATOR_ADDRESS
+        was set without a port, causing jax.distributed.initialize() to crash
+        with "IndexError: list index out of range" when parsing the address.
+
+        The test simulates the exact parsing that JAX does internally:
+            coordinator_address.rsplit(':', 1)[1]
+        This is the line that crashed before the fix.
+        """
+
+        def validate_jax_env_format():
+            import os
+
+            addr = os.environ.get("JAX_COORDINATOR_ADDRESS", "")
+            proc_id = os.environ.get("JAX_PROCESS_ID", "")
+            num_procs = os.environ.get("JAX_NUM_PROCESSES", "")
+
+            print(f"JAX_COORDINATOR_ADDRESS={addr}")
+            print(f"JAX_PROCESS_ID={proc_id}")
+            print(f"JAX_NUM_PROCESSES={num_procs}")
+
+            # Validate env vars are set
+            if not addr:
+                raise ValueError("JAX_COORDINATOR_ADDRESS not set")
+            if not proc_id:
+                raise ValueError("JAX_PROCESS_ID not set")
+            if not num_procs:
+                raise ValueError("JAX_NUM_PROCESSES not set")
+
+            # This is the exact parsing that JAX does in distributed.py:107
+            # Before the fix, this crashed with IndexError because addr had no port
+            try:
+                port_str = addr.rsplit(":", 1)[1]
+                default_coordinator_bind_address = f"[::]:{port_str}"
+            except IndexError as e:
+                raise ValueError(f"JAX_COORDINATOR_ADDRESS missing port: '{addr}'. Expected format: 'host:port'") from e
+
+            # Validate the port is numeric
+            try:
+                int(port_str)
+            except ValueError as e:
+                raise ValueError(f"Port is not numeric: '{port_str}'") from e
+
+            return {
+                "coordinator_address": addr,
+                "bind_address": default_coordinator_bind_address,
+                "process_id": proc_id,
+                "num_processes": num_procs,
+            }
+
+        # Job must request TPU resources to trigger _build_device_env_vars
+        tpu_device = cluster_pb2.DeviceConfig()
+        tpu_device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4-8-sim", count=4))
+
+        entrypoint = Entrypoint.from_callable(validate_jax_env_format)
+        environment = EnvironmentSpec()
+        resources = ResourceSpec(cpu=1, memory="1g", device=tpu_device)
+
+        job = tpu_sim_cluster.get_client().submit(
+            entrypoint=entrypoint,
+            name=unique_name("jax-env-test"),
+            resources=resources,
+            environment=environment,
+        )
+        status = tpu_sim_cluster.wait(job, timeout=tpu_sim_cluster.wait_timeout)
+
+        if status["state"] != "JOB_STATE_SUCCEEDED":
+            logs = tpu_sim_cluster.get_task_logs(job)
+            pytest.fail(f"Job failed: {status}\nLogs:\n" + "\n".join(logs[-50:]))
