@@ -276,10 +276,17 @@ class Trainer:
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
-        if isinstance(config.tracker, Sequence):
-            self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
-        else:
-            self.tracker = config.tracker.init(self.run_id)
+
+        # Use existing global tracker if available (e.g., from levanter.initialize()),
+        # otherwise create a new one. This avoids calling wandb.init() twice.
+        try:
+            self.tracker = levanter.tracker.current_tracker()
+        except RuntimeError:
+            # No global tracker set, create one
+            if isinstance(config.tracker, Sequence):
+                self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
+            else:
+                self.tracker = config.tracker.init(self.run_id)
 
         self._cmanagers = []
 
