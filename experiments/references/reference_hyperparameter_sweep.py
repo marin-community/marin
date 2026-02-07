@@ -18,6 +18,8 @@ import json
 import os
 import re
 import shutil
+import sqlite3
+import sys
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -170,13 +172,30 @@ def best_run(runs, mode="min"):
     return min(runs, key=metric_key) if mode == "min" else max(runs, key=metric_key)
 
 
-def _local_vizier_db_path(study_id: str, loop_index: int) -> str:
+def _local_vizier_db_path(study_id: str) -> str:
     safe_study = re.sub(r"[^A-Za-z0-9_.-]+", "_", study_id)
-    return os.path.join(tempfile.gettempdir(), f"vizier-{safe_study}-loop-{loop_index}.db")
+    return os.path.join(tempfile.gettempdir(), f"vizier-{safe_study}.db")
 
 
 def _configure_vizier_local_db(local_path: str) -> None:
     clients.environment_variables.servicer_kwargs["database_url"] = f"sqlite:///{local_path}"
+
+
+def _sqlite_sidecar_paths(path: str) -> tuple[str, ...]:
+    return (f"{path}-wal", f"{path}-shm", f"{path}-journal")
+
+
+def _remove_sqlite_sidecars(path: str) -> None:
+    for sidecar_path in _sqlite_sidecar_paths(path):
+        if os.path.exists(sidecar_path):
+            os.remove(sidecar_path)
+
+
+def _checkpoint_sqlite_db(path: str) -> None:
+    if not os.path.exists(path):
+        return
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA wal_checkpoint(FULL);")
 
 
 def _sync_vizier_db_from_gcs(path: str | None, local_path: str) -> bool:
@@ -185,16 +204,23 @@ def _sync_vizier_db_from_gcs(path: str | None, local_path: str) -> bool:
     fs, _, _ = fsspec.get_fs_token_paths(path)
     if not fs.exists(path):
         return False
+    _remove_sqlite_sidecars(local_path)
     with fs.open(path, "rb") as src, open(local_path, "wb") as dst:
         shutil.copyfileobj(src, dst)
     return True
 
 
 def _sync_vizier_db_to_gcs(local_path: str, path: str) -> None:
+    _checkpoint_sqlite_db(local_path)
+    _remove_sqlite_sidecars(local_path)
     fs, _, _ = fsspec.get_fs_token_paths(path)
     fs.makedirs(os.path.dirname(path), exist_ok=True)
     with open(local_path, "rb") as src, fs.open(path, "wb") as dst:
         shutil.copyfileobj(src, dst)
+    for sidecar_suffix in ("-wal", "-shm", "-journal"):
+        sidecar_path = f"{path}{sidecar_suffix}"
+        if fs.exists(sidecar_path):
+            fs.rm(sidecar_path)
 
 
 def _load_suggestions(path: str) -> dict:
@@ -306,7 +332,7 @@ def _build_base_pod_config() -> TrainLmOnPodConfig:
 
 def run_vizier_suggest(config: VizierSuggestConfig) -> None:
     """Create or load a Vizier study, suggest trials, and persist the study DB."""
-    local_db_path = _local_vizier_db_path(config.study_id, config.loop_index)
+    local_db_path = _local_vizier_db_path(config.study_id)
     output_db_path = os.path.join(config.output_path, VIZIER_DB_FILENAME)
     if not _sync_vizier_db_from_gcs(output_db_path, local_db_path):
         _sync_vizier_db_from_gcs(config.input_db_path, local_db_path)
@@ -402,7 +428,7 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
 
 def run_vizier_update(config: VizierUpdateConfig) -> None:
     """Load trial results, update Vizier, and write summary output."""
-    local_db_path = _local_vizier_db_path(config.study_id, config.loop_index)
+    local_db_path = _local_vizier_db_path(config.study_id)
     if not config.input_db_path:
         raise ValueError("input_db_path is required for run_vizier_update")
     if not _sync_vizier_db_from_gcs(config.input_db_path, local_db_path):
@@ -545,10 +571,13 @@ def _build_update_step(
 
 
 if __name__ == "__main__":
+    num_loops = SWEEP.num_loops
+    suggestions_per_loop = SWEEP.suggestions_per_loop
+
     previous_update_step: ExecutorStep | None = None
     base_pod_config = _build_base_pod_config()
 
-    for loop_index in range(SWEEP.num_loops):
+    for loop_index in range(num_loops):
         input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
         suggest_step = _build_suggest_step(loop_index=loop_index, input_db_path=input_db_path)
 
@@ -560,7 +589,7 @@ if __name__ == "__main__":
                 suggestions_path=suggestions_path,
                 base_pod_config=base_pod_config,
             )
-            for suggestion_index in range(SWEEP.suggestions_per_loop)
+            for suggestion_index in range(suggestions_per_loop)
         ]
 
         update_step = _build_update_step(
