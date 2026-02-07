@@ -33,7 +33,6 @@ we use a pragmatic multi-level approach:
 import ast
 import logging
 
-import jax
 import jax.numpy as jnp
 from jaxtyping import Float, Array
 

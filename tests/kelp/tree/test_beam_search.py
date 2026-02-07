@@ -15,7 +15,6 @@
 """Tests for beam search inference."""
 
 import jax
-import jax.numpy as jnp
 import pytest
 
 from experiments.kelp.model.config import TreeDiffusionConfig
@@ -27,7 +26,7 @@ from experiments.kelp.tree.beam_search import (
     best_of_n,
     generate_edit,
 )
-from experiments.kelp.tree.edit_model import EditModelParams, init_edit_params
+from experiments.kelp.tree.edit_model import init_edit_params
 from experiments.kelp.tree.mutation import Mutation
 from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
 

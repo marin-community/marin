@@ -35,7 +35,6 @@ from experiments.kelp.tree.train import (
     train_edit_model,
 )
 
-
 CORPUS = [
     "def add(a, b):\n    return a + b\n",
     "def sub(a, b):\n    return a - b\n",
