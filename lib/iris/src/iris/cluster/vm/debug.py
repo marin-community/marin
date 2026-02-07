@@ -374,6 +374,7 @@ def controller_tunnel(
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
 
     try:

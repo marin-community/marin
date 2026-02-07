@@ -20,7 +20,7 @@ from threading import Lock
 from typing import Protocol
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+LOG_DATEFMT = "%Y%m%d %H%M%S"
 
 
 @dataclass(frozen=True)

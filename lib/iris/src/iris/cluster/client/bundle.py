@@ -22,6 +22,40 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+EXCLUDE_EXTENSIONS = {".mov", ".pyc"}
+
+EXCLUDE_DIRS = {
+    "__pycache__",
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "node_modules",
+    "venv",
+}
+
+EXCLUDE_SUBPATHS = {
+    "docs/figures",
+    "docs/images",
+    "docs/reports",
+    "docs/static",
+    "tests/snapshot",
+}
+
+
+def _should_exclude(relative: Path) -> bool:
+    """Check whether a relative path should be excluded from the bundle."""
+    if relative.suffix in EXCLUDE_EXTENSIONS:
+        return True
+    # e.g. foo.egg-info
+    if any(part.endswith(".egg-info") for part in relative.parts):
+        return True
+    if any(part in EXCLUDE_DIRS for part in relative.parts):
+        return True
+    rel_str = str(relative)
+    return any(subpath in rel_str for subpath in EXCLUDE_SUBPATHS)
+
 
 def _get_git_non_ignored_files(workspace: Path) -> set[Path] | None:
     """Get files that are not ignored by git.
@@ -36,7 +70,9 @@ def _get_git_non_ignored_files(workspace: Path) -> set[Path] | None:
             text=True,
             check=True,
         )
-        return {workspace / line for line in result.stdout.splitlines() if line}
+        files = [Path(f) for f in result.stdout.splitlines() if f]
+        files = [f for f in files if not _should_exclude(f)]
+        return {workspace / f for f in files}
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         logger.debug("Git not available, using pattern-based exclusion: %s", e)
         return None
@@ -72,29 +108,7 @@ class BundleCreator:
                             zf.write(file, file.relative_to(self._workspace))
                 else:
                     for file in self._workspace.rglob("*"):
-                        if file.is_file() and not self._should_exclude(file):
-                            zf.write(file, file.relative_to(self._workspace))
+                        rel = file.relative_to(self._workspace)
+                        if file.is_file() and not _should_exclude(rel):
+                            zf.write(file, rel)
             return bundle_path.read_bytes()
-
-    def _should_exclude(self, path: Path) -> bool:
-        exclude_patterns = {
-            "__pycache__",
-            ".git",
-            ".pytest_cache",
-            ".mypy_cache",
-            ".ruff_cache",
-            "*.pyc",
-            "*.egg-info",
-            ".venv",
-            "venv",
-            "node_modules",
-        }
-        parts = path.relative_to(self._workspace).parts
-        for part in parts:
-            for pattern in exclude_patterns:
-                if pattern.startswith("*"):
-                    if part.endswith(pattern[1:]):
-                        return True
-                elif part == pattern:
-                    return True
-        return False

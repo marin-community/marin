@@ -1,0 +1,26 @@
+# Base task image for Iris jobs.
+#
+# No application source code is included - the bundle is mounted at runtime
+# via bind mount to /app. The uv cache is provided via Docker named volume
+# at runtime for sharing between containers.
+#
+# Build from marin repo root:
+#   docker buildx build --platform linux/amd64 -f lib/iris/Dockerfile.task -t iris-task:latest .
+
+FROM python:3.12
+
+RUN sed -i 's|deb.debian.org|cdn-fastly.deb.debian.org|g' /etc/apt/sources.list.d/*.sources 2>/dev/null; \
+    sed -i 's|deb.debian.org|cdn-fastly.deb.debian.org|g' /etc/apt/sources.list 2>/dev/null; \
+    apt-get update && apt-get install -y --no-install-recommends git curl build-essential \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -LsSf https://astral.sh/uv/0.7.12/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# uv cache location - actual cache is mounted as Docker named volume at runtime
+ENV UV_CACHE_DIR=/uv/cache
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app

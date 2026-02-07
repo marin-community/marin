@@ -33,7 +33,7 @@ def cli():
 @cli.command()
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=8080, type=int, help="Bind port")
-@click.option("--cache-dir", default="~/.cache/iris-worker", help="Cache directory")
+@click.option("--cache-dir", required=True, help="Cache directory (must be a host-visible path for Docker mounts)")
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
 @click.option(
     "--controller-address", default=None, help="Controller URL for auto-registration (e.g., http://controller:8080)"
@@ -72,7 +72,7 @@ def serve(
 
 
 @cli.command()
-@click.option("--cache-dir", default="~/.cache/iris-worker", help="Cache directory")
+@click.option("--cache-dir", required=True, help="Cache directory")
 def cleanup(cache_dir: str):
     """Clean up cached bundles, venvs, and images."""
     cache_path = Path(cache_dir).expanduser()

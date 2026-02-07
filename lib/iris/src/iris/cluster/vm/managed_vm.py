@@ -149,6 +149,17 @@ sudo gcloud auth configure-docker \
 echo "[iris-init] Pulling image: {docker_image}"
 sudo docker pull {docker_image}
 
+# Pull the pre-built task image (base image for job containers).
+# Derive registry path from the worker image by replacing the image name.
+TASK_IMAGE_REGISTRY=$(echo "{docker_image}" | sed 's|/iris-worker:|/iris-task:|')
+echo "[iris-init] Pulling task image: $TASK_IMAGE_REGISTRY"
+if sudo docker pull "$TASK_IMAGE_REGISTRY"; then
+    sudo docker tag "$TASK_IMAGE_REGISTRY" iris-task:latest
+    echo "[iris-init] Task image tagged as iris-task:latest"
+else
+    echo "[iris-init] WARNING: Failed to pull task image, jobs may fail"
+fi
+
 echo "[iris-init] Phase: worker_start"
 
 # Force-remove existing worker (handles restart policy race)
@@ -171,6 +182,7 @@ sudo docker run -d --name iris-worker \
     {docker_image} \
     .venv/bin/python -m iris.cluster.worker.main serve \
         --host 0.0.0.0 --port {worker_port} \
+        --cache-dir {cache_dir} \
         --controller-address "$CONTROLLER_ADDRESS"
 
 echo "[iris-init] Worker container started"

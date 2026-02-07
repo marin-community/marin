@@ -41,8 +41,11 @@ class JobInfo:
     advertise_host: str = "127.0.0.1"
     """The externally visible host name to use when advertising services."""
 
-    dockerfile: str | None = None
-    """The Dockerfile used to build this job's container, for inheritance by child jobs."""
+    extras: list[str] = field(default_factory=list)
+    """Extras from parent job, for child job inheritance."""
+
+    pip_packages: list[str] = field(default_factory=list)
+    """Pip packages from parent job, for child job inheritance."""
 
     ports: dict[str, int] = field(default_factory=dict)
     """Name to port number mapping for this task."""
@@ -91,7 +94,8 @@ def get_job_info() -> JobInfo | None:
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
-            dockerfile=os.environ.get("IRIS_DOCKERFILE"),
+            extras=json.loads(os.environ.get("IRIS_JOB_EXTRAS", "[]")),
+            pip_packages=json.loads(os.environ.get("IRIS_JOB_PIP_PACKAGES", "[]")),
             bundle_gcs_path=os.environ.get("IRIS_BUNDLE_GCS_PATH"),
             ports=_parse_ports_from_env(),
             env=job_env,

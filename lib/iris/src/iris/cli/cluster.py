@@ -20,13 +20,16 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import signal
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import click
 from connectrpc.errors import ConnectError
 
+from iris.cli.build import _build_image, _find_iris_root, _find_marin_root, _push_to_registries
+from iris.cli.debug import debug
+from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.vm.cluster_manager import ClusterManager
@@ -36,10 +39,6 @@ from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_re
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
-
-from iris.cli.build import _build_image, _push_to_registries
-from iris.cli.debug import debug
-from iris.cli.main import require_controller_url
 
 # =============================================================================
 # Helpers
@@ -105,18 +104,20 @@ def _parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | 
 
 @dataclass
 class _ImageBuildParams:
-    image_type: Literal["worker", "controller"]
+    image_type: str
     region: str
     project: str
     image_name: str
     version: str
+    context: str | None = None
+    dockerfile: str | None = None
 
     @property
     def local_tag(self) -> str:
         return f"{self.image_name}:{self.version}"
 
 
-def _extract_image_params(image_tag: str, image_type: Literal["worker", "controller"]) -> _ImageBuildParams | None:
+def _extract_image_params(image_tag: str, image_type: str) -> _ImageBuildParams | None:
     parsed = _parse_artifact_registry_tag(image_tag)
     if not parsed:
         return None
@@ -135,8 +136,8 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
         image_type=params.image_type,
         tag=params.local_tag,
         push=False,
-        dockerfile=None,
-        context=None,
+        dockerfile=params.dockerfile,
+        context=params.context,
         platform="linux/amd64",
         region=(),
         project=params.project,
@@ -158,6 +159,25 @@ def _build_cluster_images(config) -> None:
             if params:
                 _build_and_push_image(params)
                 click.echo()
+
+    # Build and push the task image. It uses the marin repo root as context
+    # (needs pyproject.toml + uv.lock) and Dockerfile.task from iris root.
+    worker_tag = config.defaults.bootstrap.docker_image
+    if worker_tag:
+        parsed = _parse_artifact_registry_tag(worker_tag)
+        if parsed:
+            region, project, _, _ = parsed
+            task_params = _ImageBuildParams(
+                image_type="task",
+                region=region,
+                project=project,
+                image_name="iris-task",
+                version="latest",
+                context=str(_find_marin_root()),
+                dockerfile=str(_find_iris_root() / "Dockerfile.task"),
+            )
+            _build_and_push_image(task_params)
+            click.echo()
 
 
 # =============================================================================
@@ -231,26 +251,28 @@ def cluster_stop(ctx):
 
     ctrl = create_controller_vm(config)
     click.echo("Stopping controller...")
-    try:
-        ctrl.stop()
-        click.echo("Controller stopped")
-    except Exception as e:
-        click.echo(f"Warning: Failed to stop controller: {e}", err=True)
-
-    if not slice_ids_by_group:
-        click.echo("No slices to terminate")
-        return
 
     total = sum(len(ids) for ids in slice_ids_by_group.values())
     click.echo(f"Terminating {total} slice(s)...")
-    for name, slice_ids in slice_ids_by_group.items():
-        group_config = config.scale_groups[name]
-        for slice_id in slice_ids:
+
+    # make an executor for these
+    with ThreadPoolExecutor(max_workers=total + 1) as pool:
+        futures = []
+        futures.append(pool.submit(ctrl.stop))
+        for name, slice_ids in slice_ids_by_group.items():
+            group_config = config.scale_groups[name]
+            for slice_id in slice_ids:
+                try:
+                    futures.append(pool.submit(ops.delete_slice, group_config, slice_id))
+                except Exception as e:
+                    click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
+
+        for future in as_completed(futures):
             try:
-                ops.delete_slice(group_config, slice_id)
-                click.echo(f"Terminated: {slice_id}")
+                future.result()
+                click.echo(f"Terminated: {future.result()}")
             except Exception as e:
-                click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
+                click.echo(f"Failed to terminate: {e}", err=True)
     click.echo("Cluster stopped")
 
 

@@ -40,10 +40,10 @@ class TaskProvider(Protocol):
     """
 
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str: ...
-    def get_task(self, task_id: str) -> TaskInfo | None: ...
+    def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
+    def get_logs(self, task_id: str, start_line: int = 0, attempt_id: int = -1) -> list[cluster_pb2.Worker.LogEntry]: ...
     def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
 
 
@@ -88,9 +88,12 @@ class WorkerServiceImpl:
         request: cluster_pb2.Worker.FetchTaskLogsRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.FetchTaskLogsResponse:
-        """Fetch logs for a task."""
+        """Fetch logs for a task, optionally filtered by attempt."""
         start_line = request.filter.start_line if request.filter.start_line else 0
-        logs = self._provider.get_logs(request.task_id, start_line=start_line)
+        # attempt_id=0 is valid (first attempt), so use the value directly
+        # Convention: -1 means "all attempts", caller sets explicitly
+        attempt_id = request.attempt_id
+        logs = self._provider.get_logs(request.task_id, start_line=start_line, attempt_id=attempt_id)
 
         # Apply additional filters
         result = []

@@ -220,18 +220,24 @@ message EnvironmentConfig {
 // ENTRYPOINT
 // ============================================================================
 
-// Job entrypoint - either a cloudpickled callable or a command line.
-// Exactly one must be set.
-message Entrypoint {
-  oneof kind {
-    bytes callable = 1;           // cloudpickle.dumps((fn, args, kwargs))
-    CommandEntrypoint command = 2; // Command-line execution
-  }
-}
-
 // Command-line entrypoint for script execution.
 message CommandEntrypoint {
   repeated string argv = 1;  // e.g., ["python", "train.py", "--epochs", "10"]
+}
+
+// Structured entrypoint for the runtime layer. Separates environment setup
+// from the actual user command so runtimes can handle them differently
+// (e.g., process runtime skips setup since host env is already configured).
+message RuntimeEntrypoint {
+  // Shell commands to set up the environment (uv sync, pip install, venv activation).
+  // Executed in order before run_command. Runtimes that don't need env setup skip these.
+  repeated string setup_commands = 1;
+
+  // The user's actual command to execute.
+  CommandEntrypoint run_command = 2;
+
+  // Files to write to $IRIS_WORKDIR/{key} before execution.
+  map<string, bytes> workdir_files = 3;
 }
 
 // ============================================================================
@@ -329,7 +335,7 @@ message Controller {
   // --- Job Lifecycle ---
   message LaunchJobRequest {
     string name = 1;
-    Entrypoint entrypoint = 2;              // Job entrypoint (callable or command)
+    RuntimeEntrypoint entrypoint = 2;       // Structured entrypoint for runtime layer
     ResourceSpecProto resources = 3;        // Full resource specification
     EnvironmentConfig environment = 4;  // Environment configuration
 
@@ -375,6 +381,11 @@ message Controller {
     // Per-task timeout. Task is killed if it runs longer than this.
     // If not set or milliseconds=0, no timeout.
     iris.time.Duration timeout = 21;
+
+    // If true, return ALREADY_EXISTS error even if an existing job with the same
+    // name is in a terminal state. If false (default), finished jobs are automatically
+    // removed and replaced with the new submission.
+    bool fail_if_exists = 22;
   }
 
   message LaunchJobResponse {
@@ -388,6 +399,7 @@ message Controller {
 
   message GetJobStatusResponse {
     JobStatus job = 1;
+    LaunchJobRequest request = 2;  // Original job request for debugging
   }
 
   message TerminateJobRequest {
@@ -589,12 +601,14 @@ message Controller {
     int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
     string regex = 5;                // Regex filter (propagated to workers)
+    int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
   }
 
   message TaskLogBatch {
     string task_id = 1;
     repeated Worker.LogEntry logs = 2;
     string error = 3;                // If fetch failed for this task
+    string worker_id = 4;            // Worker that produced these logs
   }
 
   message GetTaskLogsResponse {
@@ -623,7 +637,7 @@ message Worker {
     string task_id = 1;             // Full task ID: "/job/full/path/with/task/0"
     int32 num_tasks = 2;            // Total tasks in job (for IRIS_NUM_TASKS)
 
-    Entrypoint entrypoint = 3;      // Job entrypoint (callable or command)
+    RuntimeEntrypoint entrypoint = 3;  // Structured entrypoint for runtime layer
     EnvironmentConfig environment = 4;
     string bundle_gcs_path = 5;
     ResourceSpecProto resources = 6;
@@ -647,6 +661,7 @@ message Worker {
     iris.time.Timestamp timestamp = 1;
     string source = 2;  // "stdout", "stderr", or "build"
     string data = 3;    // Log line content
+    int32 attempt_id = 4;  // Which attempt produced this log
   }
 
   message FetchLogsFilter {
@@ -660,6 +675,7 @@ message Worker {
   message FetchTaskLogsRequest {
     string task_id = 1;
     FetchLogsFilter filter = 2;
+    int32 attempt_id = 3;  // Filter to specific attempt (-1 = all attempts)
   }
 
   message FetchTaskLogsResponse {

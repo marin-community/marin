@@ -14,6 +14,7 @@
 
 """Bundle storage utilities for the controller."""
 
+import hashlib
 import logging
 
 import fsspec
@@ -51,15 +52,17 @@ class BundleStore:
         Raises:
             ConnectError: If bundle storage fails
         """
-        bundle_path = f"{self._prefix}/{job_id}/bundle.zip"
+        bundle_hash = hashlib.sha256(blob).hexdigest()
+        bundle_path = f"{self._prefix}/{bundle_hash}/bundle.zip"
         try:
             # Create parent directory if needed (use same filesystem instance)
             fs, path = fsspec.core.url_to_fs(bundle_path)
             parent_dir = path.rsplit("/", 1)[0]
             fs.makedirs(parent_dir, exist_ok=True)
 
-            with fs.open(path, "wb") as f:
+            with fs.open(path + ".tmp", "wb") as f:
                 f.write(blob)
+            fs.rename(path + ".tmp", path)
             logger.info("Uploaded bundle for job %s to %s (%d bytes)", job_id, bundle_path, len(blob))
             return bundle_path
         except Exception as e:

@@ -88,10 +88,10 @@ def transition_task(
     )
 
 
-def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
-    """Create a minimal Entrypoint proto for testing."""
-    entrypoint = cluster_pb2.Entrypoint()
-    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
+    """Create a minimal RuntimeEntrypoint proto for testing."""
+    entrypoint = cluster_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
@@ -1305,3 +1305,267 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
     demand = compute_demand_entries(state)
     assert len(demand) == 1
     assert demand[0].preemptible is None
+
+
+# =============================================================================
+# Concurrent Access Race Condition Tests
+# =============================================================================
+
+
+def test_running_tasks_unsafe_iteration_causes_race(worker_metadata):
+    """Demonstrate that unsafe iteration over worker.running_tasks causes race conditions.
+
+    This reproduces the bug where _heartbeat_worker() iterates over worker.running_tasks
+    without holding state._lock, while the scheduling thread modifies the set via
+    assign_task(). When 128+ tasks are scheduled rapidly, this causes
+    "Set changed size during iteration".
+
+    The production scenario:
+    - Scheduling thread: modifies worker.running_tasks via assign_task()
+    - Heartbeat thread: iterates over worker.running_tasks without any lock
+
+    This test EXPECTS the race to trigger, demonstrating the bug.
+    """
+    import concurrent.futures
+
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "addr1:8080", worker_metadata())
+    worker = state.get_worker(worker_id)
+
+    errors = []
+    stop_flag = threading.Event()
+    barrier = threading.Barrier(3)
+
+    def iterate_unsafely():
+        """Iterate directly over the set (UNSAFE - causes race)."""
+        try:
+            barrier.wait()
+            while not stop_flag.is_set():
+                try:
+                    # UNSAFE: direct iteration without snapshot
+                    _ = [tid for tid in worker.running_tasks]
+                except RuntimeError as e:
+                    if "Set changed size during iteration" in str(e):
+                        errors.append(e)
+                        return
+                    raise
+        except Exception as e:
+            errors.append(e)
+
+    def modify_running_tasks():
+        """Modify the set rapidly to trigger the race."""
+        try:
+            barrier.wait()
+            for i in range(10000):
+                fake_tid = JobName.from_string(f"/test-job/{i % 500}")
+                worker.running_tasks.add(fake_tid)
+                if i % 3 == 0 and worker.running_tasks:
+                    try:
+                        worker.running_tasks.pop()
+                    except KeyError:
+                        pass
+            stop_flag.set()
+        except Exception as e:
+            errors.append(e)
+            stop_flag.set()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(iterate_unsafely)
+        f2 = executor.submit(modify_running_tasks)
+        barrier.wait()
+        f2.result()
+        f1.result()
+
+    # This test EXPECTS the race to trigger
+    assert errors, "Expected race condition but it didn't trigger (try running again)"
+    assert "Set changed size during iteration" in str(errors[0])
+
+
+def test_running_tasks_safe_iteration_prevents_race(worker_metadata):
+    """Verify that list(worker.running_tasks) prevents race conditions.
+
+    The fix is to create a snapshot of the set before iteration using list().
+    This ensures the iterator operates on a stable copy even if the original
+    set is modified concurrently.
+    """
+    import concurrent.futures
+
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "addr1:8080", worker_metadata())
+    worker = state.get_worker(worker_id)
+
+    errors = []
+    stop_flag = threading.Event()
+    barrier = threading.Barrier(3)
+
+    def iterate_safely():
+        """Iterate over a snapshot of the set (SAFE - no race)."""
+        try:
+            barrier.wait()
+            while not stop_flag.is_set():
+                try:
+                    # SAFE: create snapshot before iteration
+                    _ = [tid for tid in list(worker.running_tasks)]
+                except RuntimeError as e:
+                    errors.append(e)
+                    return
+        except Exception as e:
+            errors.append(e)
+
+    def modify_running_tasks():
+        """Modify the set rapidly."""
+        try:
+            barrier.wait()
+            for i in range(10000):
+                fake_tid = JobName.from_string(f"/test-job/{i % 500}")
+                worker.running_tasks.add(fake_tid)
+                if i % 3 == 0 and worker.running_tasks:
+                    try:
+                        worker.running_tasks.pop()
+                    except KeyError:
+                        pass
+            stop_flag.set()
+        except Exception as e:
+            errors.append(e)
+            stop_flag.set()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(iterate_safely)
+        f2 = executor.submit(modify_running_tasks)
+        barrier.wait()
+        f2.result()
+        f1.result()
+
+    # With list() snapshot, no race condition occurs
+    assert not errors, f"Unexpected error with safe iteration: {errors}"
+
+
+# =============================================================================
+# Heartbeat Dispatch Transition Tests
+# =============================================================================
+
+
+def test_fail_heartbeat_clears_dispatch_when_worker_fails(job_request, worker_metadata):
+    """Dispatch buffer is cleared when worker hits failure threshold.
+
+    When consecutive heartbeat failures hit the threshold:
+    1. Worker is marked unhealthy
+    2. Running tasks transition to WORKER_FAILED
+    3. Pending dispatch buffer is cleared (not orphaned)
+    """
+    from iris.cluster.controller.state import (
+        HEARTBEAT_FAILURE_THRESHOLD,
+        PendingDispatch,
+    )
+
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Submit and dispatch a task
+    tasks = submit_job(state, "j1", job_request("job1"))
+    dispatch_task(state, tasks[0], worker_id)
+
+    # Buffer a dispatch for the worker
+    fake_request = cluster_pb2.Worker.RunTaskRequest(task_id="/fake/0")
+    state.buffer_dispatch(worker_id, fake_request)
+
+    # Verify dispatch is buffered
+    assert worker_id in state._pending_dispatch
+    assert len(state._pending_dispatch[worker_id].tasks_to_run) == 1
+
+    # Create a snapshot (simulating begin_heartbeat)
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+    assert len(snapshot.tasks_to_run) == 1
+
+    # Verify buffer is now drained
+    assert worker_id not in state._pending_dispatch
+
+    # Simulate repeated failures up to threshold
+    worker = state.get_worker(worker_id)
+    worker.consecutive_failures = HEARTBEAT_FAILURE_THRESHOLD - 1
+
+    # This fail_heartbeat should trigger worker failure
+    state.fail_heartbeat(snapshot, "Connection refused")
+
+    # Verify worker is now unhealthy
+    assert not worker.healthy
+
+    # Verify dispatch buffer was NOT repopulated (would be orphaned)
+    # The fix clears the dispatch buffer when worker fails
+    assert (
+        worker_id not in state._pending_dispatch
+        or not state._pending_dispatch.get(worker_id, PendingDispatch()).tasks_to_run
+    )
+
+
+def test_fail_heartbeat_requeues_dispatch_when_worker_healthy(job_request, worker_metadata):
+    """Dispatch buffer is repopulated when worker remains healthy after failure.
+
+    When heartbeat fails but worker is still below failure threshold,
+    the dispatches should be requeued for the next heartbeat attempt.
+    """
+
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Submit and dispatch a task
+    tasks = submit_job(state, "j1", job_request("job1"))
+    dispatch_task(state, tasks[0], worker_id)
+
+    # Buffer a dispatch
+    fake_request = cluster_pb2.Worker.RunTaskRequest(task_id="/fake/0")
+    state.buffer_dispatch(worker_id, fake_request)
+
+    # Take snapshot
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+
+    # Fail heartbeat (worker stays healthy - below threshold)
+    state.fail_heartbeat(snapshot, "Timeout")
+
+    # Verify worker is still healthy
+    worker = state.get_worker(worker_id)
+    assert worker.healthy
+    assert worker.consecutive_failures == 1
+
+    # Verify dispatch was requeued
+    assert worker_id in state._pending_dispatch
+    assert len(state._pending_dispatch[worker_id].tasks_to_run) == 1
+
+
+def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
+    """complete_heartbeat properly processes task state changes from response."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Submit and dispatch a task
+    tasks = submit_job(state, "j1", job_request("job1"))
+    dispatch_task(state, tasks[0], worker_id)
+
+    # Take snapshot
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+
+    # Create a mock response with completed task
+    response = cluster_pb2.HeartbeatResponse(
+        completed_tasks=[
+            cluster_pb2.Controller.CompletedTaskEntry(
+                task_id=tasks[0].task_id.to_wire(),
+                state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                exit_code=0,
+                attempt_id=0,
+            )
+        ]
+    )
+
+    # Complete heartbeat
+    state.complete_heartbeat(snapshot, response)
+
+    # Verify task is now succeeded
+    task = state.get_task(tasks[0].task_id)
+    assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+    # Verify job is succeeded
+    job = state.get_job(tasks[0].job_id)
+    assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED

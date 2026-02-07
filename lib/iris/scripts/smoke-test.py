@@ -34,12 +34,11 @@ Usage:
     uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --timeout 2700
 
     # Keep cluster running on failure for debugging
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup
+    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode keep
 """
 
 import logging
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -49,7 +48,7 @@ from pathlib import Path
 from typing import Literal, TextIO
 
 import click
-from google.protobuf.json_format import MessageToJson
+from iris.cli.cluster import _build_cluster_images
 from iris.client import IrisClient
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -75,7 +74,6 @@ from iris.rpc.proto_utils import format_accelerator_display
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONTROLLER_PORT = 10000
 DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; TPU slices are pre-warmed by earlier tests
-SCHEDULING_POLL_INTERVAL_SECONDS = 5.0
 WORKER_DISCOVERY_INTERVAL_SECONDS = 10.0
 
 
@@ -374,62 +372,6 @@ class DockerLogStreamer:
             self._stop_event.wait(WORKER_DISCOVERY_INTERVAL_SECONDS)
 
 
-class TaskSchedulingMonitor:
-    """Background thread that polls task status and logs scheduling info."""
-
-    def __init__(self, controller_url: str, log_tree: LogTree, logger: SmokeTestLogger):
-        self._client = ControllerServiceClientSync(controller_url)
-        self._scheduling_dir = log_tree.get_dir("scheduling", "Task scheduling snapshots")
-        self._logger = logger
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._tracked_jobs: set[str] = set()
-
-    def track_job(self, job_id: str):
-        """Add a job to monitor."""
-        self._tracked_jobs.add(job_id)
-
-    def start(self):
-        """Start background polling thread."""
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        """Stop polling."""
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=5.0)
-        self._client.close()
-
-    def _poll_loop(self):
-        """Poll task status every 5 seconds."""
-        while not self._stop_event.is_set():
-            for job_id in list(self._tracked_jobs):
-                try:
-                    self._poll_job_tasks(job_id)
-                except Exception as e:
-                    self._logger.log(f"Error polling job {job_id}: {e}", level="WARN")
-            self._stop_event.wait(SCHEDULING_POLL_INTERVAL_SECONDS)
-
-    def _poll_job_tasks(self, job_id: str):
-        """Poll tasks for a specific job and log scheduling info."""
-        request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id)
-        response = self._client.list_tasks(request)
-
-        # Log pending tasks with reasons
-        pending_tasks = [t for t in response.tasks if t.state == cluster_pb2.TASK_STATE_PENDING]
-
-        if pending_tasks:
-            for task in pending_tasks:
-                if task.pending_reason:
-                    self._logger.log(f"  Task {task.task_index} pending: {task.pending_reason}", level="DEBUG")
-
-        snapshot_file = self._scheduling_dir / f"{job_id}-{int(time.time())}.json"
-        with open(snapshot_file, "w") as f:
-            f.write(MessageToJson(response, preserving_proto_field_name=True))
-
-
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -444,11 +386,9 @@ class SmokeTestConfig:
     timeout_seconds: int = 1800  # 30 min total
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
     tpu_type: str = "v5litepod-16"
-    cleanup: bool = True
-    clean_start: bool = True  # Delete existing resources before starting
     prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
     local: bool = False  # Run locally without GCP
-    fast: bool = False  # Fast mode: redeploy containers on existing VMs instead of recreating
+    mode: Literal["full", "keep", "redeploy"] = "full"
 
     @property
     def label_prefix(self) -> str:
@@ -459,35 +399,6 @@ class SmokeTestConfig:
 # Image Building
 # TODO: Refactor to use iris.build module directly instead of shelling out to CLI
 # =============================================================================
-
-
-def _build_and_push_image(image_type: str, region: str, project: str) -> bool:
-    """Build and push a Docker image using the iris CLI.
-
-    Args:
-        image_type: "controller" or "worker"
-        region: GCP Artifact Registry region
-        project: GCP project ID
-
-    Returns:
-        True if build and push succeeded
-    """
-    cmd = [
-        "uv",
-        "run",
-        "iris",
-        "build",
-        f"{image_type}-image",
-        "-t",
-        f"iris-{image_type}:latest",
-        "--push",
-        "--region",
-        region,
-        "--project",
-        project,
-    ]
-    result = subprocess.run(cmd, capture_output=False)
-    return result.returncode == 0
 
 
 # =============================================================================
@@ -527,13 +438,10 @@ class SmokeTestRunner:
         # Store zone/project for use in cleanup
         self._zone: str | None = None
         self._project: str | None = None
-        # Store region/project for image building
-        self._image_region: str | None = None
-        self._image_project: str | None = None
+        self._cluster_config = None
         # Background monitoring threads
         self._controller_streamer: DockerLogStreamer | None = None
         self._worker_streamer: DockerLogStreamer | None = None
-        self._scheduling_monitor: TaskSchedulingMonitor | None = None
 
     def run(self) -> bool:
         """Run the smoke test. Returns True if all tests pass."""
@@ -572,12 +480,11 @@ class SmokeTestRunner:
             self._project = project
 
             # GCP-only setup phases
+            self._cluster_config = cluster_config
+
             if not manager.is_local:
                 if platform_kind != "gcp":
                     raise RuntimeError("Smoke test requires a gcp platform when not running locally")
-                # Extract region/project for image building
-                self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
-                self._image_project = project
 
                 # Phase 0a: Build and push images (always needed for code changes)
                 self.logger.section("PHASE 0a: Building Images")
@@ -587,9 +494,9 @@ class SmokeTestRunner:
                 if self._interrupted or self._check_deadline():
                     return False
 
-                if not self.config.fast:
+                if self.config.mode != "redeploy":
                     # Normal mode: clean start + create VMs
-                    if self.config.clean_start:
+                    if self.config.mode in ("full", "keep"):
                         self.logger.section("PHASE 0b: Clean Start")
                         self._cleanup_existing(zone, project)
                         if self._interrupted or self._check_deadline():
@@ -597,8 +504,8 @@ class SmokeTestRunner:
 
             # Start cluster and run tests. We avoid connect() context manager
             # because it always calls stop() on exit — we handle cleanup ourselves
-            # to support --no-cleanup.
-            if not self.config.fast:
+            # to support --mode keep/redeploy.
+            if self.config.mode != "redeploy":
                 self.logger.section("Starting Cluster")
                 manager.start()
 
@@ -669,27 +576,14 @@ class SmokeTestRunner:
             self.logger.log("Cleanup complete")
 
     def _build_images(self) -> bool:
-        """Build and push controller and worker images."""
-        if self._image_region is None or self._image_project is None:
-            self.logger.log("Image region/project not set", level="ERROR")
+        """Build and push controller, worker, and task images."""
+        try:
+            _build_cluster_images(self._cluster_config)
+            self.logger.log("All images built and pushed")
+            return True
+        except Exception as e:
+            self.logger.log(f"Image build failed: {e}", level="ERROR")
             return False
-
-        region = self._image_region
-        project = self._image_project
-
-        self.logger.log(f"Building controller image (region={region}, project={project})...")
-        if not _build_and_push_image("controller", region, project):
-            self.logger.log("Controller image build failed!", level="ERROR")
-            return False
-        self.logger.log("Controller image built and pushed")
-
-        self.logger.log(f"Building worker image (region={region}, project={project})...")
-        if not _build_and_push_image("worker", region, project):
-            self.logger.log("Worker image build failed!", level="ERROR")
-            return False
-        self.logger.log("Worker image built and pushed")
-
-        return True
 
     def _run_tests(self, controller_url: str):
         """Run test jobs against the cluster."""
@@ -742,7 +636,7 @@ class SmokeTestRunner:
 
     def _write_task_logs(self, job, test_name: str):
         """Persist task logs for a job to the log directory."""
-        job_dir = self._task_logs_dir / str(job.job_id)
+        job_dir = self._task_logs_dir / job.job_id.to_safe_token()
         job_dir.mkdir(parents=True, exist_ok=True)
         for task in job.tasks():
             task_file = job_dir / f"task-{task.task_index}.log"
@@ -787,10 +681,7 @@ class SmokeTestRunner:
             )
             self.logger.log(f"  Job submitted: {job.job_id}")
 
-            if self._scheduling_monitor:
-                self._scheduling_monitor.track_job(job.job_id)
-
-            status = job.wait(timeout=job_timeout, raise_on_failure=False)
+            status = job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
             duration = time.monotonic() - start
             self._write_task_logs(job, test_name)
 
@@ -835,12 +726,9 @@ class SmokeTestRunner:
             jobs.append(job)
             self.logger.log(f"  Job submitted: {job.job_id}")
 
-            if self._scheduling_monitor:
-                self._scheduling_monitor.track_job(job.job_id)
-
         failed_jobs = []
         for job in jobs:
-            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False)
+            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False, stream_logs=True)
             if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
                 state_name = cluster_pb2.JobState.Name(status.state)
                 failed_jobs.append(f"{job.job_id}: {state_name}")
@@ -973,15 +861,6 @@ class SmokeTestRunner:
             self._worker_streamer.start()
             self.logger.log("Started worker log streaming")
 
-        # Start task scheduling monitor
-        self._scheduling_monitor = TaskSchedulingMonitor(
-            controller_url=url,
-            log_tree=self.log_tree,
-            logger=self.logger,
-        )
-        self._scheduling_monitor.start()
-        self.logger.log("Started task scheduling monitor")
-
         # Run tests
         self.logger.section("Running Tests")
         self._run_tests(url)
@@ -1019,18 +898,16 @@ class SmokeTestRunner:
             self._controller_streamer.stop()
         if self._worker_streamer:
             self._worker_streamer.stop()
-        if self._scheduling_monitor:
-            self._scheduling_monitor.stop()
         self.logger.log("Stopped background monitoring")
 
-        # In fast mode, skip VM cleanup to preserve VMs for next run
-        if self.config.fast:
-            self.logger.log("Fast mode: keeping VMs running for next iteration")
+        # In redeploy mode, skip VM cleanup to preserve VMs for next run
+        if self.config.mode == "redeploy":
+            self.logger.log("Redeploy mode: keeping VMs running for next iteration")
             return
 
-        if not self.config.cleanup:
-            self.logger.log("Skipping cleanup (--no-cleanup)")
-            self.logger.log("VMs left running for debugging or --fast iteration")
+        if self.config.mode == "keep":
+            self.logger.log("Skipping cleanup (--mode keep)")
+            self.logger.log("VMs left running for debugging or redeploy iteration")
             return
 
         if self._manager:
@@ -1087,14 +964,10 @@ class SmokeTestRunner:
     help="TPU type for test jobs (default: v5litepod-16)",
 )
 @click.option(
-    "--no-cleanup",
-    is_flag=True,
-    help="Skip cleanup, leaving VMs running for debugging or --fast iteration",
-)
-@click.option(
-    "--no-clean-start",
-    is_flag=True,
-    help="Skip deleting existing resources before starting",
+    "--mode",
+    type=click.Choice(["full", "keep", "redeploy"]),
+    default="full",
+    help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), 'redeploy' (reuse VMs)",
 )
 @click.option(
     "--prefix",
@@ -1107,47 +980,40 @@ class SmokeTestRunner:
     is_flag=True,
     help="Run locally without GCP (in-process controller and workers)",
 )
-@click.option(
-    "--fast",
-    is_flag=True,
-    help="Fast mode: redeploy containers on existing VMs without recreating",
-)
 def main(
     config_path: Path,
     timeout_seconds: int,
     job_timeout_seconds: int,
     log_dir: Path | None,
     tpu_type: str,
-    no_cleanup: bool,
-    no_clean_start: bool,
+    mode: str,
     prefix: str | None,
     local: bool,
-    fast: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
     This script starts a cluster, submits TPU jobs to exercise autoscaling,
     and validates that everything works correctly. On completion (or failure),
-    the cluster is cleaned up unless --no-cleanup is specified.
+    the cluster is cleaned up unless --mode keep or --mode redeploy is specified.
 
     Examples:
 
         # Basic smoke test (full VM creation)
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
 
-        # Fast mode: redeploy containers on existing VMs (much faster for iteration)
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --fast
+        # Keep VMs running after test
+        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode keep
+
+        # Redeploy mode: reuse existing VMs (much faster for iteration)
+        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode redeploy
 
         # With custom log directory
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \\
+        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \
             --log-dir /path/to/logs
-
-        # Custom timeout (45 min) for slow environments
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --timeout 2700
-
-        # Keep cluster running on failure for debugging
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup
     """
+    from iris.logging import configure_logging
+
+    configure_logging()
     # Create default log directory with timestamp if not provided
     if log_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1159,11 +1025,9 @@ def main(
         job_timeout_seconds=job_timeout_seconds,
         log_dir=log_dir,
         tpu_type=tpu_type,
-        cleanup=not no_cleanup,
-        clean_start=not no_clean_start,
+        mode=mode,  # type: ignore
         prefix=prefix,
         local=local,
-        fast=fast,
     )
 
     runner = SmokeTestRunner(config)

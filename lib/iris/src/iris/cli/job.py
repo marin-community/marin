@@ -28,13 +28,14 @@ import time
 from pathlib import Path
 
 import click
+import humanfriendly
 import yaml
 from google.protobuf import json_format
+from tabulate import tabulate
 
-from iris.client.client import JobFailedError
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
-from iris.client.client import LogEntry
+from iris.client.client import JobFailedError
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -55,6 +56,38 @@ _STATE_MAP: dict[str, cluster_pb2.JobState] = {
 
 def _job_state_name(state: cluster_pb2.JobState) -> str:
     return cluster_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
+
+
+def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
+    """Format job resources as a compact human-readable string."""
+    if not resources:
+        return "-"
+
+    parts = []
+
+    # CPU
+    if resources.cpu:
+        parts.append(f"{resources.cpu}cpu")
+
+    # Memory
+    if resources.memory_bytes:
+        parts.append(humanfriendly.format_size(resources.memory_bytes, binary=True))
+
+    # Disk
+    if resources.disk_bytes:
+        parts.append(f"{humanfriendly.format_size(resources.disk_bytes, binary=True)} disk")
+
+    # Device (TPU/GPU)
+    if resources.HasField("device"):
+        device = resources.device
+        if device.HasField("tpu"):
+            parts.append(device.tpu.variant)
+        elif device.HasField("gpu"):
+            gpu = device.gpu
+            gpu_str = f"{gpu.count}x{gpu.variant}" if gpu.variant else f"{gpu.count}gpu"
+            parts.append(gpu_str)
+
+    return ", ".join(parts) if parts else "-"
 
 
 def _terminate_jobs(
@@ -147,10 +180,7 @@ def build_resources(
     memory: str | None,
 ) -> ResourceSpec:
     """Build ResourceSpec from CLI arguments."""
-    spec = ResourceSpec(
-        cpu=cpu or 1,
-        memory=memory or "2GB",
-    )
+    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "2GB", disk="10GB")
 
     if tpu:
         spec.device = tpu_device(tpu)
@@ -188,7 +218,7 @@ def run_iris_job(
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
-    include_children_logs: bool = False,
+    include_children_logs: bool = True,
     terminate_on_exit: bool = True,
 ) -> int:
     """Core job submission logic.
@@ -334,7 +364,7 @@ Examples:
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.option(
     "--include-children-logs/--no-include-children-logs",
-    default=False,
+    default=True,
     help="Stream logs from child jobs (nested submissions).",
 )
 @click.option(
@@ -459,21 +489,33 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         click.echo("No jobs found.")
         return
 
-    # Compute column widths for aligned output
-    rows: list[tuple[str, str, str]] = []
+    # Build table rows
+    rows: list[list[str]] = []
+    has_reasons = False
+
     for j in jobs:
         job_id = j.job_id
         state_name = _job_state_name(j.state)
         submitted = Timestamp.from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
-        rows.append((job_id, state_name, submitted))
+        resources = _format_resources(j.resources) if j.HasField("resources") else "-"
 
-    id_width = max(len("JOB ID"), max(len(r[0]) for r in rows))
-    state_width = max(len("STATE"), max(len(r[1]) for r in rows))
+        # Show error for failed jobs, pending_reason for pending/unschedulable
+        reason = j.error or j.pending_reason or ""
+        if reason:
+            has_reasons = True
+            # Truncate long reasons
+            reason = (reason[:60] + "...") if len(reason) > 63 else reason
 
-    header = f"{'JOB ID':<{id_width}}  {'STATE':<{state_width}}  SUBMITTED"
-    click.echo(header)
-    for job_id, state_name, submitted in rows:
-        click.echo(f"{job_id:<{id_width}}  {state_name:<{state_width}}  {submitted}")
+        rows.append([job_id, state_name, resources, submitted, reason])
+
+    # Build headers - only include REASON column if there are any reasons
+    if has_reasons:
+        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED", "REASON"]
+    else:
+        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED"]
+        rows = [row[:4] for row in rows]
+
+    click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 
 
 @job.command("logs")
@@ -514,21 +556,23 @@ def logs(
     job_name = JobName.from_wire(job_id)
 
     while True:
-        response = client._cluster_client.fetch_task_logs(
+        result = client.stream_task_logs(
             job_name,
             include_children=include_children,
             since_ms=cursor_ms,
         )
 
-        for batch in response.task_logs:
-            task_id = JobName.from_wire(batch.task_id)
-            for proto in batch.logs:
-                entry = LogEntry.from_proto(proto)
-                ts = entry.timestamp.as_short_time()
-                click.echo(f"[{ts}] {task_id} {entry.data}")
+        # Print errors first so user knows why some logs might be missing
+        for error in result.errors:
+            click.echo(f"[ERROR] task={error.task_id} worker={error.worker_id or '?'} | {error.error}", err=True)
 
-        if response.last_timestamp_ms > cursor_ms:
-            cursor_ms = response.last_timestamp_ms
+        # Print log entries
+        for entry in result.entries:
+            ts = entry.timestamp.as_short_time()
+            click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")
+
+        if result.last_timestamp_ms > cursor_ms:
+            cursor_ms = result.last_timestamp_ms
 
         if not follow:
             break

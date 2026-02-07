@@ -175,7 +175,7 @@ def worker_job_entrypoint(pool_id: str) -> None:
     actual_port = server.serve_background()
 
     # Register endpoint with registry
-    address = f"{job_info.advertise_host}:{actual_port}"
+    address = f"http://{job_info.advertise_host}:{actual_port}"
     ctx.registry.register(worker_name, address, {"job_id": ctx.job_id.to_wire()})
     logger.info("Worker registered: %s at %s", worker_name, address)
 
@@ -235,7 +235,7 @@ class WorkerDispatcher:
                 self._actor_client = ActorClient(
                     resolver=self._resolver,
                     name=self.state.worker_name,
-                    timeout=self._timeout,
+                    resolve_timeout=self._timeout,
                 )
 
             task = self._get_task()
@@ -258,7 +258,7 @@ class WorkerDispatcher:
             self._actor_client = ActorClient(
                 resolver=self._resolver,
                 name=self.state.worker_name,
-                timeout=self._timeout,
+                resolve_timeout=self._timeout,
             )
             logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:

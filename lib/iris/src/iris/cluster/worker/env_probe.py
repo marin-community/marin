@@ -209,6 +209,38 @@ class EnvironmentProvider(Protocol):
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
 
 
+class TPUSimEnvironmentProvider:
+    """Simulated TPU environment for testing multi-host JAX coordination.
+
+    Wraps DefaultEnvironmentProvider and adds fake TPU metadata so that
+    _build_device_env_vars() sets JAX_COORDINATOR_ADDRESS, JAX_PROCESS_ID,
+    and JAX_NUM_PROCESSES correctly.
+    """
+
+    def __init__(
+        self,
+        worker_id: int,
+        num_workers: int,
+        coordinator_host: str = "127.0.0.1",
+        tpu_variant: str = "v4-8-sim",
+    ):
+        self._worker_id = worker_id
+        self._num_workers = num_workers
+        self._coordinator_host = coordinator_host
+        self._tpu_variant = tpu_variant
+
+    def probe(self) -> cluster_pb2.WorkerMetadata:
+        base = DefaultEnvironmentProvider().probe()
+        # Simulate TPU slice membership
+        base.tpu_name = "sim-tpu-slice"
+        base.tpu_worker_id = str(self._worker_id)
+        base.tpu_worker_hostnames = self._coordinator_host
+        base.tpu_chips_per_host_bounds = "2,2,1"
+        # Mark device as TPU so _build_device_env_vars triggers
+        base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
+        return base
+
+
 class DefaultEnvironmentProvider:
     """Default implementation that probes real system resources."""
 

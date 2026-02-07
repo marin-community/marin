@@ -131,6 +131,7 @@ class LocalClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        fail_if_exists: bool = False,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -145,6 +146,7 @@ class LocalClusterClient:
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
             timeout=timeout,
+            fail_if_exists=fail_if_exists,
         )
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
@@ -193,6 +195,7 @@ class LocalClusterClient:
         since_ms: int = 0,
         max_total_lines: int = 0,
         regex: str | None = None,
+        attempt_id: int = -1,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
         return self._remote_client.fetch_task_logs(
             target,
@@ -200,6 +203,7 @@ class LocalClusterClient:
             since_ms=since_ms,
             max_total_lines=max_total_lines,
             regex=regex,
+            attempt_id=attempt_id,
         )
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:

@@ -298,14 +298,14 @@ iris --config cluster.yaml job stop /my-job --no-include-children
 The smoke test validates end-to-end cluster functionality including autoscaling.
 
 ```bash
-# Full smoke test (builds images, starts cluster, runs TPU jobs)
+# Full smoke test (builds images, starts cluster, runs TPU jobs, cleans up)
 uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/eu-west4.yaml
 
-# Skip image builds (use existing images)
-uv run python lib/iris/scripts/smoke-test.py --config ... --no-build-images
+# Run tests and keep VMs running for debugging (manual cleanup required later)
+uv run python lib/iris/scripts/smoke-test.py --config ... --mode keep
 
-# Keep cluster on failure for debugging
-uv run python lib/iris/scripts/smoke-test.py --config ... --no-cleanup-on-failure
+# Fast iteration: redeploy containers on existing VMs
+uv run python lib/iris/scripts/smoke-test.py --config ... --mode redeploy
 
 # Custom job timeout
 uv run python lib/iris/scripts/smoke-test.py --config ... --job-timeout 900
