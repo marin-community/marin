@@ -267,9 +267,11 @@ def generate_training_example(
     # Step 4: Encode as training example.
     # The edit position is the character offset in the intermediate program,
     # which maps to a token index (1:1 for byte-level tokenizer).
-    edit_token_idx = tokenizer.char_offset_to_token_index(
-        intermediate, target_mutation.start
-    )
+    edit_token_idx = tokenizer.char_offset_to_token_index(intermediate, target_mutation.start)
+
+    # Skip if the edit position overflows the tokenizer's position range.
+    if edit_token_idx >= tokenizer.num_position_tokens:
+        return None
 
     token_ids, loss_mask = tokenizer.encode_training_example(
         context_source=intermediate,

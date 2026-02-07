@@ -28,7 +28,6 @@ from experiments.kelp.tree.mutation import (
 )
 from experiments.kelp.tree.subtree_bank import SubtreeBank
 
-
 CORPUS = [
     """\
 def fibonacci(n):
@@ -220,9 +219,7 @@ def test_corrupt_many_programs_all_valid(bank):
     """Smoke test: corrupt every corpus program and check validity."""
     rng = random.Random(123)
     for source in CORPUS:
-        corrupted, _mutations = corrupt_program(
-            source, num_steps=2, bank=bank, rng=rng
-        )
+        corrupted, _mutations = corrupt_program(source, num_steps=2, bank=bank, rng=rng)
         try:
             ast.parse(corrupted)
         except SyntaxError:
