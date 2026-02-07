@@ -1,0 +1,167 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+stop_sequence: null
+max_new_tokens: 2048
+temperature: 0.7
+n_rounds: 1
+n_generations: 1
+defer_tracker_logs_until_end: true
+skip_samples_table: true
+trainer:
+  tracker:
+    type: noop
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: true
+  ragged_paged_q_block_size: 32
+  ragged_paged_kv_block_pages: 16
+engine:
+  max_seq_len: 2560
+  max_pages: 4224
+  page_size: 64
+  max_seqs: 128
+  max_seqs_in_prefill: 128
+  max_prefill_size: 2048
+  max_queued_tokens: 640
+  max_tokens_per_round: 256
+  max_rounds: 64
+  debug_stats_every_n: 10
+  reset_mode: physical
+  cleanup_mode: none
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0
+prompts:
+  - "Prompt 001: Provide a concise overview of topic 1."
+  - "Prompt 002: Provide a concise overview of topic 2."
+  - "Prompt 003: Provide a concise overview of topic 3."
+  - "Prompt 004: Provide a concise overview of topic 4."
+  - "Prompt 005: Provide a concise overview of topic 5."
+  - "Prompt 006: Provide a concise overview of topic 6."
+  - "Prompt 007: Provide a concise overview of topic 7."
+  - "Prompt 008: Provide a concise overview of topic 8."
+  - "Prompt 009: Provide a concise overview of topic 9."
+  - "Prompt 010: Provide a concise overview of topic 10."
+  - "Prompt 011: Provide a concise overview of topic 11."
+  - "Prompt 012: Provide a concise overview of topic 12."
+  - "Prompt 013: Provide a concise overview of topic 13."
+  - "Prompt 014: Provide a concise overview of topic 14."
+  - "Prompt 015: Provide a concise overview of topic 15."
+  - "Prompt 016: Provide a concise overview of topic 16."
+  - "Prompt 017: Provide a concise overview of topic 17."
+  - "Prompt 018: Provide a concise overview of topic 18."
+  - "Prompt 019: Provide a concise overview of topic 19."
+  - "Prompt 020: Provide a concise overview of topic 20."
+  - "Prompt 021: Provide a concise overview of topic 21."
+  - "Prompt 022: Provide a concise overview of topic 22."
+  - "Prompt 023: Provide a concise overview of topic 23."
+  - "Prompt 024: Provide a concise overview of topic 24."
+  - "Prompt 025: Provide a concise overview of topic 25."
+  - "Prompt 026: Provide a concise overview of topic 26."
+  - "Prompt 027: Provide a concise overview of topic 27."
+  - "Prompt 028: Provide a concise overview of topic 28."
+  - "Prompt 029: Provide a concise overview of topic 29."
+  - "Prompt 030: Provide a concise overview of topic 30."
+  - "Prompt 031: Provide a concise overview of topic 31."
+  - "Prompt 032: Provide a concise overview of topic 32."
+  - "Prompt 033: Provide a concise overview of topic 33."
+  - "Prompt 034: Provide a concise overview of topic 34."
+  - "Prompt 035: Provide a concise overview of topic 35."
+  - "Prompt 036: Provide a concise overview of topic 36."
+  - "Prompt 037: Provide a concise overview of topic 37."
+  - "Prompt 038: Provide a concise overview of topic 38."
+  - "Prompt 039: Provide a concise overview of topic 39."
+  - "Prompt 040: Provide a concise overview of topic 40."
+  - "Prompt 041: Provide a concise overview of topic 41."
+  - "Prompt 042: Provide a concise overview of topic 42."
+  - "Prompt 043: Provide a concise overview of topic 43."
+  - "Prompt 044: Provide a concise overview of topic 44."
+  - "Prompt 045: Provide a concise overview of topic 45."
+  - "Prompt 046: Provide a concise overview of topic 46."
+  - "Prompt 047: Provide a concise overview of topic 47."
+  - "Prompt 048: Provide a concise overview of topic 48."
+  - "Prompt 049: Provide a concise overview of topic 49."
+  - "Prompt 050: Provide a concise overview of topic 50."
+  - "Prompt 051: Provide a concise overview of topic 51."
+  - "Prompt 052: Provide a concise overview of topic 52."
+  - "Prompt 053: Provide a concise overview of topic 53."
+  - "Prompt 054: Provide a concise overview of topic 54."
+  - "Prompt 055: Provide a concise overview of topic 55."
+  - "Prompt 056: Provide a concise overview of topic 56."
+  - "Prompt 057: Provide a concise overview of topic 57."
+  - "Prompt 058: Provide a concise overview of topic 58."
+  - "Prompt 059: Provide a concise overview of topic 59."
+  - "Prompt 060: Provide a concise overview of topic 60."
+  - "Prompt 061: Provide a concise overview of topic 61."
+  - "Prompt 062: Provide a concise overview of topic 62."
+  - "Prompt 063: Provide a concise overview of topic 63."
+  - "Prompt 064: Provide a concise overview of topic 64."
+  - "Prompt 065: Provide a concise overview of topic 65."
+  - "Prompt 066: Provide a concise overview of topic 66."
+  - "Prompt 067: Provide a concise overview of topic 67."
+  - "Prompt 068: Provide a concise overview of topic 68."
+  - "Prompt 069: Provide a concise overview of topic 69."
+  - "Prompt 070: Provide a concise overview of topic 70."
+  - "Prompt 071: Provide a concise overview of topic 71."
+  - "Prompt 072: Provide a concise overview of topic 72."
+  - "Prompt 073: Provide a concise overview of topic 73."
+  - "Prompt 074: Provide a concise overview of topic 74."
+  - "Prompt 075: Provide a concise overview of topic 75."
+  - "Prompt 076: Provide a concise overview of topic 76."
+  - "Prompt 077: Provide a concise overview of topic 77."
+  - "Prompt 078: Provide a concise overview of topic 78."
+  - "Prompt 079: Provide a concise overview of topic 79."
+  - "Prompt 080: Provide a concise overview of topic 80."
+  - "Prompt 081: Provide a concise overview of topic 81."
+  - "Prompt 082: Provide a concise overview of topic 82."
+  - "Prompt 083: Provide a concise overview of topic 83."
+  - "Prompt 084: Provide a concise overview of topic 84."
+  - "Prompt 085: Provide a concise overview of topic 85."
+  - "Prompt 086: Provide a concise overview of topic 86."
+  - "Prompt 087: Provide a concise overview of topic 87."
+  - "Prompt 088: Provide a concise overview of topic 88."
+  - "Prompt 089: Provide a concise overview of topic 89."
+  - "Prompt 090: Provide a concise overview of topic 90."
+  - "Prompt 091: Provide a concise overview of topic 91."
+  - "Prompt 092: Provide a concise overview of topic 92."
+  - "Prompt 093: Provide a concise overview of topic 93."
+  - "Prompt 094: Provide a concise overview of topic 94."
+  - "Prompt 095: Provide a concise overview of topic 95."
+  - "Prompt 096: Provide a concise overview of topic 96."
+  - "Prompt 097: Provide a concise overview of topic 97."
+  - "Prompt 098: Provide a concise overview of topic 98."
+  - "Prompt 099: Provide a concise overview of topic 99."
+  - "Prompt 100: Provide a concise overview of topic 100."
+  - "Prompt 101: Provide a concise overview of topic 101."
+  - "Prompt 102: Provide a concise overview of topic 102."
+  - "Prompt 103: Provide a concise overview of topic 103."
+  - "Prompt 104: Provide a concise overview of topic 104."
+  - "Prompt 105: Provide a concise overview of topic 105."
+  - "Prompt 106: Provide a concise overview of topic 106."
+  - "Prompt 107: Provide a concise overview of topic 107."
+  - "Prompt 108: Provide a concise overview of topic 108."
+  - "Prompt 109: Provide a concise overview of topic 109."
+  - "Prompt 110: Provide a concise overview of topic 110."
+  - "Prompt 111: Provide a concise overview of topic 111."
+  - "Prompt 112: Provide a concise overview of topic 112."
+  - "Prompt 113: Provide a concise overview of topic 113."
+  - "Prompt 114: Provide a concise overview of topic 114."
+  - "Prompt 115: Provide a concise overview of topic 115."
+  - "Prompt 116: Provide a concise overview of topic 116."
+  - "Prompt 117: Provide a concise overview of topic 117."
+  - "Prompt 118: Provide a concise overview of topic 118."
+  - "Prompt 119: Provide a concise overview of topic 119."
+  - "Prompt 120: Provide a concise overview of topic 120."
+  - "Prompt 121: Provide a concise overview of topic 121."
+  - "Prompt 122: Provide a concise overview of topic 122."
+  - "Prompt 123: Provide a concise overview of topic 123."
+  - "Prompt 124: Provide a concise overview of topic 124."
+  - "Prompt 125: Provide a concise overview of topic 125."
+  - "Prompt 126: Provide a concise overview of topic 126."
+  - "Prompt 127: Provide a concise overview of topic 127."
+  - "Prompt 128: Provide a concise overview of topic 128."

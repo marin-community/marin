@@ -1,0 +1,167 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+stop_sequence: null
+max_new_tokens: 2048
+temperature: 0.7
+n_rounds: 1
+n_generations: 1
+defer_tracker_logs_until_end: true
+skip_samples_table: true
+trainer:
+  tracker:
+    type: noop
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: true
+  ragged_paged_q_block_size: 32
+  ragged_paged_kv_block_pages: 16
+engine:
+  max_seq_len: 2560
+  max_pages: 2304
+  page_size: 128
+  max_seqs: 128
+  max_seqs_in_prefill: 128
+  max_prefill_size: 512
+  max_queued_tokens: 128
+  max_tokens_per_round: 128
+  max_rounds: 64
+  debug_stats_every_n: 10
+  reset_mode: physical
+  cleanup_mode: none
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0
+prompts:
+  - "P001"
+  - "P002"
+  - "P003"
+  - "P004"
+  - "P005"
+  - "P006"
+  - "P007"
+  - "P008"
+  - "P009"
+  - "P010"
+  - "P011"
+  - "P012"
+  - "P013"
+  - "P014"
+  - "P015"
+  - "P016"
+  - "P017"
+  - "P018"
+  - "P019"
+  - "P020"
+  - "P021"
+  - "P022"
+  - "P023"
+  - "P024"
+  - "P025"
+  - "P026"
+  - "P027"
+  - "P028"
+  - "P029"
+  - "P030"
+  - "P031"
+  - "P032"
+  - "P033"
+  - "P034"
+  - "P035"
+  - "P036"
+  - "P037"
+  - "P038"
+  - "P039"
+  - "P040"
+  - "P041"
+  - "P042"
+  - "P043"
+  - "P044"
+  - "P045"
+  - "P046"
+  - "P047"
+  - "P048"
+  - "P049"
+  - "P050"
+  - "P051"
+  - "P052"
+  - "P053"
+  - "P054"
+  - "P055"
+  - "P056"
+  - "P057"
+  - "P058"
+  - "P059"
+  - "P060"
+  - "P061"
+  - "P062"
+  - "P063"
+  - "P064"
+  - "P065"
+  - "P066"
+  - "P067"
+  - "P068"
+  - "P069"
+  - "P070"
+  - "P071"
+  - "P072"
+  - "P073"
+  - "P074"
+  - "P075"
+  - "P076"
+  - "P077"
+  - "P078"
+  - "P079"
+  - "P080"
+  - "P081"
+  - "P082"
+  - "P083"
+  - "P084"
+  - "P085"
+  - "P086"
+  - "P087"
+  - "P088"
+  - "P089"
+  - "P090"
+  - "P091"
+  - "P092"
+  - "P093"
+  - "P094"
+  - "P095"
+  - "P096"
+  - "P097"
+  - "P098"
+  - "P099"
+  - "P100"
+  - "P101"
+  - "P102"
+  - "P103"
+  - "P104"
+  - "P105"
+  - "P106"
+  - "P107"
+  - "P108"
+  - "P109"
+  - "P110"
+  - "P111"
+  - "P112"
+  - "P113"
+  - "P114"
+  - "P115"
+  - "P116"
+  - "P117"
+  - "P118"
+  - "P119"
+  - "P120"
+  - "P121"
+  - "P122"
+  - "P123"
+  - "P124"
+  - "P125"
+  - "P126"
+  - "P127"
+  - "P128"

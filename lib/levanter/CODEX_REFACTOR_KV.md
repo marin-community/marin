@@ -23,6 +23,8 @@ References:
 - 2026-02-07 02:39 PST: M9 scheduler-variant recovery probe at `max_seqs=57` (`max_pages=2052`, `max_tokens_per_round=8`, `max_rounds=80`) still failed with the same first-decode `Anomalies` signature. This suggests the `57+` instability is not resolved by a simple `max_tokens_per_round/max_rounds` retune.
 - 2026-02-07 02:46 PST: Additional M9 isolation checks. Prefill-limited variant (`max_seqs=57`, `max_seqs_in_prefill=56`, 57 prompts) is rejected by config validation (`max_seqs_in_prefill must cover all prompts`). Crucially, `max_seqs=60` with only 56 prompts (`after_prefill active=56`) still fails with the same first-decode `Anomalies` signature, indicating instability is tied to configured `max_seqs` shape, not merely active prompt count.
 - 2026-02-07 07:35 PST: M9 length-fixed (`2048` per prompt) sweep substantially extended. With scheduler set to preserve full-length outputs (`max_tokens_per_round=max_seqs`, `max_queued_tokens=max_seqs`), runs pass through `max_seqs=113` under the earlier `max_pages=36*max_seqs` scaling, but `114+` showed runtime `Anomalies` when `max_pages` exceeded 4096. Capping `max_pages=4096` changed the boundary: `114` and `120` PASS, `124` PASS (`pages_in_use=4092 free=4`), and `125` is deterministic fast-reject (`est. 4125 pages needed > 4096`). Current practical length-fixed ceiling: **124 prompts x 2048** for this setup.
+- 2026-02-07 00:50 PST: M9 128x2048 continuation and optimization sweep. `max_seqs=128` with `page_size=128` consistently fails at prefill with TPU scoped-vmem OOM (`ragged_paged_attention`, `16.79M > 16.00M`) across attempted tweaks (`max_prefill_size`, `max_seq_len`, `page_size`, `q_block`, `kv_block`). Switching to `page_size=64` with `max_pages=4224` unlocks decode at `128` prompts. Baseline-like `tpr=128,r64` decodes fast but still crashes mid-run with `Anomalies`. Stable tuned variants found: `tpr=64,r80` and `tpr=96,r80` (both complete but do not preserve full 2048/prompt), and `tpr=256,r32,mqt=256` (completes with full `262,144` generated tokens; current best stable fixed-length run, `round_avg_tok_s ~= 1684.0`, `real 275.72`). `tpr=128,r64` variants with higher queue (`mqt=256`) and `cleanup_mode=end` remain `Anomalies`-unstable.
+- 2026-02-07 01:56 PST: M9 128x2048 throughput sweep extended around `tpr=256,r64` with queue-depth tuning. New stable operating region identified: `mqt=320/384/512` all pass with full `262,144` output tokens. Best observed throughput is at `mqt=512` (`round_avg_tok_s ~= 1702.4`, `decode_avg_tok_s ~= 2240.7`), while fastest observed wall clock in this branch is `real 255.93` (same config family). Very high queue regresses (`mqt=640 -> round_avg_tok_s ~= 1675.8`, `mqt=768 -> round_avg_tok_s ~= 1649.5`). All high-throughput pass cases in this branch run with `decode_iters=32`.
 
 ---
 ## gold command
@@ -33,13 +35,14 @@ python lib/levanter/infra/launch.py --foreground --zone us-central1-a \
     2>&1 | tee /tmp/levanter_run_m3.log
 
 
-## Executive Summary
+## Executive Summary (2026-02-07)
 
-1. **Codify invariants** of paged KV caching (`PageTable`, `SequenceTable`, `DecodeState`, `PageBatchInfo`) and enforce them with cheap checks and tests.
-2. **Make reset semantics explicit and multi-host safe**. A reset must always clear device-side state; it must never be conditional on `jax.process_count()`.
-3. **Separate "logical reset" from "physical zeroing"**. Use logical reset by default for performance, but keep physical zeroing as an opt-in debug tool.
-4. **Only then** consider optional features like incremental cleanup during decode, or prompt streaming/admission.
-5. Keep changes **small, monotonic, and test-gated**. Every step must have an exit criterion and a rollback strategy.
+1. M5 stabilized the multi-host reset/batching path, but no clean M5 `10 prompts x 2048` single-round throughput baseline was recorded in the M5 logs.
+2. First stable post-M5 apples-to-apples baseline is M6 kernel-off (`10 prompts x 2048`): `round_total_s=161.4312`, `round_avg_tok_s=126.8652`.
+3. M8 final kernel-tuned config (`q32`, `kv16`) for the same workload: `round_total_s=75.3241`, `round_avg_tok_s=271.8918`.
+4. M5-to-M8 speedup (computed against M6 as the post-M5 baseline proxy): `~2.14x` throughput gain (`+114.3%`) and `~53.3%` lower round time.
+5. Current M9 best stable fixed-length `128 x 2048` run: `page_size=64`, `max_pages=4224`, `max_tokens_per_round=256`, `max_rounds=64`, `max_queued_tokens=512`, with full `262,144` generated tokens and `round_avg_tok_s ~= 1702.4` (fastest observed family wall clock: `real 255.93`).
+6. Estimated M9 baseline-at-128 (unstable `tpr=128,r64,mqt=128/256`) projected from partial decode logs is `~1742-1753 round_avg_tok_s` (`round_total_s ~149.6-150.5s`); current stable best is `~2.3%-2.9%` slower in round throughput, but the higher estimate is from runs that terminate with runtime `Anomalies`.
 
 ---
 

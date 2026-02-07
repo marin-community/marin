@@ -149,3 +149,77 @@ Representative logs:
 - `/tmp/levanter_run_m9_lenfix_s120_p4096_tpr120.log` (pass)
 - `/tmp/levanter_run_m9_lenfix_s124_p4096_tpr124.log` (pass)
 - `/tmp/levanter_run_m9_lenfix_s125_p4096_tpr125.log` (fast-reject)
+
+## Phase F (128 Prompts x 2048 Optimization)
+
+Objective:
+- Force `128` prompts in one round and optimize throughput while preserving fixed-length generation (`round_total_generated == 128 * 2048`).
+
+### F1: Bring-up at 128
+
+Attempts with `page_size=128` (`max_seqs=128`) consistently failed at prefill with scoped-vmem OOM:
+- Signature: `ragged_paged_attention ... Scoped allocation ... 16.79M > 16.00M`.
+- This persisted across `max_prefill_size`, `max_seq_len`, `q_block`, `kv_block`, and page-geometry tweaks.
+
+Switching to `page_size=64` with exact page budget (`max_pages=4224`) was the first setup to decode at `128`.
+
+### F2: 128 Scheduler Sweep
+
+| Variant | Core knobs | Outcome | Fixed 2048/prompt | Key metric |
+|---|---|---|---|---|
+| Baseline-like | `ps=64,p=4224,tpr=128,r=64,mqt=128` | FAIL (`Anomalies`) | yes until crash | mid-decode crash, `real 249.88` |
+| OptA | `tpr=64,r=80,mqt=128` | PASS | no | `round_avg_tok_s ~= 1363.9`, `real 230.20` |
+| OptB | `tpr=96,r=80,mqt=128` | PASS | no | `round_avg_tok_s ~= 1601.9`, `real 257.23` |
+| OptC | `tpr=256,r=32,mqt=256` | PASS | **yes** (`262,144`) | **`round_avg_tok_s ~= 1684.0`, `decode_avg_tok_s ~= 2223.9`, `real 275.72`** |
+| OptD | `tpr=128,r=64,mqt=256` | FAIL (`Anomalies`) | yes until crash | `real 254.33` |
+| OptF | `tpr=128,r=64,cleanup=end` | FAIL (`Anomalies`) | yes until crash | `real 253.07` |
+| OptG | `tpr=256,r=64,mqt=256` | PASS | **yes** (`262,144`) | `round_avg_tok_s ~= 1686.4`, `real 269.17` |
+| OptI | `tpr=384,r=32,mqt=384` | PASS | **yes** (`262,144`) | `round_avg_tok_s ~= 1618.1`, `real 268.03` |
+
+### F3: Extended 128x2048 Throughput Sweep
+
+Goal:
+- Improve stable full-length throughput beyond OptG while keeping `round_total_generated=262144`.
+
+| Variant | Core knobs | Outcome | Key metric |
+|---|---|---|---|
+| OptG rerun2 | `tpr=256,r=64,mqt=256` | PASS | `round_avg_tok_s ~= 1693.2`, `real 266.29` |
+| OptJ | `tpr=320,r=64,mqt=320` | PASS | `round_avg_tok_s ~= 1630.9`, `real 264.65` |
+| OptL | `tpr=384,r=64,mqt=384` | PASS | `round_avg_tok_s ~= 1613.5`, `real 269.60` |
+| OptM | `tpr=256,r=64,mqt=320` | PASS | `round_avg_tok_s ~= 1697.7`, `real 258.28` |
+| OptN | `tpr=256,r=64,mqt=384` | PASS but unstable perf | `round_avg_tok_s ~= 1669.2`, `real 276.32` |
+| OptN rerun2 | `tpr=256,r=64,mqt=384` | PASS | `round_avg_tok_s ~= 1699.3`, `real 259.14` |
+| OptO | `tpr=256,r=64,mqt=512` | PASS | **`round_avg_tok_s ~= 1702.4`**, `real 261.61` |
+| OptO rerun2 | `tpr=256,r=64,mqt=512` | PASS | `round_avg_tok_s ~= 1699.1`, **`real 255.93`** |
+| OptP | `seq=2112,tpr=256,r=64,mqt=320` | PASS | `round_avg_tok_s ~= 1691.7`, `real 273.03` |
+| OptQ | `tpr=256,r=64,mqt=640` | PASS | `round_avg_tok_s ~= 1675.8`, `real 267.84` |
+| OptR | `tpr=256,r=64,mqt=768` | PASS | `round_avg_tok_s ~= 1649.5`, `real 266.99` |
+
+Observations:
+- All successful high-throughput `128x2048` runs in this band used `decode_iters=32` with `8192 new` tokens/iter.
+- `max_queued_tokens` helped up to `512`; `640` and `768` both regressed.
+- `mqt>=384` and `mqt=512` commonly showed a large first decode iteration (`iter_total_s_max ~27-30s`, high `submit_s_max`), but still delivered high aggregate throughput when steady-state remained fast.
+
+### Current 128x2048 Best Stable Result
+
+- Current best-throughput stable fixed-length configuration:
+  - `page_size=64`, `max_pages=4224`, `max_tokens_per_round=256`, `max_rounds=64`, `max_queued_tokens=512`
+  - `round_total_generated=262144` (full `128 * 2048`)
+  - Best observed throughput: `round_avg_tok_s ~= 1702.4` (`OptO`)
+  - Fastest observed wall clock for this family: `real 255.93` (`OptO rerun2`)
+
+Representative logs:
+- `/tmp/levanter_run_m9_lenfix_s128_baseline_ps64_p4224_tpr128_r64_mqt128.log` (decode + `Anomalies` fail)
+- `/tmp/levanter_run_m9_lenfix_optA_s128_ps64_p4224_tpr64_r80_mqt128.log` (pass, non-fixed-length)
+- `/tmp/levanter_run_m9_lenfix_optB_s128_ps64_p4224_tpr96_r80_mqt128.log` (pass, non-fixed-length)
+- `/tmp/levanter_run_m9_lenfix_optC_s128_ps64_p4224_tpr256_r32_mqt256.log` (pass, early fixed-length reference)
+- `/tmp/levanter_run_m9_lenfix_optG_s128_ps64_p4224_tpr256_r64_mqt256.log` (pass)
+- `/tmp/levanter_run_m9_lenfix_optG_s128_ps64_p4224_tpr256_r64_mqt256_rerun2.log` (pass)
+- `/tmp/levanter_run_m9_lenfix_optM_s128_ps64_p4224_tpr256_r64_mqt320.log` (pass)
+- `/tmp/levanter_run_m9_lenfix_optN_s128_ps64_p4224_tpr256_r64_mqt384_rerun2.log` (pass)
+- `/tmp/levanter_run_m9_lenfix_optO_s128_ps64_p4224_tpr256_r64_mqt512.log` (pass, best throughput)
+- `/tmp/levanter_run_m9_lenfix_optO_s128_ps64_p4224_tpr256_r64_mqt512_rerun2.log` (pass, fastest wall clock)
+- `/tmp/levanter_run_m9_lenfix_optQ_s128_ps64_p4224_tpr256_r64_mqt640.log` (pass, regression)
+- `/tmp/levanter_run_m9_lenfix_optR_s128_ps64_p4224_tpr256_r64_mqt768.log` (pass, stronger regression)
+- `/tmp/levanter_run_m9_lenfix_optD_s128_ps64_p4224_tpr128_r64_mqt256.log` (fail)
+- `/tmp/levanter_run_m9_lenfix_optF_s128_ps64_p4224_tpr128_r64_mqt128.log` (fail)
