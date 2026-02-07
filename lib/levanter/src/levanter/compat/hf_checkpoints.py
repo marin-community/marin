@@ -796,9 +796,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     )
                     lev_model = lev_model.resize_vocab(tokenizer_Vocab.size)
                 else:
-                    logger.info(
-                        f"Leaving model vocab size unchanged."
-                    )
+                    logger.info("Leaving model vocab size unchanged.")
 
             lev_model = haliax.shard_with_axis_mapping(lev_model, axis_mapping)
 

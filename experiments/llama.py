@@ -276,7 +276,9 @@ llama_3_1_8b = LlamaConfig(
 )
 
 # Llama-3.1-8B-Instruct
-llama_3_1_8b_instruct_tokenizer = "meta-llama/Llama-3.1-8B-Instruct"  # NOTE: Instruct and base eos_token_id values are different
+llama_3_1_8b_instruct_tokenizer = (
+    "meta-llama/Llama-3.1-8B-Instruct"  # NOTE: Instruct and base eos_token_id values are different
+)
 llama_3_1_8b_instruct = LlamaConfig(
     # Matching defaults in https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/blob/main/config.json
     max_seq_len=4096,

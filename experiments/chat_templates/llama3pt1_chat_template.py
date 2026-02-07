@@ -120,12 +120,12 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
         {%- endif %}
     {%- elif message.role == "tool" or message.role == "ipython" %}
         {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
-        {%- if message.content is none %}                                                                                                                                                                                          
-            {{- '' }}                                                                                                                                                                                                              
-        {%- elif message.content is mapping or message.content is iterable %}                                                                                                                                                      
-            {{- message.content | tojson }}                                                                                                                                                                                        
-        {%- else %}                                                                                                                                                                                                                
-            {{- message.content }}                                                                                                                                                                                                 
+        {%- if message.content is none %}
+            {{- '' }}
+        {%- elif message.content is mapping or message.content is iterable %}
+            {{- message.content | tojson }}
+        {%- else %}
+            {{- message.content }}
         {%- endif %}
         {{- "<|eot_id|>" }}
     {%- endif %}

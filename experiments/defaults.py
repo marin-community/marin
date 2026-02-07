@@ -467,16 +467,8 @@ def default_sft(
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
-    initialize_from_hf = sft_config.initialize_from_hf
-
-    if initialize_from_hf is None:
-        initialize_from_hf = (
-            sft_config.model_name_or_path is not None and sft_config.initialize_from_checkpoint_path is None
-        )
-    elif initialize_from_hf is True and sft_config.model_name_or_path is None:
-        raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
-    elif initialize_from_hf is False and sft_config.initialize_from_checkpoint_path is None:
-        raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
+    if sft_config.initialize_from_hf is not None and sft_config.initialize_from_checkpoint_path is not None:
+        raise ValueError("Cannot specify both initialize_from_hf and initialize_from_checkpoint_path!")
 
     # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
@@ -494,7 +486,7 @@ def default_sft(
         steps_per_export=sft_config.steps_per_checkpoint,
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
-        initialize_from_hf=initialize_from_hf,
+        initialize_from_hf=sft_config.initialize_from_hf,
         initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
         train_seq_len=sft_config.max_seq_len,
         data_seed=sft_config.seed,

@@ -234,7 +234,7 @@ tootsie_8b_deeper_spoonbill = dataclasses.replace(
 
 spoonbill_zloss_tulu3_sft_config = dataclasses.replace(
     tulu_sft_config,
-    model_name_or_path=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "hf/step-829999/"),
+    initialize_from_hf=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "hf/step-829999/"),
 )
 
 
@@ -253,7 +253,7 @@ sft_tulu3_deeper_spoonbill = default_sft(
     model_config=llama_8b_fp32_attn,
     sft_config=dataclasses.replace(
         spoonbill_zloss_tulu3_sft_config,
-        model_name_or_path=output_path_of(tootsie_8b_deeper_spoonbill, "hf/step-839999/"),
+        initialize_from_hf=output_path_of(tootsie_8b_deeper_spoonbill, "hf/step-839999/"),
     ),
     tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
 ).with_output_path("checkpoints/sft/tulu3_tootsie_sft_deeper_spoonbill_zloss")
