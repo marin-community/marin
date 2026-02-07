@@ -95,10 +95,7 @@ qwen3_8b = Qwen3Config(
     layer_norm_epsilon=1e-6,
     tie_word_embeddings=False,
     reference_checkpoint="Qwen/Qwen3-8B",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 # same as olmo 32b
@@ -126,10 +123,7 @@ qwen2_5_1_5b = QwenConfig(
     layer_norm_epsilon=1e-6,
     tie_word_embeddings=True,  # NOTE: This is different than 7B
     reference_checkpoint="Qwen/Qwen2.5-1.5B",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 qwen2_5_1_5b_instruct_tokenizer = "Qwen/Qwen2.5-1.5B-Instruct"
@@ -146,10 +140,7 @@ qwen2_5_1_5b_instruct = QwenConfig(
     layer_norm_epsilon=1e-6,
     tie_word_embeddings=True,  # NOTE: This is different than 7B
     reference_checkpoint="Qwen/Qwen2.5-1.5B-Instruct",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 qwen2_5_3b_tokenizer = "Qwen/Qwen2.5-3B"
@@ -166,10 +157,7 @@ qwen2_5_3b = QwenConfig(
     layer_norm_epsilon=1e-6,
     tie_word_embeddings=True,  # NOTE: This is different than 7B
     reference_checkpoint="Qwen/Qwen2.5-3B",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 qwen2_5_3b_instruct_tokenizer = "Qwen/Qwen2.5-3B-Instruct"
@@ -186,10 +174,7 @@ qwen2_5_3b_instruct = QwenConfig(
     layer_norm_epsilon=1e-6,
     tie_word_embeddings=True,  # NOTE: This is different than 7B
     reference_checkpoint="Qwen/Qwen2.5-3B-Instruct",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 qwen2_5_7b_tokenizer = "Qwen/Qwen2.5-7B"
@@ -206,10 +191,7 @@ qwen2_5_7b = QwenConfig(
     layer_norm_epsilon=1e-6,
     tie_word_embeddings=False,
     reference_checkpoint="Qwen/Qwen2.5-7B",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 qwen2_5_7b_instruct_tokenizer = "Qwen/Qwen2.5-7B-Instruct"
@@ -226,10 +208,7 @@ qwen2_5_7b_instruct = QwenConfig(
     layer_norm_epsilon=1e-6,
     tie_word_embeddings=False,
     reference_checkpoint="Qwen/Qwen2.5-7B-Instruct",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 qwen2_5_32b_tokenizer = "Qwen/Qwen2.5-32B"
@@ -246,10 +225,7 @@ qwen2_5_32b = QwenConfig(
     layer_norm_epsilon=1e-5,
     tie_word_embeddings=False,
     reference_checkpoint="Qwen/Qwen2.5-32B",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 qwen2_5_32b_instruct_tokenizer = "Qwen/Qwen2.5-32B-Instruct"
@@ -266,10 +242,7 @@ qwen2_5_32b_instruct = QwenConfig(
     layer_norm_epsilon=1e-6,  # NOTE: This is changed from the base 32B version
     tie_word_embeddings=False,
     reference_checkpoint="Qwen/Qwen2.5-32B-Instruct",
-    rope=DefaultRotaryEmbeddingsConfig(
-        theta=1000000.0,
-        factor=1.0
-    ),
+    rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
 

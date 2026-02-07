@@ -45,7 +45,7 @@ Current datasets:
 19. nvidia/Nemotron-Post-Training-Dataset-v1
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
-22. open-thoughts/OpenThoughts3-1.2M  # Note that this is the *original* OpenThoughts3 dataset; smoltalk2 has a slightly different version
+22. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 """
 
 import dataclasses
