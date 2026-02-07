@@ -31,8 +31,8 @@ from vizier.service import clients
 from vizier.service import pyvizier as vz
 
 from experiments.defaults import default_train
+from experiments.pretraining_datasets.main import nemotron_mix
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
