@@ -123,6 +123,8 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
+    enforce_bos: bool | None = None,
+    enforce_eos: bool | None = None,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -141,6 +143,8 @@ def default_tokenize(
             for more details.
         sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
+        enforce_bos: Override whether BOS should be appended. None falls back to default heuristics.
+        enforce_eos: Override whether EOS should be appended. None falls back to default heuristics.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
     """
@@ -154,6 +158,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            enforce_bos=enforce_bos,
+            enforce_eos=enforce_eos,
         )
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
@@ -162,6 +168,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            enforce_bos=enforce_bos,
+            enforce_eos=enforce_eos,
         )
     else:
         config = TokenizeConfig(
@@ -171,6 +179,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            enforce_bos=enforce_bos,
+            enforce_eos=enforce_eos,
         )
 
     return ExecutorStep(

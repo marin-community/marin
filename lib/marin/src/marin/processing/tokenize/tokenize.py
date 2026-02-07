@@ -86,6 +86,10 @@ class TokenizeConfig(TokenizeConfigBase):
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
 
+    enforce_bos: bool | None = None
+    """Override whether BOS should be appended. None falls back to default heuristics."""
+    enforce_eos: bool | None = None
+    """Override whether EOS should be appended. None falls back to default heuristics."""
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa
     """
     The format of the dataset. This is used to determine how to tokenize the data.
@@ -156,6 +160,11 @@ class HfTokenizeConfig(TokenizeConfigBase):
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
+
+    enforce_bos: bool | None = None
+    """Override whether BOS should be appended. None falls back to default heuristics."""
+    enforce_eos: bool | None = None
+    """Override whether EOS should be appended. None falls back to default heuristics."""
 
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
@@ -263,7 +272,15 @@ def _tokenize_batches(
 ) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
     tokenizer: transformers.PreTrainedTokenizer = ctx.get(tokenizer_ref)
-    batch_processor = preprocessor_for_format(config.format, tokenizer)
+    enforce_bos = True if config.enforce_bos is None else config.enforce_bos
+    enforce_eos = True if config.enforce_eos is None else config.enforce_eos
+
+    batch_processor = preprocessor_for_format(
+        config.format,
+        tokenizer,
+        enforce_bos=enforce_bos,
+        enforce_eos=enforce_eos,
+    )
 
     for batch in batches:
         yield from batch_processor(batch)
