@@ -116,6 +116,10 @@ class PrismHConfig(OptimizerConfig):
         """
         Creates the optimizer.
         """
+        if self.gamma_R <= 0.0:
+            raise ValueError(f"PrismHConfig.gamma_R must be > 0 for PrismH; got {self.gamma_R}.")
+        if self.bidirectional and self.gamma_L <= 0.0:
+            raise ValueError(f"PrismHConfig.gamma_L must be > 0 for bidirectional PrismH; got {self.gamma_L}.")
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
@@ -231,14 +235,12 @@ def scale_with_prismh(
             G = layer_orig.weight.array
             D = G - M
             if bidirectional:
-                assert gamma_L > 0 and gamma_R > 0, "gamma_L and gamma_R must be > 0 for bidirectional PrismH"
                 H_L = M @ M.mT + gamma_L**2 * D @ D.mT + muon_eps * jnp.eye(M.shape[0], dtype=M.dtype)
                 H_R = M.mT @ M + gamma_R**2 * D.mT @ D + muon_eps * jnp.eye(M.shape[1], dtype=M.dtype)
                 updated_weight_array = double_sided_matmul_invroot(H_L, M, H_R, r=4, steps=steps, eps=muon_eps, scale=coefficient_scale)
             else:
-                assert gamma_R > 0, "gamma_R must be > 0 for unidirectional PrismH"
                 H_R = M.mT @ M + gamma_R**2 * D.mT @ D + muon_eps * jnp.eye(M.shape[1], dtype=M.dtype)
-                return matmul_invroot(M, H_R, r=2, steps=steps, eps=muon_eps, scale=coefficient_scale)
+                updated_weight_array = matmul_invroot(M, H_R, r=2, steps=steps, eps=muon_eps, scale=coefficient_scale)
 
             updated_weight = dataclasses.replace(layer.weight, array=updated_weight_array)
 
