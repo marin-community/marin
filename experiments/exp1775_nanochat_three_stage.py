@@ -25,7 +25,6 @@ Schedule details
   implied stable fraction is ``1 - warmup - decay``. With the values below, the effective
   schedule is 0.05 / 0.75 / 0.20.
 """
-import dataclasses
 
 from experiments.defaults import default_sft, default_train
 from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
@@ -40,7 +39,7 @@ from marin.processing.tokenize.data_configs import lm_varying_mixture_data_confi
 
 # ------------------------------------------------------------------------------------
 # Shared hyperparameters and helpers
-MODEL_CONFIG = dataclasses.replace(llama_600m, max_seq_len=4096)  # 4096 is default; just making it explicit
+MODEL_CONFIG = llama_600m
 TOKENIZER_NAME = llama3_tokenizer
 
 # Warmup/stable/decay proportions used by the combined run.
@@ -137,12 +136,12 @@ sft_config = SimpleSFTConfig(
     learning_rate=SFT_LEARNING_RATE,
     weight_decay=WEIGHT_DECAY,
     tokenizer=TOKENIZER_NAME,
-    initialize_from_hf=output_path_of(nanochat_pre_mid_step, "hf/step-24999/"),
+    model_name_or_path=output_path_of(nanochat_pre_mid_step, "hf/step-24999/"),
     steps_per_eval=100,
     steps_per_checkpoint=200,
     steps_per_hf_export=200,
     warmup=SFT_WARMUP_FRACTION,
-    decay=SFT_COOLDOWN_FRACTION,
+    cooldown=SFT_COOLDOWN_FRACTION,
 )
 
 nanochat_sft_step = default_sft(

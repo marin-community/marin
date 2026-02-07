@@ -22,7 +22,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
 from tqdm import tqdm
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 
 hf_fs = HfFileSystem()
 logger = logging.getLogger(__name__)
@@ -107,5 +107,6 @@ def prune_hf_dataset(cfg: DatasetConfig):
     )
 
     logger.info("Executing pipeline")
-    Backend.execute(pipeline)
+    with ZephyrContext() as ctx:
+        ctx.execute(pipeline)
     logger.info("Successfully processed all subsets")
