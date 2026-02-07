@@ -842,6 +842,27 @@ Recommendation:
 Tracking:
 - Detailed M8 experiment log: `CODEX_INFERENCE_M8.md`.
 
+### M9 - `max_seqs` Scaling Beyond 10
+
+Status: IN PROGRESS (2026-02-07)
+
+Goal:
+- Push concurrent sequence capacity beyond `max_seqs=10` for `2048`-token generation on real TPU.
+- Identify both:
+  - practical boundary with fixed page budget, and
+  - practical boundary when page budget is scaled with concurrency.
+
+Baseline:
+- Start from M8 final kernel-on configuration (`q32`, `kv16`) and M6-stable scheduler defaults.
+
+Deliverables:
+- Capacity/performance matrix over increasing `max_seqs` values (`12+`).
+- Clear pass/fail boundary with failure signatures and config constraints.
+- Recommended M9 operating point for higher-throughput batching.
+
+Tracking:
+- Detailed M9 experiment log: `CODEX_INFERENCE_M9.md`.
+
 ---
 
 ## Test Matrix (What We Run After Each Milestone)
