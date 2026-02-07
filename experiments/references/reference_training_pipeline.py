@@ -45,7 +45,6 @@ model = LlamaConfig(
     num_heads=16,
     num_kv_heads=8,
     num_layers=24,
-    cross_entropy_block_size=32000,  # blockwise CE to reduce memory spike
 )
 
 # --- Schedule ---
