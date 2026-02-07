@@ -81,7 +81,13 @@ def list_parquet_files(data_path: str) -> List[str]:
 
 
 def count_image_refs_in_messages(messages: List[Dict]) -> int:
-    """Count the number of image references in a messages list."""
+    """Count the number of image references in a messages list.
+
+    Checks for:
+    1. {"type": "image"} content items (standard format)
+    2. "<image>" literal text inside {"type": "text"} content items (corrupt data)
+    3. "<image>" in plain string content
+    """
     count = 0
     if not messages:
         return 0
@@ -89,8 +95,12 @@ def count_image_refs_in_messages(messages: List[Dict]) -> int:
         content = msg.get("content", [])
         if isinstance(content, list):
             for item in content:
-                if isinstance(item, dict) and item.get("type") == "image":
-                    count += 1
+                if isinstance(item, dict):
+                    if item.get("type") == "image":
+                        count += 1
+                    elif item.get("type") == "text":
+                        # Also check for <image> embedded in text content
+                        count += item.get("text", "").count("<image>")
         elif isinstance(content, str):
             # Some formats use <image> in text
             count += content.count("<image>")
