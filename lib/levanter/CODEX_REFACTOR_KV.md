@@ -804,6 +804,44 @@ Exit criteria:
 Notes:
 - Detailed experiment history and hypotheses are tracked in `CODEX_INFERENCE_M7.md`.
 
+### M8 - Kernel Tuning (10 prompts x 2048)
+
+Status: COMPLETED (2026-02-07)
+
+Goal:
+- Tune TPU ragged paged attention kernel block sizes for the M6 production workload:
+  - `10 prompts`
+  - `2048 max_new_tokens`
+  - `1 round`
+
+Deliverables:
+- Real TPU benchmark matrix comparing:
+  - M6 final kernel-off baseline
+  - Kernel-on variants with explicit (`q_block_size`, `kv_block_pages`) settings
+- Final recommended kernel-on config.
+
+Results:
+- Baseline (kernel off): `round_total_s=161.431`, `round_avg_tok_s=126.865`.
+- Kernel-on results:
+  - K1 (`q16`,`kv16`): `75.582s` (`2.136x`, `53.18%` faster vs baseline)
+  - K2 (`q32`,`kv16`): `74.738s` (`2.160x`, `53.70%` faster vs baseline)  <-- best
+  - K3 (`q16`,`kv32`): `75.241s` (`2.146x`, `53.39%` faster vs baseline)
+  - K4 (`q32`,`kv32`): `74.758s` (`2.159x`, `53.69%` faster vs baseline)
+- Canonical `m8_final` validation run (`q32`,`kv16`) also passed at `75.324s` (normal run-to-run variance band).
+- All kernel-on variants were stable on real TPU (`v5p-16`) for this workload.
+
+Exit criteria:
+- Kernel-on config is stable on real TPU for this workload. ✅
+- Throughput is not worse than M6 baseline and ideally improves. ✅ (`~2.16x`)
+- Recommendation documented with logs and measured deltas. ✅
+
+Recommendation:
+- Use `config/sampler/sample_llama8b_multihost_real_10prompts_2048_reset_physical_round1_cleanup_none_noop_m8_final.yaml`
+  (`use_tpu_ragged_paged_attention: true`, `ragged_paged_q_block_size: 32`, `ragged_paged_kv_block_pages: 16`).
+
+Tracking:
+- Detailed M8 experiment log: `CODEX_INFERENCE_M8.md`.
+
 ---
 
 ## Test Matrix (What We Run After Each Milestone)

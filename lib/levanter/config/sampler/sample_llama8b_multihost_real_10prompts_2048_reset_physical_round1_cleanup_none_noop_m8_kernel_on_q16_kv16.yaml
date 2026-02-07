@@ -1,0 +1,49 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+stop_sequence: null
+max_new_tokens: 2048
+temperature: 0.7
+n_rounds: 1
+n_generations: 1
+defer_tracker_logs_until_end: true
+skip_samples_table: true
+trainer:
+  tracker:
+    type: noop
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: true
+  ragged_paged_q_block_size: 16
+  ragged_paged_kv_block_pages: 16
+engine:
+  max_seq_len: 2560
+  max_pages: 480
+  page_size: 64
+  max_seqs: 10
+  max_seqs_in_prefill: 10
+  max_prefill_size: 4096
+  max_queued_tokens: 64
+  max_tokens_per_round: 10
+  max_rounds: 64
+  debug_stats_every_n: 10
+  reset_mode: physical
+  cleanup_mode: none
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0
+prompts:
+  - "Prompt 001: Provide a concise overview of the benefits of sleep."
+  - "Prompt 002: Summarize the main idea of photosynthesis in one paragraph."
+  - "Prompt 003: Explain what an API is to a non-technical audience."
+  - "Prompt 004: Write a short tip for staying focused while coding."
+  - "Prompt 005: Describe a simple strategy for managing time effectively."
+  - "Prompt 006: Explain the difference between RAM and storage."
+  - "Prompt 007: Give one practical idea for reducing meeting overhead."
+  - "Prompt 008: Describe what unit tests validate in software projects."
+  - "Prompt 009: Summarize how DNS resolution works at a high level."
+  - "Prompt 010: Provide a brief explanation of eventual consistency."
