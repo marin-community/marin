@@ -159,7 +159,8 @@ mixture_config = lm_mixture_data_config(
 
 # Update max_seq_len to match SimpleSFTConfig to prevent errors
 llama_8b_8k = dataclasses.replace(
-    llama_8b, max_seq_len=8192,
+    llama_8b,
+    max_seq_len=8192,
 )
 
 marin_8b_sft_smoltalk2_nemotron_v2 = default_sft(
