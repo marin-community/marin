@@ -369,6 +369,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=["math"],
         splits=["train"],
     ),
+    "teetone/temp_mixtureofthoughts_math_qwen3-4b_round1": InstructionDatasetConfig(
+        hf_dataset_id="teetone/temp_mixtureofthoughts_math_qwen3-4b_round1",
+        revision="0c0a606",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["original_response"],
+        name="teetone/temp_mixtureofthoughts_math_qwen3-4b_round1",
+        subsets=[],
+        splits=["train"],
+    ),
     "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
         hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
         revision="9e9adba",
