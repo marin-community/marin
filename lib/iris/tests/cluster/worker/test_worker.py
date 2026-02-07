@@ -17,7 +17,6 @@
 import socket
 import time
 import zipfile
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -25,9 +24,9 @@ from connectrpc.request import RequestContext
 
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
-from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
+from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.types import ContainerStats, ContainerStatus
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -90,27 +89,56 @@ def test_concurrent_allocations(allocator):
 
 
 @pytest.fixture
-def mock_bundle_cache():
-    """Create mock BundleCache."""
+def mock_bundle_cache(tmp_path):
+    """Create mock BundleCache with a real temp directory."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "test_file.py").write_text("print('hello')")
+
     cache = Mock(spec=BundleCache)
-    cache.get_bundle = Mock(return_value=Path("/tmp/bundle"))
+    cache.get_bundle = Mock(return_value=bundle_dir)
     return cache
 
 
-@pytest.fixture
-def mock_image_cache():
-    """Create mock ImageBuilder."""
-    builder = Mock(spec=ImageBuilder)
-    builder.build = Mock(
-        return_value=BuildResult(
-            image_tag="test-image:latest",
-            build_time_ms=1000,
-            from_cache=False,
-        )
-    )
-    builder.protect = Mock()
-    builder.unprotect = Mock()
-    return builder
+def create_mock_container_handle(
+    status_sequence: list[ContainerStatus] | None = None,
+    run_side_effect: Exception | None = None,
+):
+    """Create a mock ContainerHandle for testing.
+
+    Args:
+        status_sequence: List of ContainerStatus to return on successive status() calls.
+            Defaults to [running=True, running=False with exit_code=0].
+        run_side_effect: Exception to raise when run() is called.
+    """
+    handle = Mock()
+    handle.container_id = "container123"
+    handle.build = Mock(return_value=[])
+
+    if run_side_effect:
+        handle.run = Mock(side_effect=run_side_effect)
+    else:
+        handle.run = Mock()
+
+    if status_sequence is None:
+        status_sequence = [
+            ContainerStatus(running=True),
+            ContainerStatus(running=False, exit_code=0),
+        ]
+
+    call_count = [0]
+
+    def status_side_effect():
+        idx = min(call_count[0], len(status_sequence) - 1)
+        call_count[0] += 1
+        return status_sequence[idx]
+
+    handle.status = Mock(side_effect=status_side_effect)
+    handle.stop = Mock()
+    handle.logs = Mock(return_value=[])
+    handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
+    handle.cleanup = Mock()
+    return handle
 
 
 @pytest.fixture
@@ -120,39 +148,29 @@ def mock_runtime():
     By default, simulates a container that runs and completes successfully.
     """
     runtime = Mock(spec=DockerRuntime)
-    runtime.create_container = Mock(return_value="container123")
-    runtime.start_container = Mock()
 
-    call_count = [0]
+    # Create a mock handle that will be returned by create_container
+    mock_handle = create_mock_container_handle()
+    runtime.create_container = Mock(return_value=mock_handle)
 
-    def inspect_side_effect(container_id):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            return ContainerStatus(running=True)
-        return ContainerStatus(running=False, exit_code=0)
-
-    runtime.inspect = Mock(side_effect=inspect_side_effect)
-    runtime.kill = Mock()
-    runtime.remove = Mock()
-    runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
-    runtime.get_logs = Mock(return_value=[])
     runtime.list_iris_containers = Mock(return_value=[])
     runtime.remove_all_iris_containers = Mock(return_value=0)
+    runtime.cleanup = Mock()
     return runtime
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
+def worker(mock_bundle_cache, mock_runtime, tmp_path):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
         poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
+        cache_dir=tmp_path / "cache",
     )
     return Worker(
         config,
         bundle_provider=mock_bundle_cache,
-        image_provider=mock_image_cache,
         container_runtime=mock_runtime,
     )
 
@@ -245,7 +263,9 @@ def test_task_with_ports(worker):
 
 def test_task_failure_on_nonzero_exit(worker, mock_runtime):
     """Test task fails when container exits with non-zero code."""
-    mock_runtime.inspect = Mock(return_value=ContainerStatus(running=False, exit_code=1))
+    # Update the mock handle's status to return failure immediately
+    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(running=False, exit_code=1)])
+    mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
@@ -261,15 +281,14 @@ def test_task_failure_on_nonzero_exit(worker, mock_runtime):
 
 def test_task_failure_on_error(worker, mock_runtime):
     """Test task fails when container returns error."""
-    call_count = [0]
-
-    def inspect_side_effect(container_id):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            return ContainerStatus(running=True)
-        return ContainerStatus(running=False, exit_code=1, error="Container crashed")
-
-    mock_runtime.inspect = Mock(side_effect=inspect_side_effect)
+    # Update the mock handle's status to return error after first poll
+    mock_handle = create_mock_container_handle(
+        status_sequence=[
+            ContainerStatus(running=True),
+            ContainerStatus(running=False, exit_code=1, error="Container crashed"),
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
@@ -310,7 +329,9 @@ def test_list_tasks(worker):
 
 def test_kill_running_task(worker, mock_runtime):
     """Test killing a running task with graceful timeout."""
-    mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
+    # Create a handle that stays running until killed
+    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(running=True)] * 100)  # Stay running
+    mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
@@ -331,12 +352,14 @@ def test_kill_running_task(worker, mock_runtime):
     task.thread.join(timeout=15.0)
 
     assert task.status == cluster_pb2.TASK_STATE_KILLED
-    mock_runtime.kill.assert_any_call("container123", force=False)
+    mock_handle.stop.assert_called_with(force=True)
 
 
 def test_new_attempt_supersedes_old(worker, mock_runtime):
     """New attempt for same task_id kills the old attempt and starts a new one."""
-    mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
+    # Create a handle that stays running until killed
+    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(running=True)] * 100)  # Stay running
+    mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request_0 = create_run_task_request(task_id=JobName.root("retry-task").task(0).to_wire(), attempt_id=0)
     worker.submit_task(request_0)
@@ -374,7 +397,9 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
 
 def test_duplicate_attempt_rejected(worker, mock_runtime):
     """Same attempt_id for an existing non-terminal task is rejected."""
-    mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
+    # Create a handle that stays running until killed
+    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(running=True)] * 100)  # Stay running
+    mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request(task_id=JobName.root("dup-task").task(0).to_wire(), attempt_id=0)
     worker.submit_task(request)
@@ -455,84 +480,29 @@ def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
     assert any("Bundle download failed" in log.data for log in error_logs)
 
 
-def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
-    """Test that task retries with new ports when port binding fails."""
+def test_port_binding_failure(mock_bundle_cache, tmp_path):
+    """Test that task fails when port binding fails.
+
+    With --network=host, port binding happens in the application, not Docker.
+    If the app fails to bind (port in use by external process), the task fails.
+    """
     runtime = Mock(spec=DockerRuntime)
-    runtime.create_container = Mock(return_value="container123")
 
-    call_count = [0]
-
-    def start_side_effect(container_id):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            raise RuntimeError("failed to bind host port: address already in use")
-        return None
-
-    runtime.start_container = Mock(side_effect=start_side_effect)
-    runtime.remove = Mock()
-
-    inspect_call_count = [0]
-
-    def inspect_side_effect(container_id):
-        inspect_call_count[0] += 1
-        if inspect_call_count[0] == 1:
-            return ContainerStatus(running=True)
-        return ContainerStatus(running=False, exit_code=0)
-
-    runtime.inspect = Mock(side_effect=inspect_side_effect)
-    runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
-    runtime.get_logs = Mock(return_value=[])
+    mock_handle = create_mock_container_handle(
+        run_side_effect=RuntimeError("failed to bind host port: address already in use")
+    )
+    runtime.create_container = Mock(return_value=mock_handle)
+    runtime.cleanup = Mock()
 
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
         poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
     )
     worker = Worker(
         config,
         bundle_provider=mock_bundle_cache,
-        image_provider=mock_image_cache,
-        container_runtime=runtime,
-    )
-
-    request = create_run_task_request(ports=["actor"])
-    task_id = worker.submit_task(request)
-
-    task = worker.get_task(task_id)
-    assert task is not None
-    assert task.thread is not None
-    task.thread.join(timeout=15.0)
-
-    final_task = worker.get_task(task_id)
-    assert final_task is not None
-    assert final_task.status == cluster_pb2.TASK_STATE_SUCCEEDED
-
-    assert runtime.start_container.call_count == 2
-    # 1 remove from port retry cleanup + 1 remove from final task cleanup
-    assert runtime.remove.call_count == 2
-
-    logs = worker.get_logs(task_id)
-    build_logs = [log for log in logs if log.source == "build"]
-    assert any("Port conflict" in log.data for log in build_logs)
-
-
-def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
-    """Test that task fails after max port retries are exhausted."""
-    runtime = Mock(spec=DockerRuntime)
-    runtime.create_container = Mock(return_value="container123")
-    runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))
-    runtime.remove = Mock()
-    runtime.get_logs = Mock(return_value=[])
-
-    config = WorkerConfig(
-        port=0,
-        port_range=(50000, 50100),
-        poll_interval=Duration.from_seconds(0.1),
-    )
-    worker = Worker(
-        config,
-        bundle_provider=mock_bundle_cache,
-        image_provider=mock_image_cache,
         container_runtime=runtime,
     )
 
@@ -549,8 +519,6 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert final_task.error is not None
     assert "address already in use" in final_task.error
-
-    assert runtime.start_container.call_count == 3
 
 
 # ============================================================================
@@ -620,15 +588,19 @@ def test_bundle(tmp_path):
 
 
 @pytest.fixture
-def real_worker(cache_dir, docker_cleanup_scope):
+def real_worker(cache_dir):
     """Create Worker with real components (not mocks)."""
+    runtime = DockerRuntime()
     config = WorkerConfig(
         port=0,
         cache_dir=cache_dir,
         port_range=(40000, 40100),
         poll_interval=Duration.from_seconds(0.5),  # Faster polling for tests
     )
-    return Worker(config)
+    worker = Worker(config, container_runtime=runtime)
+    yield worker
+    worker.stop()
+    runtime.cleanup()
 
 
 @pytest.fixture
@@ -640,13 +612,14 @@ def real_service(real_worker):
 class TestWorkerIntegration:
     """Integration tests for Worker with real components."""
 
-    @pytest.mark.slow
+    @pytest.mark.docker
     def test_submit_task_lifecycle(self, real_worker, test_bundle):
         """Test full task lifecycle from submission to completion."""
-        request = create_integration_run_task_request(test_bundle, "integration-test-1")
+        expected_task_id = JobName.root("integration-test").task(0).to_wire()
+        request = create_integration_run_task_request(test_bundle, expected_task_id)
 
         task_id = real_worker.submit_task(request)
-        assert task_id == "integration-test-1"
+        assert task_id == expected_task_id
 
         # Poll for task completion with shorter intervals
         deadline = time.time() + 30.0
@@ -670,7 +643,7 @@ class TestWorkerIntegration:
 class TestWorkerServiceIntegration:
     """Integration tests for WorkerService RPC implementation."""
 
-    @pytest.mark.slow
+    @pytest.mark.docker
     def test_health_check_rpc(self, real_service):
         """Test HealthCheck RPC returns healthy status."""
         ctx = Mock(spec=RequestContext)
@@ -680,14 +653,14 @@ class TestWorkerServiceIntegration:
         assert response.healthy
         assert response.uptime.milliseconds >= 0
 
-    @pytest.mark.slow
-    def test_fetch_logs_tail(self, real_service, test_bundle):
+    @pytest.mark.docker
+    def test_fetch_logs_tail(self, real_worker, real_service, test_bundle):
         """Test FetchLogs with negative start_line for tailing."""
         ctx = Mock(spec=RequestContext)
 
         task_id = JobName.root("logs-test").task(0).to_wire()
         request = create_integration_run_task_request(test_bundle, task_id)
-        real_service.run_task(request, ctx)
+        real_worker.submit_task(request)
 
         time.sleep(2)
 

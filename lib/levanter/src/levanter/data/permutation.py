@@ -10,6 +10,7 @@ from jaxtyping import PRNGKeyArray
 from levanter.data import AsyncDataset
 from levanter.data._prp import PermType, Permutation
 from levanter.data.dataset import T_co
+from levanter.utils.jax_utils import local_cpu_mesh
 
 
 class PermutationDataset(AsyncDataset[T_co]):
@@ -85,6 +86,14 @@ class EraShufflingDataset(AsyncDataset[T_co]):
         super().__init__()
         self.dataset = dataset
         self.era_length = era_length
+
+        # Force key to CPU (like MixtureDataset does) to prevent JAX device placement errors
+        with local_cpu_mesh():
+            if isinstance(key, int):
+                key = jax.random.PRNGKey(key)
+            else:
+                key = jax.device_put(jax.device_get(key))
+
         self.key = key
         self._perm_type = perm_type
 

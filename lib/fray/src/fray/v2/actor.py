@@ -21,10 +21,58 @@ holds a set of actor handles with lifecycle tied to underlying jobs.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 
-@runtime_checkable
+class ActorHandle(Protocol):
+    """Handle to a remote actor with .method.remote() calling convention."""
+
+    def __getattr__(self, method_name: str) -> ActorMethod: ...
+
+
+@dataclass(frozen=True)
+class ActorContext:
+    """Context available to actors during execution."""
+
+    handle: ActorHandle
+    """Handle to self, can be passed to other actors for callbacks."""
+
+    index: int
+    """The actor's index within its group (0 to count-1)."""
+
+    group_name: str
+    """The name of the actor group this actor belongs to."""
+
+
+_current_actor_ctx: ContextVar[ActorContext | None] = ContextVar("actor_context", default=None)
+
+
+def current_actor() -> ActorContext:
+    """Get the current actor's context. Must be called from within an actor.
+
+    Returns the actor's handle (for passing to other actors), index, and group name.
+
+    Raises:
+        RuntimeError: If called outside of an actor context.
+    """
+    ctx = _current_actor_ctx.get()
+    if ctx is None:
+        raise RuntimeError("current_actor() called outside of an actor context")
+    return ctx
+
+
+def _set_current_actor(ctx: ActorContext):
+    """Set the current actor context. Used by backends during actor creation."""
+    return _current_actor_ctx.set(ctx)
+
+
+def _reset_current_actor(token):
+    """Reset the current actor context. Used by backends after actor creation."""
+    _current_actor_ctx.reset(token)
+
+
 class ActorFuture(Protocol):
     """Future for an actor method call."""
 
@@ -33,7 +81,6 @@ class ActorFuture(Protocol):
         ...
 
 
-@runtime_checkable
 class ActorMethod(Protocol):
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         """Invoke the method remotely. Returns a future."""
@@ -42,13 +89,6 @@ class ActorMethod(Protocol):
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke the method synchronously (blocking)."""
         ...
-
-
-@runtime_checkable
-class ActorHandle(Protocol):
-    """Handle to a remote actor with .method.remote() calling convention."""
-
-    def __getattr__(self, method_name: str) -> ActorMethod: ...
 
 
 class ActorGroup(Protocol):
