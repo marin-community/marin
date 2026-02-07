@@ -88,11 +88,13 @@ class SimpleSFTConfig:
     tokenizer: str | None = None
     """Tokenizer to use for training."""
 
-    model_name_or_path: str | None = None
-    """Path to the pretrained HF model checkpoint to initialize from"""
+    initialize_from_hf: str | None = None
+    """HF model name or path to initialize from (e.g., 'meta-llama/Llama-3.1-8B').
+    Mutually exclusive with initialize_from_checkpoint_path."""
 
     initialize_from_checkpoint_path: str | None = None
-    """Path to a levanter checkpoint to initialize from."""
+    """Path to a levanter checkpoint to initialize from.
+    Mutually exclusive with initialize_from_hf."""
 
     max_seq_len: int = 4096
     """Maximum sequence length for training."""
@@ -145,11 +147,6 @@ class SimpleSFTConfig:
     # Other parameters
     seed: int = 0
     """Random seed for training."""
-
-    initialize_from_hf: bool | None = None
-    """Whether to initialize from HuggingFace model.
-    If false, we will load a levanter checkpoint. None defaults to True if
-    model_name_or_path is set and initialize_from_checkpoint_path is not set."""
 
     node_count: int = 1
     """Number of TPU slices for training."""
