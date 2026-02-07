@@ -28,6 +28,9 @@ from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
@@ -1113,27 +1116,70 @@ class LlavaOnevisionModel(eqx.Module):
             features_per_patch_int = int(np.asarray(features_per_patch_val))
 
             n_image_tokens_per_batch = np.sum(mask_np, axis=-1)  # (batch,)
-            # Check first batch element (assuming all batches have same structure)
-            n_image_tokens = int(n_image_tokens_per_batch[0])
 
-            # Calculate expected features based on grid_mask if provided
+            # Calculate expected features per batch element based on grid_mask
             if grid_mask_array is not None:
-                # Use number of valid patches (True values in grid_mask)
                 grid_mask_np = np.asarray(grid_mask_array)
-                num_valid_patches = int(np.sum(grid_mask_np[0]))  # First batch element
-                expected_features = num_valid_patches * features_per_patch_int
+                valid_patches_per_batch = np.sum(grid_mask_np, axis=-1)  # (batch,)
+                expected_per_batch = valid_patches_per_batch * features_per_patch_int
             else:
-                expected_features = total_features_int
+                expected_per_batch = np.full(len(n_image_tokens_per_batch), total_features_int)
 
-            if n_image_tokens > 0 and n_image_tokens != expected_features:
+            # Check ALL batch elements for mismatches
+            mismatched = []
+            for i in range(len(n_image_tokens_per_batch)):
+                n_tok = int(n_image_tokens_per_batch[i])
+                n_exp = int(expected_per_batch[i])
+                if n_tok > 0 and n_tok != n_exp:
+                    mismatched.append(i)
+
+            if mismatched:
+                batch_size = len(n_image_tokens_per_batch)
+                # Build detailed diagnostic info
+                diag_lines = []
+                diag_lines.append(f"=== IMAGE TOKEN MISMATCH DIAGNOSTIC (batch_size={batch_size}) ===")
+                diag_lines.append(f"features_per_patch={features_per_patch_int}, total_features={total_features_int}")
+                diag_lines.append(f"Mismatched batch elements: {mismatched} ({len(mismatched)}/{batch_size})")
+                diag_lines.append("")
+
+                # Log details for mismatched elements
+                diag_lines.append("--- Mismatched elements ---")
+                for i in mismatched[:50]:  # Cap at 50 to avoid excessive output
+                    n_tok = int(n_image_tokens_per_batch[i])
+                    n_exp = int(expected_per_batch[i])
+                    gm_info = ""
+                    if grid_mask_array is not None:
+                        gm_row = grid_mask_np[i]
+                        gm_info = f", grid_mask={gm_row.tolist()}, valid_patches={int(valid_patches_per_batch[i])}"
+                    diag_lines.append(f"  batch[{i}]: n_image_tokens={n_tok}, expected={n_exp}{gm_info}")
+
+                # Also log a summary of ALL elements for context
+                diag_lines.append("")
+                diag_lines.append("--- All batch elements summary ---")
+                for i in range(batch_size):
+                    n_tok = int(n_image_tokens_per_batch[i])
+                    n_exp = int(expected_per_batch[i])
+                    status = "MISMATCH" if i in mismatched else ("img" if n_tok > 0 else "text")
+                    gm_info = ""
+                    if grid_mask_array is not None:
+                        gm_info = f", valid_patches={int(valid_patches_per_batch[i])}"
+                    diag_lines.append(f"  batch[{i}]: tokens={n_tok}, expected={n_exp}, status={status}{gm_info}")
+
+                diag_msg = "\n".join(diag_lines)
+                logger.error(diag_msg)
+
+                # Raise with summary (detailed info already logged above)
+                first_bad = mismatched[0]
                 raise ValueError(
-                    f"Image token count mismatch! "
-                    f"input_ids has {n_image_tokens} image placeholder tokens, "
-                    f"but vision encoder produces {expected_features} features. "
-                    f"This usually means data config's vision_feature_height doesn't match the model. "
-                    f"Expected vision_feature_height={int(expected_features**0.5)} based on model config "
-                    f"(image_size={self.config.vision_config.image_size}, "
-                    f"patch_size={self.config.vision_config.patch_size})."
+                    f"Image token count mismatch in {len(mismatched)}/{batch_size} batch elements! "
+                    f"First mismatch at batch[{first_bad}]: "
+                    f"input_ids has {int(n_image_tokens_per_batch[first_bad])} image placeholder tokens, "
+                    f"but expected {int(expected_per_batch[first_bad])} features "
+                    f"(valid_patches={int(valid_patches_per_batch[first_bad]) if grid_mask_array is not None else 'N/A'} * "
+                    f"features_per_patch={features_per_patch_int}). "
+                    f"See ERROR log above for full batch diagnostic. "
+                    f"Model config: image_size={self.config.vision_config.image_size}, "
+                    f"patch_size={self.config.vision_config.patch_size}."
                 )
 
         grid_mask_array = grid_mask.array if grid_mask is not None else None

@@ -2,32 +2,19 @@
   "summary": {
     "total_shards": 50,
     "shard_range": [
-      1100,
-      1150
+      1150,
+      1200
     ],
-    "total_rows": 249718,
-    "rows_with_images": 52622,
-    "total_issues": 2,
+    "total_rows": 249862,
+    "rows_with_images": 52696,
+    "total_issues": 0,
     "issue_counts": {
       "image_ref_but_no_images": 0,
       "image_count_mismatch": 0,
       "null_image_entry": 0,
       "image_load_failed": 0,
-      "unusual_dimensions": 2
+      "unusual_dimensions": 0
     }
   },
-  "issues": [
-    {
-      "shard": "train-01105",
-      "row": 1283,
-      "issue": "unusual_dimensions",
-      "detail": "images[0]: Extreme aspect ratio (154.0:1): 39424x256"
-    },
-    {
-      "shard": "train-01138",
-      "row": 1308,
-      "issue": "unusual_dimensions",
-      "detail": "images[0]: Extreme aspect ratio (20.6:1): 578x28"
-    }
-  ]
+  "issues": []
 }
