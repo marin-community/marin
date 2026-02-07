@@ -71,10 +71,14 @@ def run_kelp_evaluation(config: KelpEvaluationConfig) -> dict:
     Returns:
         Dictionary with evaluation results.
     """
+    import json
+
     import jax
 
     from experiments.kelp.eval.evaluator import TreeDiffusionEvaluator, save_results
-    from experiments.kelp.model.model import load_model
+    from experiments.kelp.model.config import TreeDiffusionConfig
+    from experiments.kelp.tree.edit_model import init_edit_params
+    from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
 
     logger.info("=" * 60)
     logger.info("Kelp Tree Diffusion Evaluation")
@@ -87,10 +91,30 @@ def run_kelp_evaluation(config: KelpEvaluationConfig) -> dict:
     logger.info("=" * 60)
 
     logger.info(f"Loading model from {config.model_path}")
-    model = load_model(config.model_path)
-    logger.info(f"Loaded model: {model.config.hidden_dim}d, {model.config.num_layers}L, vocab={model.config.vocab_size}")
 
-    evaluator = TreeDiffusionEvaluator(model, config)
+    # Load config and params from checkpoint.
+    import fsspec
+    from levanter.checkpoint import load_checkpoint
+    from levanter.grug.attention import RotaryConfig
+
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(config.model_path))
+    config_path = f"{config.model_path}/config.json"
+    with fs.open(config_path, "r") as f:
+        config_dict = json.load(f)
+
+    if isinstance(config_dict.get("rope"), dict):
+        config_dict["rope"] = RotaryConfig(**config_dict["rope"])
+
+    model_config = TreeDiffusionConfig(**config_dict)
+    tokenizer = TreeDiffusionTokenizer(max_seq_len=model_config.max_seq_len)
+
+    exemplar = jax.eval_shape(lambda key: init_edit_params(model_config, key=key), jax.random.PRNGKey(0))
+    mesh = jax.sharding.Mesh(jax.devices(), ("batch",))
+    params = load_checkpoint(exemplar, config.model_path, discover_latest=False, mesh=mesh)
+
+    logger.info(f"Loaded model: {model_config.hidden_dim}d, {model_config.num_layers}L, vocab={model_config.vocab_size}")
+
+    evaluator = TreeDiffusionEvaluator(params, model_config, tokenizer, config)
     results = evaluator.run_all_evals()
 
     output_file = f"{config.output_path}/results.json"

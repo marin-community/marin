@@ -27,7 +27,6 @@ from dataclasses import dataclass
 
 from experiments.kelp.tree.subtree_bank import (
     EXTRACTABLE_TYPES,
-    EXPRESSION_TYPES,
     STATEMENT_TYPES,
     SubtreeBank,
     count_statements,
@@ -222,9 +221,7 @@ def random_mutation(
             continue
 
         # For statements, we need to match the indentation of the original.
-        replacement_source = _match_indentation(
-            source, candidate.start, replacement_entry.source, candidate.node_type
-        )
+        replacement_source = _match_indentation(source, candidate.start, replacement_entry.source, candidate.node_type)
 
         # Verify the mutation produces valid Python.
         mutated = source[: candidate.start] + replacement_source + source[candidate.end :]
@@ -244,9 +241,7 @@ def random_mutation(
     return None
 
 
-def _match_indentation(
-    source: str, insert_offset: int, replacement: str, node_type: str
-) -> str:
+def _match_indentation(source: str, insert_offset: int, replacement: str, node_type: str) -> str:
     """Adjust indentation of the replacement to match the insertion point.
 
     For statements, the replacement's indentation is normalized to match the
@@ -286,7 +281,11 @@ def _match_indentation(
             # Remove original base indent, add target indent + relative indent.
             if line.startswith(repl_base_indent):
                 relative = line[len(repl_base_indent) :]
-                result_lines.append(target_indent + "    " + relative.lstrip() if relative.startswith(" ") or relative.startswith("\t") else target_indent + relative)
+                result_lines.append(
+                    target_indent + "    " + relative.lstrip()
+                    if relative.startswith(" ") or relative.startswith("\t")
+                    else target_indent + relative
+                )
             else:
                 result_lines.append(target_indent + "    " + line.lstrip())
         else:

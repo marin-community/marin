@@ -12,33 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for Kelp AR-to-tree-diffusion transfer."""
+"""Tests for Kelp AR-to-edit-model transfer."""
 
-import jax.numpy as jnp
-from jax import random
-
-from experiments.kelp.transfer.adapt import (
-    init_timestep_embeddings,
-    map_llama_key,
-)
-
-
-class TestInitTimestepEmbeddings:
-    def test_zeros_init(self):
-        embed = init_timestep_embeddings(100, 256, method="zeros")
-        assert embed.shape == (100, 256)
-        assert jnp.allclose(embed, 0.0)
-
-    def test_random_init(self):
-        key = random.PRNGKey(0)
-        embed = init_timestep_embeddings(100, 256, method="random", key=key)
-        assert embed.shape == (100, 256)
-        assert not jnp.allclose(embed, 0.0)
-
-    def test_sinusoidal_init(self):
-        embed = init_timestep_embeddings(100, 256, method="sinusoidal")
-        assert embed.shape == (100, 256)
-        assert jnp.all(jnp.abs(embed) <= 1.0)
+from experiments.kelp.transfer.adapt import map_llama_key
 
 
 class TestMapLlamaKey:

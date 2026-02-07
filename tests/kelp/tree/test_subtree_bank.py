@@ -29,7 +29,6 @@ from experiments.kelp.tree.subtree_bank import (
     count_statements,
 )
 
-
 SAMPLE_PROGRAMS = [
     """\
 def fibonacci(n):
@@ -163,18 +162,12 @@ def test_all_entries_are_parseable(bank):
                 try:
                     ast.parse(entry.source)
                 except SyntaxError:
-                    pytest.fail(
-                        f"Statement entry failed to parse: "
-                        f"type={node_type}, source={entry.source!r}"
-                    )
+                    pytest.fail(f"Statement entry failed to parse: " f"type={node_type}, source={entry.source!r}")
             else:
                 try:
                     ast.parse(f"__x = {entry.source}")
                 except SyntaxError:
-                    pytest.fail(
-                        f"Expression entry failed to parse: "
-                        f"type={node_type}, source={entry.source!r}"
-                    )
+                    pytest.fail(f"Expression entry failed to parse: " f"type={node_type}, source={entry.source!r}")
 
 
 def test_no_trivially_short_entries(bank):
@@ -189,17 +182,14 @@ def test_deduplication(bank):
     for node_type, entries in bank.entries.items():
         sources = [e.source for e in entries]
         assert len(sources) == len(set(sources)), (
-            f"Duplicates found in {node_type}: "
-            f"{len(sources)} entries but {len(set(sources))} unique"
+            f"Duplicates found in {node_type}: " f"{len(sources)} entries but {len(set(sources))} unique"
         )
 
 
 def test_max_entries_per_type():
     """Cap on entries per type should be respected."""
     # Generate a lot of unique programs.
-    programs = [
-        f"def f{i}(x):\n    return x + {i}\n" for i in range(200)
-    ]
+    programs = [f"def f{i}(x):\n    return x + {i}\n" for i in range(200)]
     bank = SubtreeBank.from_corpus(programs, max_entries_per_type=50)
     for entries in bank.entries.values():
         assert len(entries) <= 50

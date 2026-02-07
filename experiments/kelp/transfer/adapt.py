@@ -15,18 +15,14 @@
 """AR-to-tree-diffusion weight transfer and adaptation.
 
 Transfers weights from a pretrained AR LLM (like Marin 8b) to initialize
-a tree diffusion model. Following DiffuGPT and DREAM approaches.
-
-Key modifications:
-1. Remove causal attention mask (use bidirectional attention)
-2. Add timestep embeddings (initialized fresh)
-3. All other weights copied directly
+the AR edit-prediction model for tree diffusion. Following DiffuGPT and
+DREAM approaches, all transformer weights transfer directly since the
+edit model uses the same causal architecture as the source LLM.
 """
 
 import logging
 from typing import Any
 
-import jax
 import jax.numpy as jnp
 from jax import random
 from jaxtyping import PRNGKeyArray
@@ -35,8 +31,8 @@ from experiments.kelp.model.config import TreeDiffusionConfig
 from experiments.kelp.model.model import (
     TreeDiffusionAttentionParams,
     TreeDiffusionBlockParams,
-    TreeDiffusionModelParams,
 )
+from experiments.kelp.tree.edit_model import EditModelParams
 from experiments.kelp.transfer.config import ARToTreeDiffusionTransferConfig
 
 logger = logging.getLogger(__name__)
@@ -74,48 +70,6 @@ def load_llama_weights(model_path: str) -> dict[str, Any]:
     return weights
 
 
-def init_timestep_embeddings(
-    num_steps: int,
-    hidden_dim: int,
-    method: str = "random",
-    std: float = 0.02,
-    key: PRNGKeyArray | None = None,
-) -> jax.Array:
-    """Initialize timestep embeddings.
-
-    Args:
-        num_steps: Number of diffusion steps.
-        hidden_dim: Hidden dimension.
-        method: Initialization method ('random', 'zeros', 'sinusoidal').
-        std: Standard deviation for random init.
-        key: PRNG key for random init.
-
-    Returns:
-        Timestep embedding array of shape (num_steps, hidden_dim).
-    """
-    if method == "zeros":
-        return jnp.zeros((num_steps, hidden_dim))
-
-    elif method == "sinusoidal":
-        positions = jnp.arange(num_steps)[:, None]
-        dim_indices = jnp.arange(hidden_dim)[None, :]
-        div_term = 10000.0 ** (dim_indices / hidden_dim)
-        embeddings = jnp.where(
-            dim_indices % 2 == 0,
-            jnp.sin(positions / div_term),
-            jnp.cos(positions / div_term),
-        )
-        return embeddings
-
-    elif method == "random":
-        if key is None:
-            key = random.PRNGKey(0)
-        return std * random.truncated_normal(key, -3, 3, (num_steps, hidden_dim))
-
-    else:
-        raise ValueError(f"Unknown timestep embedding method: {method}")
-
-
 def map_llama_key(key: str) -> tuple[str, str, int | None]:
     """Map a LLaMA weight key to tree diffusion component.
 
@@ -143,22 +97,25 @@ def map_llama_key(key: str) -> tuple[str, str, int | None]:
         return ("unknown", key, None)
 
 
-def transfer_ar_to_tree_diffusion(
+def transfer_ar_to_edit_model(
     ar_model_path: str,
     target_config: TreeDiffusionConfig,
     transfer_config: ARToTreeDiffusionTransferConfig | None = None,
     key: PRNGKeyArray | None = None,
-) -> TreeDiffusionModelParams:
-    """Transfer weights from AR model to tree diffusion model.
+) -> EditModelParams:
+    """Transfer weights from AR model to tree diffusion edit model.
+
+    All transformer weights (embeddings, attention, MLP, norms) transfer
+    directly since the edit model uses the same causal architecture.
 
     Args:
         ar_model_path: Path to AR model.
-        target_config: Target tree diffusion config.
+        target_config: Target model config.
         transfer_config: Transfer configuration.
         key: PRNG key.
 
     Returns:
-        TreeDiffusionModelParams initialized from AR weights.
+        EditModelParams initialized from AR weights.
     """
     if transfer_config is None:
         transfer_config = ARToTreeDiffusionTransferConfig(source_model_path=ar_model_path)
@@ -169,22 +126,11 @@ def transfer_ar_to_tree_diffusion(
     logger.info(f"Loading AR model from {ar_model_path}")
     ar_weights = load_llama_weights(ar_model_path)
 
-    logger.info(f"Transferring to tree diffusion with {target_config.num_layers} layers")
+    logger.info(f"Transferring to edit model with {target_config.num_layers} layers")
 
     token_embed = ar_weights["model.embed_tokens.weight"]
     output_proj = ar_weights.get("lm_head.weight", token_embed).T
     final_norm = ar_weights["model.norm.weight"]
-
-    key, time_key = random.split(key)
-    timestep_embed = init_timestep_embeddings(
-        target_config.num_diffusion_steps,
-        target_config.hidden_dim,
-        method=transfer_config.init_timestep_embed,
-        std=transfer_config.timestep_embed_std,
-        key=time_key,
-    )
-
-    head_dim = target_config.inferred_head_dim
 
     blocks = []
     for layer_idx in range(target_config.num_layers):
@@ -214,9 +160,8 @@ def transfer_ar_to_tree_diffusion(
         )
         blocks.append(block)
 
-    params = TreeDiffusionModelParams(
+    params = EditModelParams(
         token_embed=token_embed,
-        timestep_embed=timestep_embed,
         output_proj=output_proj,
         blocks=tuple(blocks),
         final_norm=final_norm,
@@ -228,17 +173,13 @@ def transfer_ar_to_tree_diffusion(
     return params
 
 
-def log_param_stats(params: TreeDiffusionModelParams) -> None:
+def log_param_stats(params: EditModelParams) -> None:
     """Log statistics about transferred parameters."""
     total_params = 0
 
     token_params = params.token_embed.size
     total_params += token_params
     logger.info(f"  token_embed: {token_params:,} params")
-
-    time_params = params.timestep_embed.size
-    total_params += time_params
-    logger.info(f"  timestep_embed: {time_params:,} params (fresh)")
 
     output_params = params.output_proj.size
     total_params += output_params
@@ -268,7 +209,7 @@ def log_param_stats(params: TreeDiffusionModelParams) -> None:
 
 def verify_transfer(
     ar_model_path: str,
-    transferred_params: TreeDiffusionModelParams,
+    transferred_params: EditModelParams,
     config: TreeDiffusionConfig,
 ) -> dict:
     """Verify that the transfer was successful.

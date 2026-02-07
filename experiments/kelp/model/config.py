@@ -52,15 +52,6 @@ class TreeDiffusionConfig:
     max_seq_len: int = 2048
     """Maximum sequence length."""
 
-    num_diffusion_steps: int = 100
-    """Number of diffusion steps for generation."""
-
-    noise_schedule: str = "cosine"
-    """Noise schedule type: 'cosine' or 'linear'."""
-
-    prefix_max_len: int = 256
-    """Maximum length of the conditioning prefix (docstring/signature)."""
-
     layer_norm_eps: float = 1e-5
     """Epsilon for layer normalization."""
 
@@ -81,9 +72,6 @@ class TreeDiffusionConfig:
     pad_token_id: int = 0
     """Token ID for padding."""
 
-    mask_token_id: int | None = None
-    """Token ID for [MASK] token. If None, uses vocab_size - 1."""
-
     def __post_init__(self) -> None:
         """Validate configuration."""
         if self.hidden_dim % self.num_heads != 0 and self.head_dim is None:
@@ -100,13 +88,6 @@ class TreeDiffusionConfig:
         if self.head_dim is not None:
             return self.head_dim
         return self.hidden_dim // self.num_heads
-
-    @property
-    def effective_mask_token_id(self) -> int:
-        """Get the mask token ID."""
-        if self.mask_token_id is not None:
-            return self.mask_token_id
-        return self.vocab_size - 1
 
 
 # Size presets following grugformer convention
