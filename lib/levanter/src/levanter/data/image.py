@@ -1730,9 +1730,35 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         images_per_example: list[int] = []
 
         # Collect all images and texts - avoid repeated dict.get calls
-        for item in batch:
+        for item_idx, item in enumerate(batch):
             messages = item.get(self.messages_key, [])
             images_data = item.get(self.images_key, [])
+
+            # Handle None images_data (parquet null values)
+            if images_data is None:
+                images_data = []
+
+            # Validate messages/images consistency before processing
+            # Count image references in messages
+            num_image_refs = 0
+            if messages:
+                for msg in messages:
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        for c in content:
+                            if isinstance(c, dict) and c.get("type") == "image":
+                                num_image_refs += 1
+                    elif isinstance(content, str):
+                        num_image_refs += content.count("<image>")
+
+            if num_image_refs > 0 and len(images_data) == 0:
+                raise ValueError(
+                    f"Data inconsistency: messages reference {num_image_refs} image(s) but images list is empty! "
+                    f"batch_item_idx={item_idx}, "
+                    f"messages={json.dumps(messages, ensure_ascii=False, default=str)[:500]}, "
+                    f"images_key='{self.images_key}', "
+                    f"images_data={images_data!r}"
+                )
 
             # Load all images for this example
             all_images.extend(load_image(img) for img in images_data)
@@ -2673,8 +2699,13 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
                         # Evict oldest entries if over limit
                         while len(self._processed_cache) > self.cache_size:
                             self._processed_cache.popitem(last=False)
+                except ValueError as e:
+                    # ValueError from data validation (e.g., messages/images inconsistency)
+                    # should NOT be silently swallowed - re-raise to crash loudly
+                    logger.error(f"Prefetch hit data error: {e}")
+                    raise
                 except Exception as e:
-                    logger.warning(f"Prefetch failed: {e}")
+                    logger.warning(f"Prefetch failed (transient): {e}")
                     self._stop_prefetch.wait(0.1)
 
         self._prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
