@@ -7,8 +7,24 @@ import sys
 
 import click
 from marin.execution.executor import ExecutorStep, executor_main
+from marin.processing.tokenize import lm_mixture_data_config
 
 from experiments.pretraining_datasets import DATASETS
+from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
+
+nemotron_steps = tokenize_nemotron()
+proofpile_2 = dclm_components_llama3["proofpile_2"]
+starcoderdata = dclm_components_llama3["starcoderdata"]
+nemotron_mix = lm_mixture_data_config(
+    components={**nemotron_steps, "starcoderdata": starcoderdata, "proofpile_2": proofpile_2},
+    weights={
+        **NEMOTRON_WEIGHTS,
+        "starcoderdata": 0.25,
+        "proofpile_2": 0.055,
+    },
+    permutation_type="feistel",
+)
 
 
 def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: bool = True) -> list[ExecutorStep]:
