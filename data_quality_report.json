@@ -2,19 +2,338 @@
   "summary": {
     "total_shards": 50,
     "shard_range": [
-      1150,
-      1200
+      950,
+      1000
     ],
-    "total_rows": 249862,
-    "rows_with_images": 52696,
-    "total_issues": 0,
+    "total_rows": 249614,
+    "rows_with_images": 89153,
+    "total_issues": 53,
     "issue_counts": {
       "image_ref_but_no_images": 0,
       "image_count_mismatch": 0,
       "null_image_entry": 0,
       "image_load_failed": 0,
-      "unusual_dimensions": 0
+      "unusual_dimensions": 53
     }
   },
-  "issues": []
+  "issues": [
+    {
+      "shard": "train-00950",
+      "row": 1660,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (24.2:1): 727x30"
+    },
+    {
+      "shard": "train-00953",
+      "row": 1820,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.2:1): 318x15"
+    },
+    {
+      "shard": "train-00953",
+      "row": 4292,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.7:1): 477x22"
+    },
+    {
+      "shard": "train-00954",
+      "row": 2274,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.6:1): 412x20"
+    },
+    {
+      "shard": "train-00954",
+      "row": 2904,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.9:1): 459x21"
+    },
+    {
+      "shard": "train-00954",
+      "row": 4222,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (22.2:1): 467x21"
+    },
+    {
+      "shard": "train-00955",
+      "row": 3226,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Very small image: 8x16"
+    },
+    {
+      "shard": "train-00955",
+      "row": 4115,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.4:1): 493x23"
+    },
+    {
+      "shard": "train-00956",
+      "row": 2334,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.1:1): 502x25"
+    },
+    {
+      "shard": "train-00956",
+      "row": 3199,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.1:1): 1453x69"
+    },
+    {
+      "shard": "train-00956",
+      "row": 4233,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (22.3:1): 468x21"
+    },
+    {
+      "shard": "train-00958",
+      "row": 2855,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (22.2:1): 532x24"
+    },
+    {
+      "shard": "train-00960",
+      "row": 160,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (23.2:1): 534x23"
+    },
+    {
+      "shard": "train-00960",
+      "row": 2359,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.7:1): 1429x69"
+    },
+    {
+      "shard": "train-00961",
+      "row": 4719,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (22.3:1): 512x23"
+    },
+    {
+      "shard": "train-00962",
+      "row": 449,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (23.1:1): 625x27"
+    },
+    {
+      "shard": "train-00962",
+      "row": 3386,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.0:1): 440x21"
+    },
+    {
+      "shard": "train-00963",
+      "row": 3495,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.0:1): 1197x57"
+    },
+    {
+      "shard": "train-00964",
+      "row": 2487,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.3:1): 467x23"
+    },
+    {
+      "shard": "train-00965",
+      "row": 2817,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Very small image: 7x12"
+    },
+    {
+      "shard": "train-00968",
+      "row": 3210,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.2:1): 749x37"
+    },
+    {
+      "shard": "train-00969",
+      "row": 2359,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.5:1): 451x22"
+    },
+    {
+      "shard": "train-00970",
+      "row": 2047,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (23.3:1): 535x23"
+    },
+    {
+      "shard": "train-00970",
+      "row": 4571,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.0:1): 641x32"
+    },
+    {
+      "shard": "train-00970",
+      "row": 4865,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (22.1:1): 530x24"
+    },
+    {
+      "shard": "train-00971",
+      "row": 2867,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.5:1): 601x28"
+    },
+    {
+      "shard": "train-00971",
+      "row": 4021,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.0:1): 547x26"
+    },
+    {
+      "shard": "train-00972",
+      "row": 3482,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (22.1:1): 465x21"
+    },
+    {
+      "shard": "train-00977",
+      "row": 165,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (23.1:1): 485x21"
+    },
+    {
+      "shard": "train-00977",
+      "row": 1689,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Very small image: 5x15"
+    },
+    {
+      "shard": "train-00978",
+      "row": 462,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (26.8:1): 590x22"
+    },
+    {
+      "shard": "train-00978",
+      "row": 2896,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Very small image: 5x12"
+    },
+    {
+      "shard": "train-00979",
+      "row": 3052,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (24.3:1): 535x22"
+    },
+    {
+      "shard": "train-00983",
+      "row": 1875,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (23.4:1): 538x23"
+    },
+    {
+      "shard": "train-00984",
+      "row": 4928,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.2:1): 465x23"
+    },
+    {
+      "shard": "train-00985",
+      "row": 2136,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (154.0:1): 39424x256"
+    },
+    {
+      "shard": "train-00986",
+      "row": 2203,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Very small image: 8x19"
+    },
+    {
+      "shard": "train-00986",
+      "row": 2524,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Very small image: 7x16"
+    },
+    {
+      "shard": "train-00987",
+      "row": 1063,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (24.3:1): 534x22"
+    },
+    {
+      "shard": "train-00987",
+      "row": 2734,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.7:1): 498x23"
+    },
+    {
+      "shard": "train-00988",
+      "row": 3283,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.5:1): 473x22"
+    },
+    {
+      "shard": "train-00990",
+      "row": 4338,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.1:1): 1349x64"
+    },
+    {
+      "shard": "train-00991",
+      "row": 2556,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.6:1): 584x27"
+    },
+    {
+      "shard": "train-00992",
+      "row": 335,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.5:1): 537x25"
+    },
+    {
+      "shard": "train-00992",
+      "row": 837,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.9:1): 437x20"
+    },
+    {
+      "shard": "train-00994",
+      "row": 4474,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.2:1): 1433x71"
+    },
+    {
+      "shard": "train-00995",
+      "row": 855,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (22.9:1): 732x32"
+    },
+    {
+      "shard": "train-00996",
+      "row": 3725,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (23.0:1): 528x23"
+    },
+    {
+      "shard": "train-00996",
+      "row": 4651,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Very small image: 7x12"
+    },
+    {
+      "shard": "train-00997",
+      "row": 1711,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (23.0:1): 505x22"
+    },
+    {
+      "shard": "train-00998",
+      "row": 2838,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.7:1): 476x23"
+    },
+    {
+      "shard": "train-00998",
+      "row": 2982,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (20.5:1): 349x17"
+    },
+    {
+      "shard": "train-00998",
+      "row": 4104,
+      "issue": "unusual_dimensions",
+      "detail": "images[0]: Extreme aspect ratio (21.1:1): 676x32"
+    }
+  ]
 }
