@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Callable, Literal, TypeVar
+from typing import Any, Callable, Literal, TypeVar
 
 import chex
 import equinox as eqx
@@ -162,10 +162,10 @@ def unflatten_linear_layers(template: T, tree_with_flattened_linears: T) -> T:
 
 
 def map_flattened_linear_layers(
-    f: Callable[[hax.nn.Linear], hax.nn.Linear],
+    f: Callable[..., hax.nn.Linear],
     params: PyTree,
-    *,
-    or_else: Callable | None = None,
+    *rest: PyTree,
+    or_else: Callable[..., Any] | None = None,
     is_leaf: Callable | None = None,
 ):
     """
@@ -179,7 +179,8 @@ def map_flattened_linear_layers(
 
     Args:
         f: The function to apply to each Linear layer
-        params: The PyTree of parameters
+        params: The primary PyTree of parameters
+        *rest: Additional PyTrees with the same structure as `params`; Linear leaves are flattened before mapping.
         or_else: optional function to apply to non-Linear leaves
         is_leaf: optional function to determine if a node is a leaf. Linears will always be considered leaves.
 
@@ -196,19 +197,20 @@ def map_flattened_linear_layers(
     else:
         is_leaf = lambda x: isinstance(x, hax.nn.Linear) or orig_is_leaf(x) or x is None  # type: ignore
 
-    def map_fn(p):
+    def map_fn(p, *rest_p):
         if isinstance(p, hax.nn.Linear):
             if p.weight is None:
                 return p
-            return f(p)
+            return f(p, *rest_p)
         elif or_else is not None:
-            return or_else(p)
+            return or_else(p, *rest_p)
         else:
             return p
 
     # optax uses this MaskedNode stuff that confuses Haliax... Filter it out
     flattened_linear = flatten_linear_layers(params)
-    flattened_linear = scan_aware_tree_map(map_fn, flattened_linear, is_leaf=is_leaf)
+    flattened_rest = tuple(flatten_linear_layers(tree) for tree in rest)
+    flattened_linear = scan_aware_tree_map(map_fn, flattened_linear, *flattened_rest, is_leaf=is_leaf)
     # Now we have a flattened tree with linear layers, we can unflatten them back to the original structure
     # params = eqx.combine(masked_nodes, flattened_linear, is_leaf=is_leaf)
 
