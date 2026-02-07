@@ -37,7 +37,7 @@ deeper_sft_config = dataclasses.replace(
     learning_rate=1e-4,
     num_train_steps=10228,
     train_batch_size=128,
-    model_name_or_path=tootsie_8b_deeper_starling,
+    initialize_from_hf=tootsie_8b_deeper_starling,
 )
 
 
