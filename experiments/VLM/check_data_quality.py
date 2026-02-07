@@ -22,6 +22,16 @@ Usage:
     python experiments/VLM/check_data_quality.py \
         --data_path "gs://marin-vlm/stage3_sharded_full/*.parquet" \
         --skip_image_load
+
+    # Clean mode: preview what would be removed (dry run)
+    python experiments/VLM/check_data_quality.py \
+        --data_path "gs://marin-vlm/stage3_sharded_full/*.parquet" \
+        --clean --dry_run --skip_image_load
+
+    # Clean mode: remove bad rows, upload cleaned parquet, delete originals
+    python experiments/VLM/check_data_quality.py \
+        --data_path "gs://marin-vlm/stage3_sharded_full/*.parquet" \
+        --clean --skip_image_load
 """
 
 import argparse
@@ -235,6 +245,96 @@ def check_row(
     return issues
 
 
+def is_row_clean(row: Dict[str, Any], messages_key: str = "messages", images_key: str = "images") -> bool:
+    """Check if a row is clean (no image_ref_but_no_images issue)."""
+    messages = row.get(messages_key)
+    images = row.get(images_key)
+    num_image_refs = count_image_refs_in_messages(messages) if messages else 0
+    if images is None:
+        num_images = 0
+    elif isinstance(images, (list, tuple)):
+        num_images = len(images)
+    else:
+        num_images = 1
+    # Dirty: messages reference images but images list is empty/null
+    if num_image_refs > 0 and num_images == 0:
+        return False
+    return True
+
+
+def clean_shard(
+    shard_path: str,
+    messages_key: str,
+    images_key: str,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Clean a single parquet shard by removing rows with image_ref_but_no_images.
+
+    Returns dict with stats: original_rows, cleaned_rows, removed_rows, cleaned_path.
+    """
+    import gcsfs
+    import pyarrow as pa
+
+    shard_name = Path(shard_path).stem
+    t0 = time.time()
+
+    # Read parquet
+    with fsspec.open(shard_path, "rb") as f:
+        table = pq.read_table(f)
+
+    original_rows = len(table)
+    rows_dict = table.to_pydict()
+
+    # Build boolean mask: True = keep, False = remove
+    mask = []
+    for row_idx in range(original_rows):
+        row = {k: v[row_idx] for k, v in rows_dict.items()}
+        mask.append(is_row_clean(row, messages_key, images_key))
+
+    removed = sum(1 for m in mask if not m)
+    cleaned_rows = original_rows - removed
+
+    if dry_run:
+        return {
+            "shard_name": shard_name,
+            "original_rows": original_rows,
+            "cleaned_rows": cleaned_rows,
+            "removed_rows": removed,
+            "cleaned_path": None,
+            "elapsed": time.time() - t0,
+        }
+
+    # Filter table using pyarrow boolean mask
+    pa_mask = pa.array(mask, type=pa.bool_())
+    cleaned_table = table.filter(pa_mask)
+
+    # Generate cleaned path: train-00900.parquet -> train-00900_cleaned.parquet
+    cleaned_path = shard_path.replace(".parquet", "_cleaned.parquet")
+
+    # Write cleaned parquet to GCS
+    if shard_path.startswith("gs://"):
+        gfs = gcsfs.GCSFileSystem()
+        gcs_cleaned_path = cleaned_path.replace("gs://", "")
+        with gfs.open(gcs_cleaned_path, "wb") as f:
+            pq.write_table(cleaned_table, f)
+        # Delete original
+        gcs_original_path = shard_path.replace("gs://", "")
+        gfs.rm(gcs_original_path)
+    else:
+        pq.write_table(cleaned_table, cleaned_path)
+        import os
+        os.remove(shard_path)
+
+    return {
+        "shard_name": shard_name,
+        "original_rows": original_rows,
+        "cleaned_rows": cleaned_rows,
+        "removed_rows": removed,
+        "cleaned_path": cleaned_path,
+        "elapsed": time.time() - t0,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Check VLM training data quality")
     parser.add_argument("--data_path", required=True, help="GCS path pattern to parquet files (e.g., gs://bucket/path/*.parquet)")
@@ -245,6 +345,8 @@ def main():
     parser.add_argument("--skip_image_load", action="store_true", help="Skip actual image loading (fast metadata-only check)")
     parser.add_argument("--output", default="data_quality_report.json", help="Output JSON file for results")
     parser.add_argument("--max_issues_per_shard", type=int, default=100, help="Max issues to report per shard")
+    parser.add_argument("--clean", action="store_true", help="Clean mode: remove bad rows and re-upload parquet files")
+    parser.add_argument("--dry_run", action="store_true", help="With --clean: only report what would be removed, don't modify files")
     args = parser.parse_args()
 
     # List parquet files
@@ -258,6 +360,59 @@ def main():
     end_shard = args.end_shard if args.end_shard is not None else len(parquet_files)
     parquet_files = parquet_files[args.start_shard:end_shard]
     logger.info(f"Checking shards {args.start_shard} to {end_shard} ({len(parquet_files)} shards)")
+
+    # ── Clean mode ──
+    if args.clean:
+        mode_str = "DRY RUN" if args.dry_run else "CLEANING"
+        print(f"\n{'=' * 70}")
+        print(f"  {mode_str}: Removing image_ref_but_no_images rows from {len(parquet_files)} shards")
+        print(f"{'=' * 70}\n", flush=True)
+
+        total_original = 0
+        total_removed = 0
+        total_cleaned = 0
+
+        for shard_idx, shard_path in enumerate(parquet_files):
+            global_shard_idx = args.start_shard + shard_idx
+            shard_name = Path(shard_path).stem
+            print(f"[{shard_idx+1}/{len(parquet_files)}] {mode_str} shard {global_shard_idx} ({shard_name})...", end=" ", flush=True)
+
+            try:
+                stats = clean_shard(
+                    shard_path,
+                    messages_key=args.messages_key,
+                    images_key=args.images_key,
+                    dry_run=args.dry_run,
+                )
+                total_original += stats["original_rows"]
+                total_removed += stats["removed_rows"]
+                total_cleaned += stats["cleaned_rows"]
+
+                if stats["removed_rows"] > 0:
+                    print(
+                        f"{stats['original_rows']} -> {stats['cleaned_rows']} rows "
+                        f"(removed {stats['removed_rows']}) in {stats['elapsed']:.1f}s",
+                        flush=True,
+                    )
+                else:
+                    print(f"{stats['original_rows']} rows, no issues ({stats['elapsed']:.1f}s)", flush=True)
+
+            except Exception as e:
+                print(f"FAILED: {e}", flush=True)
+                logger.error(f"Failed to clean shard {shard_path}: {e}")
+
+        print(f"\n{'=' * 70}")
+        print(f"{'DRY RUN ' if args.dry_run else ''}CLEAN SUMMARY")
+        print(f"{'=' * 70}")
+        print(f"Total shards: {len(parquet_files)}")
+        print(f"Total original rows: {total_original}")
+        print(f"Total removed rows: {total_removed}")
+        print(f"Total cleaned rows: {total_cleaned}")
+        if args.dry_run:
+            print("\n(Dry run - no files were modified)")
+        return
+
+    # ── Check mode (original behavior) ──
 
     # Collect all issues
     all_issues: List[Dict] = []
