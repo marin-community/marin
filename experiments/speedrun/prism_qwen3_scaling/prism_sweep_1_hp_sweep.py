@@ -201,7 +201,15 @@ class ScaleByPrismHState(NamedTuple):
 
 
 def scale_with_prismh(
-    momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, learning_rate=0.02, coefficient_scale=1.001, gamma_L=0., gamma_R=0., bidirectional=False
+    momentum=0.95,
+    nesterov=True,
+    steps=5,
+    muon_eps=1e-8,
+    learning_rate=0.02,
+    coefficient_scale=1.001,
+    gamma_L=0.0,
+    gamma_R=0.0,
+    bidirectional=False,
 ):
     # Convert steps to concrete int at function definition time
     steps = int(steps)
@@ -237,7 +245,15 @@ def scale_with_prismh(
             if bidirectional:
                 H_L = M @ M.mT + gamma_L**2 * D @ D.mT + muon_eps * jnp.eye(M.shape[0], dtype=M.dtype)
                 H_R = M.mT @ M + gamma_R**2 * D.mT @ D + muon_eps * jnp.eye(M.shape[1], dtype=M.dtype)
-                updated_weight_array = double_sided_matmul_invroot(H_L, M, H_R, r=4, steps=steps, eps=muon_eps, scale=coefficient_scale)
+                updated_weight_array = double_sided_matmul_invroot(
+                    H_L,
+                    M,
+                    H_R,
+                    r=4,
+                    steps=steps,
+                    eps=muon_eps,
+                    scale=coefficient_scale,
+                )
             else:
                 H_R = M.mT @ M + gamma_R**2 * D.mT @ D + muon_eps * jnp.eye(M.shape[1], dtype=M.dtype)
                 updated_weight_array = matmul_invroot(M, H_R, r=2, steps=steps, eps=muon_eps, scale=coefficient_scale)
@@ -279,7 +295,7 @@ def scale_with_prismh(
 coefs = [
     None,  # r = 0
     None,  # r = 1, omitted
-    [      # r = 2
+    [  # r = 2
         (7.42487, -18.3958, 12.8967),
         (3.48773, -2.33004, 0.440469),
         (2.77661, -2.07064, 0.463023),
@@ -287,7 +303,7 @@ coefs = [
         (15 / 8, -5 / 4, 3 / 8),
     ],
     None,  # r = 3, omitted
-    [      # r = 4
+    [  # r = 4
         (3.85003, -10.8539, 8.61893),
         (1.80992, -0.587778, 0.0647852),
         (1.50394, -0.594516, 0.121161),
@@ -296,39 +312,49 @@ coefs = [
 ]
 
 
-def abc(r=1, steps=None, scale=1.):
+def abc(r=1, steps=None, scale=1.0):
     w, steps = coefs[r], steps or len(coefs[r])
     for a, b, c in w[:steps] + w[-1:] * max(steps - len(w), 0):
-        yield a / scale, b / scale**(r + 1), c / scale**(2 * r + 1)
+        yield a / scale, b / scale ** (r + 1), c / scale ** (2 * r + 1)
 
 
 def _sym(M: jax.Array) -> jax.Array:
     return 0.5 * (M + M.mT)
 
 
-def matmul_invroot(G: jax.Array, P: jax.Array, r: int, s=1, steps=None, eps=1e-5, scale: float=1.001):
+def matmul_invroot(G: jax.Array, P: jax.Array, r: int, s=1, steps=None, eps=1e-5, scale: float = 1.001):
     # Computes G @ P^(-s/r)
-    I = jnp.eye(P.shape[0], dtype=P.dtype)
-    P = P / (t := (P * P.mT).sum()**0.5) + eps * I
+    I_n = jnp.eye(P.shape[0], dtype=P.dtype)
+    P = P / (t := (P * P.mT).sum() ** 0.5) + eps * I_n
     for a, b, c in abc(r, steps, scale=scale):
-        W = a * I + b * P + c * P @ P
+        W = a * I_n + b * P + c * P @ P
         W1, W2 = jnp.linalg.matrix_power(W, s), jnp.linalg.matrix_power(W, r)
         G, P = G @ W1, _sym(P @ W2)
-    return G * t**(-s/r)
+    return G * t ** (-s / r)
 
 
-def double_sided_matmul_invroot(Q: jax.Array, G: jax.Array, P: jax.Array, *, r: int, s=1, steps=None, eps: float=1e-5, scale: float=1.001):
+def double_sided_matmul_invroot(
+    Q: jax.Array,
+    G: jax.Array,
+    P: jax.Array,
+    *,
+    r: int,
+    s=1,
+    steps=None,
+    eps: float = 1e-5,
+    scale: float = 1.001,
+):
     # Computes Q^(-s/r) @ G @ P^(-s/r)
     I_m, I_n = jnp.eye(G.shape[0], dtype=Q.dtype), jnp.eye(G.shape[1], dtype=P.dtype)
-    Q = Q / (tQ := jnp.sum(Q * Q.mT)**0.5) + eps * I_m
-    P = P / (tP := jnp.sum(P * P.mT)**0.5) + eps * I_n
+    Q = Q / (tQ := jnp.sum(Q * Q.mT) ** 0.5) + eps * I_m
+    P = P / (tP := jnp.sum(P * P.mT) ** 0.5) + eps * I_n
     for a, b, c in abc(r, steps, scale=scale):
         WQ = a * I_m + b * Q + c * Q @ Q
         WP = a * I_n + b * P + c * P @ P
         WQ1, WQ2 = jnp.linalg.matrix_power(WQ, s), jnp.linalg.matrix_power(WQ, r)
         WP1, WP2 = jnp.linalg.matrix_power(WP, s), jnp.linalg.matrix_power(WP, r)
         Q, G, P = _sym(Q @ WQ2), WQ1 @ G @ WP1, _sym(P @ WP2)
-    G = G * tQ**(-s/r) * tP**(-s/r)
+    G = G * tQ ** (-s / r) * tP ** (-s / r)
     return G
 
 
@@ -477,10 +503,8 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    runs = [
-        build_config("130m", 0., gamma_r, False) for gamma_r in [0.1, 1., 2.]
-    ] + [
-        build_config("130m", gamma, gamma, True) for gamma in [0.1, 1., 2.]
+    runs = [build_config("130m", 0.0, gamma_r, False) for gamma_r in [0.1, 1.0, 2.0]] + [
+        build_config("130m", gamma, gamma, True) for gamma in [0.1, 1.0, 2.0]
     ]
 
     steps = []
