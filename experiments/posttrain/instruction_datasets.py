@@ -378,6 +378,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=[],
         splits=["train"],
     ),
+    "teetone/temp_openthoughts4_math_qwen3-4b_round1": InstructionDatasetConfig(
+        hf_dataset_id="teetone/temp_openthoughts4_math_qwen3-4b_round1",
+        revision="fb9f767",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["original_response"],
+        name="teetone/temp_openthoughts4_math_qwen3-4b_round1",
+        subsets=[],
+        splits=["train"],
+    ),
     "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
         hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
         revision="9e9adba",
