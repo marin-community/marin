@@ -275,7 +275,12 @@ def main(config: ExecutorMainConfig):
             raise RuntimeError("integration_test.py must not be launched via `uv run`. Please run it directly.")
         import ray
 
-        ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=os.cpu_count())
+        ray.init(
+            resources={"head_node": 1},
+            runtime_env={"working_dir": None},
+            num_cpus=os.cpu_count(),
+            _memory=1024 * 1024 * 1024 * 1024,  # 1TB
+        )
         set_current_cluster(create_cluster("ray"))
 
         # path to synthetic test data

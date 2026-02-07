@@ -1412,32 +1412,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dupekit"
-version = "0.1.0"
-source = { editable = "lib/dupekit" }
-
-[package.metadata]
-requires-dist = [
-    { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
-    { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
-]
-provides-extras = ["benchmark"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "huggingface-hub" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-timeout" },
-]
-test = [
-    { name = "huggingface-hub" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-timeout" },
-]
-
-[[package]]
 name = "einops"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3141,6 +3115,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "starlette" },
+    { name = "tabulate" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -3180,6 +3155,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "starlette", specifier = ">=0.50.0" },
+    { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
@@ -4566,7 +4542,6 @@ dependencies = [
     { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus" },
-    { name = "dupekit" },
     { name = "fasteners" },
     { name = "flask" },
     { name = "floret" },
@@ -4731,7 +4706,6 @@ requires-dist = [
     { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
-    { name = "dupekit", editable = "lib/dupekit" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "flask" },
     { name = "floret" },

@@ -30,7 +30,7 @@ from huggingface_hub import HfFileSystem
 from huggingface_hub.errors import HfHubHTTPError
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
@@ -227,7 +227,8 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    Backend.execute(pipeline, max_parallelism=cfg.zephyr_max_parallelism)
+    with ZephyrContext() as ctx:
+        ctx.execute(pipeline)
 
     # Write Provenance JSON
     write_provenance_json(
