@@ -1,0 +1,96 @@
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+stop_sequence: null
+max_new_tokens: 2048
+temperature: 0.7
+n_rounds: 1
+n_generations: 1
+defer_tracker_logs_until_end: true
+skip_samples_table: true
+trainer:
+  tracker:
+    type: noop
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: true
+  ragged_paged_q_block_size: 32
+  ragged_paged_kv_block_pages: 16
+engine:
+  max_seq_len: 2560
+  max_pages: 2052
+  page_size: 64
+  max_seqs: 57
+  max_seqs_in_prefill: 57
+  max_prefill_size: 4096
+  max_queued_tokens: 64
+  max_tokens_per_round: 57
+  max_rounds: 64
+  debug_stats_every_n: 10
+  reset_mode: physical
+  cleanup_mode: none
+  max_stop_seqs: 1
+  max_stop_tokens: 8
+  seed: 0
+prompts:
+  - "Prompt 001: Provide a concise overview of the benefits of sleep."
+  - "Prompt 002: Summarize the main idea of photosynthesis in one paragraph."
+  - "Prompt 003: Explain what an API is to a non-technical audience."
+  - "Prompt 004: Write a short tip for staying focused while coding."
+  - "Prompt 005: Describe a simple strategy for managing time effectively."
+  - "Prompt 006: Explain the difference between RAM and storage."
+  - "Prompt 007: Give one practical idea for reducing meeting overhead."
+  - "Prompt 008: Describe what unit tests validate in software projects."
+  - "Prompt 009: Summarize how DNS resolution works at a high level."
+  - "Prompt 010: Provide a brief explanation of eventual consistency."
+  - "Prompt 011: Explain why idempotency matters in distributed systems."
+  - "Prompt 012: Write a short note on choosing useful monitoring metrics."
+  - "Prompt 013: Describe the tradeoff between latency and throughput."
+  - "Prompt 014: Summarize what a load balancer does."
+  - "Prompt 015: Explain why schema versioning is important for data pipelines."
+  - "Prompt 016: Give one tactic to reduce flaky integration tests."
+  - "Prompt 017: Describe what backpressure means in streaming systems."
+  - "Prompt 018: Explain the difference between authentication and authorization."
+  - "Prompt 019: Summarize why retries need jitter."
+  - "Prompt 020: Give a concise checklist for production rollout readiness."
+  - "Prompt 021: Explain how circuit breakers help prevent cascading failures."
+  - "Prompt 022: Describe when to use optimistic concurrency control."
+  - "Prompt 023: Summarize why bounded queues improve system stability."
+  - "Prompt 024: Give one practical method to detect silent data corruption."
+  - "Prompt 025: Explain tradeoffs between columnar and row-oriented storage."
+  - "Prompt 026: Describe how canary releases reduce deployment risk."
+  - "Prompt 027: Summarize why clock skew matters in distributed tracing."
+  - "Prompt 028: Provide one guideline for choosing cache eviction policies."
+  - "Prompt 029: Explain when write amplification becomes a storage bottleneck."
+  - "Prompt 030: Describe a safe pattern for retrying non-idempotent operations."
+  - "Prompt 031: Summarize how request hedging trades latency for extra load."
+  - "Prompt 032: Give one method to verify end-to-end data lineage integrity."
+  - "Prompt 033: Explain what quorum reads and writes guarantee in practice."
+  - "Prompt 034: Describe why backfills need deterministic replay boundaries."
+  - "Prompt 035: Summarize how token bucket rate limiting works."
+  - "Prompt 036: Provide one checklist item for zero-downtime schema migration."
+  - "Prompt 037: Explain why tombstone compaction affects read latency over time."
+  - "Prompt 038: Describe one approach for safe incremental backfill rollouts."
+  - "Prompt 039: Summarize how quorum loss impacts consistency guarantees."
+  - "Prompt 040: Provide one strategy to reduce cardinality in metrics systems."
+  - "Prompt 041: Explain one way to bound fanout in event-driven architectures."
+  - "Prompt 042: Describe how snapshot isolation differs from serializability."
+  - "Prompt 043: Summarize why index bloat can degrade write throughput."
+  - "Prompt 044: Give one guideline for choosing queue visibility timeouts."
+  - "Prompt 045: Explain one tradeoff of read-repair in distributed databases."
+  - "Prompt 046: Describe a practical strategy for API version sunset policies."
+  - "Prompt 047: Summarize why partial failures require idempotent handlers."
+  - "Prompt 048: Give one approach for preventing thundering herd retries."
+  - "Prompt 049: Explain one benefit of monotonic IDs in event ordering."
+  - "Prompt 050: Describe a safe pattern for incremental index backfills."
+  - "Prompt 051: Summarize why read-your-writes consistency can matter for UX."
+  - "Prompt 052: Give one method to cap fan-in in stream joins."
+  - "Prompt 053: Explain one way to bound replay lag in event consumers."
+  - "Prompt 054: Describe a strategy for safe dual-write cutovers."
+  - "Prompt 055: Summarize when adaptive batching improves tail latency."
+  - "Prompt 056: Give one method for validating disaster-recovery failover drills."
+  - "Prompt 057: Explain one benefit of deterministic partition assignment."

@@ -15,6 +15,14 @@ References:
 ## Work Log
 - 2026-02-05 00:46 PST: M5 multi-round debugging. Tested multiple configs (5 prompts/2048, 1 prompt/256) across physical/logical reset, engine reinit, per-round request rebuild, skip barrier, skip samples table. All still fail after round 0 when n_rounds>1. With TPU debug env enabled, failures show **TPU slice/runtime halt** (`program continuator has halted unexpectedly`, slice health check failed). Documented in `CODEX_REFACTOR_KV_M5_DEBUG.md`; likely runtime issue, not Python exception.
 - 2026-02-05 01:18 PST: M5 batched-rounds workaround validated. Updated engine sizing validation to scale `max_seqs`, `max_seqs_in_prefill`, and `max_prefill_size` by `n_rounds` when rounds are batched. `n_rounds=2` batched run (1 prompt/256 tokens) succeeded. Initial 5 prompts/2048 batched run failed with `Out of free pages during allocation` at `max_pages=240`; increasing `max_pages` to 336 fixed it (job finished, `pages_in_use=330 free=6`). Logs recorded in `CODEX_REFACTOR_KV_M5_DEBUG.md`.
+- 2026-02-07 01:45 PST: M9 Phase A/B matrix executed on real TPU (`v5p-16`) with M8 kernel-on settings. Results: fixed-page boundary at `max_pages=480` supports `max_seqs=14` but fast-rejects `max_seqs=16` (`est. 528 pages needed`); scaled-page runs passed through `max_seqs=28` (`max_pages=1008`). Updated `CODEX_INFERENCE_M9.md` with pass/fail matrix and metrics.
+- 2026-02-07 01:50 PST: M9 extended C-phase completed with scaled pages: `max_seqs=32` (`max_pages=1152`) and `max_seqs=36` (`max_pages=1296`) both passed on real TPU. Round time stayed in the same band (~`80-83s`) while generated tokens remained near `~25.6k`, confirming scheduler-limited workload saturation rather than page-capacity saturation.
+- 2026-02-07 01:55 PST: M9 further extension to `max_seqs=40` (`max_pages=1440`) passed on real TPU with `round_total_s=81.022s`, `round_total_generated=25640`, and `DecodeStats[after_decode] pages_in_use=440 free=1000`. Concurrency remained stable; scheduler-limited token plateau remained unchanged.
+- 2026-02-07 02:03 PST: M9 continued to `max_seqs=44` (`max_pages=1584`) and `max_seqs=48` (`max_pages=1728`), both PASS on real TPU. Round times remained within the established band (`82.091s` and `83.818s`), while generated totals remained near `~25.6k` and free-page headroom remained large (`free=1140`, `free=1280`).
+- 2026-02-07 02:32 PST: M9 boundary sweep extended and finalized for this setup. `max_seqs=52` (`max_pages=1872`) and `max_seqs=56` (`max_pages=2016`) PASS; revalidation at `56` also PASS. `max_seqs=57/58/60` all fail reproducibly at first decode iteration with the same `Anomalies` signature and worker exit status 1 (not config page-capacity rejection, not container OOM). Current stable ceiling is `max_seqs=56`.
+- 2026-02-07 02:39 PST: M9 scheduler-variant recovery probe at `max_seqs=57` (`max_pages=2052`, `max_tokens_per_round=8`, `max_rounds=80`) still failed with the same first-decode `Anomalies` signature. This suggests the `57+` instability is not resolved by a simple `max_tokens_per_round/max_rounds` retune.
+- 2026-02-07 02:46 PST: Additional M9 isolation checks. Prefill-limited variant (`max_seqs=57`, `max_seqs_in_prefill=56`, 57 prompts) is rejected by config validation (`max_seqs_in_prefill must cover all prompts`). Crucially, `max_seqs=60` with only 56 prompts (`after_prefill active=56`) still fails with the same first-decode `Anomalies` signature, indicating instability is tied to configured `max_seqs` shape, not merely active prompt count.
+- 2026-02-07 07:35 PST: M9 length-fixed (`2048` per prompt) sweep substantially extended. With scheduler set to preserve full-length outputs (`max_tokens_per_round=max_seqs`, `max_queued_tokens=max_seqs`), runs pass through `max_seqs=113` under the earlier `max_pages=36*max_seqs` scaling, but `114+` showed runtime `Anomalies` when `max_pages` exceeded 4096. Capping `max_pages=4096` changed the boundary: `114` and `120` PASS, `124` PASS (`pages_in_use=4092 free=4`), and `125` is deterministic fast-reject (`est. 4125 pages needed > 4096`). Current practical length-fixed ceiling: **124 prompts x 2048** for this setup.
 
 ---
 ## gold command
@@ -844,7 +852,7 @@ Tracking:
 
 ### M9 - `max_seqs` Scaling Beyond 10
 
-Status: IN PROGRESS (2026-02-07)
+Status: IN PROGRESS (boundary sweep completed through `max_seqs=60` on 2026-02-07; stable ceiling currently `max_seqs=56`)
 
 Goal:
 - Push concurrent sequence capacity beyond `max_seqs=10` for `2048`-token generation on real TPU.
@@ -859,6 +867,37 @@ Deliverables:
 - Capacity/performance matrix over increasing `max_seqs` values (`12+`).
 - Clear pass/fail boundary with failure signatures and config constraints.
 - Recommended M9 operating point for higher-throughput batching.
+
+Phase A/B/C results (real TPU `v5p-16`):
+- A1 (`12,480`): PASS, `round_total_s=79.591s`, `round_total_generated=22536`.
+- A2 (`14,480`): PASS, `round_total_s=80.428s`, `round_total_generated=24590`.
+- A3 (`16,480`): FAIL fast (startup validation), `engine.max_pages=480` too small (`est. 528` pages).
+- B1 (`20,720`): PASS, `round_total_s=80.842s`, `round_total_generated=25620`.
+- B2 (`24,864`): PASS, `round_total_s=80.970s`, `round_total_generated=25624`.
+- B3 (`28,1008`): PASS, `round_total_s=80.375s`, `round_total_generated=25628`.
+- C1 (`32,1152`): PASS, `round_total_s=80.981s`, `round_total_generated=25632`.
+- C2 (`36,1296`): PASS, `round_total_s=83.452s`, `round_total_generated=25636`.
+- C3 (`40,1440`): PASS, `round_total_s=81.022s`, `round_total_generated=25640`.
+- C4 (`44,1584`): PASS, `round_total_s=82.091s`, `round_total_generated=25644`.
+- C5 (`48,1728`): PASS, `round_total_s=83.818s`, `round_total_generated=25648`.
+- C6 (`52,1872`): PASS, `round_total_s=83.082s`, `round_total_generated=25652`.
+- C7 (`56,2016`): PASS, `round_total_s=82.265s`, `round_total_generated=25656`.
+- C7 revalidation (`56,2016`): PASS, `round_total_s=83.125s`, `round_total_generated=25656`.
+- D1 (`57,2052`): FAIL (runtime) at first decode iteration with `Anomalies` and worker exit status 1.
+- D1P (`57,2052`, prefill-limited attempt): FAIL fast at config validation (`max_seqs_in_prefill must cover all prompts per round`).
+- D1S (`57,2052`, scheduler probe `tpr=8`, `rounds=80`): FAIL (runtime) with same first-decode `Anomalies` signature.
+- D2 (`58,2088`): FAIL (runtime) with same first-decode `Anomalies` signature.
+- D3 (`60,2160`): FAIL (runtime) with same first-decode `Anomalies` signature; reproduced on rerun.
+- D4 (`60,2160`, 56 prompts only): FAIL (runtime) with same first-decode `Anomalies` signature despite `after_prefill active=56`.
+
+Current interpretation:
+- Fixed-page boundary is now explicit and safe (validation fails fast before TPU runtime failure).
+- Scaled-page concurrency is stable through `max_seqs=56`; `57+` fails reproducibly with a runtime anomaly signature.
+- Round time stays in the same band (~`80-84s`) from `20` to `56` prompts under current scheduler defaults.
+- Generated-token totals plateau near `~25.6k` for B1-C7; per-prompt generation declines as `max_seqs` rises.
+- Simple scheduler retune (`max_tokens_per_round=8`, `max_rounds=80`) at `max_seqs=57` does not recover stability.
+- Isolation run (`max_seqs=60`, 56 prompts) still fails, so the issue tracks configured `max_seqs` shape beyond 56 rather than only the number of active prompts.
+- Next M9 step is failure analysis/recovery for `57+` at runtime/collective level (beyond basic scheduler retuning).
 
 Tracking:
 - Detailed M9 experiment log: `CODEX_INFERENCE_M9.md`.
