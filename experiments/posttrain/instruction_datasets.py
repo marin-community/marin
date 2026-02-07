@@ -371,7 +371,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     ),
     "teetone/temp_mixtureofthoughts_math_qwen3-4b_round1": InstructionDatasetConfig(
         hf_dataset_id="teetone/temp_mixtureofthoughts_math_qwen3-4b_round1",
-        revision="0c0a606",
+        revision="1ac58b6",
         adapter=multi_turn_adapter(),
         metadata_columns=["original_response"],
         name="teetone/temp_mixtureofthoughts_math_qwen3-4b_round1",
