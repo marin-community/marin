@@ -19,7 +19,6 @@ import os
 import re
 import shutil
 import sqlite3
-import sys
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -572,6 +571,8 @@ def _build_update_step(
 
 if __name__ == "__main__":
     num_loops = SWEEP.num_loops
+    if os.getenv("CI", None) is not None:
+        num_loops = 1
     suggestions_per_loop = SWEEP.suggestions_per_loop
 
     previous_update_step: ExecutorStep | None = None
