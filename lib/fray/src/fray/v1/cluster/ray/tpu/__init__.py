@@ -14,7 +14,7 @@
 
 """Ray TPU orchestration for gang scheduling and multislice coordination."""
 
-from fray.cluster.ray.tpu.execution import (
+from fray.v1.cluster.ray.tpu.execution import (
     HEALTH_CHECK_TIMEOUT,
     START_ACTOR_TIMEOUT,
     MultisliceInfo,

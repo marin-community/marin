@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterator, Sequence
 
 import numpy as np
 import pytest
+from zephyr.execution import ZephyrWorkerError
 
 from levanter.data import BatchProcessor, ShardedDataSource, batched
 from levanter.data.sharded_datasource import TextUrlDataSource
@@ -193,11 +194,11 @@ def test_cache_recover_from_crash():
 
     with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as tmpdir2:
         source = CrashingShardSource(4)
-        with pytest.raises(_CustomException):
+        with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, source, TestProcessor())
 
         source = CrashingShardSource(5)
-        with pytest.raises(_CustomException):
+        with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, source, TestProcessor())
 
         # testing this doesn't throw
@@ -230,7 +231,7 @@ def test_shard_cache_crashes_if_processor_throws():
             raise RuntimeError("exc")
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor())
 
 
@@ -264,10 +265,10 @@ async def test_shard_cache_fails_gracefully_with_unknown_file_type_async():
             [f"{tmpdir}/data.not_a_real_extension"],
         )
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, dataset, TestProcessor())
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, dataset, TestProcessor())
 
 
@@ -280,8 +281,8 @@ def test_shard_cache_fails_gracefully_with_unknown_file_type():
             [f"{tmpdir}/data.not_a_real_extension"],
         )
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, dataset, TestProcessor())
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, dataset, TestProcessor())

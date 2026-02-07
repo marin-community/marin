@@ -27,6 +27,10 @@ import time
 
 import draccus
 
+from fray.cluster import ResourceConfig, TpuConfig, get_tpu_topology
+from fray.v1.cluster import ResourceConfig as V1ResourceConfig
+from fray.v1.cluster import TpuConfig as V1TpuConfig
+
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
@@ -50,6 +54,34 @@ def get_evaluator(config: EvaluationConfig) -> Evaluator:
     return EVALUATORS[config.evaluator]()
 
 
+def _to_v1_resource_config(config: ResourceConfig) -> V1ResourceConfig:
+    """Convert a v2 ResourceConfig to v1 for the evaluation subsystem.
+
+    The key difference is `replicas`: v2 means total VMs (slice_count * vm_count),
+    v1 means slice_count. For TPU configs we divide back out; for non-TPU configs
+    the value passes through unchanged.
+    """
+    replicas = config.replicas
+    device = config.device
+    if isinstance(device, TpuConfig):
+        try:
+            topo = get_tpu_topology(device.variant)
+            replicas = max(1, config.replicas // topo.vm_count)
+        except ValueError:
+            pass
+        device = V1TpuConfig(variant=device.variant, topology=device.topology)
+
+    return V1ResourceConfig(
+        cpu=config.cpu,
+        ram=config.ram,
+        disk=config.disk,
+        device=device,
+        replicas=replicas,
+        preemptible=config.preemptible,
+        regions=config.regions,
+    )
+
+
 def evaluate(config: EvaluationConfig) -> None:
     logger.info(f"Running evals with args: {config}")
     evaluator: Evaluator = get_evaluator(config)
@@ -59,12 +91,13 @@ def evaluate(config: EvaluationConfig) -> None:
 
     start_time: float = time.time()
     if config.launch_with_ray:
+        v1_resources = _to_v1_resource_config(config.resource_config)
         evaluator.launch_evaluate_with_ray(
             model,
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
-            resource_config=config.resource_config,
+            resource_config=v1_resources,
         )
     else:
         evaluator.evaluate(
