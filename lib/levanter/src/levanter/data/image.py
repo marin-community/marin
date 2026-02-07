@@ -1765,12 +1765,24 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             images_per_example.append(len(images_data))
 
             # Apply chat template to get the text with image placeholders
-            all_texts.append(
-                self.processor.apply_chat_template(
-                    messages,
-                    add_generation_prompt=self.add_generation_prompt,
-                )
+            template_text = self.processor.apply_chat_template(
+                messages,
+                add_generation_prompt=self.add_generation_prompt,
             )
+            all_texts.append(template_text)
+
+            # Check apply_chat_template output for image placeholders that our pre-check missed
+            # This catches message formats like {"type": "image_url"} that produce <image> tokens
+            template_image_count = template_text.count("<image>")
+            if template_image_count > 0 and len(images_data) == 0:
+                raise ValueError(
+                    f"Data inconsistency: apply_chat_template produced {template_image_count} "
+                    f"<image> placeholder(s) but images list is empty! "
+                    f"This suggests messages have image references in a format our pre-check missed. "
+                    f"batch_item_idx={item_idx}, "
+                    f"template_text={template_text[:500]!r}, "
+                    f"messages={json.dumps(messages, ensure_ascii=False, default=str)[:500]}"
+                )
 
         # Process all images and texts together in one call
         if all_images:
@@ -1927,6 +1939,28 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 num_unpadded_features=num_unpadded_features,
             )
             position_ids = self._compute_position_ids(combined_mask)
+
+            # Post-processing consistency check: verify input_ids image tokens match pixel_values/grid_mask
+            image_token_id = getattr(self.processor, "image_token_id", None)
+            if image_token_id is not None:
+                image_token_count = int(np.sum(input_ids == image_token_id))
+                has_valid_images = (
+                    pixel_values is not None
+                    and grid_mask is not None
+                    and np.any(grid_mask)
+                )
+                if image_token_count > 0 and not has_valid_images:
+                    raise ValueError(
+                        f"Post-processing consistency error: input_ids has {image_token_count} "
+                        f"image tokens (token_id={image_token_id}) but pixel_values is "
+                        f"{'None' if pixel_values is None else 'present'}, "
+                        f"grid_mask={grid_mask}, num_images={num_images}. "
+                        f"This means image tokens were injected into input_ids without "
+                        f"corresponding image data. "
+                        f"chat_template_text={all_texts[i][:500]!r}, "
+                        f"images_per_example[i]={images_per_example[i]}, "
+                        f"batch_item_idx={i}"
+                    )
 
             # Create labels and build result
             result: ImageTextDict = {
