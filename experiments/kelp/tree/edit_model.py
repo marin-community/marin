@@ -59,8 +59,9 @@ logger = logging.getLogger(__name__)
 class EditModelParams:
     """Parameters for the AR edit-prediction model.
 
-    Same as TreeDiffusionModelParams but without timestep_embed, since
-    tree diffusion uses iterative edits rather than a fixed noise schedule.
+    Contains token embeddings, output projection, transformer blocks, and
+    final layer norm. No timestep conditioning -- tree diffusion uses
+    iterative edits rather than a fixed noise schedule.
     """
 
     token_embed: jax.Array
@@ -231,9 +232,7 @@ def ar_loss(
     shifted_mask = loss_mask[:, 1:]
 
     log_probs = jax.nn.log_softmax(shifted_logits, axis=-1)
-    target_log_probs = jnp.take_along_axis(
-        log_probs, shifted_targets[..., None], axis=-1
-    ).squeeze(-1)
+    target_log_probs = jnp.take_along_axis(log_probs, shifted_targets[..., None], axis=-1).squeeze(-1)
 
     masked_loss = -target_log_probs * shifted_mask
     num_loss_tokens = jnp.sum(shifted_mask)

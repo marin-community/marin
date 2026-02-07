@@ -16,7 +16,6 @@
 
 import ast
 
-import pytest
 
 from experiments.kelp.tree.tree_diff import (
     Edit,
@@ -75,9 +74,7 @@ def test_function_body_difference():
 
     # The edit should target the body, not the whole function.
     for edit in edits:
-        assert edit.node_type != "FunctionDef", (
-            "Should target a specific sub-expression, not the whole function"
-        )
+        assert edit.node_type != "FunctionDef", "Should target a specific sub-expression, not the whole function"
 
 
 def test_multiple_statement_differences():
@@ -192,9 +189,12 @@ def fib(n):
     # At least one edit should target the changed part (the if condition
     # or the return value inside the if).
     edit_types = {e.node_type for e in edits}
-    assert edit_types & {"Compare", "Constant", "Return", "If"}, (
-        f"Expected edits to target changed nodes, got types: {edit_types}"
-    )
+    assert edit_types & {
+        "Compare",
+        "Constant",
+        "Return",
+        "If",
+    }, f"Expected edits to target changed nodes, got types: {edit_types}"
 
 
 def test_tree_diff_syntax_error_returns_empty():

@@ -12,31 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Main training script for Kelp tree diffusion models.
+"""Main training script for Kelp tree diffusion edit models.
 
-Supports training at different scales with various datasets.
+Trains an AR edit-prediction model on Python source code using the tree
+diffusion pipeline: corrupt programs via AST subtree replacement, compute
+TreeDiff edit paths, and train the model to predict single edits.
 
 Usage:
-    # Toy model on toy data (laptop)
-    uv run python experiments/kelp/train.py --preset laptop --dataset toy
+    # Train on toy corpus (laptop)
+    uv run python experiments/kelp/train.py --preset toy --steps 1000
 
-    # Medium model on quine data (GPU)
-    uv run python experiments/kelp/train.py --preset single_gpu --dataset quine
+    # Train overnight on CPU
+    uv run python experiments/kelp/train.py --preset overnight_cpu --steps 30000
 
-    # Transfer from Marin 8b
-    uv run python experiments/kelp/train.py --preset tpu_v5p_8 --dataset stack_edu --transfer
-
-For ExecutorStep-based training, use the executor_main entry point.
+    # With W&B logging
+    uv run python experiments/kelp/train.py --preset laptop --wandb-project kelp
 """
 
 import argparse
 import logging
 import sys
-from dataclasses import dataclass
 
 from experiments.kelp.model.presets import PRESETS, get_preset
-from experiments.kelp.training.train import TrainingConfig, train
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from experiments.kelp.tree.subtree_bank import SubtreeBank
+from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
+from experiments.kelp.tree.train import (
+    EditTrainingConfig,
+    create_edit_data_iter,
+    train_edit_model,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,199 +50,127 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class KelpTrainingConfig:
-    """Full configuration for Kelp training."""
-
-    preset: str
-    """Model preset name."""
-
-    dataset: str
-    """Dataset name: 'toy', 'quine', 'stack_edu'."""
-
-    output_path: str
-    """Output path for checkpoints and logs."""
-
-    total_steps: int = 10000
-    """Total training steps."""
-
-    learning_rate: float | None = None
-    """Learning rate (uses preset default if None)."""
-
-    batch_size: int | None = None
-    """Batch size (uses preset default if None)."""
-
-    transfer_from: str | None = None
-    """Path to checkpoint for transfer learning."""
-
-    seed: int = 42
-    """Random seed."""
-
-    log_interval: int = 10
-    """Steps between logging."""
-
-    checkpoint_interval: int = 1000
-    """Steps between checkpoints."""
-
-
-def run_kelp_training(config: KelpTrainingConfig) -> dict:
-    """Run Kelp training.
-
-    This function is called by the executor framework.
-
-    Args:
-        config: Training configuration.
-
-    Returns:
-        Dictionary with training results.
-    """
-    from jax import random
-
-    preset = get_preset(config.preset)
-    model_config = preset.config
-    lr = config.learning_rate or preset.learning_rate
-    batch_size = config.batch_size or preset.batch_size
-
-    training_config = TrainingConfig(
-        model=model_config,
-        learning_rate=lr,
-        total_steps=config.total_steps,
-        batch_size=batch_size,
-        log_interval=config.log_interval,
-        checkpoint_interval=config.checkpoint_interval,
-        output_dir=config.output_path,
-        seed=config.seed,
-    )
-
-    key = random.PRNGKey(config.seed)
-
-    if config.dataset == "toy":
-        from experiments.kelp.tokenizer import SimpleTokenizer
-        from experiments.kelp.train_toy import create_toy_data_iter
-
-        tokenizer = SimpleTokenizer(vocab_size=model_config.vocab_size)
-        data_iter = create_toy_data_iter(
-            batch_size=batch_size,
-            max_seq_len=model_config.max_seq_len,
-            tokenizer=tokenizer,
-            key=key,
-        )
-    elif config.dataset == "quine":
-        from experiments.kelp.data.quine_dataset import create_quine_data_iter
-
-        data_iter = create_quine_data_iter(
-            batch_size=batch_size,
-            max_seq_len=model_config.max_seq_len,
-            key=key,
-        )
-    elif config.dataset == "stack_edu":
-        from experiments.kelp.data.stack_edu import create_stack_edu_data_iter
-
-        data_iter = create_stack_edu_data_iter(
-            batch_size=batch_size,
-            max_seq_len=model_config.max_seq_len,
-            key=key,
-        )
-    else:
-        raise ValueError(f"Unknown dataset: {config.dataset}")
-
-    initial_params = None
-    if config.transfer_from:
-        logger.info(f"Loading weights from {config.transfer_from}")
-        from experiments.kelp.transfer.adapt import transfer_ar_to_tree_diffusion
-
-        initial_params = transfer_ar_to_tree_diffusion(
-            config.transfer_from,
-            model_config,
-        )
-
-    model = train(training_config, data_iter, initial_params=initial_params)
-
-    return {
-        "status": "completed",
-        "output_path": config.output_path,
-        "total_steps": config.total_steps,
-    }
-
-
-def kelp_training_step(
-    preset: str = "laptop",
-    dataset: str = "toy",
-    total_steps: int = 10000,
-    transfer_from: str | None = None,
-    name_suffix: str = "",
-) -> ExecutorStep:
-    """Create an ExecutorStep for Kelp training.
-
-    Args:
-        preset: Model preset name.
-        dataset: Dataset name.
-        total_steps: Total training steps.
-        transfer_from: Optional path for transfer learning.
-        name_suffix: Optional suffix for step name.
-
-    Returns:
-        ExecutorStep for training.
-    """
-    step_name = f"kelp/train/{preset}/{dataset}"
-    if name_suffix:
-        step_name = f"{step_name}/{name_suffix}"
-    if transfer_from:
-        step_name = f"{step_name}/transfer"
-
-    return ExecutorStep(
-        name=step_name,
-        fn=run_kelp_training,
-        config=KelpTrainingConfig(
-            preset=preset,
-            dataset=dataset,
-            output_path=this_output_path(),
-            total_steps=total_steps,
-            transfer_from=transfer_from,
-        ),
-    )
+# Toy corpus for quick iteration.
+TOY_CORPUS = [
+    "def add(a, b):\n    return a + b\n",
+    "def sub(a, b):\n    return a - b\n",
+    "def mul(a, b):\n    return a * b\n",
+    "def div(a, b):\n    return a / b\n",
+    "def neg(x):\n    return -x\n",
+    "def square(x):\n    return x * x\n",
+    "def double(x):\n    return x + x\n",
+    "def is_positive(x):\n    return x > 0\n",
+    "def is_zero(x):\n    return x == 0\n",
+    "def identity(x):\n    return x\n",
+    "def abs_val(x):\n    if x < 0:\n        return -x\n    return x\n",
+    "def max_val(a, b):\n    if a > b:\n        return a\n    return b\n",
+    "def min_val(a, b):\n    if a < b:\n        return a\n    return b\n",
+    "def clamp(x, lo, hi):\n    if x < lo:\n        return lo\n    if x > hi:\n        return hi\n    return x\n",
+    "def fib(n):\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n",
+]
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train a Kelp tree diffusion model")
-    parser.add_argument("--preset", type=str, default="laptop", choices=list(PRESETS.keys()), help="Model preset")
-    parser.add_argument("--dataset", type=str, default="toy", choices=["toy", "quine", "stack_edu"], help="Dataset")
-    parser.add_argument("--steps", type=int, default=10000, help="Number of training steps")
+    parser = argparse.ArgumentParser(description="Train a Kelp tree diffusion edit model")
+    parser.add_argument("--preset", type=str, default="toy", choices=list(PRESETS.keys()), help="Model preset")
+    parser.add_argument("--steps", type=int, default=1000, help="Number of training steps")
     parser.add_argument("--lr", type=float, default=None, help="Learning rate (uses preset default if not set)")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (uses preset default if not set)")
-    parser.add_argument("--transfer", type=str, default=None, help="Path to checkpoint for transfer learning")
-    parser.add_argument("--output-dir", type=str, default="checkpoints/kelp", help="Output directory")
+    parser.add_argument("--output-dir", type=str, default="checkpoints/kelp-edit", help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--use-executor", action="store_true", help="Run via executor framework")
+    parser.add_argument("--log-interval", type=int, default=10, help="Steps between logging")
+    parser.add_argument("--wandb-project", type=str, default=None, help="W&B project name (enables W&B logging)")
+    parser.add_argument("--wandb-run-name", type=str, default=None, help="W&B run name")
+    parser.add_argument(
+        "--corpus-file",
+        type=str,
+        default=None,
+        help="Path to corpus file (one program per entry, separated by blank lines)",
+    )
     return parser.parse_args()
+
+
+def load_corpus(path: str) -> list[str]:
+    """Load a corpus from a file.
+
+    Programs are separated by blank lines. Each program is a contiguous
+    block of non-empty lines.
+    """
+    programs = []
+    current: list[str] = []
+
+    with open(path) as f:
+        for line in f:
+            if line.strip() == "" and current:
+                programs.append("\n".join(current) + "\n")
+                current = []
+            elif line.strip():
+                current.append(line.rstrip())
+
+    if current:
+        programs.append("\n".join(current) + "\n")
+
+    return programs
 
 
 def main():
     """Main entry point."""
     args = parse_args()
 
-    if args.use_executor:
-        step = kelp_training_step(
-            preset=args.preset,
-            dataset=args.dataset,
-            total_steps=args.steps,
-            transfer_from=args.transfer,
-        )
-        executor_main(steps=[step])
-    else:
-        config = KelpTrainingConfig(
-            preset=args.preset,
-            dataset=args.dataset,
-            output_path=args.output_dir,
-            total_steps=args.steps,
-            learning_rate=args.lr,
-            batch_size=args.batch_size,
-            transfer_from=args.transfer,
-            seed=args.seed,
-        )
+    preset = get_preset(args.preset)
+    model_config = preset.config
+    lr = args.lr or preset.learning_rate
+    batch_size = args.batch_size or preset.batch_size
 
-        run_kelp_training(config)
+    # Load corpus.
+    if args.corpus_file:
+        corpus = load_corpus(args.corpus_file)
+        logger.info(f"Loaded {len(corpus)} programs from {args.corpus_file}")
+    else:
+        corpus = TOY_CORPUS
+        logger.info(f"Using toy corpus ({len(corpus)} programs)")
+
+    # Build subtree bank and tokenizer.
+    bank = SubtreeBank.from_corpus(corpus)
+    tokenizer = TreeDiffusionTokenizer(max_seq_len=model_config.max_seq_len)
+    logger.info(f"Subtree bank: {bank.total_entries} entries across {len(bank.entries)} node types")
+
+    # Override model config vocab_size to match tokenizer.
+    from dataclasses import replace
+
+    model_config = replace(model_config, vocab_size=tokenizer.vocab_size)
+
+    train_cfg = EditTrainingConfig(
+        model=model_config,
+        max_seq_len=model_config.max_seq_len,
+        learning_rate=lr,
+        total_steps=args.steps,
+        batch_size=batch_size,
+        log_interval=args.log_interval,
+        output_dir=args.output_dir,
+        seed=args.seed,
+        wandb_project=args.wandb_project,
+        wandb_run_name=args.wandb_run_name,
+    )
+
+    data_iter = create_edit_data_iter(
+        corpus=corpus,
+        bank=bank,
+        tokenizer=tokenizer,
+        config=train_cfg,
+        seed=args.seed,
+    )
+
+    logger.info(f"Training config: {train_cfg}")
+    logger.info(f"Model config: {model_config}")
+
+    params = train_edit_model(
+        config=train_cfg,
+        data_iter=data_iter,
+    )
+
+    logger.info("Training complete!")
 
 
 if __name__ == "__main__":
