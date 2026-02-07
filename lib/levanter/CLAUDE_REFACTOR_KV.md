@@ -281,6 +281,45 @@ Unknown root cause. HLO dumps show identical compilation across hosts. Possible 
 
 ---
 
+## CRITICAL: model.decode() Crash on v5p-16 (2026-02-04)
+
+### Current State
+Even 1-prompt config crashes on v5p-16 multihost at `model.decode()`:
+
+**What Works:**
+- Model loading on both hosts
+- Engine creation on both hosts
+- Simple JIT test (hax.named_jit with scalar math)
+- Model embedding lookup (`model.embeddings.embed(tokens)`)
+- KV cache creation (`hax.named_jit(model.initial_cache)(...)`)
+- Sync barrier (`barrier_sync_with_tag`)
+
+**What Fails:**
+- `model.decode(tokens, cache, binfo, pos_ids)` inside `_prefill_kernel`
+- Both hosts reach the call point, then exit with status 1
+- No Python traceback - crash is at XLA/TPU level
+- jax.debug.print statements inside model.decode don't execute
+
+### Debug Attempts
+1. Added sync barrier before `_run_prefill` - both hosts sync, still crash
+2. Set `use_tpu_ragged_paged_attention: false` - still crash (reference impl)
+3. Set `JAX_TRACEBACK_FILTERING=off` - no additional info
+4. Added jax.debug.print inside `_prefill_kernel` - doesn't print (crash before execution)
+
+### Possible Causes
+1. **SPMD trace mismatch**: Different hosts generating different HLO
+2. **Array sharding mismatch**: Inference arrays not matching model sharding
+3. **Mesh configuration**: model=4, replica_dcn=2 might have issues
+4. **Nested control flow**: `default_ragged_paged_attention` has nested fori_loops
+
+### Next Steps
+1. Try single-host (v5p-8) to confirm code works outside multihost
+2. Check HLO dumps for trace differences between hosts
+3. Add explicit sharding constraints to inference arrays
+4. Consider simpler attention path for debugging
+
+---
+
 ## Testing Plan (Post-Implementation)
 
 Now that P0 and P1 are implemented, run configs in this order to validate incrementally:

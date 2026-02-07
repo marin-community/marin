@@ -5,6 +5,7 @@ import dataclasses
 import functools
 import logging
 import os
+import sys
 import time
 import warnings
 from dataclasses import dataclass, field
@@ -294,9 +295,18 @@ class GenState(eqx.Module):
 
     def reset(self):
         """Reset with physical cache zeroing."""
+        import jax
+
+        print(f"[DEBUG P{jax.process_index()}] === GenState.reset() called ===", flush=True)
+        print(f"[DEBUG P{jax.process_index()}] === About to call cache.reset() ===", flush=True)
+        new_cache = self.cache.reset()
+        print(f"[DEBUG P{jax.process_index()}] === cache.reset() completed ===", flush=True)
+        print(f"[DEBUG P{jax.process_index()}] === About to call decode_state.reset() ===", flush=True)
+        new_decode_state = self.decode_state.reset()
+        print(f"[DEBUG P{jax.process_index()}] === decode_state.reset() completed ===", flush=True)
         return GenState(
-            cache=self.cache.reset(),
-            decode_state=self.decode_state.reset(),
+            cache=new_cache,
+            decode_state=new_decode_state,
         )
 
     def reset_logical(self):
@@ -306,9 +316,18 @@ class GenState(eqx.Module):
         This is safe because attention masks by kv_len and new allocations
         overwrite stale data before it can be used.
         """
+        import jax
+
+        print(f"[DEBUG P{jax.process_index()}] === GenState.reset_logical() called ===", flush=True)
+        print(f"[DEBUG P{jax.process_index()}] === About to call cache.reset_logical() ===", flush=True)
+        new_cache = self.cache.reset_logical()
+        print(f"[DEBUG P{jax.process_index()}] === cache.reset_logical() completed ===", flush=True)
+        print(f"[DEBUG P{jax.process_index()}] === About to call decode_state.reset() ===", flush=True)
+        new_decode_state = self.decode_state.reset()
+        print(f"[DEBUG P{jax.process_index()}] === decode_state.reset() completed ===", flush=True)
         return GenState(
-            cache=self.cache.reset_logical(),
-            decode_state=self.decode_state.reset(),
+            cache=new_cache,
+            decode_state=new_decode_state,
         )
 
     def clone_sequence(
@@ -437,6 +456,7 @@ def _prefill_kernel(
     max_seqs_in_prefill: int,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
+<<<<<<< HEAD
     import sys
 
     print(f"[_prefill_kernel P{jax.process_index()}] === ENTERED ===", flush=True)
@@ -495,11 +515,28 @@ def _prefill_kernel(
 
     print(f"[_prefill_kernel P{jax.process_index()}] === allocate_for_seq done ===", flush=True)
     sys.stdout.flush()
+=======
+    import jax
+
+    print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: entered ===", flush=True)
+
+    tokens = queue.queued_tokens
+    pos_ids = queue.queued_pos_ids
+    slot_ids = queue.queued_slot_ids
+    print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: extracted queue data ===", flush=True)
+
+    print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: calling allocate_for_seq ===", flush=True)
+    decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+    print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: allocate_for_seq done ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
 
     seq_lens = decode_state.seq_lens
 
+    print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: calling _compute_sample_indices ===", flush=True)
     sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_seqs_in_prefill)
+    print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: _compute_sample_indices done ===", flush=True)
 
+<<<<<<< HEAD
     print(f"[_prefill_kernel P{jax.process_index()}] === about to call model.decode ===", flush=True)
     sys.stdout.flush()
 
@@ -507,6 +544,46 @@ def _prefill_kernel(
 
     print(f"[_prefill_kernel P{jax.process_index()}] === model.decode returned, logits.array.shape={logits.array.shape} ===", flush=True)
     sys.stdout.flush()
+=======
+    # jax.debug.print(
+    #     "[_run_prefill] tokens={tokens} slots={slots} pos={pos} seq_lens={lens}",
+    #     tokens=tokens.array,
+    #     slots=slot_ids.array,
+    #     pos=pos_ids.array,
+    #     lens=decode_state.seq_lens.array,
+    # )
+    print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: calling model.decode ===", flush=True)
+    # Debug: print cache shape info to detect multihost sharding issues
+    print(f"[DEBUG P{jax.process_index()}] === cache layers: {len(gen_state.cache)} ===", flush=True)
+    if len(gen_state.cache) > 0:
+        first_layer = gen_state.cache[0]
+        print(
+            f"[DEBUG P{jax.process_index()}] === cache[0].kv_pages axes: {first_layer.kv_pages.axes} ===", flush=True
+        )
+        print(
+            f"[DEBUG P{jax.process_index()}] === cache[0].kv_pages sharding: {first_layer.kv_pages.array.sharding if hasattr(first_layer.kv_pages.array, 'sharding') else 'no sharding attr'} ===",
+            flush=True,
+        )
+    print(f"[DEBUG P{jax.process_index()}] === tokens axes: {tokens.axes} ===", flush=True)
+    print(f"[DEBUG P{jax.process_index()}] === binfo.num_seqs: {binfo.num_seqs} ===", flush=True)
+    sys.stdout.flush()
+    # Debug: print input shapes and values to identify multihost coordination issues
+    jax.debug.print(
+        "[_prefill_kernel P{pid}] tokens.shape={ts} pos_ids.shape={ps} binfo.num_seqs={ns}",
+        pid=jax.process_index(),
+        ts=tokens.array.shape,
+        ps=pos_ids.array.shape,
+        ns=binfo.num_seqs,
+    )
+    jax.debug.print(
+        "[_prefill_kernel P{pid}] tokens[:5]={t5} pos_ids[:5]={p5}",
+        pid=jax.process_index(),
+        t5=tokens.array[:5],
+        p5=pos_ids.array[:5],
+    )
+    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    print(f"[DEBUG P{jax.process_index()}] === _prefill_kernel: model.decode done ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
     logits_at_samples = logits["position", sample_indices]
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -623,6 +700,7 @@ def _run_prefill(
     work: PrefillWork,
     max_seqs_in_prefill: int,
 ) -> tuple[GenState, _DecodeOutputs]:
+<<<<<<< HEAD
     """Run prefill by applying work and then calling the module-level _prefill_kernel JIT."""
     import sys
 
@@ -676,6 +754,18 @@ def _run_prefill(
 
     print(f"[_run_prefill P{jax.process_index()}] === DONE ===", flush=True)
     sys.stdout.flush()
+=======
+    import jax
+
+    print(f"[DEBUG P{jax.process_index()}] === _run_prefill: calling _apply_prefill_work ===", flush=True)
+    gen_state = _apply_prefill_work(gen_state, work)
+    print(
+        f"[DEBUG P{jax.process_index()}] === _run_prefill: _apply_prefill_work done, calling _prefill_kernel ===",
+        flush=True,
+    )
+    result = _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    print(f"[DEBUG P{jax.process_index()}] === _run_prefill: _prefill_kernel done ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
     return result
 
 
@@ -997,6 +1087,7 @@ class InferenceEngine:
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         When `use_logical_reset` is True in config, skips expensive cache zeroing.
         """
+<<<<<<< HEAD
         import sys
         print(f"[DEBUG InferenceEngine.reset P{jax.process_index()}] === Starting reset, use_logical_reset={self.config.use_logical_reset} ===", flush=True)
         sys.stdout.flush()
@@ -1009,24 +1100,64 @@ class InferenceEngine:
         sys.stdout.flush()
         sys.stderr.flush()
 
+=======
+        import jax
+
+        print(
+            f"[DEBUG P{jax.process_index()}] === reset() called, use_logical_reset={self.config.use_logical_reset} ===",
+            flush=True,
+        )
+
+        # On multihost, skip gen_state reset entirely to avoid array coordination issues
+        # The gen_state from initialization is already in a clean state
+        # Each array was created during InferenceEngine.from_model_with_config() which properly
+        # coordinates the creation across hosts. Creating new arrays outside of JIT causes issues.
+        if jax.process_count() > 1:
+            print(
+                f"[DEBUG P{jax.process_index()}] === Multihost: skipping gen_state reset, keeping initialized state ===",
+                flush=True,
+            )
+        else:
+            if self.config.use_logical_reset:
+                print(
+                    f"[DEBUG P{jax.process_index()}] === About to call reset_logical with eqx.filter_jit ===",
+                    flush=True,
+                )
+                self.gen_state = eqx.filter_jit(self.gen_state.reset_logical, donate="all")()
+                print(f"[DEBUG P{jax.process_index()}] === reset_logical completed ===", flush=True)
+            else:
+                print(f"[DEBUG P{jax.process_index()}] === About to call reset with eqx.filter_jit ===", flush=True)
+                self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
+                print(f"[DEBUG P{jax.process_index()}] === reset completed ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
+<<<<<<< HEAD
         print(f"[DEBUG InferenceEngine.reset P{jax.process_index()}] === Reset done ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
+=======
+        print(f"[DEBUG P{jax.process_index()}] === reset() done ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
 
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
         """
+<<<<<<< HEAD
         import sys
         print(f"[DEBUG _prefill_batch P{jax.process_index()}] === Starting _prefill_batch with {len(batch)} requests ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
 
+=======
+        import jax
+
+        print(f"[DEBUG P{jax.process_index()}] === _prefill_batch: building prefill work ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
         # Build a single PrefillWork description and run prefill exactly once
         print(f"[DEBUG _prefill_batch P{jax.process_index()}] === About to call _prefill_prompts ===", flush=True)
         print(f"[DEBUG _prefill_batch P{jax.process_index()}] === free_slots before: {self.free_slots} ===", flush=True)
@@ -1042,7 +1173,9 @@ class InferenceEngine:
             sys.stdout.flush()
             sys.stderr.flush()
         if prefill_work is None:
+            print(f"[DEBUG P{jax.process_index()}] === _prefill_batch: no work to do ===", flush=True)
             return None
+<<<<<<< HEAD
         print(f"[DEBUG _prefill_batch P{jax.process_index()}] === About to call _run_prefill ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
@@ -1075,6 +1208,35 @@ class InferenceEngine:
             sys.stdout.flush()
             sys.stderr.flush()
             raise
+=======
+        print(f"[DEBUG P{jax.process_index()}] === _prefill_batch: prefill_work ready ===", flush=True)
+
+        # Flush before JIT to ensure both hosts are ready
+        import sys
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        # Sync barrier before JIT call to ensure both hosts enter JIT together
+        if jax.process_count() > 1:
+            from levanter.utils.jax_utils import barrier_sync_with_tag
+
+            print(f"[DEBUG P{jax.process_index()}] === _prefill_batch: syncing before _run_prefill ===", flush=True)
+            sys.stdout.flush()
+            barrier_sync_with_tag("prefill_batch_before_run_prefill")
+            print(f"[DEBUG P{jax.process_index()}] === _prefill_batch: sync complete ===", flush=True)
+            sys.stdout.flush()
+
+        print(f"[DEBUG P{jax.process_index()}] === _prefill_batch: calling _run_prefill ===", flush=True)
+        new_state = _run_prefill(
+            self.gen_state,
+            self.model,
+            self.sampler,
+            prefill_work,
+            int(self.config.max_seqs_in_prefill),
+        )
+        print(f"[DEBUG P{jax.process_index()}] === _prefill_batch: _run_prefill completed ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
 
         # _run_prefill returns (GenState, _DecodeOutputs)
         self.gen_state, outputs = new_state
@@ -1293,8 +1455,12 @@ class InferenceEngine:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
         """
+        import jax
+
+        print(f"[DEBUG P{jax.process_index()}] === generate() entered with {len(requests)} requests ===", flush=True)
         # validate we don't have any sequences with n_generations exceeding max_seqs
         max_needed = max(int(r.n_generations) for r in requests)
+        print(f"[DEBUG P{jax.process_index()}] === max_needed={max_needed} ===", flush=True)
         if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
             raise ValueError(
                 f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
@@ -1303,6 +1469,7 @@ class InferenceEngine:
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
+<<<<<<< HEAD
         import sys
         print(f"[DEBUG engine.generate P{jax.process_index()}] === About to call reset() ===", flush=True)
         sys.stdout.flush()
@@ -1311,6 +1478,11 @@ class InferenceEngine:
         print(f"[DEBUG engine.generate P{jax.process_index()}] === reset() done ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
+=======
+        print(f"[DEBUG P{jax.process_index()}] === About to call self.reset() ===", flush=True)
+        self.reset()
+        print(f"[DEBUG P{jax.process_index()}] === self.reset() completed ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
 
         # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]
@@ -1349,6 +1521,7 @@ class InferenceEngine:
 
         time_in = time.time()
         # Initial admission from queue and extract prompt tokens
+<<<<<<< HEAD
         print(f"[DEBUG engine.generate P{jax.process_index()}] === About to call _prefill_batch() ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
@@ -1356,6 +1529,11 @@ class InferenceEngine:
         print(f"[DEBUG engine.generate P{jax.process_index()}] === _prefill_batch() done ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
+=======
+        print(f"[DEBUG P{jax.process_index()}] === About to call _prefill_batch ===", flush=True)
+        decode_outputs = self._prefill_batch(requests)
+        print(f"[DEBUG P{jax.process_index()}] === _prefill_batch completed ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
         self._ingest_outputs(decode_outputs)
         print(f"[DEBUG engine.generate P{jax.process_index()}] === _ingest_outputs() done ===", flush=True)
         sys.stdout.flush()

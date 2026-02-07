@@ -322,6 +322,7 @@ def main(config: SampleLmMultihostConfig):
             sys.stderr.flush()
             raise
 
+<<<<<<< HEAD
         print(f"[DEBUG P{jax.process_index()}] === About to get memory_device ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
@@ -335,6 +336,53 @@ def main(config: SampleLmMultihostConfig):
         print(f"[DEBUG P{jax.process_index()}] === HBM free before engine: {hbm_free_before_engine} GiB ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
+=======
+        # === MULTIHOST SANITY TEST ===
+        print(f"[DEBUG P{jax.process_index()}] === Running multihost sanity test ===", flush=True)
+        sys.stdout.flush()
+        try:
+            # Test 1: Simple embedding lookup
+            test_tokens = hax.named(jnp.array([1, 2, 3]), axis="position")
+            print(f"[DEBUG P{jax.process_index()}] === Test tokens created: {test_tokens.axes} ===", flush=True)
+
+            # Test 2: Simple JIT function
+            @hax.named_jit()
+            def simple_test(x):
+                return x * 2
+
+            result = simple_test(test_tokens)
+            print(f"[DEBUG P{jax.process_index()}] === Simple JIT test passed ===", flush=True)
+
+            # Test 3: Model embedding lookup
+            embedded = model.embeddings.embed(test_tokens)
+            print(f"[DEBUG P{jax.process_index()}] === Model embedding test passed: {embedded.axes} ===", flush=True)
+
+            # Test 4: Create a minimal cache and test model.decode
+            from levanter.inference.page_table import PageTable
+
+            test_page_table = PageTable.init(max_pages=4, max_seqs=1, page_size=64, max_pages_per_seq=4)
+            test_cache = hax.named_jit(model.initial_cache)(test_page_table.spec(), dtype=jnp.bfloat16)
+            print(f"[DEBUG P{jax.process_index()}] === Cache created: {len(test_cache)} layers ===", flush=True)
+
+            # Note: model.decode test removed - it captures model as constant (16GB) and is slow
+            # The actual _run_prefill passes model as argument which avoids this
+
+            print(f"[DEBUG P{jax.process_index()}] === All sanity tests passed ===", flush=True)
+        except Exception as e:
+            print(f"[DEBUG P{jax.process_index()}] === SANITY TEST FAILED: {e} ===", flush=True)
+            import traceback
+
+            traceback.print_exc()
+            sys.stdout.flush()
+            raise
+        # === END SANITY TEST ===
+
+        print(f"[DEBUG P{jax.process_index()}] === GETTING MEMORY DEVICE ===", flush=True)
+        memory_device = jax.local_devices()[0] if jax.local_devices() else None
+        print(f"[DEBUG P{jax.process_index()}] === ESTIMATING FREE MEMORY ===", flush=True)
+        hbm_free_before_engine = estimated_free_device_memory(memory_device)
+        print(f"[DEBUG P{jax.process_index()}] === FREE MEMORY: {hbm_free_before_engine} ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
 
         print(f"[DEBUG P{jax.process_index()}] === STARTING engine creation ===", flush=True)
         logger.info("=== STARTING engine creation ===")
@@ -342,12 +390,20 @@ def main(config: SampleLmMultihostConfig):
         sys.stderr.flush()
 
         engine_start_time = time.perf_counter()
+        print(
+            f"[DEBUG P{jax.process_index()}] === About to call InferenceEngine.from_model_with_config ===", flush=True
+        )
+        sys.stdout.flush()
         try:
             print(f"[DEBUG P{jax.process_index()}] === About to call InferenceEngine.from_model_with_config ===", flush=True)
             sys.stdout.flush()
             sys.stderr.flush()
             engine = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+<<<<<<< HEAD
             print(f"[DEBUG P{jax.process_index()}] === ENGINE CREATION COMPLETE ===", flush=True)
+=======
+            print(f"[DEBUG P{jax.process_index()}] === InferenceEngine created successfully ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
             logger.info("=== ENGINE CREATION COMPLETE ===")
             sys.stdout.flush()
             sys.stderr.flush()
@@ -357,7 +413,9 @@ def main(config: SampleLmMultihostConfig):
             sys.stderr.flush()
             raise
 
+        print(f"[DEBUG P{jax.process_index()}] === Engine creation done, computing time ===", flush=True)
         engine_creation_time = time.perf_counter() - engine_start_time
+<<<<<<< HEAD
         print(f"[DEBUG P{jax.process_index()}] === Engine creation took {engine_creation_time:.2f}s ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
@@ -366,6 +424,11 @@ def main(config: SampleLmMultihostConfig):
         print(f"[DEBUG P{jax.process_index()}] === HBM free after engine: {hbm_free_after_engine} GiB ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
+=======
+        print(f"[DEBUG P{jax.process_index()}] === Engine creation time: {engine_creation_time:.2f}s ===", flush=True)
+        hbm_free_after_engine = estimated_free_device_memory(memory_device)
+        print(f"[DEBUG P{jax.process_index()}] === HBM free after engine: {hbm_free_after_engine} ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
 
         if config.log_kernel_jaxprs_path:
             jaxprs_path = config.log_kernel_jaxprs_path
@@ -373,7 +436,9 @@ def main(config: SampleLmMultihostConfig):
                 jaxprs_path = f"{jaxprs_path}.host{jax.process_index()}"
             engine.write_kernel_jaxprs(jaxprs_path)
 
+        print(f"[DEBUG P{jax.process_index()}] === Creating base PRNGKey ===", flush=True)
         base_key = jrandom.PRNGKey(base_seed)
+<<<<<<< HEAD
         print(f"[DEBUG P{jax.process_index()}] === Created base_key ===", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
@@ -393,6 +458,19 @@ def main(config: SampleLmMultihostConfig):
                     sys.stdout.flush()
                     sys.stderr.flush()
 
+=======
+        print(f"[DEBUG P{jax.process_index()}] === PRNGKey created ===", flush=True)
+
+        total_batches = (len(prompt_ids) + batch_size - 1) // batch_size
+        print(
+            f"[DEBUG P{jax.process_index()}] === Total batches: {total_batches}, starting decode loop ===", flush=True
+        )
+        try:
+            for round_index in range(int(config.n_rounds)):
+                print(f"[DEBUG P{jax.process_index()}] === Round {round_index} starting ===", flush=True)
+                for batch_index, start in enumerate(range(0, len(prompt_ids), batch_size)):
+                    print(f"[DEBUG P{jax.process_index()}] === Batch {batch_index} starting ===", flush=True)
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
                     batch_prompt_ids = prompt_ids[start : start + batch_size]
                     batch_prompts = prompts[start : start + batch_size]
                     batch_requests: list[Request] = []
@@ -435,6 +513,7 @@ def main(config: SampleLmMultihostConfig):
                             step=round_index * total_batches + batch_index,
                         )
 
+<<<<<<< HEAD
                     print(f"[DEBUG P{jax.process_index()}] === About to call engine.generate() ===", flush=True)
                     sys.stdout.flush()
                     sys.stderr.flush()
@@ -445,6 +524,26 @@ def main(config: SampleLmMultihostConfig):
                     print(f"[DEBUG P{jax.process_index()}] === engine.generate() completed in {duration:.2f}s ===", flush=True)
                     sys.stdout.flush()
                     sys.stderr.flush()
+=======
+                    print(f"[DEBUG P{jax.process_index()}] === About to call engine.generate ===", flush=True)
+                    sys.stdout.flush()
+                    start_time = time.time()
+                    try:
+                        result = engine.generate(batch_requests)
+                        duration = time.time() - start_time
+                        print(
+                            f"[DEBUG P{jax.process_index()}] === engine.generate completed in {duration:.2f}s ===",
+                            flush=True,
+                        )
+                    except Exception as e:
+                        print(f"[DEBUG P{jax.process_index()}] === engine.generate FAILED: {e} ===", flush=True)
+                        import traceback
+
+                        traceback.print_exc()
+                        sys.stdout.flush()
+                        sys.stderr.flush()
+                        raise
+>>>>>>> 605e47f3c9584f98edabf2f8703585f91e5698b4
 
                     # Diagnostic: we completed generation for this batch
                     if is_leader:
