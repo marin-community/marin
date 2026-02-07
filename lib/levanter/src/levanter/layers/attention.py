@@ -1871,6 +1871,8 @@ def ragged_paged_attention(
                 num_seqs,
                 sm_scale=sm_scale,
                 soft_cap=soft_cap,
+                q_block_size=q_block_size,
+                kv_block_pages=kv_block_pages,
             )
             return out
         except Exception:  # pragma: no cover - fall back if kernel fails
@@ -1903,6 +1905,8 @@ def _do_tpu_ragged_paged_attention(
     num_seqs: jnp.ndarray,  # scalar int32
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
+    q_block_size: int = 16,
+    kv_block_pages: int = 16,
 ) -> NamedArray:
     # Usual shardmap dance
     # Ensure last dimension (head_size) is a multiple of 128 for Pallas kernels
@@ -1936,9 +1940,17 @@ def _do_tpu_ragged_paged_attention(
     this_num_seqs = jnp.where(this_num_seqs < 0, 0, this_num_seqs)
     page_indices = hax.where(~is_valid(page_indices), 0, page_indices)
     kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
+    pages_per_seq = page_indices.axis_size("page")
+    kv_pages_per_block = min(kv_block_pages, pages_per_seq)
 
     o = shard_map(
-        Partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
+        Partial(
+            tpu_ragged_paged_attention,
+            sm_scale=sm_scale,
+            soft_cap=soft_cap,
+            num_queries_per_block=q_block_size,
+            num_kv_pages_per_block=kv_pages_per_block,
+        ),
         mesh=jax.sharding.get_abstract_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),

@@ -108,3 +108,38 @@ DO NOT:
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
+
+<!-- CODEX-COMMS-MONITOR-START -->
+## Inter-Agent Communications (Codex)
+
+You are session `codex-marin-inference`. You have comms MCP tools available (comms.send_message, comms.read_messages, comms.check_unread_count, comms.list_sessions, comms.broadcast, comms.get_conversation).
+
+### On Session Start
+- IMMEDIATELY call `comms.read_messages` to check for pending messages.
+- Process any messages before doing anything else.
+
+### After Every Task
+- Call `comms.read_messages` after completing each user request.
+
+### Idle Monitoring Loop (CRITICAL)
+When you have NO active user task (you've finished responding and are waiting
+for input), you MUST enter a monitoring loop:
+
+1. Sleep 30 seconds: `sleep 30` via shell
+2. Call `comms.check_unread_count` (lightweight peek)
+3. If count > 0: call `comms.read_messages` and process them
+4. REPEAT from step 1 — do NOT stop
+
+This loop ensures you receive messages from other agents even when idle.
+Continue until the user sends a new message (which interrupts you naturally).
+
+### Message Handling
+- For quick questions/responses: reply inline via `comms.send_message`
+- For substantial tasks: acknowledge receipt immediately ("Working on it..."),
+  then complete the work and send results when done
+- Always identify yourself by session name in responses
+
+### Priority
+User input > agent messages. If the user sends something, handle it first,
+then resume monitoring.
+<!-- CODEX-COMMS-MONITOR-END -->

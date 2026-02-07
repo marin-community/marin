@@ -780,20 +780,29 @@ Rollback:
 
 ### M7 - TPU Ragged Paged Attention VMEM OOM (Dedicated Track)
 
+Status: COMPLETED (2026-02-06)
+
 Goal: re-enable TPU kernel safely or provide a robust alternative.
 
-Deliverables:
-- A small reproducer focused only on the kernel.
-- One of:
-  - chunked kernel implementation
-  - reduced scratch usage
-  - alternative attention backend for inference
+What was fixed:
+- `src/levanter/layers/attention.py` now threads
+  `ragged_paged_q_block_size` / `ragged_paged_kv_block_pages` into the TPU ragged kernel call
+  (`num_queries_per_block`, `num_kv_pages_per_block`).
+- This removes reliance on kernel auto block-size selection for these runs.
+
+Validation:
+- Previously failing kernel-on config now passes:
+  - `config/sampler/sample_llama8b_multihost_real_1prompt_2048_reset_physical_round1_cleanup_none_noop_m7_kernel_on.yaml`
+  - log: `/tmp/levanter_run_m7_e14_1prompt_2048_kernel_on_original_afterpatch.log`
+- Additional passing kernel-on confirmations:
+  - `/tmp/levanter_run_m7_e10_1prompt_2048_kernel_on_prefill1024_pages40_kv8.log`
+  - `/tmp/levanter_run_m7_e11_1prompt_2048_kernel_on_prefill1024_pages40_afterpatch.log`
 
 Exit criteria:
-- TPU kernel path passes 1-prompt long generation without vmem OOM.
+- TPU kernel path passes 1-prompt long generation without VMEM OOM. ✅
 
-Rollback:
-- Keep reference attention path default.
+Notes:
+- Detailed experiment history and hypotheses are tracked in `CODEX_INFERENCE_M7.md`.
 
 ---
 
