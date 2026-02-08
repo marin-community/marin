@@ -29,10 +29,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Add pad_token_id to TreeDiffusionConfig instead of hardcoding 0 (#9)
 
 ### Changed
+- Consolidate dead code: remove unused modules, extract shared corpus and checkpointing (#48)
 - Update training pipeline for tree diffusion with TreeDiff supervision (#34)
 - Replace bidirectional parallel prediction with causal AR edit prediction (#32)
 
 ### Removed
+- Remove dead modules: data/, eval/, transfer/, tokenizer.py, tree/parser.py (#48)
+- Remove unused SIZE_PRESETS and factory functions from model/config.py (#48)
 - Remove D3PM noise process and parallel prediction code (#37)
 - Remove dead code: freeze_embeddings and freeze_attention config options (#8)
 
