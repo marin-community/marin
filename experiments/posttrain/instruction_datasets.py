@@ -653,6 +653,28 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed",
         max_parallelism=32,
     ),
+    "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens-n8-reformatted": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens-n8-reformatted",
+        revision="c09424d",
+        adapter=instruction_response_adapter(
+            instruction_column="instruction_seed",
+            response_column="generated_text",
+        ),
+        metadata_columns=["row_id", "_source", "__original_row_idx", "ms_id"],
+        name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens-n8-reformatted",
+        max_parallelism=32,
+    ),
+    "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens-n8-reformatted-selfconsistency": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens-n8-reformatted-selfconsistency",
+        revision="ece6593",
+        adapter=instruction_response_adapter(
+            instruction_column="instruction_seed",
+            response_column="generated_text",
+        ),
+        metadata_columns=["row_id", "_source", "__original_row_idx", "ms_id", "final_answer", "majority_vote_agree_count", "complete_responses_count"],
+        name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens-n8-reformatted-selfconsistency",
+        max_parallelism=32,
+    ),
     # nvidia/OpenMathReasoning - CoT split (Chain of Thought reasoning)
     "nvidia/OpenMathReasoning/cot": InstructionDatasetConfig(
         hf_dataset_id="nvidia/OpenMathReasoning",
