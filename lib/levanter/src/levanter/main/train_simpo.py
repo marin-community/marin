@@ -265,6 +265,7 @@ def _create_inference_eval_callback(
         # For single-host: run inference with global mesh as before
         local_model = None
         local_mesh = None
+        local_mesh_devices = list(local_devices)
 
         try:
             max_prefill_size = max_seq_len
@@ -279,12 +280,13 @@ def _create_inference_eval_callback(
                 debug_print(f"Creating local mesh with {len(local_devices)} devices...")
                 local_mesh = create_local_mesh(devices=local_devices)
                 debug_print(f"Local mesh created: {local_mesh}")
+                local_mesh_devices = list(local_mesh.devices.flat)
 
                 # Replicate the globally-sharded model to local devices
                 # This triggers an all-gather to collect all shards
                 debug_print("Replicating model to local devices (all-gather)...")
                 replication_start = time.perf_counter()
-                local_model = replicate_model_to_local_mesh(model, local_devices=local_devices)
+                local_model = replicate_model_to_local_mesh(model, local_mesh=local_mesh)
                 block_until_ready_tree(local_model)
                 replication_time = time.perf_counter() - replication_start
                 debug_print(f"Model replicated in {replication_time:.2f}s")
@@ -309,7 +311,7 @@ def _create_inference_eval_callback(
                         max_pages=None,
                         max_rounds=32,
                         max_prefill_size=max_prefill_size,
-                        devices=local_devices,
+                        devices=local_mesh_devices,
                     )
                     # Use the local mesh context for budget inference
                     with hax.partitioning.set_mesh(local_mesh):
@@ -354,7 +356,7 @@ def _create_inference_eval_callback(
                 max_pages=resolved_max_pages,
                 max_rounds=32,
                 max_prefill_size=max_prefill_size,
-                devices=local_devices if is_multihost else None,
+                devices=local_mesh_devices if is_multihost else None,
             )
             debug_print("Engine config created")
 

@@ -545,6 +545,7 @@ def sync_global_devices(name: str):
 def replicate_model_to_local_mesh(
     model: PyTree,
     local_devices: Sequence[jax.Device] | None = None,
+    local_mesh: Mesh | None = None,
 ) -> PyTree:
     """Convert a globally-sharded model to a fully-replicated copy on local devices.
 
@@ -557,16 +558,21 @@ def replicate_model_to_local_mesh(
         model: A PyTree (typically a model) that may be sharded across multiple hosts.
         local_devices: The local devices to replicate the model to. If None, uses
             jax.local_devices().
+        local_mesh: Optional local mesh to replicate onto. If provided, this exact
+            mesh (including device order) is used for replication sharding.
 
     Returns:
         A PyTree with the same structure as the input, but with all arrays fully
         replicated on the local devices.
     """
-    if local_devices is None:
-        local_devices = jax.local_devices()
-
-    # Create a local mesh with local devices only
-    local_mesh = Mesh(np.array(local_devices).reshape(-1), axis_names=("local",))
+    if local_mesh is None:
+        if local_devices is None:
+            local_devices = jax.local_devices()
+        local_mesh = Mesh(np.array(local_devices).reshape(-1), axis_names=("local",))
+    elif local_devices is not None:
+        mesh_devices = list(local_mesh.devices.flat)
+        if list(local_devices) != mesh_devices:
+            raise ValueError("local_devices and local_mesh devices must match in order when both are provided.")
 
     # PartitionSpec() = fully replicated (no sharding)
     replicated_sharding = NamedSharding(local_mesh, PartitionSpec())
@@ -575,12 +581,15 @@ def replicate_model_to_local_mesh(
         if not is_jax_array_like(x):
             return x
 
+        # Materialize to host first so the copy target can differ from the source
+        # device list size (e.g. global mesh -> per-host local mesh).
+        host_value = np.asarray(jax.device_get(x.array if isinstance(x, hax.NamedArray) else x))
+
         if isinstance(x, hax.NamedArray):
-            inner = x.array
-            local_inner = jax.device_put(inner, replicated_sharding)
+            local_inner = jax.device_put(host_value, replicated_sharding)
             return hax.NamedArray(local_inner, x.axes)
         else:
-            return jax.device_put(x, replicated_sharding)
+            return jax.device_put(host_value, replicated_sharding)
 
     return jax.tree.map(_to_local_replica, model, is_leaf=is_named_array)
 

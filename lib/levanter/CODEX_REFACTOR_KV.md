@@ -921,6 +921,182 @@ Scheduler explainer (why `56` vs `124/128` both appear in M9):
 Tracking:
 - Detailed M9 experiment log: `CODEX_INFERENCE_M9.md`.
 
+### M10 - Multi-Host Data-Parallel Inference (`128 prompts x 2048` fixed-length)
+
+Status: IN PROGRESS (2026-02-07; M10.1-M10.3 implemented; M10.3 validated end-to-end on `v5p-16`)
+
+Goal:
+- Add a true multi-host data-parallel inference path for the M9 fixed-length workload:
+  - `128 prompts`
+  - `max_new_tokens=2048`
+  - `n_rounds=1`
+- Make `v5p-32` (16 chips) materially faster than `v5p-16` (8 chips) for one end-to-end run of this workload.
+
+Current behavior (what global mesh does today):
+1. `sample_lm_multihost.py` runs inference inside a single global mesh:
+   - `with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):`
+2. Prompt tokenization happens on the leader, then prompts are broadcast to all hosts.
+3. Every host builds the same full `requests` list for the round.
+4. Every host calls `engine.generate(requests)` over the same global prompt set.
+5. M9 configs currently set `trainer.mesh.axes.model: 4` (model axis only).
+6. Default compute mapping covers logical `batch`, but inference state is organized on logical `seq`/`position`.
+7. Net effect: this path is globally sharded inference, not explicit prompt-level data parallel sharding.
+8. Consequence: moving `v5p-16 -> v5p-32` with unchanged config/path does not imply near-2x lower latency for one `128x2048` run.
+
+Design target for M10:
+- Split prompts across hosts explicitly.
+- Keep decoding local to each host after setup.
+- Aggregate outputs deterministically on leader.
+- Preserve M5 safety constraints (deferred logging, symmetric barriers, all-host-safe behavior).
+
+Proposed design (recommended first implementation):
+- Add a new sampling mode for `sample_lm_multihost.py`:
+  - `inference_mode: global_mesh | host_data_parallel` (default `global_mesh` to preserve current behavior).
+- In `host_data_parallel` mode:
+  1. Build/load model with the existing global path (unchanged startup compatibility).
+  2. On each host, create `local_mesh = create_local_mesh(jax.local_devices())`.
+  3. Replicate the model to local devices using `replicate_model_to_local_mesh(...)` (one all-gather at setup).
+  4. Deterministically shard prompts by host index:
+     - `start = floor(host_idx * N / host_count)`
+     - `end = floor((host_idx + 1) * N / host_count)`
+     - local host handles prompts `[start:end)`.
+  5. Build `Request`s only for the local shard.
+  6. Run local engine creation + `generate()` under local mesh context.
+  7. Gather per-host JSON-serializable outputs to leader (ordered by source host), merge by global prompt index, and emit final metrics/samples only on leader.
+
+M10 milestone breakdown:
+
+M10.1 - Plumbing and guardrails
+- Add `inference_mode` config switch.
+- Keep existing `global_mesh` behavior unchanged.
+- Add validation that `host_data_parallel` is only enabled for compatible modes in first pass (for example, `n_rounds=1` if needed to reduce risk).
+- Implemented (2026-02-07):
+  - Added `SampleLmMultihostConfig.inference_mode` with values `global_mesh | host_data_parallel`.
+  - Added `_validate_inference_mode_safety(...)` fail-fast guardrails:
+    - requires multi-host, `n_rounds=1`, `n_generations=1`, and `defer_tracker_logs_until_end=true` for `host_data_parallel`.
+  - `host_data_parallel` no longer fails inside validation; validation only enforces guardrails.
+  - Added unit coverage in `tests/inference/test_sample_lm_multihost_config_guard.py`.
+
+M10.2 - Deterministic prompt sharding
+- Implement host-local prompt sharding logic.
+- Ensure global prompt IDs are preserved in request metadata so merged outputs are stable and sortable.
+- Handle uneven splits (for host counts that do not divide 128).
+- Implemented (2026-02-07):
+  - Added `_prompt_shard_bounds(...)` and `_shard_prompts_for_host(...)` helpers.
+  - Extended `_build_requests_for_rounds(...)` with `prompt_id_offset` and `total_num_prompts` for stable global request IDs across shards.
+  - Added unit coverage in `tests/inference/test_sample_lm_multihost_prompt_sharding.py`.
+
+M10.3 - Local mesh execution path
+- Add local-mesh + local-model inference branch.
+- Size `engine.max_seqs`, `max_seqs_in_prefill`, `max_prefill_size`, and `max_pages` against local prompt count in this mode.
+- Preserve kernel-on settings from M9 fixed-length path.
+- Implemented (2026-02-07):
+  - Replaced the M10.2 runtime stub with a real `host_data_parallel` execution path:
+    - global startup/model load remains unchanged
+    - per host: replicate to local devices, create local mesh, run local `engine.generate(...)`
+  - Added host-local engine validation for sharded prompts in this mode.
+  - Added `SampleLmMultihostConfig.host_data_parallel_output_dir` (default: `host_data_parallel_outputs`).
+  - Added deterministic per-host JSONL outputs:
+    - `host_0000_of_0016.jsonl`, `host_0001_of_0016.jsonl`, ...
+    - includes `global_prompt_index`, `request_id`, local shard metadata, generated tokens, generated text.
+  - Added unit coverage in `tests/inference/test_sample_lm_multihost_host_outputs.py`.
+  - M10.4 ragged-path recovery is now working on `v5p-16`; M10.5 M9-style host-DP tuning sweep executed on `v5p-16`; M10.6 gather/leader merge remains pending.
+  - Manual host-output inspection command pattern:
+    - `gcloud alpha compute tpus tpu-vm ssh $TPU_NAME --zone=$ZONE --worker=all --command='ls -lh /tmp/m10_host_outputs'`
+    - `gcloud alpha compute tpus tpu-vm ssh $TPU_NAME --zone=$ZONE --worker=all --command='head -n 2 /tmp/m10_host_outputs/host_*.jsonl'`
+  - Runtime fixes from TPU execution:
+    - Fixed `create_local_mesh(...)` default path (`ResourceAxis` import in `src/levanter/utils/mesh.py`).
+    - Fixed global->local replication copy failure by materializing leaves on host before local replication in
+      `replicate_model_to_local_mesh(...)` (`src/levanter/utils/jax_utils.py`).
+    - Fixed local-mesh device-order mismatch by replicating onto the exact local mesh used by host-local JIT
+      (`replicate_model_to_local_mesh(..., local_mesh=...)`) and using local-mesh device order for engine devices.
+    - Added host-local engine down-sizing helper for M10.3 (`max_seqs`, `max_seqs_in_prefill`, `max_prefill_size`,
+      `max_pages`, queue/tokens-per-round caps) and unit coverage in
+      `tests/inference/test_sample_lm_multihost_prompt_sharding.py`.
+    - Additional TPU runtime finding: ragged prefill still hit scoped-vmem OOM on this replicated local-model path.
+    - For `sample_llama8b_multihost_real_128prompts_2048_m10_hostdp_v5p16.yaml`, setting
+      `model.use_tpu_ragged_paged_attention: false` produced a successful end-to-end run with per-host JSONL outputs:
+      `host_0000_of_0002.jsonl` and `host_0001_of_0002.jsonl` under `/tmp/m10_host_outputs`.
+    - M10.4 progress: HF-load overrides for ragged kernel knobs were fixed in
+      `src/levanter/main/sample_lm_multihost.py` (`use_tpu_ragged_paged_attention`,
+      `ragged_paged_q_block_size`, `ragged_paged_kv_block_pages`), and ragged-on host-DP now completes on `v5p-16`.
+    - M10.4 perf snapshot (`128x2048`, `v5p-16`):
+      - non-ragged host-DP fallback: `~655s` end-to-end (`round_total_s ~551s/host`)
+      - ragged-on host-DP: `~189s` end-to-end (`round_total_s ~101-102s/host`)
+      - speedup: `~3.47x` end-to-end vs non-ragged fallback.
+
+M10.4 - Ragged paged attention recovery for M10.3
+- Goal: keep M10.3 host-data-parallel path, but make it work with
+  `model.use_tpu_ragged_paged_attention: true` for `128 x 2048`.
+- Current status: IN PROGRESS with first successful ragged-on end-to-end run on `v5p-16`.
+- Remaining outcomes:
+  - repeatability validation (multiple reruns),
+  - finalize preferred ragged config values,
+  - preserve M10.3 correctness/output invariants (per-host JSONL files, full-length outputs).
+
+M10.5 - Host-DP parameter sweep (M9-style)
+- Now that ragged host-DP is functioning, run an M9-style tuning sweep for host-data-parallel mode.
+- Sweep at least:
+  - `engine.max_tokens_per_round`
+  - `engine.max_queued_tokens`
+  - `engine.page_size`
+  - `engine.max_pages`
+  - `engine.max_rounds`
+- Keep comparison workload fixed:
+  - `128 prompts`, `max_new_tokens=2048`, `n_rounds=1`, `n_generations=1`
+  - ragged enabled (`use_tpu_ragged_paged_attention=true`) except explicit fallback probes.
+- Deliverables:
+  - pass/fail matrix with runtime signatures
+  - throughput + end-to-end wall clock table
+  - recommended host-DP operating point to carry into benchmarks.
+- Executed sweep (2026-02-07, `v5p-16`, all PASS):
+  - best wall clock: `real 240.22s` at `ps128/p1088/tpr128/r64/mqt512`
+  - best host rounds in sweep: `~106.36s` and `~107.93s` (same config)
+  - vs M10.3 non-ragged baseline (`~655s`): `~2.73x` faster end-to-end
+  - vs prior M10.4 ragged baseline (`~189s`): `~0.79x` (about `27%` slower end-to-end).
+
+M10.6 - Output gather and leader aggregation
+- Gather per-host outputs with deterministic source ordering.
+- Merge to one global output table ordered by `(round, prompt_id, generation_id)`.
+- Keep tracker writes leader-only (deferred, then flush), preserving M5 multi-host safety.
+
+M10.7 - Benchmarks and acceptance
+- Compare four runs:
+  1. `v5p-16` + `global_mesh` (baseline)
+  2. `v5p-16` + `host_data_parallel`
+  3. `v5p-32` + `global_mesh`
+  4. `v5p-32` + `host_data_parallel`
+- Use fixed workload:
+  - `128 prompts`, `2048` max new tokens, `n_rounds=1`, kernel-on M9 settings.
+- Record:
+  - round wall time
+  - end-to-end wall time
+  - total generated tokens (must remain `128 * 2048` for fixed-length mode)
+  - failure signatures if any.
+
+Expected performance model:
+- `T_total ~= T_model_replication + T_local_generate(128 / host_count) + T_result_gather`.
+- Near-2x from `v5p-16 -> v5p-32` is plausible only if replication/gather overhead is small versus generation time.
+- M10 success criterion should be a practical speedup target (for example `>=1.6x`), not an unconditional `2.0x`.
+
+Deliverables:
+- `sample_lm_multihost.py` support for `host_data_parallel` inference mode.
+- Configs for M10 baseline and DP variants.
+- Documentation updates in this plan + `CODEX_INFERENCE_M10.md`.
+- Repro commands and logs for the benchmark matrix above.
+
+Exit criteria:
+- Correctness:
+  - all 128 prompts produced exactly once in merged output;
+  - fixed-length mode preserves `128 * 2048` generated tokens.
+- Stability:
+  - repeated runs pass (no `Anomalies`, no multi-host divergence).
+- Performance:
+  - `v5p-32 + host_data_parallel` is materially faster than `v5p-16` baseline on the same workload.
+
+Rollback:
+- Keep `inference_mode=global_mesh` as default and disable `host_data_parallel` path behind config if regressions appear.
+
 ---
 
 ## Test Matrix (What We Run After Each Milestone)

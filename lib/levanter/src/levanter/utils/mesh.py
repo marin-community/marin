@@ -8,7 +8,7 @@ from typing import Union, Sequence, Tuple, Mapping, Dict
 
 from draccus import field
 
-from haliax.partitioning import ResourceMapping
+from haliax.partitioning import ResourceAxis, ResourceMapping
 import jax
 from jax.experimental import mesh_utils
 from jax.sharding import AxisType, Mesh
