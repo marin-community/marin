@@ -923,6 +923,14 @@ class ControllerEndpoint:
 
 
 @dataclass
+class WorkerTimeoutResult:
+    """Result of checking worker heartbeat timeouts."""
+
+    tasks_to_kill: set[JobName]
+    failed_vm_addresses: list[str]
+
+
+@dataclass
 class PendingDispatch:
     """Buffered dispatches waiting for next heartbeat.
 
@@ -1044,12 +1052,12 @@ class ControllerState:
 
             return txn
 
-    def check_worker_timeouts(self, timeout: Duration) -> set[JobName]:
+    def check_worker_timeouts(self, timeout: Duration) -> WorkerTimeoutResult:
         """Check for timed-out workers and mark them as failed.
 
         Atomically identifies all workers that have exceeded the heartbeat timeout,
-        marks them as failed, and cascades to their running tasks. Returns the set
-        of task IDs that need kill RPCs sent.
+        marks them as failed, and cascades to their running tasks. Returns tasks
+        that need kill RPCs and VM addresses for autoscaler notification.
 
         This method acquires the state lock for the entire operation to prevent races
         with incoming heartbeats.
@@ -1058,10 +1066,11 @@ class ControllerState:
             timeout: Maximum time since last heartbeat before declaring timeout
 
         Returns:
-            Set of task IDs that need kill RPCs sent to workers
+            WorkerTimeoutResult with tasks to kill and failed VM addresses
         """
         with self._lock:
             tasks_to_kill: set[JobName] = set()
+            failed_vm_addresses: list[str] = []
 
             for worker in self._workers.values():
                 if worker.healthy and worker.is_heartbeat_expired(timeout):
@@ -1075,8 +1084,13 @@ class ControllerState:
                     self._on_worker_failed(txn, txn.event)  # type: ignore[arg-type]
                     self._transactions.append(txn)
                     tasks_to_kill.update(txn.tasks_to_kill)
+                    if worker.metadata.vm_address:
+                        failed_vm_addresses.append(worker.metadata.vm_address)
 
-            return tasks_to_kill
+            return WorkerTimeoutResult(
+                tasks_to_kill=tasks_to_kill,
+                failed_vm_addresses=failed_vm_addresses,
+            )
 
     # -------------------------------------------------------------------------
     # Worker Event Handlers
