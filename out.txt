@@ -1,195 +1,670 @@
-les/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker [repeated 10x across cluster]
-(<lambda> pid=2088, ip=10.164.0.95)     processed = self._batch_processor(raw_items) [repeated 10x across cluster]
-(<lambda> pid=2088, ip=10.164.0.95)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 10x across cluster]
-(<lambda> pid=2088, ip=10.164.0.95)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__ [repeated 10x across cluster]
-(<lambda> pid=2088, ip=10.164.0.95)     raise ValueError( [repeated 10x across cluster]
-(<lambda> pid=2087, ip=10.164.0.215) 2026-02-07T02:09:54 - 12 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=19, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what aspect of the triangle is directly calculated without solving?\nChoices:\nA. The hypotenuse\nB. The right angle property\nC. The area\nD. The altitude<|im_end|><|im_start|>assistant \nIn any right triangle, the right angle property (90 degrees) is a given and does not need calculation. So the', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what aspect of the triangle is directly calculated without solving?\nChoices:\nA. The hypotenuse\nB. The right angle property\nC. The area\nD. The altitude", "type": "text"}], "role": "user"}, {"content": [{"text": "In any right triangle, the right angle property (90 degrees) is a gi
-(<lambda> pid=2087, ip=10.164.0.215) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=19, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what aspect of the triangle is directly calculated without solving?\nChoices:\nA. The hypotenuse\nB. The right angle property\nC. The area\nD. The altitude<|im_end|><|im_start|>assistant \nIn any right triangle, the right angle property (90 degrees) is a given and does not need calculation. So the', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what aspect of the triangle is directly calculated without solving?\nChoices:\nA. The hypotenuse\nB. The right angle property\nC. The area\nD. The altitude", "type": "text"}], "role": "user"}, {"content": [{"text": "In any right triangle, the right angle property (90 degrees) is a gi
-(<lambda> pid=2087, ip=10.164.0.102) 2026-02-07T02:09:54 - 14 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=22, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: DF is 8.0. In shape DBEF, what is the length of EF?\nChoices:\nA: 12.57\nB: 10.5\nC: 15.0\nD: 7.0<|im_end|><|im_start|>assistant \nSince AB is 8.0 and ABC is an isosceles triangle, BC is also 8.0. CB is 8.0. Given that CBD is an isosceles triangle, BD is also 8.0. EF is the side opposite to DB, and hence is also 8.0.', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: DF is 8.0. In shape DBEF, what is the length of EF?\nChoices:\nA: 12.57\nB: 10.5\nC: 15.0\nD: 7.0", "type": "text"}], "role": "user"}, {"content": [{"text": "Since AB is 8.0 and ABC is an isosceles triangle, BC is also 8.0. CB is 8.0. Given that CBD is an isosceles triangle, BD is also 8.0. EF is the si
-(<lambda> pid=2087, ip=10.164.0.102) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=22, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: DF is 8.0. In shape DBEF, what is the length of EF?\nChoices:\nA: 12.57\nB: 10.5\nC: 15.0\nD: 7.0<|im_end|><|im_start|>assistant \nSince AB is 8.0 and ABC is an isosceles triangle, BC is also 8.0. CB is 8.0. Given that CBD is an isosceles triangle, BD is also 8.0. EF is the side opposite to DB, and hence is also 8.0.', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: DF is 8.0. In shape DBEF, what is the length of EF?\nChoices:\nA: 12.57\nB: 10.5\nC: 15.0\nD: 7.0", "type": "text"}], "role": "user"}, {"content": [{"text": "Since AB is 8.0 and ABC is an isosceles triangle, BC is also 8.0. CB is 8.0. Given that CBD is an isosceles triangle, BD is also 8.0. EF is the si
-(autoscaler +32m28s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +32m28s) Resized to 19680 CPUs, 656 TPUs.
-(<lambda> pid=2088, ip=10.164.0.214) 2026-02-07T02:09:56 - 25 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=1, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, what relationship does the double cone have with the cylinder?<|im_end|><|im_start|>assistant \nThe double cone is inscribed within the cylinder, which means it fits perfectly inside the cylinder. So the answer is The double cone is inscribed within the cylinder\nThe answer is The doub', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, what relationship does the double cone have with the cylinder?", "type": "text"}], "role": "user"}, {"content": [{"text": "The double cone is inscribed within the cylinder, which means it fits perfectly inside the cylinder. So the answer is The double cone is inscribed within
-(<lambda> pid=2088, ip=10.164.0.214) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=1, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, what relationship does the double cone have with the cylinder?<|im_end|><|im_start|>assistant \nThe double cone is inscribed within the cylinder, which means it fits perfectly inside the cylinder. So the answer is The double cone is inscribed within the cylinder\nThe answer is The doub', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, what relationship does the double cone have with the cylinder?", "type": "text"}], "role": "user"}, {"content": [{"text": "The double cone is inscribed within the cylinder, which means it fits perfectly inside the cylinder. So the answer is The double cone is inscribed within
-(<lambda> pid=2087, ip=10.164.0.216) 2026-02-07T02:09:56 - 18 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=2, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, what proportion of people waited less than 35 minutes?<|im_end|><|im_start|>assistant \nSum the frequencies of all intervals less than 35 minutes to find the total number of people in these ranges. Divide this number by the total number of people served to ascertain the proportion. Us', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, what proportion of people waited less than 35 minutes?", "type": "text"}], "role": "user"}, {"content": [{"text": "Sum the frequencies of all intervals less than 35 minutes to find the total number of people in these ranges. Divide this number by the total number of people se
-(<lambda> pid=2087, ip=10.164.0.216)       
-(<lambda> pid=2087, ip=10.164.0.216)          
-(<lambda> pid=2087, ip=10.164.0.216)  ^^^^^^^^
-(<lambda> pid=2087, ip=10.164.0.216) ^^^^^^^^^
-(<lambda> pid=2087, ip=10.164.0.216) ^^^^^^^^^
-(<lambda> pid=2087, ip=10.164.0.216) ^^^^^^
-(<lambda> pid=2087, ip=10.164.0.216) ValueError: 
-(<lambda> pid=2087, ip=10.164.0.216) Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=2, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, what proportion of people waited less than 35 minutes?<|im_end|><|im_start|>assistant \nSum the frequencies of all intervals less than 35 minutes to find the total number of people in these ranges. Divide this number by the total number of people served to ascertain the proportion. Us', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, what proportion of people waited less than 35 minutes?", "type": "text"}], "role": "user"}, {"content": [{"text": "Sum the frequencies of all intervals less than 35 minutes to find the total number of people in these ranges. Divide this number by the total number of people se
-(<lambda> pid=2089, ip=10.164.0.111) 2026-02-07T02:09:58 - 4 - levanter.data.image - image.py:2642 - INFO :: Loading shard 17: 1092_parquet
-(<lambda> pid=2088, ip=10.164.0.218) 2026-02-07T02:09:57 - 0 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 1.124.
-(<lambda> pid=2088, ip=10.164.0.93) 2026-02-07T02:09:57 - 5 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 16 (4984 rows) in 32.78s [repeated 8x across cluster]
-(<lambda> pid=2088, ip=10.164.0.93) 2026-02-07T02:09:57 - 5 - levanter.data.image - image.py:2590 - INFO :: Seeked to shard 16/148, row 4236/4984 (skipped 84016 total items) [repeated 8x across cluster]
-(<lambda> pid=2088, ip=10.164.0.93) 2026-02-07T02:09:58 - 5 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.606.
-(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T02:09:58 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 20.0 seconds. Waiting for 32 image items. [repeated 7x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216) Exception in thread Thread-4 (prefetch_worker): [repeated 4x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216) Traceback (most recent call last): [repeated 4x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 4x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216)     self.run() [repeated 4x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 4x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216)     self._target(*self._args, **self._kwargs) [repeated 4x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker [repeated 4x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216)     processed = self._batch_processor(raw_items) [repeated 4x across cluster]
-(<lambda> pid=2088, ip=10.164.0.214)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__ [repeated 4x across cluster]
-(<lambda> pid=2087, ip=10.164.0.216)     raise ValueError( [repeated 4x across cluster]
-(<lambda> pid=2086, ip=10.164.0.104) 2026-02-07T02:10:02 - 2 - levanter.data.image - image.py:2642 - INFO :: Loading shard 17: 1090_parquet
-(<lambda> pid=2088, ip=10.164.0.213) 2026-02-07T02:10:02 - 50 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 16 (5039 rows) in 35.30s [repeated 2x across cluster]
-(<lambda> pid=2088, ip=10.164.0.213) 2026-02-07T02:10:02 - 50 - levanter.data.image - image.py:2590 - INFO :: Seeked to shard 16/147, row 3771/5039 (skipped 84016 total items) [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.101) 2026-02-07T02:10:03 - 55 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 20.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2089, ip=10.164.0.110) 2026-02-07T02:10:04 - 3 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 0.631.
-(<lambda> pid=2088, ip=10.164.0.213) 2026-02-07T02:10:04 - 50 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=16, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what total fraction do the unshaded areas represent?\nChoices:\nA. 92/100\nB. 9/10\nC. 99/100\nD. 90/100<|im_end|><|im_start|>assistant \nWith 100 total squares and 8 squares shaded for the product of 0.8 by 0.1, the unshaded area represents 92 out of 100. So the answer is A\nAnswer: A<|im_end|>', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what total fraction do the unshaded areas represent?\nChoices:\nA. 92/100\nB. 9/10\nC. 99/100\nD. 90/100", "type": "text"}], "role": "user"}, {"content": [{"text": "With 100 total squares and 8 squares shaded for the product of 0.8 by 0.1, the unshaded area represents 92 out of 100. 
-(<lambda> pid=2088, ip=10.164.0.213) Exception in thread Thread-4 (prefetch_worker):
-(<lambda> pid=2088, ip=10.164.0.213) Traceback (most recent call last):
-(<lambda> pid=2088, ip=10.164.0.213)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=2088, ip=10.164.0.213)     self.run()
-(<lambda> pid=2088, ip=10.164.0.213)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=2088, ip=10.164.0.213)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=2088, ip=10.164.0.213)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
-(<lambda> pid=2088, ip=10.164.0.213)     processed = self._batch_processor(raw_items)
-(<lambda> pid=2088, ip=10.164.0.213)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2088, ip=10.164.0.213)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
-(<lambda> pid=2088, ip=10.164.0.213)     raise ValueError(
-(<lambda> pid=2088, ip=10.164.0.213) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=16, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what total fraction do the unshaded areas represent?\nChoices:\nA. 92/100\nB. 9/10\nC. 99/100\nD. 90/100<|im_end|><|im_start|>assistant \nWith 100 total squares and 8 squares shaded for the product of 0.8 by 0.1, the unshaded area represents 92 out of 100. So the answer is A\nAnswer: A<|im_end|>', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what total fraction do the unshaded areas represent?\nChoices:\nA. 92/100\nB. 9/10\nC. 99/100\nD. 90/100", "type": "text"}], "role": "user"}, {"content": [{"text": "With 100 total squares and 8 squares shaded for the product of 0.8 by 0.1, the unshaded area represents 92 out of 100. 
-(<lambda> pid=2087, ip=10.164.0.72) 2026-02-07T02:10:07 - 7 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=12, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Is x equal to 45 given that angle ACB is 45 and angle BAC is 90?\nChoices:\nA. Yes\nB. No<|im_end|><|im_start|>assistant \nStart by summing up the angles in the triangle. Angle ACB is 45 degrees and angle BAC is 90 degrees. Since the sum of angles in a triangle is 180 degrees, x, which is angle ABC, is calculated a', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Is x equal to 45 given that angle ACB is 45 and angle BAC is 90?\nChoices:\nA. Yes\nB. No", "type": "text"}], "role": "user"}, {"content": [{"text": "Start by summing up the angles in the triangle. Angle ACB is 45 degrees and angle BAC is 90 degrees. Since the sum of angles in a triangle is 180 degrees,
-(<lambda> pid=2087, ip=10.164.0.72) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=12, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Is x equal to 45 given that angle ACB is 45 and angle BAC is 90?\nChoices:\nA. Yes\nB. No<|im_end|><|im_start|>assistant \nStart by summing up the angles in the triangle. Angle ACB is 45 degrees and angle BAC is 90 degrees. Since the sum of angles in a triangle is 180 degrees, x, which is angle ABC, is calculated a', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Is x equal to 45 given that angle ACB is 45 and angle BAC is 90?\nChoices:\nA. Yes\nB. No", "type": "text"}], "role": "user"}, {"content": [{"text": "Start by summing up the angles in the triangle. Angle ACB is 45 degrees and angle BAC is 90 degrees. Since the sum of angles in a triangle is 180 degrees,
-(<lambda> pid=2087, ip=10.164.0.107) 2026-02-07T02:10:07 - 1 - levanter.data.image - image.py:2642 - INFO :: Loading shard 17: 1089_parquet [repeated 3x across cluster]
-(<lambda> pid=2087, ip=10.164.0.72) 2026-02-07T02:10:07 - 7 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 17 (4952 rows) in 14.13s
-(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T02:10:08 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 30.0 seconds. Waiting for 32 image items. [repeated 9x across cluster]
-(<lambda> pid=2087, ip=10.164.0.72) Exception in thread Thread-4 (prefetch_worker):
-(<lambda> pid=2087, ip=10.164.0.72) Traceback (most recent call last):
-(<lambda> pid=2087, ip=10.164.0.72)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=2087, ip=10.164.0.72)     self.run()
-(<lambda> pid=2087, ip=10.164.0.72)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=2087, ip=10.164.0.72)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=2087, ip=10.164.0.72)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
-(<lambda> pid=2087, ip=10.164.0.72)     processed = self._batch_processor(raw_items)
-(<lambda> pid=2087, ip=10.164.0.72)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2087, ip=10.164.0.72)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
-(<lambda> pid=2087, ip=10.164.0.72)     raise ValueError(
-(<lambda> pid=2087, ip=10.164.0.211) 2026-02-07T02:10:10 - 9 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 16 (5635 rows) in 38.99s
-(<lambda> pid=2087, ip=10.164.0.211) 2026-02-07T02:10:10 - 9 - levanter.data.image - image.py:2590 - INFO :: Seeked to shard 16/148, row 3755/5635 (skipped 84016 total items)
-(<lambda> pid=2086, ip=10.164.0.98) 2026-02-07T02:10:12 - 8 - levanter.data.image - image.py:2642 - INFO :: Loading shard 17: 1096_parquet [repeated 3x across cluster]
-(<lambda> pid=2087, ip=10.164.0.101) 2026-02-07T02:10:14 - 55 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 30.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2086, ip=10.164.0.104) 2026-02-07T02:10:18 - 2 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 17 (4909 rows) in 15.60s
-(<lambda> pid=2086, ip=10.164.0.104) 2026-02-07T02:10:18 - 2 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=30, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, which of the following is not a line of symmetry for the shape shown?\nChoices:\nA. Line AB\nB. Line CD\nC. Line EF\nD. None<|im_end|><|im_start|>assistant \nLooking at the shape, Line AB and Line CD are lines of symmetry if the shape is symmetrical across these lines, while Line EF is not. So the', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, which of the following is not a line of symmetry for the shape shown?\nChoices:\nA. Line AB\nB. Line CD\nC. Line EF\nD. None", "type": "text"}], "role": "user"}, {"content": [{"text": "Looking at the shape, Line AB and Line CD are lines of symmetry if the shape is symmetrical across 
-(<lambda> pid=2086, ip=10.164.0.104) Exception in thread Thread-4 (prefetch_worker):
-(<lambda> pid=2086, ip=10.164.0.104) Traceback (most recent call last):
-(<lambda> pid=2086, ip=10.164.0.104)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=2086, ip=10.164.0.104)     self.run()
-(<lambda> pid=2086, ip=10.164.0.104)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=2086, ip=10.164.0.104)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=2086, ip=10.164.0.104)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
-(<lambda> pid=2086, ip=10.164.0.104)     processed = self._batch_processor(raw_items)
-(<lambda> pid=2086, ip=10.164.0.104)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2086, ip=10.164.0.104)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
-(<lambda> pid=2086, ip=10.164.0.104)     raise ValueError(
-(<lambda> pid=2086, ip=10.164.0.104) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=30, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, which of the following is not a line of symmetry for the shape shown?\nChoices:\nA. Line AB\nB. Line CD\nC. Line EF\nD. None<|im_end|><|im_start|>assistant \nLooking at the shape, Line AB and Line CD are lines of symmetry if the shape is symmetrical across these lines, while Line EF is not. So the', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, which of the following is not a line of symmetry for the shape shown?\nChoices:\nA. Line AB\nB. Line CD\nC. Line EF\nD. None", "type": "text"}], "role": "user"}, {"content": [{"text": "Looking at the shape, Line AB and Line CD are lines of symmetry if the shape is symmetrical across 
-(<lambda> pid=2086, ip=10.164.0.104) 2026-02-07T02:10:18 - 2 - levanter.data.image - image.py:2616 - INFO :: Loading shard 18: 1154_parquet
-(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T02:10:19 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 40.0 seconds. Waiting for 32 image items. [repeated 10x across cluster]
-(<lambda> pid=2088, ip=10.164.0.218) 2026-02-07T02:10:19 - 0 - levanter.data.image - image.py:2616 - INFO :: Loading shard 18: 1152_parquet
-(<lambda> pid=2087, ip=10.164.0.72) 2026-02-07T02:10:22 - 7 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 18 (4970 rows) in 15.90s [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.101) 2026-02-07T02:10:24 - 55 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 40.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2088, ip=10.164.0.218) 2026-02-07T02:10:24 - 0 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=10, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what is the right endpoint of the range for the integral approximation?\nChoices:\nA. 2\nB. 3\nC. 4\nD. 5<|im_end|><|im_start|>assistant \nThe right endpoint, usually the upper limit of the integral, should be visibly marked or deduced from the plot/diagram presented in the image. So the answer is', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what is the right endpoint of the range for the integral approximation?\nChoices:\nA. 2\nB. 3\nC. 4\nD. 5", "type": "text"}], "role": "user"}, {"content": [{"text": "The right endpoint, usually the upper limit of the integral, should be visibly marked or deduced from the plot/diagram
-(<lambda> pid=2088, ip=10.164.0.218) Exception in thread Thread-7 (prefetch_worker):
-(<lambda> pid=2088, ip=10.164.0.218) Traceback (most recent call last):
-(<lambda> pid=2088, ip=10.164.0.218)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=2088, ip=10.164.0.218)     self.run()
-(<lambda> pid=2088, ip=10.164.0.218)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=2088, ip=10.164.0.218)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=2088, ip=10.164.0.218)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
-(<lambda> pid=2088, ip=10.164.0.218)     processed = self._batch_processor(raw_items)
-(<lambda> pid=2088, ip=10.164.0.218)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2088, ip=10.164.0.218)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
-(<lambda> pid=2088, ip=10.164.0.218)     raise ValueError(
-(<lambda> pid=2088, ip=10.164.0.218) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=10, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what is the right endpoint of the range for the integral approximation?\nChoices:\nA. 2\nB. 3\nC. 4\nD. 5<|im_end|><|im_start|>assistant \nThe right endpoint, usually the upper limit of the integral, should be visibly marked or deduced from the plot/diagram presented in the image. So the answer is', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what is the right endpoint of the range for the integral approximation?\nChoices:\nA. 2\nB. 3\nC. 4\nD. 5", "type": "text"}], "role": "user"}, {"content": [{"text": "The right endpoint, usually the upper limit of the integral, should be visibly marked or deduced from the plot/diagram
-(<lambda> pid=2089, ip=10.164.0.110) 2026-02-07T02:10:20 - 3 - levanter.data.image - image.py:2642 - INFO :: Loading shard 17: 1091_parquet
-(<lambda> pid=2089, ip=10.164.0.111) 2026-02-07T02:10:25 - 4 - levanter.data.image - image.py:2616 - INFO :: Loading shard 18: 1156_parquet
-(<lambda> pid=2089, ip=10.164.0.111) 2026-02-07T02:10:25 - 4 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what is the intersection height of the cone and the paraboloid?\nChoices:\nA. $z=0.5$\nB. $z=1$\nC. $z=1.5$\nD. $z=2$<|im_end|><|im_start|>assistant \nThe point of intersection between the cone and the paraboloid along the $z$-axis is at $z=1$. This value comes from solving the system of equations', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what is the intersection height of the cone and the paraboloid?\nChoices:\nA. $z=0.5$\nB. $z=1$\nC. $z=1.5$\nD. $z=2$", "type": "text"}], "role": "user"}, {"content": [{"text": "The point of intersection between the cone and the paraboloid along the $z$-axis is at $z=1$. This value c
-(<lambda> pid=2089, ip=10.164.0.111) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what is the intersection height of the cone and the paraboloid?\nChoices:\nA. $z=0.5$\nB. $z=1$\nC. $z=1.5$\nD. $z=2$<|im_end|><|im_start|>assistant \nThe point of intersection between the cone and the paraboloid along the $z$-axis is at $z=1$. This value comes from solving the system of equations', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, what is the intersection height of the cone and the paraboloid?\nChoices:\nA. $z=0.5$\nB. $z=1$\nC. $z=1.5$\nD. $z=2$", "type": "text"}], "role": "user"}, {"content": [{"text": "The point of intersection between the cone and the paraboloid along the $z$-axis is at $z=1$. This value c
-(autoscaler +33m1s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +33m1s) Resized to 19680 CPUs, 656 TPUs.
-(<lambda> pid=2089, ip=10.164.0.111) 2026-02-07T02:10:25 - 4 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 17 (4961 rows) in 26.94s
-(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T02:10:29 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 50.0 seconds. Waiting for 32 image items. [repeated 10x across cluster]
-(<lambda> pid=2089, ip=10.164.0.111) Exception in thread Thread-4 (prefetch_worker):
-(<lambda> pid=2089, ip=10.164.0.111) Traceback (most recent call last):
-(<lambda> pid=2089, ip=10.164.0.111)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=2089, ip=10.164.0.111)     self.run()
-(<lambda> pid=2089, ip=10.164.0.111)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=2089, ip=10.164.0.111)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=2089, ip=10.164.0.111)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
-(<lambda> pid=2089, ip=10.164.0.111)     processed = self._batch_processor(raw_items)
-(<lambda> pid=2089, ip=10.164.0.111)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2089, ip=10.164.0.111)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
-(<lambda> pid=2089, ip=10.164.0.111)     raise ValueError(
-(<lambda> pid=2088, ip=10.164.0.93) 2026-02-07T02:10:32 - 5 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 17 (5045 rows) in 21.05s
-(<lambda> pid=2088, ip=10.164.0.93) 2026-02-07T02:10:32 - 5 - levanter.data.image - image.py:2616 - INFO :: Loading shard 18: 1157_parquet
-(<lambda> pid=2087, ip=10.164.0.228) 2026-02-07T02:10:33 - 6 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=23, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, determine the highest x-coordinate in region $D$ based on its vertex points.\nChoices:\nA. 5\nB. 1\nC. 3\nD. 0<|im_end|><|im_start|>assistant \nThe vertex $(5,3)$ of region $D$ represents the highest $x$-coordinate within the triangular region described for the integral task. So the answer is A\nAn', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, determine the highest x-coordinate in region $D$ based on its vertex points.\nChoices:\nA. 5\nB. 1\nC. 3\nD. 0", "type": "text"}], "role": "user"}, {"content": [{"text": "The vertex $(5,3)$ of region $D$ represents the highest $x$-coordinate within the triangular region described for
-(<lambda> pid=2087, ip=10.164.0.228) Exception in thread Thread-4 (prefetch_worker):
-(<lambda> pid=2087, ip=10.164.0.228) Traceback (most recent call last):
-(<lambda> pid=2087, ip=10.164.0.228)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=2087, ip=10.164.0.228)     self.run()
-(<lambda> pid=2087, ip=10.164.0.228)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=2087, ip=10.164.0.228)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=2087, ip=10.164.0.228)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
-(<lambda> pid=2087, ip=10.164.0.228)     processed = self._batch_processor(raw_items)
-(<lambda> pid=2087, ip=10.164.0.228)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2087, ip=10.164.0.228)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
-(<lambda> pid=2087, ip=10.164.0.228)     raise ValueError(
-(<lambda> pid=2087, ip=10.164.0.228) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=23, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, determine the highest x-coordinate in region $D$ based on its vertex points.\nChoices:\nA. 5\nB. 1\nC. 3\nD. 0<|im_end|><|im_start|>assistant \nThe vertex $(5,3)$ of region $D$ represents the highest $x$-coordinate within the triangular region described for the integral task. So the answer is A\nAn', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, determine the highest x-coordinate in region $D$ based on its vertex points.\nChoices:\nA. 5\nB. 1\nC. 3\nD. 0", "type": "text"}], "role": "user"}, {"content": [{"text": "The vertex $(5,3)$ of region $D$ represents the highest $x$-coordinate within the triangular region described for
-(<lambda> pid=2087, ip=10.164.0.101) 2026-02-07T02:10:34 - 55 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 50.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2088, ip=10.164.0.93) 2026-02-07T02:10:35 - 5 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=20, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, how many angles are greater than 90 degrees in the figure?\nChoices:\nA. 0\nB. 1\nC. 2\nD. 3<|im_end|><|im_start|>assistant \nIdentify each angle from the diagram and compare whether they are greater or lesser than 90 degrees. So the answer is A\nAnswer: A<|im_end|>', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, how many angles are greater than 90 degrees in the figure?\nChoices:\nA. 0\nB. 1\nC. 2\nD. 3", "type": "text"}], "role": "user"}, {"content": [{"text": "Identify each angle from the diagram and compare whether they are greater or lesser than 90 degrees. So the answer is A\nAnswer: A"
-(<lambda> pid=2088, ip=10.164.0.93) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=20, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, how many angles are greater than 90 degrees in the figure?\nChoices:\nA. 0\nB. 1\nC. 2\nD. 3<|im_end|><|im_start|>assistant \nIdentify each angle from the diagram and compare whether they are greater or lesser than 90 degrees. So the answer is A\nAnswer: A<|im_end|>', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, how many angles are greater than 90 degrees in the figure?\nChoices:\nA. 0\nB. 1\nC. 2\nD. 3", "type": "text"}], "role": "user"}, {"content": [{"text": "Identify each angle from the diagram and compare whether they are greater or lesser than 90 degrees. So the answer is A\nAnswer: A"
-(<lambda> pid=2087, ip=10.164.0.107) 2026-02-07T02:10:35 - 1 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=1, template_text="<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, why do we use the square root operation in calculating the area?\nChoices:\nA. To find a side length using Pythagoras' Theorem\nB. To compute the diagonal of the rectangle\nC. To simplify the area's algebraic expression\nD. To calculate curvature of shapes<|im_end|><|im_start|>assistant \nThe squa", messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, why do we use the square root operation in calculating the area?\nChoices:\nA. To find a side length using Pythagoras' Theorem\nB. To compute the diagonal of the rectangle\nC. To simplify the area's algebraic expression\nD. To calculate curvature of shapes", "type": "text"}], "role":
-(<lambda> pid=2087, ip=10.164.0.107) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=1, template_text="<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, why do we use the square root operation in calculating the area?\nChoices:\nA. To find a side length using Pythagoras' Theorem\nB. To compute the diagonal of the rectangle\nC. To simplify the area's algebraic expression\nD. To calculate curvature of shapes<|im_end|><|im_start|>assistant \nThe squa", messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Based on the image, why do we use the square root operation in calculating the area?\nChoices:\nA. To find a side length using Pythagoras' Theorem\nB. To compute the diagonal of the rectangle\nC. To simplify the area's algebraic expression\nD. To calculate curvature of shapes", "type": "text"}], "role":
-(<lambda> pid=2086, ip=10.164.0.98) 2026-02-07T02:10:36 - 8 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 17 (5112 rows) in 24.42s [repeated 3x across cluster]
-(<lambda> pid=2086, ip=10.164.0.98) 2026-02-07T02:10:36 - 8 - levanter.data.image - image.py:2616 - INFO :: Loading shard 18: 1160_parquet [repeated 3x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107) Exception in thread Thread-4 (prefetch_worker): [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107) Traceback (most recent call last): [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)     self.run() [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)     self._target(*self._args, **self._kwargs) [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)     processed = self._batch_processor(raw_items) [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__ [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.107)     raise ValueError( [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T02:10:39 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 60.0 seconds. Waiting for 32 image items. [repeated 10x across cluster]
-(<lambda> pid=2086, ip=10.164.0.98) 2026-02-07T02:10:41 - 8 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=5, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, compute the total surface area of the red icing on the cake.<|im_end|><|im_start|>assistant \nThe total surface area with the red icing involves adding the area of the curved surface and the area of the one remaining flat face. Each calculation is based on known dimensions and subtrac', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, compute the total surface area of the red icing on the cake.", "type": "text"}], "role": "user"}, {"content": [{"text": "The total surface area with the red icing involves adding the area of the curved surface and the area of the one remaining flat face. Each calculation is b
-(<lambda> pid=2086, ip=10.164.0.98) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=5, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, compute the total surface area of the red icing on the cake.<|im_end|><|im_start|>assistant \nThe total surface area with the red icing involves adding the area of the curved surface and the area of the one remaining flat face. Each calculation is based on known dimensions and subtrac', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first conduct reasoning, and then answer the question and provide the final value, e.g., The answer is xxx\nQuestion: Based on the image, compute the total surface area of the red icing on the cake.", "type": "text"}], "role": "user"}, {"content": [{"text": "The total surface area with the red icing involves adding the area of the curved surface and the area of the one remaining flat face. Each calculation is b
-(<lambda> pid=2088, ip=10.164.0.218) 2026-02-07T02:10:42 - 0 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 18 (5084 rows) in 22.63s [repeated 3x across cluster]
-(<lambda> pid=2087, ip=10.164.0.211) 2026-02-07T02:10:41 - 9 - levanter.data.image - image.py:2642 - INFO :: Loading shard 17: 1097_parquet [repeated 2x across cluster]
-(<lambda> pid=2086, ip=10.164.0.98) Exception in thread Thread-4 (prefetch_worker):
-(<lambda> pid=2086, ip=10.164.0.98) Traceback (most recent call last):
-(<lambda> pid=2086, ip=10.164.0.98)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=2086, ip=10.164.0.98)     self.run()
-(<lambda> pid=2086, ip=10.164.0.98)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=2086, ip=10.164.0.98)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=2086, ip=10.164.0.98)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
-(<lambda> pid=2086, ip=10.164.0.98)     processed = self._batch_processor(raw_items)
-(<lambda> pid=2086, ip=10.164.0.98)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2086, ip=10.164.0.98)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
-(<lambda> pid=2086, ip=10.164.0.98)     raise ValueError(
-(<lambda> pid=2087, ip=10.164.0.101) 2026-02-07T02:10:44 - 55 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 60.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2089, ip=10.164.0.110) 2026-02-07T02:10:46 - 3 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=11, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Were there at least 50 baskets made by Wendy Wolverine?\nChoices:\nA. Yes\nB. No<|im_end|><|im_start|>assistant \nWendy Wolverine scored exactly 50 baskets. So the answer is A\nAnswer: A<|im_end|>', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Were there at least 50 baskets made by Wendy Wolverine?\nChoices:\nA. Yes\nB. No", "type": "text"}], "role": "user"}, {"content": [{"text": "Wendy Wolverine scored exactly 50 baskets. So the answer is A\nAnswer: A", "type": "text"}], "role": "assistant"}]
-(<lambda> pid=2089, ip=10.164.0.110) Exception in thread Thread-4 (prefetch_worker):
-(<lambda> pid=2089, ip=10.164.0.110) Traceback (most recent call last):
-(<lambda> pid=2089, ip=10.164.0.110)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=2089, ip=10.164.0.110)     self.run()
-(<lambda> pid=2089, ip=10.164.0.110)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=2089, ip=10.164.0.110)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=2089, ip=10.164.0.110)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
-(<lambda> pid=2089, ip=10.164.0.110)     processed = self._batch_processor(raw_items)
-(<lambda> pid=2089, ip=10.164.0.110)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2089, ip=10.164.0.110)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1ff1274332d3509f/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
-(<lambda> pid=2089, ip=10.164.0.110)     raise ValueError(
-(<lambda> pid=2089, ip=10.164.0.110) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=11, template_text='<|im_start|>user \n<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Were there at least 50 baskets made by Wendy Wolverine?\nChoices:\nA. Yes\nB. No<|im_end|><|im_start|>assistant \nWendy Wolverine scored exactly 50 baskets. So the answer is A\nAnswer: A<|im_end|>', messages=[{"content": [{"text": "<image>\nAccording to the question shown in the image, please first perform reasoning, then finally select the right answer from the choices, e.g., Answer: xxx.\nQuestion: Were there at least 50 baskets made by Wendy Wolverine?\nChoices:\nA. Yes\nB. No", "type": "text"}], "role": "user"}, {"content": [{"text": "Wendy Wolverine scored exactly 50 baskets. So the answer is A\nAnswer: A", "type": "text"}], "role": "assistant"}]
-(<lambda> pid=2088, ip=10.164.0.93) 2026-02-07T02:10:46 - 5 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 18 (4890 rows) in 14.71s [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T02:10:49 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 70.0 seconds. Waiting for 32 image items. [repeated 10x across cluster]
-(<lambda> pid=2087, ip=10.164.0.101) 2026-02-07T02:10:54 - 55 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 70.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2086, ip=10.164.0.98) 2026-02-07T02:10:54 - 8 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 18 (5029 rows) in 17.95s
+(<lambda> pid=2088, ip=10.164.0.115) 2026-02-07T13:44:45 - 39 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41500.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2087, ip=10.164.0.116) 2026-02-07T13:44:51 - 21 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41510.0 seconds. Waiting for 32 image items. [repeated 12x across cluster]
+(<lambda> pid=2087, ip=10.164.0.106) 2026-02-07T13:44:56 - 27 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41510.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2089, ip=10.164.0.103) 2026-02-07T13:45:01 - 26 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41520.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+(autoscaler +12h7m37s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h7m37s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=2088, ip=10.164.0.222) 2026-02-07T13:45:06 - 33 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41520.0 seconds. Waiting for 32 image items. [repeated 19x across cluster]
+(<lambda> pid=2087, ip=10.164.0.230) 2026-02-07T13:45:12 - 38 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41530.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T13:45:18 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41540.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2087, ip=10.164.0.219) 2026-02-07T13:45:23 - 42 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41540.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2088, ip=10.164.0.97) 2026-02-07T13:45:28 - 56 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41540.0 seconds. Waiting for 32 image items. [repeated 13x across cluster]
+(autoscaler +12h8m4s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h8m4s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=2087, ip=10.164.0.102) 2026-02-07T13:45:34 - 14 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41540.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2086, ip=10.164.0.90) 2026-02-07T13:45:40 - 62 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41550.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+(<lambda> pid=2088, ip=10.164.0.115) 2026-02-07T13:45:45 - 39 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41560.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2087, ip=10.164.0.116) 2026-02-07T13:45:51 - 21 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41570.0 seconds. Waiting for 32 image items. [repeated 12x across cluster]
+(<lambda> pid=2087, ip=10.164.0.106) 2026-02-07T13:45:56 - 27 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41570.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2089, ip=10.164.0.103) 2026-02-07T13:46:01 - 26 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41580.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+(<lambda> pid=2087, ip=10.164.0.229) 2026-02-07T13:46:06 - 36 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41580.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2087, ip=10.164.0.91) 2026-02-07T13:46:12 - 46 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41590.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+(<lambda> pid=2088, ip=10.164.0.222) 2026-02-07T13:46:17 - 33 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41590.0 seconds. Waiting for 32 image items. [repeated 18x across cluster]
+(<lambda> pid=2087, ip=10.164.0.230) 2026-02-07T13:46:22 - 38 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41600.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T13:46:28 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41610.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2087, ip=10.164.0.219) 2026-02-07T13:46:34 - 42 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41610.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2088, ip=10.164.0.97) 2026-02-07T13:46:39 - 56 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41610.0 seconds. Waiting for 32 image items. [repeated 13x across cluster]
+(<lambda> pid=2087, ip=10.164.0.102) 2026-02-07T13:46:44 - 14 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41610.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2086, ip=10.164.0.90) 2026-02-07T13:46:50 - 62 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41620.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+(<lambda> pid=2088, ip=10.164.0.115) 2026-02-07T13:46:56 - 39 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41630.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2087, ip=10.164.0.116) 2026-02-07T13:47:01 - 21 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41640.0 seconds. Waiting for 32 image items. [repeated 12x across cluster]
+(<lambda> pid=2087, ip=10.164.0.106) 2026-02-07T13:47:06 - 27 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41640.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2089, ip=10.164.0.103) 2026-02-07T13:47:12 - 26 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41650.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+(<lambda> pid=2087, ip=10.164.0.229) 2026-02-07T13:47:17 - 36 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41650.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
+(<lambda> pid=2087, ip=10.164.0.91) 2026-02-07T13:47:22 - 46 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41660.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
+*** SIGTERM received at time=1770500842 on cpu 4 ***
+PC: @     0x75d07e65c7f8  (unknown)  clock_nanosleep
+    @     0x75d07e5b9520  (unknown)  (unknown)
+    @ ... and at least 7 more frames
+[2026-02-07 13:47:22,838 E 1965423 1965423] logging.cc:474: *** SIGTERM received at time=1770500842 on cpu 4 ***
+[2026-02-07 13:47:22,838 E 1965423 1965423] logging.cc:474: PC: @     0x75d07e65c7f8  (unknown)  clock_nanosleep
+[2026-02-07 13:47:22,838 E 1965423 1965423] logging.cc:474:     @     0x75d07e5b9520  (unknown)  (unknown)
+[2026-02-07 13:47:22,838 E 1965423 1965423] logging.cc:474:     @ ... and at least 7 more frames
+(<lambda> pid=2086, ip=10.164.0.100) 2026-02-07T13:47:22 - 54 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41660.0 seconds. Waiting for 32 image items. [repeated 4x across cluster]
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-1.7b-stage3_4096-correct-0  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round3_eu_west4.py --force_run_failed true 
+Uninstalled 1 package in 1ms
+Installed 1 package in 90ms
+2026-02-07 23:05:43,128 - INFO - Creating SSH proxy chain through marin-eu-west4
+2026-02-07 23:05:43,128 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-eu-west4': RayPortMapping(dashboard_port=8266, gcs_port=6380, api_port=10002)}
+2026-02-07 23:05:43,133 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '34.6.60.99' (ED25519) to the list of known hosts.
+2026-02-07 23:05:44,135 - INFO - SSH tunnel not ready, retrying in 1s... (2/3)
+2026-02-07 23:05:45,431 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-02-07 23:05:46,033 - INFO - Submitting job with entrypoint:  python experiments/VLM/demo_vlm_train_round3_eu_west4.py --force_run_failed true
+2026-02-07 23:05:46,034 - INFO - Extras: 
+2026-02-07 23:05:46,034 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "EXP_NAME": "vlm-official-qwen3-1.7b-stage3_4096-correct-0",
+    "HF_DATASETS_TRUST_REMOTE_CODE": "true",
+    "TPU_TYPE": "v5litepod-256",
+    "GIT_COMMIT": "357096dd25850b8d6b4d67227f83cfab79d0adb7",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 393 packages in 21ms
+2026-02-07 23:05:46,099 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "EXP_NAME": "vlm-official-qwen3-1.7b-stage3_4096-correct-0", "HF_DATASETS_TRUST_REMOTE_CODE": "true", "TPU_TYPE": "v5litepod-256", "GIT_COMMIT": "357096dd25850b8d6b4d67227f83cfab79d0adb7", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_a49a633c4ec46bb8.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_private3", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-demo_vlm_train_round3_eu_west4-20260207-230540  -- pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4.py --force_run_failed true
+2026-02-07 23:05:46,107 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
+2026-02-07 23:05:46,211 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
+2026-02-07 23:05:46,218 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
+2026-02-07 23:05:46,297 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
+2026-02-07 23:05:46,353 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
+2026-02-07 23:05:46,394 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
+2026-02-07 23:05:46,401 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
+2026-02-07 23:05:46,406 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
+2026-02-07 23:05:46,508 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
+2026-02-07 23:05:46,514 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
+2026-02-07 23:05:46,593 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
+2026-02-07 23:05:46,650 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
+2026-02-07 23:05:46,691 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
+2026-02-07 23:05:46,697 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
+2026-02-07 23:05:46,999 INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_2a2e591d1b9bce76.zip.
+2026-02-07 23:05:46,999 INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_private3'.
+2026-02-07 23:05:47,000 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
+2026-02-07 23:05:47,143 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
+2026-02-07 23:05:47,151 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
+2026-02-07 23:05:47,251 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
+2026-02-07 23:05:47,324 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
+2026-02-07 23:05:47,385 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
+2026-02-07 23:05:47,396 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
+2026-02-07 23:05:50,534 - INFO - Job submitted with ID: ray-run-ruili-demo_vlm_train_round3_eu_west4-20260207-230540
+2026-02-07 23:05:50,534 - INFO - Job URL: http://localhost:8266/#/jobs/ray-run-ruili-demo_vlm_train_round3_eu_west4-20260207-230540
+2026-02-07 15:05:50,456 INFO job_manager.py:579 -- Runtime env is setting up.
+Running entrypoint for job ray-run-ruili-demo_vlm_train_round3_eu_west4-20260207-230540: pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4.py --force_run_failed true
+Found existing installation: opencv-python-headless 4.13.0.92
+Uninstalling opencv-python-headless-4.13.0.92:
+  Successfully uninstalled opencv-python-headless-4.13.0.92
+Collecting opencv-python-headless
+  Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl.metadata (19 kB)
+Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl (60.4 MB)
+Installing collected packages: opencv-python-headless
+Successfully installed opencv-python-headless-4.13.0.92
+
+[notice] A new release of pip is available: 24.3.1 -> 26.0
+[notice] To update, run: pip install --upgrade pip
+2026-02-07 15:06:00,567 - INFO - Using cluster from FRAY_CLUSTER_SPEC=ray
+2026-02-07 15:06:00,685 INFO cluster.py:103 -- Created new namespace: fray_704bba0a
+2026-02-07 15:06:00,685 INFO cluster.py:114 -- Set default job context to RayContext
+2026-02-07 15:06:00,686 INFO executor.py:719 -- ### Inspecting the 1 provided steps ###
+2026-02-07 15:06:00,689 INFO executor.py:727 -- ### Reading 1 statuses ###
+2026-02-07 15:06:00,689 INFO executor.py:737 -- ### Writing metadata ###
+2026-02-07 15:06:00,689 INFO executor.py:1104 -- Writing executor info to gs://marin-eu-west4/experiments/demo_vlm_train_round3_eu_west4-7388b9.json
+2026-02-07 15:06:00,689 INFO executor.py:1107 -- To view the experiment page, go to:
+2026-02-07 15:06:00,690 INFO executor.py:1108 -- 
+2026-02-07 15:06:00,690 INFO executor.py:1109 -- https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/demo_vlm_train_round3_eu_west4-7388b9.json
+2026-02-07 15:06:00,690 INFO executor.py:1110 -- 
+2026-02-07 15:06:00,970 INFO executor.py:740 -- ### Launching 1 steps ###
+2026-02-07 15:06:00,970 INFO executor.py:810 -- checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0>
+2026-02-07 15:06:00,970 INFO executor.py:811 --   output_path = gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+2026-02-07 15:06:00,971 INFO executor.py:812 --   config = {}
+2026-02-07 15:06:01,073 INFO executor.py:1142 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Status checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0>: RUNNING
+2026-02-07 15:06:01,151 INFO executor.py:1161 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Step checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0> has no active lock, taking over.
+2026-02-07 15:06:01,151 INFO executor.py:1163 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Attempting to acquire lock for checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0>
+2026-02-07 15:06:01,220 INFO executor_step_status.py:236 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Found stale lock from ray-marin-eu-west4-head-af1481f3-compute-129538333296448, attempting takeover
+2026-02-07 15:06:01,461 INFO executor.py:1166 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Acquired lock for checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0>
+2026-02-07 15:06:01,597 INFO cluster.py:149 -- Launching job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0
+2026-02-07 15:06:01,597 INFO cluster.py:278 -- Building environment for device: cpu/cpu
+2026-02-07 15:06:01,597 INFO cluster.py:283 -- Building environment with [], extras [] for job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0
+2026-02-07 15:06:01,597 INFO cluster.py:298 -- Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'JAX_PLATFORMS': 'cpu', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_704bba0a'}}
+2026-02-07 15:06:01,598 INFO worker.py:1680 -- Using address 10.164.0.2:6379 set in the environment variable RAY_ADDRESS
+2026-02-07 15:06:01,600 INFO worker.py:1821 -- Connecting to existing Ray cluster at address: 10.164.0.2:6379...
+2026-02-07 15:06:01,611 INFO worker.py:1998 -- Connected to Ray cluster. View the dashboard at http://10.164.0.2:8265 
+(raylet) The node with node id: e9e86eca02ca0950f7a3ecf725548e90a5412bc133f0ab11867890c5 and address: 10.164.0.30 and node name: 10.164.0.30 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +57s) Tip: use `ray status` to view detailed cluster status. To disable these messages, set RAY_SCHEDULER_EVENTS=0.
+(autoscaler +57s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +57s) Resized to 600 CPUs, 20 TPUs.
+(autoscaler +2m12s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +2m12s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +2m12s) Resized to 600 CPUs, 20 TPUs.
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Using provided namespace: fray_704bba0a
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Set default job context to RayContext
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Launching job: train_vlm
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Building environment for device: tpu/v5litepod-256
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Building environment with [], extras ['tpu'] for job: train_vlm
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Resolved 393 packages in 4ms
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '357096dd25850b8d6b4d67227f83cfab79d0adb7', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_704bba0a', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
+(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Launching TPU job train_vlm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '357096dd25850b8d6b4d67227f83cfab79d0adb7', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_704bba0a', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
+(autoscaler +4m42s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +4m42s) Resized to 600 CPUs, 20 TPUs.
+(autoscaler +5m13s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5m13s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +5m13s) Resized to 840 CPUs, 28 TPUs.
+(autoscaler +8m10s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +8m10s) Resized to 840 CPUs, 28 TPUs.
+(autoscaler +11m0s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +11m0s) Resized to 840 CPUs, 28 TPUs.
+(autoscaler +11m31s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +11m31s) Resized to 840 CPUs, 28 TPUs.
+(autoscaler +11m56s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +11m56s) Resized to 840 CPUs, 28 TPUs.
+(autoscaler +13m5s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +13m5s) Resized to 840 CPUs, 28 TPUs.
+(autoscaler +15m17s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +15m17s) Resized to 4560 CPUs, 152 TPUs.
+(autoscaler +16m5s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +16m5s) Resized to 4560 CPUs, 152 TPUs.
+(autoscaler +16m46s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +16m46s) Resized to 4560 CPUs, 152 TPUs.
+(raylet, ip=10.164.0.238) [2026-02-07 15:22:53,532 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +17m26s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +17m26s) Resized to 4560 CPUs, 152 TPUs.
+(autoscaler +18m6s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +18m6s) Removing 31 nodes of type tpu_slice_v5e_128 (idle).
+(autoscaler +18m6s) Resized to 840 CPUs, 28 TPUs.
+(autoscaler +18m23s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +18m23s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +18m40s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +18m40s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +19m8s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +19m8s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +19m35s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +19m35s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +20m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +20m2s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +20m20s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +20m20s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=2156, ip=10.164.2.92) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(raylet, ip=10.164.2.64) [2026-02-07 15:22:53,535 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 8x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
+(<lambda> pid=2088, ip=10.164.2.100) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 2x across cluster]
+(autoscaler +21m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +21m2s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=2156, ip=10.164.2.92) 2026-02-07T15:27:34 - 41 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=2087, ip=10.164.0.251) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 61x across cluster]
+(<lambda> pid=2087, ip=10.164.0.245) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=2088, ip=10.164.0.246) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec.
+(<lambda> pid=2087, ip=10.164.0.245) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=2089, ip=10.164.2.15) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=2089, ip=10.164.2.15) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=2089, ip=10.164.2.15) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/wandb/offline-run-20260207_152734-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(autoscaler +21m41s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +21m41s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=2087, ip=10.164.0.245) wandb: setting up run vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2087, ip=10.164.0.245) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=2087, ip=10.164.0.245) wandb: Resuming run vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2087, ip=10.164.0.245) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
+(<lambda> pid=2087, ip=10.164.0.245) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2089, ip=10.164.2.105) 2026-02-07T15:27:35 - 58 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:35 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:35 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2089, ip=10.164.2.19) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:38 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:38 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2087, ip=10.164.0.243) 2026-02-07T15:27:38 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=2087, ip=10.164.2.93) 2026-02-07T15:27:40 - 27 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:38 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 127x across cluster]
+(<lambda> pid=2087, ip=10.164.2.0) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec. [repeated 62x across cluster]
+(<lambda> pid=2087, ip=10.164.0.245) wandb: Tracking run with wandb version 0.24.0 [repeated 63x across cluster]
+(<lambda> pid=2086, ip=10.164.2.65) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 62x across cluster]
+(<lambda> pid=2087, ip=10.164.0.245) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/wandb/run-20260207_152734-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec [repeated 63x across cluster]
+(<lambda> pid=2086, ip=10.164.2.65) 2026-02-07T15:27:40 - 20 - levanter.checkpoint - checkpoint.py:131 - INFO :: Found prior temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003. We will delete it after saving a new checkpoint.
+(autoscaler +22m24s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +22m24s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +23m0s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +23m0s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +23m33s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +23m33s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +23m54s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +23m54s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +24m11s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +24m11s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +24m43s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +24m43s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +25m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +25m10s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +25m43s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +25m43s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +26m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +26m10s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +26m48s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +26m48s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +27m35s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +27m35s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +27m53s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +27m53s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +28m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +28m10s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +28m38s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +28m38s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +29m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +29m10s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +29m38s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +29m38s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +30m0s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +30m0s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +30m17s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +30m17s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +30m30s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +30m30s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +30m47s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +30m47s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +31m4s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +31m4s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +31m37s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +31m37s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +32m9s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +32m9s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +32m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +32m31s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +32m59s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +32m59s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +33m16s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +33m16s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +33m43s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +33m43s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +34m16s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +34m16s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +34m38s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +34m38s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +34m55s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +34m55s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +35m22s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +35m22s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +35m40s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +35m40s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +36m7s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +36m7s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +36m35s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +36m35s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +36m52s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +36m52s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +37m24s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +37m24s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:43:43 - 0 - levanter.data.image - image.py:2497 - INFO :: Initializing streaming dataset (step-based mode)...
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:43:43 - 0 - levanter.data.image - image.py:2507 - INFO :: Found 9437 total shards in 0.00s
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:43:43 - 0 - levanter.data.image - image.py:2516 - INFO :: Worker 0/64: assigned 148 shards (indices 0, 64, ...)
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:43:43 - 0 - levanter.data.image - image.py:3576 - INFO :: Built streaming dataset for train (train): streaming mode
+(<lambda> pid=2087, ip=10.164.2.73) 2026-02-07T15:27:38 - 37 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec [repeated 125x across cluster]
+(<lambda> pid=2087, ip=10.164.0.245) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 63x across cluster]
+(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:38 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(<lambda> pid=2087, ip=10.164.2.103) 2026-02-07T15:27:40 - 7 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003 [repeated 63x across cluster]
+(<lambda> pid=2089, ip=10.164.2.70) 2026-02-07T15:27:40 - 28 - levanter.checkpoint - checkpoint.py:131 - INFO :: Found prior temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003. We will delete it after saving a new checkpoint. [repeated 63x across cluster]
+(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:44 - 43 - levanter.main.train_vlm - train_vlm.py:683 - INFO :: Using max_num_patches=0 from model config
+(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:44 - 43 - levanter.main.train_vlm - train_vlm.py:691 - INFO :: Using config-based image shape: C=3, H=384, W=384
+(<lambda> pid=2086, ip=10.164.2.65) 2026-02-07T15:43:44 - 20 - levanter.main.train_vlm - train_vlm.py:702 - INFO :: Using compute dtype <class 'jax.numpy.bfloat16'> for pixel values
+(<lambda> pid=2087, ip=10.164.2.24) 2026-02-07T15:43:44 - 13 - levanter.main.train_vlm - train_vlm.py:711 - INFO :: Using VLM checkpoint vocab size 151936 (tokenizer has 151669)
+(autoscaler +37m52s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +37m52s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=2089, ip=10.164.2.23) 2026-02-07T15:43:46 - 35 - levanter.checkpoint - checkpoint.py:452 - INFO :: Loading checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003
+(<lambda> pid=2089, ip=10.164.2.15) 2026-02-07T15:43:46 - 47 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2089, ip=10.164.2.15) 2026-02-07T15:43:46 - 47 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2089, ip=10.164.2.15) 2026-02-07T15:43:46 - 47 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
+(<lambda> pid=2087, ip=10.164.2.13) I0207 15:43:46.382004    3773 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
+(<lambda> pid=2087, ip=10.164.0.219) 2026-02-07T15:43:52 - 57 - levanter.main.train_vlm - train_vlm.py:810 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory.
+(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:43 - 43 - levanter.data.image - image.py:2497 - INFO :: Initializing streaming dataset (step-based mode)... [repeated 63x across cluster]
+(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:43 - 43 - levanter.data.image - image.py:2507 - INFO :: Found 9437 total shards in 0.00s [repeated 63x across cluster]
+(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:43 - 43 - levanter.data.image - image.py:2516 - INFO :: Worker 43/64: assigned 147 shards (indices 43, 107, ...) [repeated 63x across cluster]
+(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:43 - 43 - levanter.data.image - image.py:3576 - INFO :: Built streaming dataset for train (train): streaming mode [repeated 63x across cluster]
+(<lambda> pid=2089, ip=10.164.2.70) 2026-02-07T15:43:46 - 28 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003 [repeated 64x across cluster]
+(<lambda> pid=2089, ip=10.164.2.23) 2026-02-07T15:43:44 - 35 - levanter.main.train_vlm - train_vlm.py:683 - INFO :: Using max_num_patches=0 from model config [repeated 63x across cluster]
+(<lambda> pid=2089, ip=10.164.2.23) 2026-02-07T15:43:44 - 35 - levanter.main.train_vlm - train_vlm.py:691 - INFO :: Using config-based image shape: C=3, H=384, W=384 [repeated 63x across cluster]
+(<lambda> pid=2089, ip=10.164.2.23) 2026-02-07T15:43:44 - 35 - levanter.main.train_vlm - train_vlm.py:702 - INFO :: Using compute dtype <class 'jax.numpy.bfloat16'> for pixel values [repeated 63x across cluster]
+(<lambda> pid=2086, ip=10.164.2.98) 2026-02-07T15:43:44 - 36 - levanter.main.train_vlm - train_vlm.py:711 - INFO :: Using VLM checkpoint vocab size 151936 (tokenizer has 151669) [repeated 63x across cluster]
+(<lambda> pid=2089, ip=10.164.2.70) 2026-02-07T15:43:46 - 28 - levanter.checkpoint - checkpoint.py:452 - INFO :: Loading checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003 [repeated 63x across cluster]
+(<lambda> pid=2087, ip=10.164.0.243) 2026-02-07T15:43:46 - 30 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'> [repeated 2749x across cluster]
+(<lambda> pid=2088, ip=10.164.2.12) I0207 15:43:46.498545    3706 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 63x across cluster]
+(<lambda> pid=2089, ip=10.164.2.19) 2026-02-07T15:43:52 - 56 - levanter.main.train_vlm - train_vlm.py:870 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16)
+(<lambda> pid=2087, ip=10.164.2.14) 2026-02-07T15:43:52 - 10 - levanter.main.train_vlm - train_vlm.py:890 - INFO :: Resume: train -> seek to item 84016/process (total=5377024, step=21004, batch_size=256)
+(<lambda> pid=2089, ip=10.164.2.15) 2026-02-07T15:43:52 - 47 - levanter.data.image - image.py:2770 - INFO :: Starting pipeline with resume: seeking to item 84016
+(<lambda> pid=2087, ip=10.164.2.93) 2026-02-07T15:44:01 - 27 - levanter.data.image - image.py:2570 - WARNING :: shard_num_rows not available for 1243_parquet, loading full shard to count
+(<lambda> pid=2089, ip=10.164.0.99) 2026-02-07T15:43:52 - 38 - levanter.main.train_vlm - train_vlm.py:810 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory. [repeated 63x across cluster]
+(<lambda> pid=2089, ip=10.164.0.99) 2026-02-07T15:43:52 - 38 - levanter.main.train_vlm - train_vlm.py:870 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16) [repeated 63x across cluster]
+(<lambda> pid=2087, ip=10.164.2.0) 2026-02-07T15:43:52 - 53 - levanter.main.train_vlm - train_vlm.py:890 - INFO :: Resume: train -> seek to item 84016/process (total=5377024, step=21004, batch_size=256) [repeated 63x across cluster]
+(<lambda> pid=2087, ip=10.164.0.242) 2026-02-07T15:43:52 - 49 - levanter.data.image - image.py:2770 - INFO :: Starting pipeline with resume: seeking to item 84016 [repeated 63x across cluster]
+(<lambda> pid=2087, ip=10.164.2.93) 2026-02-07T15:44:01 - 27 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
+(<lambda> pid=2087, ip=10.164.2.93) wandb: 
+(<lambda> pid=2087, ip=10.164.2.93) wandb: Run summary:
+(<lambda> pid=2087, ip=10.164.2.93) wandb:                                 backend tpu
+(<lambda> pid=2087, ip=10.164.2.93) wandb:                             num_devices 256
+(<lambda> pid=2087, ip=10.164.2.93) wandb:                               num_hosts 64
+(<lambda> pid=2087, ip=10.164.2.93) wandb:                         parameter_count 2140151024
+(<lambda> pid=2087, ip=10.164.2.93) wandb:                  throughput/device_kind TPU v5 lite
+(<lambda> pid=2087, ip=10.164.2.93) wandb:            throughput/theoretical_flops 5.0432e+16
+(<lambda> pid=2087, ip=10.164.2.93) wandb: throughput/theoretical_flops_per_device 197000000000000.0
+(<lambda> pid=2087, ip=10.164.2.93) wandb: 
+(<lambda> pid=2087, ip=10.164.2.93) wandb: You can sync this run to the cloud by running:
+(<lambda> pid=2087, ip=10.164.2.93) wandb: wandb sync /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/wandb/offline-run-20260207_152734-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2087, ip=10.164.2.93) wandb: Find logs at: ./wandb/offline-run-20260207_152734-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/logs
+(<lambda> pid=2087, ip=10.164.2.93) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7fc768337740>
+(<lambda> pid=2087, ip=10.164.2.93) Traceback (most recent call last):
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=2087, ip=10.164.2.93)     conn.teardown(hooks.exit_code)
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=2087, ip=10.164.2.93)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=2087, ip=10.164.2.93)     return future.result()
+(<lambda> pid=2087, ip=10.164.2.93)            ^^^^^^^^^^^^^^^
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=2087, ip=10.164.2.93)     return self.__get_result()
+(<lambda> pid=2087, ip=10.164.2.93)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=2087, ip=10.164.2.93)     raise self._exception
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=2087, ip=10.164.2.93)     return await fn()
+(<lambda> pid=2087, ip=10.164.2.93)            ^^^^^^^^^^
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=2087, ip=10.164.2.93)     await self._client.close()
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=2087, ip=10.164.2.93)     await self._writer.wait_closed()
+(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=2087, ip=10.164.2.93)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=2087, ip=10.164.2.93) BrokenPipeError: [Errno 32] Broken pipe
+(SliceActor pid=2012, ip=10.164.2.92) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2087, ip=10.164.2.93)
+(SliceActor pid=2012, ip=10.164.2.92)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/sharded_datasource.py", line 162, in shard_num_rows
+(SliceActor pid=2012, ip=10.164.2.92)     with fsspec.open(url, "rb") as f:
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
+(SliceActor pid=2012, ip=10.164.2.92)     f = self.fs.open(self.path, mode=mode)
+(SliceActor pid=2012, ip=10.164.2.92)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
+(SliceActor pid=2012, ip=10.164.2.92)     f = self._open(
+(SliceActor pid=2012, ip=10.164.2.92)         ^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
+(SliceActor pid=2012, ip=10.164.2.92)     return GCSFile(
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
+(SliceActor pid=2012, ip=10.164.2.92)     super().__init__(
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
+(SliceActor pid=2012, ip=10.164.2.92)     self.size = self.details["size"]
+(SliceActor pid=2012, ip=10.164.2.92)                 ^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
+(SliceActor pid=2012, ip=10.164.2.92)     self._details = self.fs.info(self.path, generation=self.generation)
+(SliceActor pid=2012, ip=10.164.2.92)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+(SliceActor pid=2012, ip=10.164.2.92)     return sync(self.loop, func, *args, **kwargs)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+(SliceActor pid=2012, ip=10.164.2.92)     raise return_result
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+(SliceActor pid=2012, ip=10.164.2.92)     result[0] = await coro
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
+(SliceActor pid=2012, ip=10.164.2.92)     out = await self._ls(path, **kwargs)
+(SliceActor pid=2012, ip=10.164.2.92)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
+(SliceActor pid=2012, ip=10.164.2.92)     for entry in await self._list_objects(
+(SliceActor pid=2012, ip=10.164.2.92)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
+(SliceActor pid=2012, ip=10.164.2.92)     return [await self._get_object(path)]
+(SliceActor pid=2012, ip=10.164.2.92)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
+(SliceActor pid=2012, ip=10.164.2.92)     res = await self._call(
+(SliceActor pid=2012, ip=10.164.2.92)           ^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+(SliceActor pid=2012, ip=10.164.2.92)     status, headers, info, contents = await self._request(
+(SliceActor pid=2012, ip=10.164.2.92)                                       ^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+(SliceActor pid=2012, ip=10.164.2.92)     return await caller(func, *(extras + args), **kw)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+(SliceActor pid=2012, ip=10.164.2.92)     return await func(*args, **kwargs)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+(SliceActor pid=2012, ip=10.164.2.92)     validate_response(status, contents, path, args)
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
+(SliceActor pid=2012, ip=10.164.2.92)     raise FileNotFoundError(path)
+(SliceActor pid=2012, ip=10.164.2.92) FileNotFoundError: b/marin-vlm/o/stage3_sharded_full%2Ftrain-01243.parquet
+(SliceActor pid=2012, ip=10.164.2.92) 
+(SliceActor pid=2012, ip=10.164.2.92) During handling of the above exception, another exception occurred:
+(SliceActor pid=2012, ip=10.164.2.92) 
+(SliceActor pid=2012, ip=10.164.2.92) ray::<lambda>() (pid=2087, ip=10.164.2.93)
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=2012, ip=10.164.2.92)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2012, ip=10.164.2.92)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/main/train_vlm.py", line 896, in main
+(SliceActor pid=2012, ip=10.164.2.92)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
+(SliceActor pid=2012, ip=10.164.2.92)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 4343, in __init__
+(SliceActor pid=2012, ip=10.164.2.92)     super().__init__(
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
+(SliceActor pid=2012, ip=10.164.2.92)     initial_example = blocking_wait(self.data_store.getitem_async(0))
+(SliceActor pid=2012, ip=10.164.2.92)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
+(SliceActor pid=2012, ip=10.164.2.92)     return asyncio.run(coro)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)     return runner.run(main)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)     return self._loop.run_until_complete(task)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
+(SliceActor pid=2012, ip=10.164.2.92)     return await dataset.getitem_async(dataset_index)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
+(SliceActor pid=2012, ip=10.164.2.92)     return (await self.get_batch([index]))[0]
+(SliceActor pid=2012, ip=10.164.2.92)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2813, in get_batch
+(SliceActor pid=2012, ip=10.164.2.92)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)     result = self.fn(*self.args, **self.kwargs)
+(SliceActor pid=2012, ip=10.164.2.92)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2773, in _get_from_cache_or_process
+(SliceActor pid=2012, ip=10.164.2.92)     self._start_pipeline(items_to_skip)
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2549, in _start_pipeline
+(SliceActor pid=2012, ip=10.164.2.92)     self._seek_to_item(items_to_skip)
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2571, in _seek_to_item
+(SliceActor pid=2012, ip=10.164.2.92)     shard_data = list(self.source.open_shard(shard_name))
+(SliceActor pid=2012, ip=10.164.2.92)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 185, in open_shard_at_row
+(SliceActor pid=2012, ip=10.164.2.92)     with fsspec.open(url, "rb") as f:
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
+(SliceActor pid=2012, ip=10.164.2.92)     f = self.fs.open(self.path, mode=mode)
+(SliceActor pid=2012, ip=10.164.2.92)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
+(SliceActor pid=2012, ip=10.164.2.92)     f = self._open(
+(SliceActor pid=2012, ip=10.164.2.92)         ^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
+(SliceActor pid=2012, ip=10.164.2.92)     return GCSFile(
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
+(SliceActor pid=2012, ip=10.164.2.92)     super().__init__(
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
+(SliceActor pid=2012, ip=10.164.2.92)     self.size = self.details["size"]
+(SliceActor pid=2012, ip=10.164.2.92)                 ^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
+(SliceActor pid=2012, ip=10.164.2.92)     self._details = self.fs.info(self.path, generation=self.generation)
+(SliceActor pid=2012, ip=10.164.2.92)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+(SliceActor pid=2012, ip=10.164.2.92)     return sync(self.loop, func, *args, **kwargs)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+(SliceActor pid=2012, ip=10.164.2.92)     raise return_result
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+(SliceActor pid=2012, ip=10.164.2.92)     result[0] = await coro
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
+(SliceActor pid=2012, ip=10.164.2.92)     out = await self._ls(path, **kwargs)
+(SliceActor pid=2012, ip=10.164.2.92)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
+(SliceActor pid=2012, ip=10.164.2.92)     for entry in await self._list_objects(
+(SliceActor pid=2012, ip=10.164.2.92)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
+(SliceActor pid=2012, ip=10.164.2.92)     return [await self._get_object(path)]
+(SliceActor pid=2012, ip=10.164.2.92)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
+(SliceActor pid=2012, ip=10.164.2.92)     res = await self._call(
+(SliceActor pid=2012, ip=10.164.2.92)           ^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+(SliceActor pid=2012, ip=10.164.2.92)     status, headers, info, contents = await self._request(
+(SliceActor pid=2012, ip=10.164.2.92)                                       ^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+(SliceActor pid=2012, ip=10.164.2.92)     return await caller(func, *(extras + args), **kw)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+(SliceActor pid=2012, ip=10.164.2.92)     return await func(*args, **kwargs)
+(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+(SliceActor pid=2012, ip=10.164.2.92)     validate_response(status, contents, path, args)
+(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
+(SliceActor pid=2012, ip=10.164.2.92)     raise FileNotFoundError(path)
+(SliceActor pid=2012, ip=10.164.2.92) FileNotFoundError: b/marin-vlm/o/stage3_sharded_full%2Ftrain-01243.parquet
+(run_on_pod_ray pid=2285, ip=10.164.0.113) Task error ray::<lambda>() (pid=2087, ip=10.164.2.93)
+(run_on_pod_ray pid=2285, ip=10.164.0.113) 
+(run_on_pod_ray pid=2285, ip=10.164.0.113) 
+(run_on_pod_ray pid=2285, ip=10.164.0.113) ray::<lambda>() (pid=2087, ip=10.164.2.93)
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return func(*args, **kwargs)
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=2285, ip=10.164.0.113) ray.exceptions.RayTaskError(FileNotFoundError): ray::<lambda>() (pid=2087, ip=10.164.2.93)
+(run_on_pod_ray pid=2285, ip=10.164.0.113) 
+(run_on_pod_ray pid=2285, ip=10.164.0.113) 
+(run_on_pod_ray pid=2285, ip=10.164.0.113) ray::<lambda>() (pid=2087, ip=10.164.2.93)
+(<lambda> pid=2087, ip=10.164.2.93) E0207 15:44:02.901008    2284 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=2087, ip=10.164.2.93) F0207 15:44:02.901032    2284 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=2087, ip=10.164.2.93) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=2087, ip=10.164.2.93) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
+(run_on_pod_ray pid=2285, ip=10.164.0.113) Failed 1 times. Continuing to retry.
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return func(*args, **kwargs)
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=2285, ip=10.164.0.113) ray.exceptions.RayTaskError(FileNotFoundError): ray::<lambda>() (pid=2087, ip=10.164.2.93)
+(run_on_pod_ray pid=2285, ip=10.164.0.113) 
+(run_on_pod_ray pid=2285, ip=10.164.0.113) 
+(run_on_pod_ray pid=2285, ip=10.164.0.113) ray::<lambda>() (pid=2087, ip=10.164.2.93)
+(<lambda> pid=2089, ip=10.164.0.246) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:44:01 - 43 - levanter.data.image - image.py:2570 - WARNING :: shard_num_rows not available for 1259_parquet, loading full shard to count [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113) Traceback (most recent call last): [repeated 2x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run [repeated 12x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                 ^^^^^^^^^^ [repeated 10x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/sharded_datasource.py", line 162, in shard_num_rows [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     with fsspec.open(url, "rb") as f: [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     f = self.fs.open(self.path, mode=mode) [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     f = self._open( [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)         ^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return GCSFile( [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__ [repeated 18x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     super().__init__( [repeated 9x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     self.size = self.details["size"] [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                 ^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     self._details = self.fs.info(self.path, generation=self.generation) [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper [repeated 8x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return sync(self.loop, func, *args, **kwargs) [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     raise return_result [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     result[0] = await coro [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     out = await self._ls(path, **kwargs) [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     for entry in await self._list_objects( [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                  ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return [await self._get_object(path)] [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     res = await self._call( [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)           ^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     status, headers, info, contents = await self._request( [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                                       ^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return await caller(func, *(extras + args), **kw) [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return await func(*args, **kwargs) [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     validate_response(status, contents, path, args) [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     raise FileNotFoundError(path) [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113) FileNotFoundError: b/marin-vlm/o/stage3_sharded_full%2Ftrain-01243.parquet [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113) During handling of the above exception, another exception occurred: [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/main/train_vlm.py", line 896, in main [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     initial_example = blocking_wait(self.data_store.getitem_async(0)) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return asyncio.run(coro) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return runner.run(main) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return self._loop.run_until_complete(task) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async [repeated 6x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return await dataset.getitem_async(dataset_index) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return (await self.get_batch([index]))[0] [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2813, in get_batch [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     result = self.fn(*self.args, **self.kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2773, in _get_from_cache_or_process [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     self._start_pipeline(items_to_skip) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2549, in _start_pipeline [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     self._seek_to_item(items_to_skip) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2571, in _seek_to_item [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)     shard_data = list(self.source.open_shard(shard_name)) [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 185, in open_shard_at_row [repeated 3x across cluster]
+(autoscaler +38m24s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +38m24s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +38m24s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=2089, ip=10.164.2.95) 2026-02-07T15:44:22 - 18 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=2089, ip=10.164.2.16) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 63x across cluster]
+(<lambda> pid=2088, ip=10.164.0.245) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=2088, ip=10.164.2.14) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec.
+(<lambda> pid=2089, ip=10.164.2.95) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=2089, ip=10.164.2.95) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=2089, ip=10.164.2.95) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/wandb/offline-run-20260207_154422-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2088, ip=10.164.0.245) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=2088, ip=10.164.0.245) wandb: setting up run vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2088, ip=10.164.0.245) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=2088, ip=10.164.0.245) wandb: Resuming run vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2088, ip=10.164.0.245) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
+(<lambda> pid=2088, ip=10.164.0.245) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2089, ip=10.164.0.244) 2026-02-07T15:44:24 - 6 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:24 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
+(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:24 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2091, ip=10.164.0.248) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:26 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
+(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:26 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
+(<lambda> pid=2091, ip=10.164.2.1) 2026-02-07T15:44:26 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=2089, ip=10.164.0.247) 2026-02-07T15:44:27 - 1 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003
+(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:26 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 127x across cluster]
+(<lambda> pid=2089, ip=10.164.0.252) 2026-02-07T15:44:27 - 26 - levanter.checkpoint - checkpoint.py:131 - INFO :: Found prior temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003. We will delete it after saving a new checkpoint.
