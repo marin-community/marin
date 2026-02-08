@@ -33,7 +33,9 @@ import argparse
 import logging
 import random
 import sys
+from dataclasses import replace
 
+from experiments.kelp.corpus import TOY_CORPUS
 from experiments.kelp.model.presets import PRESETS, get_preset
 from experiments.kelp.tree.augmentation import augment_bank
 from experiments.kelp.tree.subtree_bank import SubtreeBank
@@ -50,26 +52,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-
-
-# Toy corpus for quick iteration.
-TOY_CORPUS = [
-    "def add(a, b):\n    return a + b\n",
-    "def sub(a, b):\n    return a - b\n",
-    "def mul(a, b):\n    return a * b\n",
-    "def div(a, b):\n    return a / b\n",
-    "def neg(x):\n    return -x\n",
-    "def square(x):\n    return x * x\n",
-    "def double(x):\n    return x + x\n",
-    "def is_positive(x):\n    return x > 0\n",
-    "def is_zero(x):\n    return x == 0\n",
-    "def identity(x):\n    return x\n",
-    "def abs_val(x):\n    if x < 0:\n        return -x\n    return x\n",
-    "def max_val(a, b):\n    if a > b:\n        return a\n    return b\n",
-    "def min_val(a, b):\n    if a < b:\n        return a\n    return b\n",
-    "def clamp(x, lo, hi):\n    if x < lo:\n        return lo\n    if x > hi:\n        return hi\n    return x\n",
-    "def fib(n):\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n",
-]
 
 
 def parse_args() -> argparse.Namespace:
@@ -148,8 +130,6 @@ def main():
     logger.info(f"Subtree bank: {bank.total_entries} entries across {len(bank.entries)} node types")
 
     # Override model config vocab_size to match tokenizer.
-    from dataclasses import replace
-
     model_config = replace(model_config, vocab_size=tokenizer.vocab_size)
 
     train_cfg = EditTrainingConfig(
@@ -177,7 +157,7 @@ def main():
     logger.info(f"Training config: {train_cfg}")
     logger.info(f"Model config: {model_config}")
 
-    params = train_edit_model(
+    train_edit_model(
         config=train_cfg,
         data_iter=data_iter,
     )

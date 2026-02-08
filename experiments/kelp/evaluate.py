@@ -29,12 +29,20 @@ import argparse
 import ast
 import json
 import logging
-import pickle
 import random
 import sys
 import time
-from dataclasses import replace
 from pathlib import Path
+
+import jax
+
+from experiments.kelp.checkpointing import find_best_checkpoint, load_checkpoint
+from experiments.kelp.model.config import TreeDiffusionConfig
+from experiments.kelp.tree.beam_search import best_of_n
+from experiments.kelp.tree.edit_model import EditModelParams
+from experiments.kelp.tree.mutation import corrupt_program
+from experiments.kelp.tree.subtree_bank import SubtreeBank
+from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,16 +50,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-
-import jax
-import jax.numpy as jnp
-
-from experiments.kelp.model.config import TreeDiffusionConfig
-from experiments.kelp.tree.beam_search import beam_search, best_of_n, generate_edit
-from experiments.kelp.tree.edit_model import EditModelParams
-from experiments.kelp.tree.mutation import corrupt_program
-from experiments.kelp.tree.subtree_bank import SubtreeBank
-from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
 
 # Evaluation tasks: (clean_program, test_cases)
 # Each test case is (input_expression, expected_output).
@@ -122,7 +120,9 @@ EVAL_TASKS = [
     },
     {
         "name": "clamp",
-        "clean": "def clamp(x, lo, hi):\n    if x < lo:\n        return lo\n    if x > hi:\n        return hi\n    return x\n",
+        "clean": (
+            "def clamp(x, lo, hi):\n    if x < lo:\n        return lo\n    if x > hi:\n        return hi\n    return x\n"
+        ),
         "tests": [
             ("clamp(5, 1, 10)", "5"),
             ("clamp(-1, 0, 10)", "0"),
@@ -148,46 +148,6 @@ EVAL_TASKS = [
         ],
     },
 ]
-
-
-def load_checkpoint(ckpt_dir: Path) -> tuple[EditModelParams, TreeDiffusionConfig]:
-    """Load model parameters and config from a checkpoint directory."""
-    config_path = ckpt_dir / "config.json"
-    params_path = ckpt_dir / "params.pkl"
-
-    if not config_path.exists() or not params_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found at {ckpt_dir}")
-
-    with open(config_path) as f:
-        config_dict = json.load(f)
-
-    # Handle RotaryConfig reconstruction.
-    from levanter.grug.attention import RotaryConfig
-
-    rope_val = config_dict.pop("rope", None)
-    if isinstance(rope_val, dict):
-        config_dict["rope"] = RotaryConfig(**rope_val)
-    elif rope_val is not None:
-        config_dict["rope"] = rope_val
-
-    config = TreeDiffusionConfig(**config_dict)
-
-    with open(params_path, "rb") as f:
-        params = pickle.load(f)
-
-    logger.info(f"Loaded checkpoint from {ckpt_dir} (vocab_size={config.vocab_size})")
-    return params, config
-
-
-def find_best_checkpoint(checkpoint_dir: Path) -> Path | None:
-    """Find the checkpoint with the highest step number."""
-    ckpt_dirs = sorted(
-        [d for d in checkpoint_dir.iterdir() if d.is_dir() and d.name.startswith("step-")],
-        key=lambda d: int(d.name.split("-")[1]),
-    )
-    if not ckpt_dirs:
-        return None
-    return ckpt_dirs[-1]
 
 
 def is_valid_python(source: str) -> bool:
@@ -243,12 +203,15 @@ def evaluate_task(
     best_overall_pass_rate = 0.0
     best_overall_candidate = clean
 
-    for trial in range(num_corruptions):
-        key, corrupt_key, search_key = jax.random.split(key, 3)
+    for _trial in range(num_corruptions):
+        key, _corrupt_key, search_key = jax.random.split(key, 3)
 
         # Corrupt the clean program.
-        corrupted, mutations = corrupt_program(
-            clean, num_steps=corruption_steps, bank=bank, rng=rng,
+        corrupted, _mutations = corrupt_program(
+            clean,
+            num_steps=corruption_steps,
+            bank=bank,
+            rng=rng,
         )
 
         if corrupted == clean:
@@ -302,11 +265,15 @@ def evaluate_task(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a Kelp tree diffusion checkpoint")
     parser.add_argument(
-        "--checkpoint-dir", type=str, default="checkpoints/kelp-edit",
+        "--checkpoint-dir",
+        type=str,
+        default="checkpoints/kelp-edit",
         help="Directory containing step-XXXXXX subdirectories",
     )
     parser.add_argument(
-        "--checkpoint", type=str, default=None,
+        "--checkpoint",
+        type=str,
+        default=None,
         help="Specific checkpoint subdirectory (e.g., step-012000). Uses latest if not set.",
     )
     parser.add_argument("--num-corruptions", type=int, default=5, help="Corruption trials per task")
