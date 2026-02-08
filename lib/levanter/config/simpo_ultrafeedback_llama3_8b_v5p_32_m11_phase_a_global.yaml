@@ -39,7 +39,9 @@ model:
   num_heads: 32
   num_kv_heads: 8
   flash_attention_block_size: 512
-  use_tpu_ragged_paged_attention: false
+  use_tpu_ragged_paged_attention: true
+  ragged_paged_q_block_size: 16
+  ragged_paged_kv_block_pages: 8
   use_bias: false
   use_layer_norm_weight: true
   initializer_range: 0.02
@@ -56,7 +58,7 @@ trainer:
     type: noop
   mp: p=f32,c=bfloat16
   train_batch_size: 128
-  num_train_steps: 7
+  num_train_steps: 2
   steps_per_eval: 200
   model_averaging: null
   checkpointer:
@@ -82,7 +84,7 @@ hf_save_path: gs://marin-us-central1/checkpoints/simpo/ultrafeedback_llama3_8b/h
 
 inference_eval:
   enabled: true
-  inference_mode: host_data_parallel
+  inference_mode: global_mesh
   eval_at_steps: [2]
   max_new_tokens: 2048
   temperature: 0.0

@@ -82,6 +82,7 @@ def test_build_host_local_engine_config_downsizes_shard() -> None:
 
     assert engine_config.max_seqs == 32
     assert engine_config.max_seqs_in_prefill == 32
+    assert engine_config.max_pages == 1088
     assert engine_config.max_tokens_per_round == 128
     assert engine_config.max_queued_tokens >= 128
 

@@ -1,6 +1,6 @@
 # CODEX Inference M11: Interleaved SimPO Train -> Host-DP Inference -> Train
 
-Status: IMPLEMENTED (2026-02-08; code/config/tests complete, TPU runtime validation pending)
+Status: IN PROGRESS - BLOCKED (2026-02-08 runtime blocker on `v5p-32`)
 
 ## Goal
 
@@ -9,49 +9,85 @@ Implement and validate an in-process workflow in `src/levanter/main/train_simpo.
 2. Pause training and run multi-host host-data-parallel inference for `128` prompts with `max_new_tokens=2048`.
 3. Resume the same training run for 5 additional steps (total steps `= 7`).
 
-## Work Log
+## What Has Been Implemented
 
-- 2026-02-08: Created M11 execution plan in `CODEX_REFACTOR_KV.md`.
-- 2026-02-08: Started implementation work:
-  - extending inference-eval scheduling for exact step triggers,
-  - adding host-data-parallel prompt sharding in `train_simpo.py`,
-  - preparing M11 config derived from `config/simpo_ultrafeedback_llama3_8b_v5p_32.yaml`.
-- 2026-02-08: Implemented core callback refactor in `src/levanter/main/train_simpo.py`:
-  - added exact-step scheduling support (`eval_at_steps`) with `eval_every` fallback,
-  - added `inference_mode: global_mesh | host_data_parallel`,
-  - added deterministic host prompt sharding in callback mode `host_data_parallel`,
-  - added host payload gather to leader for global metrics/samples in host-DP mode,
-  - added per-host JSONL output writing per eval step (`host_data_parallel_output_dir`),
-  - converted callback exception handling to propagate failures (no swallow).
-- 2026-02-08: Added M11 run config:
+- Exact-step inference scheduling (`eval_at_steps`) with `eval_every` fallback.
+- Inference mode switch:
+  - `global_mesh`
+  - `host_data_parallel`
+- Deterministic host prompt sharding for host-DP callback execution.
+- Host payload gather-to-leader for global metrics/samples in host-DP mode.
+- Per-host JSONL output writing by eval step (`host_data_parallel_output_dir`).
+- Callback exception handling updated to propagate failures (no swallow).
+- M11 configs created:
   - `config/simpo_ultrafeedback_llama3_8b_v5p_32_m11_train2_infer128_train5.yaml`
-  - key settings:
-    - `trainer.num_train_steps: 7`
-    - `inference_eval.eval_at_steps: [2]`
-    - `inference_eval.inference_mode: host_data_parallel`
-    - `inference_eval.synthetic_prompt_count: 128`
-    - `inference_eval.max_new_tokens: 2048`
+  - `config/simpo_ultrafeedback_llama3_8b_v5p_32_m11_phase_a.yaml`
+  - `config/simpo_ultrafeedback_llama3_8b_v5p_32_m11_phase_a_train2.yaml`
+  - `config/simpo_ultrafeedback_llama3_8b_v5p_32_m11_phase_a_global.yaml`
 
-## Hypotheses
+## TPU Runtime Progress (What Was Done)
 
-1. Existing callback/barrier scaffolding can support interleaving train/infer/train with exact-step scheduling.
-2. Host-data-parallel prompt sharding inside the callback will prevent duplicate prompt work across hosts.
-3. Step-scheduled callback (`eval_at_steps=[2]`) is sufficient for M11 without changing the trainer core loop.
+### Repeated phase-A experiments (same failure family)
 
-## Pending
+- Ran multiple variants (`run20` through `run32`) across:
+  - host-DP and global inference modes,
+  - cleanup mode variants,
+  - ragged/non-ragged variants,
+  - different decode microbatch knobs.
+- Representative logs:
+  - `/tmp/levanter_run_m11_v5p32_run23_phaseA_hostdp.log`
+  - `/tmp/levanter_run_m11_v5p32_run24_phaseA_cleanup_end.log`
+  - `/tmp/levanter_run_m11_v5p32_run25_phaseA_global.log`
+  - `/tmp/levanter_run_m11_v5p32_run26_phaseA_ragged.log`
 
-- Execute multi-host TPU runtime validation for the full M11 flow.
-- Capture wall-clock and token-total metrics from a real M11 run.
+Common outcome:
+- Inference decode runs and reaches end-of-decode state.
+- Resume into post-inference training fails with the same TPU runtime crash signature.
 
-## Validation (Code-Level)
+### Focused runs from latest pass
 
-Completed:
-- `uv run pytest tests/test_train_simpo_inference_eval.py tests/test_simpo.py`
-  - result: `14 passed`.
-- `./infra/pre-commit.py --all-files`
-  - result: all checks passed.
-- Config decode sanity:
-  - `simpo_ultrafeedback_llama3_8b_v5p_32_m11_train2_infer128_train5.yaml` decodes into `TrainSimpoConfig`.
+- `run31` log: `/tmp/levanter_run_m11_v5p32_run31_phaseA_train3_tpr256_r64_mqt512.log`
+  - Reached `DecodeStats[after_decode]: active=32 pages_in_use=1056 free=3168`.
+  - Immediately after inference, training resume failed with:
+    - `jax.errors.JaxRuntimeError: INTERNAL: Core halted unexpectedly`
+    - `TensorCoreSequencer ... scheckne`
+    - `An unexpected peer shows up in the launch group with a different launch id`
 
-Outstanding runtime validation:
-- Multi-host TPU run for full M11 flow (step 2 inference trigger and step 7 completion) has not yet been executed in this local implementation pass.
+- `run32` log: `/tmp/levanter_run_m11_v5p32_run32_phaseA_syncbar_train3_tpr256_r64_mqt512.log`
+  - Same phase-A setup after adding extra device-sync barriers (see patch below).
+  - Same outcome and same crash signature as `run31`.
+
+- `run33` log: `/tmp/levanter_run_m11_v5p32_run33_phaseA_train2_syncbar.log`
+  - Started a train2-only termination test to see if stopping immediately after inference avoids resume crash.
+  - Observed active decode progress (iter0 + steady decode iterations around ~292-294 tok/s per host).
+  - No successful completion marker captured before interruption, so this run is inconclusive.
+
+## Patch Added During Runtime Debugging
+
+File: `src/levanter/main/train_simpo.py`
+
+- Imported `sync_global_devices` and added explicit device-level barriers:
+  - Before inference callback body:
+    - `sync_global_devices(f"levanter_inference_pre_device_{step_number}")`
+  - In callback `finally` before the post callback barrier:
+    - `sync_global_devices(f"levanter_inference_post_device_{step_number}")`
+
+Result:
+- Did not resolve the post-inference resume crash (`run32` still failed identically to `run31`).
+
+## Current Blocker (Where We Are Stuck)
+
+M11 is blocked by a TPU runtime failure when transitioning from completed inference back into training within the same process:
+
+- `jax.errors.JaxRuntimeError: INTERNAL: Core halted unexpectedly`
+- `TensorCoreSequencer ... scheckne`
+- launch-group mismatch:
+  - `unexpected peer shows up in the launch group with a different launch id`
+
+This failure has reproduced across multiple config variants and persisted after adding explicit pre/post device sync barriers.
+
+## Current Completion State
+
+- Code-level M11 functionality is implemented.
+- Runtime objective is not yet met because train->infer works, but infer->train resume is not stable on the tested `v5p-32` path.
+- M11 is not complete yet; M12 remains blocked on M11 runtime unblock.

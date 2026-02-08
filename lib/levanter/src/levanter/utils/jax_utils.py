@@ -20,7 +20,7 @@ from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
-from jax.experimental.multihost_utils import host_local_array_to_global_array
+from jax.experimental.multihost_utils import host_local_array_to_global_array, process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
@@ -581,9 +581,22 @@ def replicate_model_to_local_mesh(
         if not is_jax_array_like(x):
             return x
 
+        arr = x.array if isinstance(x, hax.NamedArray) else x
+
         # Materialize to host first so the copy target can differ from the source
         # device list size (e.g. global mesh -> per-host local mesh).
-        host_value = np.asarray(jax.device_get(x.array if isinstance(x, hax.NamedArray) else x))
+        # For non-addressable global arrays, use process_allgather to assemble the
+        # full value on each host before placing it on local devices.
+        if isinstance(arr, jax.Array) and not arr.is_fully_addressable:
+            gathered_value = process_allgather(arr, tiled=True)
+            host_value = np.asarray(gathered_value)
+            if host_value.shape != arr.shape:
+                raise RuntimeError(
+                    "replicate_model_to_local_mesh process_allgather returned shape "
+                    f"{host_value.shape} for global shape {arr.shape}."
+                )
+        else:
+            host_value = np.asarray(jax.device_get(arr))
 
         if isinstance(x, hax.NamedArray):
             local_inner = jax.device_put(host_value, replicated_sharding)

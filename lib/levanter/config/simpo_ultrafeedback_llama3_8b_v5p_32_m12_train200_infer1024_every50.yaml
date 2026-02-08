@@ -39,6 +39,7 @@ model:
   num_heads: 32
   num_kv_heads: 8
   flash_attention_block_size: 512
+  use_tpu_ragged_paged_attention: false
   use_bias: false
   use_layer_norm_weight: true
   initializer_range: 0.02
@@ -52,10 +53,7 @@ trainer:
   per_device_parallelism: -1
   per_device_eval_parallelism: 8
   tracker:
-    type: wandb
-    project: "dpo"
-    name: "simpo_llama3_8b_m12_train200_infer1024_every50"
-    tags: ["dpo", "ultrafeedback", "llama3", "m12", "periodic_inference"]
+    type: noop
   mp: p=f32,c=bfloat16
   train_batch_size: 128
   num_train_steps: 200
@@ -88,7 +86,7 @@ inference_eval:
   eval_at_steps: [50, 100, 150, 200]
   max_new_tokens: 2048
   temperature: 0.7
-  max_seq_len: 4096
+  max_seq_len: 2304
   synthetic_prompt_count: 1024
   synthetic_prompt_template: "M12 prompt {index}: provide a concise technical answer with one example."
   page_size: 128
@@ -98,9 +96,9 @@ inference_eval:
   max_queued_tokens: 256
   max_seqs: 256
   max_seqs_in_prefill: 256
-  max_prefill_size: 4096
+  max_prefill_size: 2304
   reset_mode: physical
   cleanup_mode: end
   allow_multihost: true
-  host_data_parallel_output_dir: /tmp/train_simpo_m12_hostdp_outputs
+  host_data_parallel_output_dir: null
   max_logged_samples: 16

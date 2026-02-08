@@ -50,6 +50,7 @@ from levanter.utils.jax_utils import (
     estimated_free_device_memory,
     parameter_count,
     replicate_model_to_local_mesh,
+    sync_global_devices,
 )
 from levanter.utils.mesh import create_local_mesh
 from levanter.utils.tree_utils import inference_mode
@@ -328,6 +329,7 @@ def _build_host_local_engine_config(
 ) -> InferenceEngineConfig:
     prompt_count = len(prompt_tokens)
     local_prompt_count = max(1, prompt_count)
+    configured_max_pages = int(inference_config.max_pages) if inference_config.max_pages is not None else None
 
     base_max_seqs = int(inference_config.max_seqs) if inference_config.max_seqs is not None else local_prompt_count
     if base_max_seqs <= 0:
@@ -369,6 +371,10 @@ def _build_host_local_engine_config(
     if max_prefill_size <= 0:
         raise ValueError(f"inference_eval.max_prefill_size must be positive when set, got {max_prefill_size}")
 
+    # Preserve configured page budget for host-data-parallel runs. M10 tuning and
+    # stability measurements assume max_pages is already chosen per host workload.
+    max_pages = configured_max_pages
+
     return InferenceEngineConfig(
         max_seq_len=max_seq_len,
         hbm_utilization=inference_config.hbm_utilization,
@@ -380,7 +386,7 @@ def _build_host_local_engine_config(
         max_stop_tokens=inference_config.max_stop_tokens,
         seed=inference_config.seed,
         max_seqs=max_seqs,
-        max_pages=inference_config.max_pages,
+        max_pages=max_pages,
         max_queued_tokens=max_queued_tokens,
         max_seqs_in_prefill=max_seqs_in_prefill,
         max_prefill_size=max_prefill_size,
@@ -416,7 +422,7 @@ def _create_inference_eval_callback(
         )
 
     def _run_with_inference_context(*, is_multihost: bool, local_mesh, fn):
-        if is_multihost:
+        if is_multihost and local_mesh is not None:
             with hax.partitioning.set_mesh(local_mesh):
                 with hax.axis_mapping({}):
                     return fn()
@@ -446,6 +452,10 @@ def _create_inference_eval_callback(
             return
 
         _block_until_ready_tree(step.state)
+        # Device-level rendezvous before switching from training to eval inference.
+        # This avoids cross-host launch-group skew when large inference kernels are
+        # compiled/executed immediately after a train step.
+        sync_global_devices(f"levanter_inference_pre_device_{step_number}")
         if is_multihost:
             barrier_sync_with_tag(f"levanter_inference_pre_{step_number}", timeout=120.0)
 
@@ -458,22 +468,38 @@ def _create_inference_eval_callback(
         local_model = None
         local_mesh = None
         engine = None
+        effective_inference_mode: InferenceMode = inference_config.inference_mode
 
         try:
             local_mesh_devices = None
             inference_model = model
-            if is_multihost:
+            if is_multihost and inference_config.inference_mode == "host_data_parallel":
                 local_mesh = create_local_mesh(devices=local_devices)
                 local_mesh_devices = list(local_mesh.devices.flat)
-                replication_start = time.perf_counter()
-                local_model = replicate_model_to_local_mesh(model, local_mesh=local_mesh)
-                _block_until_ready_tree(local_model)
-                replication_time = time.perf_counter() - replication_start
-                if is_leader:
-                    logger.info("[Step %d] Inference model replication time: %.2fs", step_number, replication_time)
-                inference_model = local_model
+                try:
+                    replication_start = time.perf_counter()
+                    local_model = replicate_model_to_local_mesh(model, local_mesh=local_mesh)
+                    _block_until_ready_tree(local_model)
+                    replication_time = time.perf_counter() - replication_start
+                    if is_leader:
+                        logger.info("[Step %d] Inference model replication time: %.2fs", step_number, replication_time)
+                    inference_model = local_model
+                except RuntimeError as e:
+                    if "replicate_model_to_local_mesh received a non-addressable array" not in str(e):
+                        raise
+                    effective_inference_mode = "global_mesh"
+                    local_mesh = None
+                    local_mesh_devices = None
+                    local_model = None
+                    inference_model = model
+                    if is_leader:
+                        logger.warning(
+                            "[Step %d] Host-DP replication unavailable for sharded train model; "
+                            "falling back to global_mesh inference for this eval step.",
+                            step_number,
+                        )
 
-            if inference_config.inference_mode == "host_data_parallel":
+            if effective_inference_mode == "host_data_parallel":
                 local_prompts, shard_start, shard_end = _shard_prompts_for_host(
                     prompts,
                     process_index=process_index,
@@ -489,7 +515,7 @@ def _create_inference_eval_callback(
                 max_seq_len=max_seq_len,
                 prompt_tokens=prompt_tokens,
                 devices=local_mesh_devices,
-                shard_locally=inference_config.inference_mode == "host_data_parallel" and is_multihost,
+                shard_locally=effective_inference_mode == "host_data_parallel" and is_multihost,
             )
 
             if engine_config.max_pages is None:
@@ -558,10 +584,21 @@ def _create_inference_eval_callback(
             )
             tokens_per_second = total_generated / generation_time if generation_time > 0 else 0.0
 
+            samples_per_host = (
+                0
+                if inference_config.max_logged_samples == 0
+                else max(1, math.ceil(inference_config.max_logged_samples / max(process_count, 1)))
+            )
+            should_write_host_rows = inference_config.host_data_parallel_output_dir is not None
             local_rows: list[dict[str, object]] = []
-            for (global_prompt_index, prompt), tokens in zip(request_meta, result_tokens):
-                local_rows.append(
-                    {
+            sample_rows: list[dict[str, object]] = []
+            rows_to_decode = len(request_meta) if should_write_host_rows else samples_per_host
+            if rows_to_decode > 0:
+                # Avoid expensive token->text decoding when neither samples nor per-host JSONL outputs are requested.
+                for row_index, ((global_prompt_index, prompt), tokens) in enumerate(zip(request_meta, result_tokens)):
+                    if row_index >= rows_to_decode:
+                        break
+                    row = {
                         "step": step_number,
                         "process_index": process_index,
                         "process_count": process_count,
@@ -570,9 +607,12 @@ def _create_inference_eval_callback(
                         "generated_text": tokenizer.decode(tokens, skip_special_tokens=True),
                         "generated_token_count": len(tokens),
                     }
-                )
+                    if should_write_host_rows:
+                        local_rows.append(row)
+                    if row_index < samples_per_host:
+                        sample_rows.append(row)
 
-            if inference_config.host_data_parallel_output_dir is not None:
+            if should_write_host_rows:
                 output_path = _inference_eval_host_output_path(
                     output_dir=inference_config.host_data_parallel_output_dir,
                     step=step_number,
@@ -589,11 +629,6 @@ def _create_inference_eval_callback(
                     output_path,
                 )
 
-            samples_per_host = (
-                0
-                if inference_config.max_logged_samples == 0
-                else max(1, math.ceil(inference_config.max_logged_samples / max(process_count, 1)))
-            )
             local_payload: dict[str, object] = {
                 "process_index": process_index,
                 "process_count": process_count,
@@ -604,10 +639,10 @@ def _create_inference_eval_callback(
                 "local_tokens_per_second": tokens_per_second,
                 "shard_start": shard_start,
                 "shard_end": shard_end,
-                "sample_rows": local_rows[:samples_per_host],
+                "sample_rows": sample_rows,
             }
 
-            if inference_config.inference_mode == "host_data_parallel":
+            if effective_inference_mode == "host_data_parallel":
                 gathered_payloads = _gather_host_payload_to_leader(
                     local_payload=local_payload,
                     process_index=process_index,
@@ -688,7 +723,7 @@ def _create_inference_eval_callback(
                 logger.info(
                     "[Step %d] Inference eval complete: mode=%s prompts=%d tokens=%d generation_time=%.2fs",
                     step_number,
-                    inference_config.inference_mode,
+                    effective_inference_mode,
                     total_prompts,
                     total_tokens,
                     max_generation_time,
@@ -699,6 +734,9 @@ def _create_inference_eval_callback(
             if local_model is not None:
                 del local_model
             gc.collect()
+            # Ensure all hosts/devices finish inference dispatch and teardown before
+            # the trainer issues the next train-step program.
+            sync_global_devices(f"levanter_inference_post_device_{step_number}")
             if is_multihost:
                 barrier_sync_with_tag(f"levanter_inference_post_{step_number}", timeout=120.0)
 

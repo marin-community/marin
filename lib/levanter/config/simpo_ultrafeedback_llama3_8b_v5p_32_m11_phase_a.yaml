@@ -56,7 +56,7 @@ trainer:
     type: noop
   mp: p=f32,c=bfloat16
   train_batch_size: 128
-  num_train_steps: 7
+  num_train_steps: 3
   steps_per_eval: 200
   model_averaging: null
   checkpointer:
@@ -91,9 +91,9 @@ inference_eval:
   synthetic_prompt_template: "M11 prompt {index:04d}: explain one practical ML idea in concise terms."
   page_size: 64
   max_pages: 4224
-  max_rounds: 32
+  max_rounds: 64
   max_tokens_per_round: 256
-  max_queued_tokens: 256
+  max_queued_tokens: 512
   max_seqs: 128
   max_seqs_in_prefill: 128
   max_prefill_size: 2176

@@ -1,6 +1,5 @@
-# Example SimPO config for train_simpo.py using the Ultrafeedback preference dataset.
-# Update the GCS paths to match your transformed preference dataset and desired cache location.
-# python infra/launch.py --zone us-central1-a --tpu_name debug --tpu_type v5p-8 -- python src/levanter/main/train_simpo.py --config_path config/simpo_ultrafeedback_llama3_8b.yaml
+# M11 Subprocess Phase 1: Train 2 steps, save HF + orbax checkpoint.
+# Inference is DISABLED - it runs as a separate subprocess (phase 2).
 data:
   tokenizer: marin-community/marin-tokenizer
   shuffle: true
@@ -10,7 +9,6 @@ data:
       source:
         type: url
         train_urls:
-          # Replace with the output path from transform_preference_dataset_step (train_prefs split).
           - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
       format:
         type: preference_chat
@@ -20,7 +18,6 @@ data:
       source:
         type: url
         validation_urls:
-          # Replace with the output path from transform_preference_dataset_step (test_prefs split).
           - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
       format:
         type: preference_chat
@@ -53,15 +50,18 @@ trainer:
   per_device_parallelism: -1
   per_device_eval_parallelism: 8
   tracker:
-    type: noop
+    type: wandb
+    project: marin
+    tags: ["m11", "simpo", "subprocess", "phase1"]
   mp: p=f32,c=bfloat16
   train_batch_size: 128
-  num_train_steps: 7
+  num_train_steps: 2
   steps_per_eval: 200
   model_averaging: null
   checkpointer:
-    save_interval: 30m
-    base_path: gs://marin-us-central1/checkpoints/simpo/ultrafeedback_llama3_8b
+    save_interval: 1000000s
+    base_path: gs://marin-us-central1/checkpoints/simpo/m11_subprocess_test/orbax
+    append_run_id_to_base_path: false
 
 optimizer:
   learning_rate: 6e-7
@@ -77,28 +77,8 @@ validation_split_fraction: null
 initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
 use_hf_model_config: false
 
-hf_save_steps: 1000
-hf_save_path: gs://marin-us-central1/checkpoints/simpo/ultrafeedback_llama3_8b/hf
+hf_save_steps: 1
+hf_save_path: gs://marin-us-central1/checkpoints/simpo/m11_subprocess_test/hf
 
 inference_eval:
-  enabled: true
-  inference_mode: host_data_parallel
-  eval_at_steps: [2]
-  max_new_tokens: 2048
-  temperature: 0.0
-  max_seq_len: 2176
-  synthetic_prompt_count: 128
-  synthetic_prompt_template: "M11 prompt {index:04d}: explain one practical ML idea in concise terms."
-  page_size: 64
-  max_pages: 4224
-  max_rounds: 32
-  max_tokens_per_round: 256
-  max_queued_tokens: 256
-  max_seqs: 128
-  max_seqs_in_prefill: 128
-  max_prefill_size: 2176
-  reset_mode: physical
-  cleanup_mode: none
-  allow_multihost: true
-  host_data_parallel_output_dir: null
-  max_logged_samples: 0
+  enabled: false

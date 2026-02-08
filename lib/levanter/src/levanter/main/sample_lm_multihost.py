@@ -5,6 +5,7 @@ import gc
 import json
 import logging
 import math
+import os
 import time
 import zlib
 from dataclasses import dataclass, field, replace
@@ -417,16 +418,16 @@ def _derive_host_local_engine_config(
     )
 
 
-def _host_output_path(output_dir: str, *, process_index: int, process_count: int) -> Path:
+def _host_output_path(output_dir: str, *, process_index: int, process_count: int) -> str:
     """Return a deterministic per-host JSONL output path."""
 
-    return Path(output_dir) / f"host_{process_index:04d}_of_{process_count:04d}.jsonl"
+    return os.path.join(output_dir, f"host_{process_index:04d}_of_{process_count:04d}.jsonl")
 
 
-def _merged_host_output_path(output_dir: str, *, process_count: int) -> Path:
+def _merged_host_output_path(output_dir: str, *, process_count: int) -> str:
     """Return a deterministic leader-written merged JSONL path for all hosts."""
 
-    return Path(output_dir) / f"all_hosts_merged_of_{process_count:04d}.jsonl"
+    return os.path.join(output_dir, f"all_hosts_merged_of_{process_count:04d}.jsonl")
 
 
 def _filter_generated_tokens(sequence_tokens, *, pad_token_id: int | None) -> list[int]:
@@ -513,19 +514,31 @@ def _build_host_generation_rows(
     return rows
 
 
-def _write_rows_jsonl(*, output_path: Path, rows: list[dict[str, object]]) -> int:
-    """Write JSONL rows to disk and return the number of written rows."""
+def _write_rows_jsonl(*, output_path: str, rows: list[dict[str, object]]) -> int:
+    """Write JSONL rows and return the number of written rows.
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row) + "\n")
+    Supports both local paths and cloud paths (e.g. gs://) via fsspec.
+    """
+    import fsspec
+
+    path_str = str(output_path)
+    if "://" in path_str:
+        # Cloud path (gs://, s3://, etc.) — use fsspec directly.
+        with fsspec.open(path_str, "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+    else:
+        # Local path — ensure parent directory exists.
+        Path(path_str).parent.mkdir(parents=True, exist_ok=True)
+        with open(path_str, "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
     return len(rows)
 
 
 def _write_host_generations_jsonl(
     *,
-    output_path: Path,
+    output_path: str,
     requests: list[Request],
     request_meta: list[tuple[int, int]],
     result_tokens: list[list[int]],
