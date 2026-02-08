@@ -31,9 +31,11 @@ Usage:
 
 import argparse
 import logging
+import random
 import sys
 
 from experiments.kelp.model.presets import PRESETS, get_preset
+from experiments.kelp.tree.augmentation import augment_bank
 from experiments.kelp.tree.subtree_bank import SubtreeBank
 from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
 from experiments.kelp.tree.train import (
@@ -88,6 +90,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to corpus file (one program per entry, separated by blank lines)",
     )
+    parser.add_argument("--checkpoint-interval", type=int, default=1000, help="Steps between checkpoints")
+    parser.add_argument(
+        "--augment", action="store_true", help="Augment subtree bank with renamed/perturbed/synthetic variants"
+    )
+    parser.add_argument("--no-augment", dest="augment", action="store_false")
+    parser.set_defaults(augment=False)
     return parser.parse_args()
 
 
@@ -133,6 +141,9 @@ def main():
 
     # Build subtree bank and tokenizer.
     bank = SubtreeBank.from_corpus(corpus)
+    if args.augment:
+        rng = random.Random(args.seed)
+        bank = augment_bank(bank, rng, n_renamed=2, n_perturbed=2, synthetic_count=50)
     tokenizer = TreeDiffusionTokenizer(max_seq_len=model_config.max_seq_len)
     logger.info(f"Subtree bank: {bank.total_entries} entries across {len(bank.entries)} node types")
 
@@ -148,6 +159,7 @@ def main():
         total_steps=args.steps,
         batch_size=batch_size,
         log_interval=args.log_interval,
+        checkpoint_interval=args.checkpoint_interval,
         output_dir=args.output_dir,
         seed=args.seed,
         wandb_project=args.wandb_project,
