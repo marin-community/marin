@@ -401,6 +401,11 @@ def main(config: TrainDpoConfig):
                 policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
+                policy_model = state.model.policy
+        else:
+            # On resume, use the policy weights restored from the training checkpoint.
+            logger.info(f"Resuming from step {state.step}, using checkpoint policy weights.")
+            policy_model = state.model.policy
 
         if config.reference_is_hf:
             if converter is None:

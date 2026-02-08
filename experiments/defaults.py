@@ -80,6 +80,42 @@ from marin.training.training import (
 logger = logging.getLogger("ray")
 
 
+def _truncate_wandb_name(name: str) -> str:
+    """Truncate a run name to fit WANDB's 64-character limit, preserving the trailing suffix."""
+    if len(name) <= 64:
+        return name
+    old_name = name
+    if "-" not in name:
+        name = name[:64]
+    else:
+        prefix, suffix = name.rsplit("-", 1)
+        if len(suffix) >= 64:
+            suffix = suffix[:64]
+            name = suffix
+        else:
+            name = prefix[: 63 - len(suffix)] + "-" + suffix
+    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+    return name
+
+
+def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int) -> int | None:
+    """Resolve the HF export step interval: None means same as checkpoint, -1 means disabled."""
+    if steps_per_hf_export is None:
+        return steps_per_export
+    if steps_per_hf_export == -1:
+        return None
+    return steps_per_hf_export
+
+
+def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) -> int:
+    """Resolve and validate the training sequence length against the model's max."""
+    actual = unwrap_versioned_value(model_config)
+    train_length = train_seq_len or actual.max_seq_len
+    if train_length > actual.max_seq_len:
+        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual.max_seq_len}.")
+    return train_length
+
+
 def default_download(
     name: str,
     hf_dataset_id: str,
@@ -222,11 +258,7 @@ def simulated_epoching_train(
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
-    # Use explicit training length rather than inferring from the model
-    actual_model_config = unwrap_versioned_value(model_config)
-    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
-    if train_length > actual_model_config.max_seq_len:
-        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
+    train_length = _validate_train_length(train_config.train_seq_len, model_config)
 
     # Calculate the experiment token budget
     experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
@@ -281,33 +313,14 @@ def default_train(
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
 
-    # Max length of 64 characters for WANDB run is 64 characters
-    # we don't want to use the first 64 because the UID bit goes at the end. instead, grab the trailing -XXX
-    # and add whatever we can fit in the remaining space.
-    if len(name) > 64:
-        old_name = name
-        if "-" not in name:
-            name = name[:64]
-        else:
-            prefix, suffix = name.rsplit("-", 1)
-            if len(suffix) >= 64:
-                suffix = suffix[:64]
-                name = suffix
-            else:
-                name = prefix[: 63 - len(suffix)] + "-" + suffix
-        logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+    name = _truncate_wandb_name(name)
 
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
     else:
         harness_config = None
 
-    if train_config.steps_per_hf_export is None:
-        steps_per_export_hf = steps_per_export
-    elif train_config.steps_per_hf_export == -1:
-        steps_per_export_hf = None
-    else:
-        steps_per_export_hf = train_config.steps_per_hf_export
+    steps_per_export_hf = _resolve_hf_export_steps(train_config.steps_per_hf_export, steps_per_export)
 
     model_averaging = None
     if train_config.ema_beta is not None:
@@ -329,11 +342,7 @@ def default_train(
     if hf_checkpoint_path_to_load_from is not None and checkpoint_path_to_load_from is not None:
         raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
 
-    # Create the inner config
-    actual_model_config = unwrap_versioned_value(model_config)
-    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
-    if train_length > actual_model_config.max_seq_len:
-        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
+    train_length = _validate_train_length(train_config.train_seq_len, model_config)
 
     inner_config = TrainLmConfig(
         data=pretraining_data,
@@ -553,31 +562,12 @@ def default_dpo(
     pretraining_data = dataclasses.replace(pretraining_data, permutation_type="feistel")
     vocab_size = _get_vocab_size(pretraining_data)
 
-    if len(name) > 64:
-        old_name = name
-        if "-" not in name:
-            name = name[:64]
-        else:
-            prefix, suffix = name.rsplit("-", 1)
-            if len(suffix) >= 64:
-                suffix = suffix[:64]
-                name = suffix
-            else:
-                name = prefix[: 63 - len(suffix)] + "-" + suffix
-        logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+    name = _truncate_wandb_name(name)
 
     steps_per_export = dpo_config.steps_per_checkpoint
-    if dpo_config.steps_per_hf_export is None:
-        steps_per_export_hf = steps_per_export
-    elif dpo_config.steps_per_hf_export == -1:
-        steps_per_export_hf = None
-    else:
-        steps_per_export_hf = dpo_config.steps_per_hf_export
+    steps_per_export_hf = _resolve_hf_export_steps(dpo_config.steps_per_hf_export, steps_per_export)
 
-    actual_model_config = unwrap_versioned_value(model_config)
-    train_length = dpo_config.train_seq_len or actual_model_config.max_seq_len
-    if train_length > actual_model_config.max_seq_len:
-        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
+    train_length = _validate_train_length(dpo_config.train_seq_len, model_config)
 
     schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
     total_examples = schedule.global_data_offset_by_step(dpo_config.num_train_steps)
