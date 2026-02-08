@@ -41,6 +41,7 @@ Usage:
 
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -74,6 +75,23 @@ from fray.cluster.ray.auth import maybe_fetch_local_ray_token
 cloudpickle.register_pickle_by_value(marin.utils)
 
 logger = logging.getLogger(__name__)
+
+
+_RAY_DISCONNECT_SUBSTRINGS = (
+    "grpc client is shut down",
+    "attempted to reconnect to a session that has already been cleaned up",
+    "failed during this or a previous request",
+)
+
+
+class RayDisconnectError(RuntimeError):
+    """Raised when Ray disconnects and the allocation should be recreated."""
+
+
+@dataclass(frozen=True)
+class TPUAllocation:
+    host_info: dict[str, str]
+    actor: object
 
 
 def run_logged(cmd: list[str] | str, **kwargs) -> subprocess.CompletedProcess:
@@ -214,6 +232,41 @@ def kill_ssh_session(host_alias: str) -> None:
         logger.warning(f"Timeout killing SSH control connection to {host_alias}")
     except Exception as e:
         logger.debug(f"Failed to kill SSH control connection to {host_alias}: {e}")
+
+
+def _iter_exception_chain(exc: BaseException) -> Generator[BaseException, None, None]:
+    seen: set[int] = set()
+    stack: list[BaseException | None] = [exc]
+    while stack:
+        current = stack.pop()
+        if current is None:
+            continue
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        yield current
+        stack.append(current.__cause__)
+        stack.append(current.__context__)
+
+
+def _is_ray_disconnect_error(exc: BaseException) -> bool:
+    for err in _iter_exception_chain(exc):
+        message = str(err).lower()
+        if any(substr in message for substr in _RAY_DISCONNECT_SUBSTRINGS):
+            return True
+    return False
+
+
+def _monitor_allocation(actor: object, heartbeat_interval: float, heartbeat_timeout: float) -> None:
+    while True:
+        time.sleep(heartbeat_interval)
+        try:
+            ray.get(actor.heartbeat.remote(), timeout=heartbeat_timeout)
+        except Exception as e:
+            if _is_ray_disconnect_error(e):
+                raise RayDisconnectError("Ray disconnect detected.") from e
+            raise
 
 
 class TPUAllocationActor:
@@ -458,7 +511,7 @@ def hold_tpu_allocation(
     config_file: str,
     sync_path: str = ".",
     tpu_type: str = "v4-8",
-) -> Generator[dict[str, str], None, None]:
+) -> Generator[TPUAllocation, None, None]:
     """Context manager that holds a TPU allocation until the context exits.
 
     Uses a Ray actor to manage the TPU allocation lifecycle.
@@ -468,6 +521,7 @@ def hold_tpu_allocation(
     from fray.cluster.ray import DashboardConfig
 
     with ray_utils.ray_dashboard(DashboardConfig.from_cluster(config_file, ray_init=True)):
+        actor = None
         try:
             logger.info(f"Creating TPU allocation actor for {tpu_name}")
             actor = ray.remote(resources={"TPU": 4, f"TPU-{tpu_type}-head": 1})(TPUAllocationActor).remote(
@@ -502,12 +556,25 @@ def hold_tpu_allocation(
                 logger.warning(f"Environment setup failed, keeping TPU allocation alive. {e}")
 
             print(f"SSH alias: dev-tpu-{tpu_name}")
-            yield host_info
+            yield TPUAllocation(host_info=host_info, actor=actor)
         except Exception as e:
+            if _is_ray_disconnect_error(e):
+                logger.error("Ray disconnect detected during allocation; releasing allocation.", exc_info=True)
+                raise RayDisconnectError("Ray disconnect detected during allocation.") from e
             logger.error(f"Error during TPU allocation or setup: {e}", exc_info=True)
             raise
         finally:
+            if actor is not None:
+                try:
+                    ray.kill(actor, no_restart=True)
+                except Exception as e:
+                    logger.debug(f"Failed to kill TPU allocation actor: {e}")
             remove_ssh_host_config(tpu_name)
+            if ray.is_initialized():
+                try:
+                    ray.shutdown()
+                except Exception as e:
+                    logger.debug(f"Failed to shutdown Ray: {e}")
 
 
 class Context:
@@ -575,8 +642,39 @@ def cli(ctx, config, cluster, tpu_name, verbose):
 @click.option("--tpu-type", help="TPU type")
 @click.option("--sync-path", default=".", help="Local path to sync")
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())
+@click.option(
+    "--heartbeat-interval",
+    default=30.0,
+    type=float,
+    show_default=True,
+    help="Seconds between Ray heartbeat checks.",
+)
+@click.option(
+    "--heartbeat-timeout",
+    default=15.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait for Ray heartbeat responses.",
+)
+@click.option(
+    "--retry/--no-retry",
+    "--retry-on-ray-disconnect/--no-retry-on-ray-disconnect",
+    "retry_on_ray_disconnect",
+    default=True,
+    show_default=True,
+    help="Recreate the allocation if the Ray client disconnects.",
+)
+@click.option(
+    "--retry-backoff",
+    default=30.0,
+    type=float,
+    show_default=True,
+    help="Seconds to wait before recreating after a Ray disconnect.",
+)
 @click.pass_context
-def allocate(ctx, tpu_type, sync_path, username):
+def allocate(
+    ctx, tpu_type, sync_path, username, heartbeat_interval, heartbeat_timeout, retry_on_ray_disconnect, retry_backoff
+):
     """Allocate a development TPU. Holds until Ctrl-C."""
     if not ctx.obj.config_file:
         print("Error: --config required", file=sys.stderr)
@@ -600,19 +698,28 @@ def allocate(ctx, tpu_type, sync_path, username):
     print(f"Allocating development TPU '{tpu_name}' for {username}...")
     print(f"TPU type: {tpu_type}")
 
-    with hold_tpu_allocation(
-        username,
-        tpu_name,
-        ctx.obj.config_file,
-        sync_path,
-        tpu_type,
-    ):
-        print("\nTPU allocation is active. Press Ctrl-C to release...")
+    while True:
         try:
-            while True:
-                time.sleep(1)
+            with hold_tpu_allocation(
+                username,
+                tpu_name,
+                ctx.obj.config_file,
+                sync_path,
+                tpu_type,
+            ) as allocation:
+                print("\nTPU allocation is active. Press Ctrl-C to release...")
+                _monitor_allocation(allocation.actor, heartbeat_interval, heartbeat_timeout)
         except KeyboardInterrupt:
             print("\nReceived Ctrl-C, releasing TPU allocation...")
+            break
+        except RayDisconnectError:
+            logger.error("Ray disconnect detected; releasing allocation.")
+            if not retry_on_ray_disconnect:
+                break
+            if retry_backoff > 0:
+                print(f"Recreating TPU allocation in {retry_backoff} seconds...")
+                time.sleep(retry_backoff)
+            continue
 
     print("TPU allocation released.")
 
