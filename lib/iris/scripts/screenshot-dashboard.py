@@ -148,6 +148,13 @@ def _pipeline_parent_job():
     return "pipeline complete"
 
 
+def _oom_job():
+    """Job that allocates too much memory to trigger OOM killer."""
+    # Allocate 200MB in a 64MB container to trigger OOM
+    _data = bytearray(200 * 1024 * 1024)
+    return "should not reach here"
+
+
 # =============================================================================
 # Job submission
 # =============================================================================
@@ -313,6 +320,16 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["pipeline"] = str(job.job_id)
     logger.info("Submitted pipeline parent job (will spawn children): %s", job.job_id)
 
+    # 14. OOM job — allocates too much memory to trigger OOM killer (validates OOM error display)
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(_oom_job),
+        name="snapshot-oom",
+        resources=ResourceSpec(cpu=1, memory="64m"),
+        environment=EnvironmentSpec(),
+    )
+    job_ids["oom"] = str(job.job_id)
+    logger.info("Submitted OOM job (will exceed memory limit): %s", job.job_id)
+
     return job_ids
 
 
@@ -329,9 +346,9 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
         cluster_pb2.JOB_STATE_WORKER_FAILED,
     )
 
-    # Wait for succeeded, failed, and retry jobs first
+    # Wait for succeeded, failed, retry, and OOM jobs first
     deadline = time.monotonic() + timeout
-    for name in ["succeeded", "failed", "retry"]:
+    for name in ["succeeded", "failed", "retry", "oom"]:
         jid = JobName.from_wire(job_ids[name])
         logger.info("Waiting for %s job (%s) to finish...", name, jid)
         while time.monotonic() < deadline:
@@ -473,7 +490,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             saved.append(path)
 
         # Screenshot job detail pages
-        for name, label in [("building", "building"), ("failed", "failed"), ("running", "running")]:
+        for name, label in [("building", "building"), ("failed", "failed"), ("running", "running"), ("oom", "failed-oom")]:
             jid = job_ids.get(name)
             if not jid:
                 continue
