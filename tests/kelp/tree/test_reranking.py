@@ -16,7 +16,6 @@
 
 from experiments.kelp.tree.beam_search import BeamCandidate
 from experiments.kelp.tree.reranking import (
-    RankedCandidate,
     filter_passing,
     rerank_candidates,
     score_candidate,
@@ -116,10 +115,7 @@ def test_rerank_empty_candidates():
 
 
 def test_rerank_preserves_all_candidates():
-    candidates = [
-        _make_candidate(f"x = {i}\n", score=-float(i))
-        for i in range(5)
-    ]
+    candidates = [_make_candidate(f"x = {i}\n", score=-float(i)) for i in range(5)]
     ranked = rerank_candidates(candidates, ["assert True"])
     assert len(ranked) == 5
 
