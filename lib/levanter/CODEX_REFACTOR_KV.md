@@ -25,6 +25,7 @@ References:
 - 2026-02-07 07:35 PST: M9 length-fixed (`2048` per prompt) sweep substantially extended. With scheduler set to preserve full-length outputs (`max_tokens_per_round=max_seqs`, `max_queued_tokens=max_seqs`), runs pass through `max_seqs=113` under the earlier `max_pages=36*max_seqs` scaling, but `114+` showed runtime `Anomalies` when `max_pages` exceeded 4096. Capping `max_pages=4096` changed the boundary: `114` and `120` PASS, `124` PASS (`pages_in_use=4092 free=4`), and `125` is deterministic fast-reject (`est. 4125 pages needed > 4096`). Current practical length-fixed ceiling: **124 prompts x 2048** for this setup.
 - 2026-02-07 00:50 PST: M9 128x2048 continuation and optimization sweep. `max_seqs=128` with `page_size=128` consistently fails at prefill with TPU scoped-vmem OOM (`ragged_paged_attention`, `16.79M > 16.00M`) across attempted tweaks (`max_prefill_size`, `max_seq_len`, `page_size`, `q_block`, `kv_block`). Switching to `page_size=64` with `max_pages=4224` unlocks decode at `128` prompts. Baseline-like `tpr=128,r64` decodes fast but still crashes mid-run with `Anomalies`. Stable tuned variants found: `tpr=64,r80` and `tpr=96,r80` (both complete but do not preserve full 2048/prompt), and `tpr=256,r32,mqt=256` (completes with full `262,144` generated tokens; current best stable fixed-length run, `round_avg_tok_s ~= 1684.0`, `real 275.72`). `tpr=128,r64` variants with higher queue (`mqt=256`) and `cleanup_mode=end` remain `Anomalies`-unstable.
 - 2026-02-07 01:56 PST: M9 128x2048 throughput sweep extended around `tpr=256,r64` with queue-depth tuning. New stable operating region identified: `mqt=320/384/512` all pass with full `262,144` output tokens. Best observed throughput is at `mqt=512` (`round_avg_tok_s ~= 1702.4`, `decode_avg_tok_s ~= 2240.7`), while fastest observed wall clock in this branch is `real 255.93` (same config family). Very high queue regresses (`mqt=640 -> round_avg_tok_s ~= 1675.8`, `mqt=768 -> round_avg_tok_s ~= 1649.5`). All high-throughput pass cases in this branch run with `decode_iters=32`.
+- 2026-02-08: M11/M12 implementation pass completed in `train_simpo.py`. Added exact-step inference scheduling (`eval_at_steps`), host-data-parallel mode in the training callback, prompt-source options (`prompts_path` and synthetic generation), host-local JSONL outputs, and leader metric aggregation. Added configs for M11/M12 (`v5p-32`) plus unit tests in `tests/test_train_simpo_inference_eval.py`; local tests and repo pre-commit checks pass. TPU runtime validation for M11/M12 remains pending.
 
 ---
 ## gold command
@@ -407,7 +408,11 @@ Rollback:
 
 ### M5.1 - Very Large Prompt Sets (Design + Tradeoffs)
 
-Status: DEFERRED (post-M5 scaling)
+Status: NOT PLANNED (2026-02-08 decision: no M5.1 implementation in this refactor cycle)
+
+Decision:
+- We will not implement M5.1 orchestration/productization work in this stream.
+- Keep this section as design reference only; use external orchestration operationally when needed.
 
 Problem statement:
 We need a safe, repeatable way to handle very large prompt sets (e.g., 10k–100k prompts)
@@ -774,7 +779,7 @@ Updated M6 priorities:
 4. M6.4 KV update optimization: DONE.
 5. M6.5: Scheduler/decode batch sweep. DONE (lock `max_rounds=64` for this workload).
 6. M6.6: Scheduler sweep (`max_tokens_per_round`, `max_queued_tokens`). DONE.
-7. M6.7: Fine-grained queue/pack sweep around `tpr10/mqt64` and validate on lock-in long-gen configs. (OPTIONAL/FUTURE)
+7. M6.7: NOT PLANNED (2026-02-08 decision: no further M6 tuning in this stream).
 
 Rules:
 - Performance changes must land separately from correctness changes.
@@ -855,7 +860,7 @@ Tracking:
 
 ### M9 - `max_seqs` Scaling Beyond 10
 
-Status: IN PROGRESS (boundary sweep completed through `max_seqs=60` on 2026-02-07; stable ceiling currently `max_seqs=56`)
+Status: MOSTLY DONE (2026-02-08; scaling sweeps complete with documented operating points; one remaining item is `57+` runtime-anomaly root cause/recovery in the scaled-page regime)
 
 Goal:
 - Push concurrent sequence capacity beyond `max_seqs=10` for `2048`-token generation on real TPU.
@@ -900,7 +905,7 @@ Current interpretation:
 - Generated-token totals plateau near `~25.6k` for B1-C7; per-prompt generation declines as `max_seqs` rises.
 - Simple scheduler retune (`max_tokens_per_round=8`, `max_rounds=80`) at `max_seqs=57` does not recover stability.
 - Isolation run (`max_seqs=60`, 56 prompts) still fails, so the issue tracks configured `max_seqs` shape beyond 56 rather than only the number of active prompts.
-- Next M9 step is failure analysis/recovery for `57+` at runtime/collective level (beyond basic scheduler retuning).
+- Remaining item to close M9: failure analysis/recovery for `57+` at runtime/collective level (beyond basic scheduler retuning).
 
 Scheduler explainer (why `56` vs `124/128` both appear in M9):
 - The scheduler is a bounded decode work planner, not a "variable-length mode".
@@ -923,7 +928,14 @@ Tracking:
 
 ### M10 - Multi-Host Data-Parallel Inference (`128 prompts x 2048` fixed-length)
 
-Status: IN PROGRESS (2026-02-07; M10.1-M10.3 implemented; M10.3 validated end-to-end on `v5p-16`)
+Status: COMPLETE (2026-02-08; M10.1-M10.7 implemented and runtime-validated, with `v5p-32` scaling validated through `1024 prompts x 2048`)
+
+Completion snapshot:
+- Host data-parallel path is implemented and validated end-to-end.
+- Deterministic gather/leader merge path is implemented and validated.
+- Benchmark matrix (`v5p-16`/`v5p-32`, global vs host-DP) was completed.
+- Additional `v5p-32` scaling runs completed for `128/256/512/1024` prompts with full fixed-length token targets.
+- Detailed metrics and run references are tracked in `CODEX_INFERENCE_M10.md`.
 
 Goal:
 - Add a true multi-host data-parallel inference path for the M9 fixed-length workload:
@@ -1000,7 +1012,7 @@ M10.3 - Local mesh execution path
     - `host_0000_of_0016.jsonl`, `host_0001_of_0016.jsonl`, ...
     - includes `global_prompt_index`, `request_id`, local shard metadata, generated tokens, generated text.
   - Added unit coverage in `tests/inference/test_sample_lm_multihost_host_outputs.py`.
-  - M10.4 ragged-path recovery is now working on `v5p-16`; M10.5 M9-style host-DP tuning sweep executed on `v5p-16`; M10.6 gather/leader merge remains pending.
+  - M10.4-M10.7 follow-on milestones are now completed and documented in `CODEX_INFERENCE_M10.md`.
   - Manual host-output inspection command pattern:
     - `gcloud alpha compute tpus tpu-vm ssh $TPU_NAME --zone=$ZONE --worker=all --command='ls -lh /tmp/m10_host_outputs'`
     - `gcloud alpha compute tpus tpu-vm ssh $TPU_NAME --zone=$ZONE --worker=all --command='head -n 2 /tmp/m10_host_outputs/host_*.jsonl'`
@@ -1028,11 +1040,11 @@ M10.3 - Local mesh execution path
 M10.4 - Ragged paged attention recovery for M10.3
 - Goal: keep M10.3 host-data-parallel path, but make it work with
   `model.use_tpu_ragged_paged_attention: true` for `128 x 2048`.
-- Current status: IN PROGRESS with first successful ragged-on end-to-end run on `v5p-16`.
-- Remaining outcomes:
-  - repeatability validation (multiple reruns),
-  - finalize preferred ragged config values,
-  - preserve M10.3 correctness/output invariants (per-host JSONL files, full-length outputs).
+- Status: COMPLETE.
+- Outcome:
+  - ragged-on host-DP is restored and validated on `v5p-16` for `128 x 2048`,
+  - per-host output invariants are preserved,
+  - regression/perf details are documented in `CODEX_INFERENCE_M10.md`.
 
 M10.5 - Host-DP parameter sweep (M9-style)
 - Now that ragged host-DP is functioning, run an M9-style tuning sweep for host-data-parallel mode.
@@ -1059,6 +1071,7 @@ M10.6 - Output gather and leader aggregation
 - Gather per-host outputs with deterministic source ordering.
 - Merge to one global output table ordered by `(round, prompt_id, generation_id)`.
 - Keep tracker writes leader-only (deferred, then flush), preserving M5 multi-host safety.
+- Status: COMPLETE (implemented and runtime-validated).
 
 M10.7 - Benchmarks and acceptance
 - Compare four runs:
@@ -1073,6 +1086,7 @@ M10.7 - Benchmarks and acceptance
   - end-to-end wall time
   - total generated tokens (must remain `128 * 2048` for fixed-length mode)
   - failure signatures if any.
+- Status: COMPLETE.
 
 Expected performance model:
 - `T_total ~= T_model_replication + T_local_generate(128 / host_count) + T_result_gather`.
@@ -1096,6 +1110,115 @@ Exit criteria:
 
 Rollback:
 - Keep `inference_mode=global_mesh` as default and disable `host_data_parallel` path behind config if regressions appear.
+
+### M11 - Interleaved SimPO Train -> Multi-Host Inference -> Train
+
+Status: IMPLEMENTED (2026-02-08; code/config/tests complete, multi-host TPU runtime validation pending)
+
+Goal:
+- Add a first-class interleaved workflow in `src/levanter/main/train_simpo.py`:
+  1. train for 2 steps,
+  2. pause and run multi-host host-data-parallel inference on `128 prompts` with `max_new_tokens=2048`,
+  3. resume the same training run for 5 more steps.
+
+Why this milestone exists:
+- We validated standalone host-data-parallel inference in M10.
+- We now need to prove we can safely transition between training and large inference inside one multi-host process.
+
+Scope (M11.1):
+- Extend `InferenceEvalConfig` in `train_simpo.py` so scheduling can be step-precise, not only `eval_every`:
+  - add `eval_at_steps: list[int] | None` (exact trigger steps),
+  - keep `eval_every` for backward-compatible periodic mode in configs that still use it,
+  - add `inference_mode: global_mesh | host_data_parallel` for eval-time execution choice.
+- Add host-data-parallel prompt sharding to inference-eval callback:
+  - deterministic contiguous host shards,
+  - local mesh inference per host,
+  - consistent global prompt indexing in logged outputs.
+- Add per-host local generation dump support in `train_simpo.py` eval path:
+  - one JSONL per host per eval step for inspection/repro.
+
+Implemented (2026-02-08):
+- `src/levanter/main/train_simpo.py`:
+  - added exact-step eval scheduling (`eval_at_steps`) with `eval_every` fallback,
+  - added `inference_mode: global_mesh | host_data_parallel`,
+  - added deterministic host prompt sharding + host payload gather in the inference callback,
+  - added prompt-source options for large runs (`prompts_path`, `synthetic_prompt_count`, `synthetic_prompt_template`),
+  - added per-step host JSONL outputs (`host_data_parallel_output_dir`),
+  - changed callback behavior to propagate inference exceptions (no swallow).
+- Added config:
+  - `config/simpo_ultrafeedback_llama3_8b_v5p_32_m11_train2_infer128_train5.yaml`
+- Added unit tests:
+  - `tests/test_train_simpo_inference_eval.py`
+
+Execution plan:
+1. Wire exact-step scheduling in trainer hook callback.
+2. Reuse M10 host sharding semantics in `train_simpo.py` callback.
+3. Keep M5 safety constraints:
+   - all hosts enter/exit inference callback together,
+   - explicit pre/post barriers around inference,
+   - leader-only tracker logging after generation completes.
+4. Add an M11 config derived from:
+   - `config/simpo_ultrafeedback_llama3_8b_v5p_32.yaml`
+   - with `trainer.num_train_steps: 7`
+   - and inference eval set to trigger at step `2` with `128` prompts and `2048` max new tokens.
+
+Acceptance criteria:
+- On multi-host TPU (`v5p-32` target):
+  - training reaches step 2,
+  - inference callback runs once at step 2 for all hosts,
+  - per-host generation files are written,
+  - training resumes and reaches step 7 without host divergence or runtime anomaly.
+- Logged token totals match fixed-length target:
+  - per host: `64 * 2048` generated tokens (for 2 hosts),
+  - global total: `128 * 2048`.
+
+Risks / guardrails:
+- Risk: callback shape or collective-order mismatch across hosts.
+- Guardrail: strict barrier usage and deterministic host sharding based on process index/count.
+- Risk: memory pressure while switching train/infer.
+- Guardrail: explicit cleanup of inference engine/local model state before resuming training.
+
+### M12 - Periodic Inference During Long SimPO Training
+
+Status: IMPLEMENTED (2026-02-08; code/config/tests complete, multi-host TPU runtime validation pending)
+
+Goal:
+- Run a longer SimPO job with periodic large-batch inference:
+  - `200` training steps total,
+  - every `50` steps run host-data-parallel inference with `1024 prompts`,
+  - `max_new_tokens=2048` for each prompt.
+
+Scope (M12.1):
+- Build on M11 scheduling + host-DP eval path.
+- Add a production-style config with periodic triggers at:
+  - steps `[50, 100, 150, 200]` (or equivalent `eval_every=50` if exact-step mode is not needed).
+- Ensure prompt provisioning for `1024` prompts is practical (file-backed or generated list), avoiding brittle inline YAML bloat.
+
+Implemented (2026-02-08):
+- Added config:
+  - `config/simpo_ultrafeedback_llama3_8b_v5p_32_m12_train200_infer1024_every50.yaml`
+- Uses the shared M11 callback machinery in `train_simpo.py` with:
+  - periodic exact-step triggers (`[50, 100, 150, 200]`),
+  - host-data-parallel inference mode,
+  - synthetic prompt generation for `1024` prompts,
+  - per-step host output dumps and leader aggregation metrics.
+
+Execution plan:
+1. Add M12 config derived from `simpo_ultrafeedback_llama3_8b_v5p_32.yaml`.
+2. Set `trainer.num_train_steps: 200`.
+3. Configure inference eval for host-data-parallel mode and 1024-prompt fixed-length workload.
+4. Write per-host outputs for each eval step and keep leader-merged summary metrics.
+5. Validate end-to-end completion and collect wall-clock deltas for train-only vs train+periodic-infer.
+
+Acceptance criteria:
+- Training reaches step 200 successfully.
+- Inference runs exactly at configured intervals with no missed or duplicated steps.
+- Each inference interval produces full fixed-length token totals for the configured prompt count.
+- No multi-host runtime anomalies or deadlocks across repeated train/infer transitions.
+
+Out of scope for M12:
+- Hyperparameter tuning of inference scheduler for best throughput (handled by M10 sweep tracks).
+- New serving infrastructure; this remains in-process training callback orchestration.
 
 ---
 

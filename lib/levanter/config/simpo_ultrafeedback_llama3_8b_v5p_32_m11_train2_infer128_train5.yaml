@@ -1,0 +1,106 @@
+# Example SimPO config for train_simpo.py using the Ultrafeedback preference dataset.
+# Update the GCS paths to match your transformed preference dataset and desired cache location.
+# python infra/launch.py --zone us-central1-a --tpu_name debug --tpu_type v5p-8 -- python src/levanter/main/train_simpo.py --config_path config/simpo_ultrafeedback_llama3_8b.yaml
+data:
+  tokenizer: marin-community/marin-tokenizer
+  shuffle: true
+  permutation_type: feistel
+  components:
+    ultrafeedback_train_prefs:
+      source:
+        type: url
+        train_urls:
+          # Replace with the output path from transform_preference_dataset_step (train_prefs split).
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
+    ultrafeedback_test_prefs:
+      source:
+        type: url
+        validation_urls:
+          # Replace with the output path from transform_preference_dataset_step (test_prefs split).
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_test_prefs_marin_tokenizer-29ecfb
+  train_weights:
+    ultrafeedback_train_prefs: 1.0
+    ultrafeedback_test_prefs: 0.0
+
+model:
+  type: llama
+  max_seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+train_seq_len: 4096
+
+trainer:
+  seed: 0
+  per_device_parallelism: -1
+  per_device_eval_parallelism: 8
+  tracker:
+    type: wandb
+    project: "dpo"
+    name: "simpo_llama3_8b_m11_train2_infer128_train5"
+    tags: ["dpo", "ultrafeedback", "llama3", "m11", "interleaved_inference"]
+  mp: p=f32,c=bfloat16
+  train_batch_size: 128
+  num_train_steps: 7
+  steps_per_eval: 200
+  model_averaging: null
+  checkpointer:
+    save_interval: 30m
+    base_path: gs://marin-us-central1/checkpoints/simpo/ultrafeedback_llama3_8b
+
+optimizer:
+  learning_rate: 6e-7
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: "cosine"
+  warmup: 0.1
+
+beta: 1.0
+gamma_beta_ratio: 0.5
+validation_split_fraction: null
+
+initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
+use_hf_model_config: false
+
+hf_save_steps: 1000
+hf_save_path: gs://marin-us-central1/checkpoints/simpo/ultrafeedback_llama3_8b/hf
+
+inference_eval:
+  enabled: true
+  inference_mode: host_data_parallel
+  eval_at_steps: [2]
+  max_new_tokens: 2048
+  temperature: 0.7
+  max_seq_len: 4096
+  synthetic_prompt_count: 128
+  synthetic_prompt_template: "M11 prompt {index}: explain one practical ML idea in concise terms."
+  page_size: 128
+  max_pages: 1088
+  max_rounds: 64
+  max_tokens_per_round: 128
+  max_queued_tokens: 256
+  max_seqs: 64
+  max_seqs_in_prefill: 64
+  max_prefill_size: 4096
+  reset_mode: physical
+  cleanup_mode: end
+  allow_multihost: true
+  host_data_parallel_output_dir: /tmp/train_simpo_m11_hostdp_outputs
+  max_logged_samples: 16

@@ -2,11 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import base64
 import gc
+import json
 import logging
+import math
 import os
+import time
+import zlib
 from dataclasses import dataclass, field
-from typing import Optional, cast
+from pathlib import Path
+from typing import Literal, Optional, cast
 
 import haliax as hax
 import jax
@@ -162,376 +168,539 @@ def _build_validation_split(
     return train_dataset, validation_sets
 
 
+InferenceMode = Literal["global_mesh", "host_data_parallel"]
+
+
+def _block_until_ready_tree(tree) -> None:
+    def _block(x):
+        if is_jax_array_like(x):
+            jax.block_until_ready(x)
+        return x
+
+    jax.tree_util.tree_map(_block, tree)
+
+
+def _normalize_eval_at_steps(eval_at_steps: list[int] | None) -> set[int] | None:
+    if eval_at_steps is None:
+        return None
+
+    normalized: set[int] = set()
+    for step in eval_at_steps:
+        step_int = int(step)
+        if step_int <= 0:
+            raise ValueError(f"inference_eval.eval_at_steps must be positive, got {step_int}")
+        normalized.add(step_int)
+    return normalized
+
+
+def _should_run_inference_eval_step(
+    *,
+    step: int,
+    eval_every: int,
+    eval_at_steps: set[int] | None,
+) -> bool:
+    if step <= 0:
+        return False
+    if eval_at_steps is not None:
+        return step in eval_at_steps
+    if eval_every <= 0:
+        raise ValueError(f"inference_eval.eval_every must be positive, got {eval_every}")
+    return step % eval_every == 0
+
+
+def _resolve_inference_prompts(inference_config: "InferenceEvalConfig") -> list[str]:
+    if inference_config.prompts_path is not None:
+        prompts_path = Path(inference_config.prompts_path)
+        if not prompts_path.exists():
+            raise ValueError(f"inference_eval.prompts_path does not exist: {prompts_path}")
+        prompts = [line.strip() for line in prompts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not prompts:
+            raise ValueError(f"inference_eval.prompts_path contains no non-empty prompts: {prompts_path}")
+        return prompts
+
+    if inference_config.synthetic_prompt_count is not None:
+        count = int(inference_config.synthetic_prompt_count)
+        if count <= 0:
+            raise ValueError(f"inference_eval.synthetic_prompt_count must be positive, got {count}")
+        template = inference_config.synthetic_prompt_template
+        return [template.format(index=i) for i in range(count)]
+
+    if not inference_config.prompts:
+        raise ValueError(
+            "inference_eval.prompts must be non-empty when prompts_path and synthetic_prompt_count are unset."
+        )
+    return list(inference_config.prompts)
+
+
+def _prompt_shard_bounds(num_prompts: int, process_index: int, process_count: int) -> tuple[int, int]:
+    if process_count <= 0:
+        raise ValueError(f"process_count must be positive, got {process_count}")
+    if process_index < 0 or process_index >= process_count:
+        raise ValueError(f"process_index={process_index} out of range for process_count={process_count}")
+    start = (process_index * num_prompts) // process_count
+    end = ((process_index + 1) * num_prompts) // process_count
+    return start, end
+
+
+def _shard_prompts_for_host(
+    prompts: list[str],
+    *,
+    process_index: int,
+    process_count: int,
+) -> tuple[list[str], int, int]:
+    start, end = _prompt_shard_bounds(len(prompts), process_index, process_count)
+    return prompts[start:end], start, end
+
+
+def _encode_host_payload(payload: dict[str, object]) -> str:
+    serialized = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.b64encode(zlib.compress(serialized)).decode("ascii")
+
+
+def _decode_host_payload(payload: str) -> dict[str, object]:
+    decoded = zlib.decompress(base64.b64decode(payload.encode("ascii")))
+    parsed = json.loads(decoded.decode("utf-8"))
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"Expected host payload dict, got {type(parsed).__name__}.")
+    return parsed
+
+
+def _gather_host_payload_to_leader(
+    *,
+    local_payload: dict[str, object],
+    process_index: int,
+    process_count: int,
+    tag: str,
+    timeout_sec: float = 600.0,
+) -> list[dict[str, object]] | None:
+    if process_count == 1:
+        return [local_payload]
+
+    import jax._src.distributed as distributed
+
+    client = distributed.global_state.client
+    if client is None:
+        raise RuntimeError("Host payload gather requires jax distributed client to be initialized.")
+
+    payload_key = f"{tag}_payload_{process_index:04d}"
+    payload_value = _encode_host_payload(local_payload)
+    timeout_ms = int(timeout_sec * 1000.0)
+    client.key_value_set(payload_key, payload_value)
+    client.wait_at_barrier(f"{tag}_after_set", timeout_in_ms=timeout_ms)
+
+    gathered_payloads: list[dict[str, object]] | None = None
+    if process_index == 0:
+        gathered_payloads = []
+        for host_index in range(process_count):
+            host_key = f"{tag}_payload_{host_index:04d}"
+            host_payload = client.blocking_key_value_get(host_key, timeout_in_ms=timeout_ms)
+            gathered_payloads.append(_decode_host_payload(host_payload))
+
+    client.wait_at_barrier(f"{tag}_after_get", timeout_in_ms=timeout_ms)
+    return gathered_payloads
+
+
+def _inference_eval_host_output_path(
+    *,
+    output_dir: str,
+    step: int,
+    process_index: int,
+    process_count: int,
+) -> Path:
+    return Path(output_dir) / f"step_{step:06d}" / f"host_{process_index:04d}_of_{process_count:04d}.jsonl"
+
+
+def _write_inference_rows_jsonl(output_path: Path, rows: list[dict[str, object]]) -> int:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+    return len(rows)
+
+
+def _build_host_local_engine_config(
+    *,
+    inference_config: "InferenceEvalConfig",
+    max_seq_len: int,
+    prompt_tokens: list[list[int]],
+    devices,
+    shard_locally: bool,
+) -> InferenceEngineConfig:
+    prompt_count = len(prompt_tokens)
+    local_prompt_count = max(1, prompt_count)
+
+    base_max_seqs = int(inference_config.max_seqs) if inference_config.max_seqs is not None else local_prompt_count
+    if base_max_seqs <= 0:
+        raise ValueError(f"inference_eval.max_seqs must be positive when set, got {base_max_seqs}")
+    max_seqs = min(base_max_seqs, local_prompt_count) if shard_locally else base_max_seqs
+    if prompt_count > max_seqs:
+        raise ValueError(
+            f"inference_eval engine max_seqs={max_seqs} cannot cover prompt_count={prompt_count} "
+            f"(shard_locally={shard_locally})."
+        )
+
+    base_max_seqs_in_prefill = (
+        int(inference_config.max_seqs_in_prefill) if inference_config.max_seqs_in_prefill is not None else max_seqs
+    )
+    if base_max_seqs_in_prefill <= 0:
+        raise ValueError(
+            f"inference_eval.max_seqs_in_prefill must be positive when set, got {base_max_seqs_in_prefill}"
+        )
+    max_seqs_in_prefill = (
+        min(base_max_seqs_in_prefill, local_prompt_count) if shard_locally else base_max_seqs_in_prefill
+    )
+    if prompt_count > max_seqs_in_prefill:
+        raise ValueError(
+            f"inference_eval engine max_seqs_in_prefill={max_seqs_in_prefill} cannot cover prompt_count={prompt_count} "
+            f"(shard_locally={shard_locally})."
+        )
+
+    max_tokens_per_round = (
+        int(inference_config.max_tokens_per_round) if inference_config.max_tokens_per_round is not None else None
+    )
+    if max_tokens_per_round is not None and max_tokens_per_round <= 0:
+        raise ValueError(f"inference_eval.max_tokens_per_round must be positive when set, got {max_tokens_per_round}")
+    effective_tpr = max_tokens_per_round if max_tokens_per_round is not None else max_seqs
+    max_queued_tokens = max(int(inference_config.max_queued_tokens), max_seqs, max_seqs_in_prefill, effective_tpr)
+
+    max_prefill_size = (
+        int(inference_config.max_prefill_size) if inference_config.max_prefill_size is not None else max_seq_len
+    )
+    if max_prefill_size <= 0:
+        raise ValueError(f"inference_eval.max_prefill_size must be positive when set, got {max_prefill_size}")
+
+    return InferenceEngineConfig(
+        max_seq_len=max_seq_len,
+        hbm_utilization=inference_config.hbm_utilization,
+        page_size=inference_config.page_size,
+        max_rounds=inference_config.max_rounds,
+        reset_mode=inference_config.reset_mode,
+        cleanup_mode=inference_config.cleanup_mode,
+        max_stop_seqs=inference_config.max_stop_seqs,
+        max_stop_tokens=inference_config.max_stop_tokens,
+        seed=inference_config.seed,
+        max_seqs=max_seqs,
+        max_pages=inference_config.max_pages,
+        max_queued_tokens=max_queued_tokens,
+        max_seqs_in_prefill=max_seqs_in_prefill,
+        max_prefill_size=max_prefill_size,
+        max_tokens_per_round=max_tokens_per_round,
+        devices=devices,
+    )
+
+
 def _create_inference_eval_callback(
     inference_config: "InferenceEvalConfig",
     tokenizer,
     model_max_seq_len: int,
     compute_axis_mapping,
 ):
-    """Create a callback that runs inference evaluation during training.
+    prompts = _resolve_inference_prompts(inference_config)
+    eval_at_steps = _normalize_eval_at_steps(inference_config.eval_at_steps)
+    max_seq_len = inference_config.max_seq_len or model_max_seq_len
+    if max_seq_len <= 0:
+        raise ValueError(f"inference_eval.max_seq_len must be positive, got {max_seq_len}")
+    if max_seq_len > model_max_seq_len:
+        raise ValueError(
+            "inference_eval.max_seq_len cannot exceed model max sequence length: "
+            f"{max_seq_len} > {model_max_seq_len}"
+        )
+    if inference_config.inference_mode not in ("global_mesh", "host_data_parallel"):
+        raise ValueError(
+            f"Unknown inference_eval.inference_mode={inference_config.inference_mode!r}. "
+            "Expected one of: 'global_mesh', 'host_data_parallel'."
+        )
+    if inference_config.max_logged_samples < 0:
+        raise ValueError(
+            "inference_eval.max_logged_samples must be non-negative, " f"got {inference_config.max_logged_samples}"
+        )
 
-    This callback pauses training, creates an InferenceEngine, generates samples
-    from the prompts, logs the results to WandB (including a samples table),
-    and then discards the engine to free memory.
-
-    For multi-host training (e.g., v5p-64 with 8 hosts):
-    - We create a per-host replicated model copy for inference
-    - Each host runs inference independently on its local devices
-    - This avoids XLA launch ID mismatch issues with globally-sharded inference
-    - Only process 0 logs results
-    """
-    prompts = inference_config.prompts
-    max_new_tokens = inference_config.max_new_tokens
-    temperature = inference_config.temperature
-    max_seq_len = inference_config.max_seq_len or min(model_max_seq_len, 512)
-    hbm_utilization = inference_config.hbm_utilization
-    max_pages = inference_config.max_pages
-    allow_multihost = inference_config.allow_multihost
+    def _run_with_inference_context(*, is_multihost: bool, local_mesh, fn):
+        if is_multihost:
+            with hax.partitioning.set_mesh(local_mesh):
+                with hax.axis_mapping({}):
+                    return fn()
+        with hax.axis_mapping(compute_axis_mapping):
+            return fn()
 
     def inference_eval_callback(step: StepInfo):
-        import sys
-        import time
-        import traceback
-
-        def debug_print(msg):
-            """Print with flush for immediate output."""
-            print(f"[INFERENCE DEBUG][Process {jax.process_index()}][Step {step.step}] {msg}", flush=True)
-            sys.stdout.flush()
-
-        def block_until_ready_tree(tree):
-            def _block(x):
-                if is_jax_array_like(x):
-                    jax.block_until_ready(x)
-                return x
-
-            jax.tree_util.tree_map(_block, tree)
-
-        debug_print(">>> CALLBACK ENTERED")
-
-        if step.step == 0:
-            debug_print("Skipping step 0")
+        step_number = int(jax.device_get(step.state.step))
+        if not _should_run_inference_eval_step(
+            step=step_number,
+            eval_every=inference_config.eval_every,
+            eval_at_steps=eval_at_steps,
+        ):
             return
 
         is_multihost = jax.process_count() > 1
-        is_leader = jax.process_index() == 0
+        process_index = int(jax.process_index())
+        process_count = int(jax.process_count())
+        is_leader = process_index == 0
 
-        debug_print(f"is_multihost={is_multihost}, is_leader={is_leader}, process_count={jax.process_count()}")
-
-        debug_print("Blocking until training step is fully complete...")
-        block_until_ready_tree(step.state)
-        debug_print("Training state ready")
-
-        # CRITICAL: Sync all hosts BEFORE starting inference
-        # This ensures all hosts enter the inference code path together
-        if is_multihost:
-            debug_print("Barrier BEFORE inference (ensuring all hosts enter together)...")
-            barrier_sync_with_tag(f"levanter_inference_pre_{step.step}", timeout=120.0)
-            debug_print("Pre-inference barrier passed")
-
-        if is_multihost and not allow_multihost:
+        if is_multihost and not inference_config.allow_multihost:
             if is_leader:
-                logger.info(f"[Step {step.step}] Skipping inference evaluation on multi-host (allow_multihost=False)")
-            debug_print("allow_multihost=False, returning")
+                logger.info(
+                    "[Step %d] Skipping inference evaluation on multi-host (allow_multihost=False).",
+                    step_number,
+                )
             return
 
-        prompt_texts = prompts
+        _block_until_ready_tree(step.state)
+        if is_multihost:
+            barrier_sync_with_tag(f"levanter_inference_pre_{step_number}", timeout=120.0)
 
-        debug_print("Starting inference...")
-        if is_leader:
-            logger.info(f"[Step {step.step}] Running inference evaluation with {len(prompts)} prompts...")
-
-        # Start total timing
         total_start_time = time.perf_counter()
+        local_devices = list(jax.local_devices())
+        memory_device = local_devices[0] if local_devices else None
+        hbm_free_before = estimated_free_device_memory(memory_device) if memory_device is not None else None
 
-        # Get local devices for this host
-        local_devices = jax.local_devices()
-        memory_device = local_devices[0]
-
-        # Log memory before inference
-        debug_print("Getting HBM memory stats...")
-        hbm_free_before = estimated_free_device_memory(memory_device)
-        if hbm_free_before is not None and is_leader:
-            logger.info(f"[Step {step.step}] HBM free before inference: {hbm_free_before:.2f} GiB")
-        debug_print(f"HBM free before: {hbm_free_before}")
-
-        debug_print("Getting eval_model...")
-        model = step.eval_model
-        debug_print(f"Model type: {type(model)}")
-        debug_print("Calling inference_mode...")
-        model = inference_mode(model, True)
-        debug_print("inference_mode done")
-
-        # For multi-host: replicate model to local devices and run inference in local mesh
-        # For single-host: run inference with global mesh as before
+        model = inference_mode(step.eval_model, True)
         local_model = None
         local_mesh = None
-        local_mesh_devices = list(local_devices)
+        engine = None
 
         try:
-            max_prefill_size = max_seq_len
-            resolved_max_pages = max_pages
-
-            # Prepare prompt tokens and parameters
-            prompt_tokens = [tokenizer.encode(prompt) for prompt in prompt_texts]
-            base_seed = int(jax.device_get(step.state.step))
-
+            local_mesh_devices = None
+            inference_model = model
             if is_multihost:
-                # Create a local mesh for this host's devices
-                debug_print(f"Creating local mesh with {len(local_devices)} devices...")
                 local_mesh = create_local_mesh(devices=local_devices)
-                debug_print(f"Local mesh created: {local_mesh}")
                 local_mesh_devices = list(local_mesh.devices.flat)
-
-                # Replicate the globally-sharded model to local devices
-                # This triggers an all-gather to collect all shards
-                debug_print("Replicating model to local devices (all-gather)...")
                 replication_start = time.perf_counter()
                 local_model = replicate_model_to_local_mesh(model, local_mesh=local_mesh)
-                block_until_ready_tree(local_model)
+                _block_until_ready_tree(local_model)
                 replication_time = time.perf_counter() - replication_start
-                debug_print(f"Model replicated in {replication_time:.2f}s")
                 if is_leader:
-                    logger.info(f"[Step {step.step}] Model replication time: {replication_time:.2f}s")
-
-                # Log memory after replication
-                hbm_free_after_replication = estimated_free_device_memory(memory_device)
-                if hbm_free_after_replication is not None and is_leader:
-                    logger.info(
-                        f"[Step {step.step}] HBM free after model replication: {hbm_free_after_replication:.2f} GiB"
-                    )
-
-                # Infer max_pages using the local model and local devices
-                if resolved_max_pages is None:
-                    debug_print("Inferring max_pages for inference KV cache...")
-                    budget_config = InferenceEngineConfig(
-                        max_seq_len=max_seq_len,
-                        max_seqs=len(prompt_texts),
-                        hbm_utilization=hbm_utilization,
-                        page_size=128,
-                        max_pages=None,
-                        max_rounds=32,
-                        max_prefill_size=max_prefill_size,
-                        devices=local_mesh_devices,
-                    )
-                    # Use the local mesh context for budget inference
-                    with hax.partitioning.set_mesh(local_mesh):
-                        with hax.axis_mapping({}):  # No sharding for local inference
-                            resolved_max_pages = _infer_max_pages_from_hbm(local_model, budget_config)
-
+                    logger.info("[Step %d] Inference model replication time: %.2fs", step_number, replication_time)
                 inference_model = local_model
-            else:
-                # Single-host: use original model with global mesh
-                if resolved_max_pages is None:
-                    debug_print("Inferring max_pages for inference KV cache...")
-                    budget_config = InferenceEngineConfig(
-                        max_seq_len=max_seq_len,
-                        max_seqs=len(prompt_texts),
-                        hbm_utilization=hbm_utilization,
-                        page_size=128,
-                        max_pages=None,
-                        max_rounds=32,
-                        max_prefill_size=max_prefill_size,
-                        devices=None,
-                    )
-                    with hax.axis_mapping(compute_axis_mapping):
-                        resolved_max_pages = _infer_max_pages_from_hbm(model, budget_config)
-                inference_model = model
 
-            if len(prompt_tokens) != len(prompt_texts):
-                raise RuntimeError(
-                    f"Prompt tokenization mismatch: {len(prompt_tokens)} tokens for {len(prompt_texts)} prompts."
+            if inference_config.inference_mode == "host_data_parallel":
+                local_prompts, shard_start, shard_end = _shard_prompts_for_host(
+                    prompts,
+                    process_index=process_index,
+                    process_count=process_count,
                 )
-            if resolved_max_pages is None:
-                raise RuntimeError("resolved_max_pages must be set before creating the inference engine.")
-
-            debug_print(
-                f"Creating engine config with max_seq_len={max_seq_len}, "
-                f"max_seqs={len(prompt_texts)}, max_pages={resolved_max_pages}"
-            )
-            engine_config = InferenceEngineConfig(
-                max_seq_len=max_seq_len,
-                max_seqs=len(prompt_texts),
-                hbm_utilization=hbm_utilization,
-                page_size=128,
-                max_pages=resolved_max_pages,
-                max_rounds=32,
-                max_prefill_size=max_prefill_size,
-                devices=local_mesh_devices if is_multihost else None,
-            )
-            debug_print("Engine config created")
-
-            # Time engine creation
-            debug_print(">>> Creating InferenceEngine...")
-            engine_start_time = time.perf_counter()
-
-            if is_multihost:
-                # Run engine creation and inference within local mesh context
-                with hax.partitioning.set_mesh(local_mesh):
-                    with hax.axis_mapping({}):  # No sharding for local inference
-                        engine = InferenceEngine.from_model_with_config(
-                            model=inference_model,
-                            tokenizer=tokenizer,
-                            config=engine_config,
-                        )
             else:
-                with hax.axis_mapping(compute_axis_mapping):
-                    engine = InferenceEngine.from_model_with_config(
-                        model=inference_model,
-                        tokenizer=tokenizer,
-                        config=engine_config,
-                    )
+                local_prompts = list(prompts)
+                shard_start, shard_end = 0, len(prompts)
 
-            engine_creation_time = time.perf_counter() - engine_start_time
-            debug_print(f"<<< Engine created in {engine_creation_time:.2f}s")
-            if is_leader:
-                logger.info(f"[Step {step.step}] Engine creation time: {engine_creation_time:.2f}s")
+            prompt_tokens = [tokenizer.encode(prompt) for prompt in local_prompts]
+            engine_config = _build_host_local_engine_config(
+                inference_config=inference_config,
+                max_seq_len=max_seq_len,
+                prompt_tokens=prompt_tokens,
+                devices=local_mesh_devices,
+                shard_locally=inference_config.inference_mode == "host_data_parallel" and is_multihost,
+            )
 
-            # Log memory after engine creation (KV cache allocated)
-            hbm_free_after_engine = estimated_free_device_memory(memory_device)
-            if hbm_free_after_engine is not None and is_leader:
-                logger.info(f"[Step {step.step}] HBM free after engine creation: {hbm_free_after_engine:.2f} GiB")
+            if engine_config.max_pages is None:
+                inferred_pages = _run_with_inference_context(
+                    is_multihost=is_multihost,
+                    local_mesh=local_mesh,
+                    fn=lambda: _infer_max_pages_from_hbm(inference_model, engine_config),
+                )
+                engine_config = dataclasses.replace(engine_config, max_pages=int(inferred_pages))
 
-            debug_print("Creating requests...")
-            requests = []
-            base_key = jax.random.PRNGKey(base_seed)
-            for i, tokens in enumerate(prompt_tokens):
-                key = jax.random.fold_in(base_key, i)
+            engine_start = time.perf_counter()
+            engine = _run_with_inference_context(
+                is_multihost=is_multihost,
+                local_mesh=local_mesh,
+                fn=lambda: InferenceEngine.from_model_with_config(
+                    model=inference_model,
+                    tokenizer=tokenizer,
+                    config=engine_config,
+                ),
+            )
+            engine_creation_time = time.perf_counter() - engine_start
+
+            hbm_free_after_engine = estimated_free_device_memory(memory_device) if memory_device is not None else None
+
+            request_meta: list[tuple[int, str]] = []
+            requests: list[Request] = []
+            base_key = jrandom.PRNGKey(step_number + int(inference_config.seed))
+            for local_idx, tokens in enumerate(prompt_tokens):
+                global_prompt_index = shard_start + local_idx
+                request_key = jrandom.fold_in(base_key, global_prompt_index)
                 requests.append(
                     Request(
                         prompt_tokens=tokens,
-                        request_id=i,
+                        request_id=global_prompt_index,
                         decode_params=SeqDecodingParams(
-                            max_num_tokens=jnp.array(len(tokens) + max_new_tokens, dtype=jnp.int32),
-                            temperature=jnp.array(temperature, dtype=jnp.float32),
+                            max_num_tokens=jnp.array(len(tokens) + inference_config.max_new_tokens, dtype=jnp.int32),
+                            temperature=jnp.array(inference_config.temperature, dtype=jnp.float32),
                             stop_tokens=None,
-                            key=key,
+                            key=request_key,
                         ),
                         n_generations=1,
                     )
                 )
-            debug_print(f"Created {len(requests)} requests")
+                request_meta.append((global_prompt_index, local_prompts[local_idx]))
 
-            # Time generation - each host runs independently with local model
-            debug_print(f">>> Starting generation with {len(requests)} requests...")
-            generation_start_time = time.perf_counter()
-
-            if is_multihost:
-                with hax.partitioning.set_mesh(local_mesh):
-                    with hax.axis_mapping({}):  # No sharding for local inference
-                        result = engine.generate(requests)
+            if requests:
+                generation_start = time.perf_counter()
+                result = _run_with_inference_context(
+                    is_multihost=is_multihost,
+                    local_mesh=local_mesh,
+                    fn=lambda: engine.generate(requests),
+                )
+                generation_time = time.perf_counter() - generation_start
+                for tokens in result.tokens:
+                    jax.block_until_ready(tokens)
+                _block_until_ready_tree(engine.gen_state)
+                total_generated = int(result.total_generated)
+                result_tokens = result.tokens
             else:
-                with hax.axis_mapping(compute_axis_mapping):
-                    result = engine.generate(requests)
+                generation_time = 0.0
+                total_generated = 0
+                result_tokens = []
 
-            # Block until results are ready
-            debug_print("Blocking until inference results ready...")
-            for tokens in result.tokens:
-                jax.block_until_ready(tokens)
-            block_until_ready_tree(engine.gen_state)
-            debug_print("All inference results materialized")
+            hbm_free_after_generation = (
+                estimated_free_device_memory(memory_device) if memory_device is not None else None
+            )
+            tokens_per_second = total_generated / generation_time if generation_time > 0 else 0.0
 
-            generation_time = time.perf_counter() - generation_start_time
-            debug_print(f"<<< Generation complete in {generation_time:.2f}s, {result.total_generated} tokens")
-            if is_leader:
-                logger.info(f"[Step {step.step}] Generation time: {generation_time:.2f}s")
-
-            # Calculate tokens per second
-            tokens_per_second = result.total_generated / generation_time if generation_time > 0 else 0
-            if is_leader:
-                logger.info(
-                    f"[Step {step.step}] Generated {result.total_generated} tokens at {tokens_per_second:.1f} tokens/sec"
+            local_rows: list[dict[str, object]] = []
+            for (global_prompt_index, prompt), tokens in zip(request_meta, result_tokens):
+                local_rows.append(
+                    {
+                        "step": step_number,
+                        "process_index": process_index,
+                        "process_count": process_count,
+                        "global_prompt_index": global_prompt_index,
+                        "prompt": prompt,
+                        "generated_text": tokenizer.decode(tokens, skip_special_tokens=True),
+                        "generated_token_count": len(tokens),
+                    }
                 )
 
-            # Log memory after generation
-            hbm_free_after_gen = estimated_free_device_memory(memory_device)
-            if hbm_free_after_gen is not None and is_leader:
-                logger.info(f"[Step {step.step}] HBM free after generation: {hbm_free_after_gen:.2f} GiB")
+            if inference_config.host_data_parallel_output_dir is not None:
+                output_path = _inference_eval_host_output_path(
+                    output_dir=inference_config.host_data_parallel_output_dir,
+                    step=step_number,
+                    process_index=process_index,
+                    process_count=process_count,
+                )
+                rows_written = _write_inference_rows_jsonl(output_path, local_rows)
+                logger.info(
+                    "[Step %d] Inference host rows written: process=%d/%d rows=%d path=%s",
+                    step_number,
+                    process_index,
+                    process_count,
+                    rows_written,
+                    output_path,
+                )
 
-            # Decode results
-            debug_print("Decoding results...")
-            decoded_texts = []
-            for i, (prompt, tokens) in enumerate(zip(prompts, result.tokens)):
-                generated_text = tokenizer.decode(tokens, skip_special_tokens=True)
-                decoded_texts.append((prompt, generated_text, len(tokens)))
-            debug_print(f"Decoded {len(decoded_texts)} results")
+            samples_per_host = (
+                0
+                if inference_config.max_logged_samples == 0
+                else max(1, math.ceil(inference_config.max_logged_samples / max(process_count, 1)))
+            )
+            local_payload: dict[str, object] = {
+                "process_index": process_index,
+                "process_count": process_count,
+                "local_num_prompts": len(local_prompts),
+                "local_total_generated": total_generated,
+                "local_generation_time_sec": generation_time,
+                "local_engine_creation_time_sec": engine_creation_time,
+                "local_tokens_per_second": tokens_per_second,
+                "shard_start": shard_start,
+                "shard_end": shard_end,
+                "sample_rows": local_rows[:samples_per_host],
+            }
 
-            # Only leader logs to wandb/logger
+            if inference_config.inference_mode == "host_data_parallel":
+                gathered_payloads = _gather_host_payload_to_leader(
+                    local_payload=local_payload,
+                    process_index=process_index,
+                    process_count=process_count,
+                    tag=f"train_simpo_inference_eval_step_{step_number}",
+                )
+            else:
+                gathered_payloads = [local_payload] if is_leader else None
+
             if is_leader:
-                try:
-                    import wandb
+                if gathered_payloads is None:
+                    raise RuntimeError("Leader expected gathered host payloads, got None.")
 
-                    samples_table = wandb.Table(
-                        columns=["step", "prompt_id", "prompt", "generated_text", "num_tokens"]
-                    )
+                total_tokens = int(sum(int(p["local_total_generated"]) for p in gathered_payloads))
+                total_prompts = int(sum(int(p["local_num_prompts"]) for p in gathered_payloads))
+                max_generation_time = float(max(float(p["local_generation_time_sec"]) for p in gathered_payloads))
+                max_engine_creation_time = float(
+                    max(float(p["local_engine_creation_time_sec"]) for p in gathered_payloads)
+                )
+                total_time = time.perf_counter() - total_start_time
+                round_tokens_per_second = total_tokens / max_generation_time if max_generation_time > 0 else 0.0
 
-                    for i, (prompt, generated_text, num_tokens) in enumerate(decoded_texts):
-                        logger.info(f"\n[Step {step.step}] Prompt {i}: {prompt[:50]}...")
-                        logger.info(f"[Step {step.step}] Generated: {generated_text[:200]}...")
-                        samples_table.add_data(step.step, i, prompt, generated_text, num_tokens)
+                gathered_samples: list[dict[str, object]] = []
+                for payload in gathered_payloads:
+                    payload_samples = payload.get("sample_rows", [])
+                    if not isinstance(payload_samples, list):
+                        continue
+                    for row in payload_samples:
+                        if isinstance(row, dict):
+                            gathered_samples.append(row)
+                gathered_samples.sort(key=lambda row: (int(row["global_prompt_index"]), int(row["process_index"])))
+                gathered_samples = gathered_samples[: inference_config.max_logged_samples]
 
-                    levanter.tracker.log(
-                        {"inference_eval/samples": samples_table},
-                        step=step.step,
-                    )
+                if gathered_samples:
+                    try:
+                        import wandb
 
-                except ImportError:
-                    for i, (prompt, generated_text, num_tokens) in enumerate(decoded_texts):
-                        logger.info(f"\n[Step {step.step}] Prompt {i}: {prompt[:50]}...")
-                        logger.info(f"[Step {step.step}] Generated: {generated_text[:200]}...")
+                        samples_table = wandb.Table(
+                            columns=["step", "prompt_id", "process", "prompt", "generated_text", "num_tokens"]
+                        )
+                        for sample in gathered_samples:
+                            samples_table.add_data(
+                                int(sample["step"]),
+                                int(sample["global_prompt_index"]),
+                                int(sample["process_index"]),
+                                str(sample["prompt"]),
+                                str(sample["generated_text"]),
+                                int(sample["generated_token_count"]),
+                            )
+                        levanter.tracker.log({"inference_eval/samples": samples_table}, step=step_number)
+                    except ImportError:
+                        pass
 
-                metrics: dict = {
-                    "inference_eval/total_tokens": result.total_generated,
-                    "inference_eval/num_prompts": len(prompts),
-                    "inference_eval/avg_tokens_per_prompt": result.total_generated / len(prompts),
-                    "inference_eval/engine_creation_time_sec": engine_creation_time,
-                    "inference_eval/generation_time_sec": generation_time,
-                    "inference_eval/tokens_per_second": tokens_per_second,
+                metrics: dict[str, float | int] = {
+                    "inference_eval/total_tokens": total_tokens,
+                    "inference_eval/num_prompts": total_prompts,
+                    "inference_eval/avg_tokens_per_prompt": (
+                        (total_tokens / total_prompts) if total_prompts > 0 else 0.0
+                    ),
+                    "inference_eval/engine_creation_time_sec": max_engine_creation_time,
+                    "inference_eval/generation_time_sec": max_generation_time,
+                    "inference_eval/tokens_per_second": round_tokens_per_second,
+                    "inference_eval/total_callback_time_sec": total_time,
+                    "inference_eval/num_hosts": process_count,
+                    "inference_eval/max_seq_len": max_seq_len,
                 }
-
                 if hbm_free_before is not None:
                     metrics["inference_eval/hbm_free_before_gib"] = hbm_free_before
                 if hbm_free_after_engine is not None:
                     metrics["inference_eval/hbm_free_after_engine_gib"] = hbm_free_after_engine
-                if hbm_free_after_gen is not None:
-                    metrics["inference_eval/hbm_free_after_gen_gib"] = hbm_free_after_gen
+                if hbm_free_after_generation is not None:
+                    metrics["inference_eval/hbm_free_after_gen_gib"] = hbm_free_after_generation
                 if hbm_free_before is not None and hbm_free_after_engine is not None:
                     metrics["inference_eval/hbm_used_by_engine_gib"] = hbm_free_before - hbm_free_after_engine
 
-                levanter.tracker.log(metrics, step=step.step)
+                levanter.tracker.log(metrics, step=step_number)
 
-            # Cleanup
-            del engine
+                logger.info(
+                    "[Step %d] Inference eval complete: mode=%s prompts=%d tokens=%d generation_time=%.2fs",
+                    step_number,
+                    inference_config.inference_mode,
+                    total_prompts,
+                    total_tokens,
+                    max_generation_time,
+                )
+        finally:
+            if engine is not None:
+                del engine
             if local_model is not None:
                 del local_model
             gc.collect()
-
-            # Log memory after cleanup
-            hbm_free_after_cleanup = estimated_free_device_memory(memory_device)
-            if hbm_free_after_cleanup is not None and is_leader:
-                logger.info(f"[Step {step.step}] HBM free after cleanup: {hbm_free_after_cleanup:.2f} GiB")
-
-            total_time = time.perf_counter() - total_start_time
-            debug_print(f"Inference evaluation complete in {total_time:.2f}s")
-            if is_leader:
-                logger.info(f"[Step {step.step}] Inference evaluation complete in {total_time:.2f}s")
-
-        except Exception as e:
-            debug_print(f"!!! EXCEPTION: {e}")
-            logger.error(f"[Step {step.step}] Inference evaluation failed: {e}")
-            traceback.print_exc()
-            # Cleanup on error
-            if local_model is not None:
-                del local_model
-            gc.collect()
-
-        # Sync all processes before returning to training
-        # This ensures all processes complete inference before any resume training
-        if is_multihost:
-            debug_print("Syncing host processes (barrier_sync_with_tag)...")
-            barrier_sync_with_tag(f"levanter_inference_post_{step.step}", timeout=120.0)
-            debug_print("Barrier passed, resuming training")
-
-        debug_print("<<< CALLBACK EXITING")
+            if is_multihost:
+                barrier_sync_with_tag(f"levanter_inference_post_{step_number}", timeout=120.0)
 
     return inference_eval_callback
 
@@ -544,6 +713,10 @@ class InferenceEvalConfig:
     """Whether to run inference evaluation."""
     eval_every: int = 10
     """Run inference every N steps."""
+    eval_at_steps: list[int] | None = None
+    """Run inference at these exact step numbers. When set, this overrides eval_every."""
+    inference_mode: InferenceMode = "global_mesh"
+    """Inference execution mode: global_mesh or host_data_parallel."""
     prompts: list[str] = field(
         default_factory=lambda: [
             "What is the capital of France?",
@@ -552,19 +725,54 @@ class InferenceEvalConfig:
         ]
     )
     """Prompts to generate from during evaluation."""
+    prompts_path: str | None = None
+    """Optional local text file with one prompt per line."""
+    synthetic_prompt_count: int | None = None
+    """Generate this many synthetic prompts using synthetic_prompt_template."""
+    synthetic_prompt_template: str = "Synthetic prompt {index}: explain one key concept in machine learning."
+    """Template used when synthetic_prompt_count is set. Must accept {index}."""
     max_new_tokens: int = 128
     """Maximum number of new tokens to generate per prompt."""
     temperature: float = 0.7
     """Sampling temperature for generation."""
     max_seq_len: int | None = 512
     """Maximum sequence length for inference. Kept small to avoid OOM during training."""
+
     hbm_utilization: float = 0.2
     """Fraction of HBM to use for inference KV cache (keep low to avoid OOM during training)."""
-    max_pages: int = 64
-    """Maximum number of KV cache pages. Kept small to avoid VMEM exhaustion in paged attention."""
+    page_size: int = 128
+    """KV page size used by inference engine."""
+    max_pages: int | None = 64
+    """Maximum number of KV cache pages. If None, infer from hbm_utilization."""
+    max_rounds: int = 32
+    """Maximum decode rounds for each inference eval call."""
+    max_tokens_per_round: int | None = None
+    """Maximum tokens packed per decode round."""
+    max_queued_tokens: int = 512
+    """Queue capacity for prefill/decode token handoff."""
+    max_seqs: int | None = None
+    """Maximum sequences in local eval engine. Defaults to prompt count."""
+    max_seqs_in_prefill: int | None = None
+    """Maximum sequences to prefill at once. Defaults to max_seqs."""
+    max_prefill_size: int | None = None
+    """Prefill token budget. Defaults to max_seq_len."""
+    reset_mode: Literal["logical", "physical"] = "physical"
+    """Inference reset mode."""
+    cleanup_mode: Literal["none", "end", "incremental"] = "end"
+    """Inference cleanup mode."""
+    max_stop_seqs: int = 4
+    """Max stop sequences per request for eval engine sizing."""
+    max_stop_tokens: int = 16
+    """Max stop tokens per stop sequence for eval engine sizing."""
+    seed: int = 0
+    """Base seed offset for deterministic eval request keys."""
+
     allow_multihost: bool = True
-    """If True, run inference on all hosts during multi-host training.
-    If False, skip inference entirely on multi-host setups."""
+    """If True, run inference on all hosts in multi-host training."""
+    host_data_parallel_output_dir: str | None = "train_simpo_inference_eval_outputs"
+    """Optional output dir for host-local inference JSONL rows."""
+    max_logged_samples: int = 16
+    """Maximum number of sample rows to emit to tracker per eval step."""
 
 
 @dataclass
@@ -747,9 +955,17 @@ def main(config: TrainSimpoConfig):
             logger.warning("No validation datasets provided.")
 
         if config.inference_eval.enabled:
+            resolved_prompts = _resolve_inference_prompts(config.inference_eval)
+            normalized_eval_steps = _normalize_eval_at_steps(config.inference_eval.eval_at_steps)
+            if normalized_eval_steps is None:
+                schedule_desc = f"every {config.inference_eval.eval_every} steps"
+            else:
+                schedule_desc = f"at steps {sorted(normalized_eval_steps)}"
             logger.info(
-                f"Inference evaluation enabled: running every {config.inference_eval.eval_every} steps "
-                f"with {len(config.inference_eval.prompts)} prompts"
+                "Inference evaluation enabled: mode=%s schedule=%s prompts=%d",
+                config.inference_eval.inference_mode,
+                schedule_desc,
+                len(resolved_prompts),
             )
             inference_callback = _create_inference_eval_callback(
                 config.inference_eval,
@@ -757,7 +973,12 @@ def main(config: TrainSimpoConfig):
                 model_max_seq_len=model_max_seq_len,
                 compute_axis_mapping=trainer.compute_axis_mapping,
             )
-            trainer.add_hook(inference_callback, every=config.inference_eval.eval_every)
+            hook_every = 1 if normalized_eval_steps is not None else config.inference_eval.eval_every
+            if hook_every <= 0:
+                raise ValueError(
+                    f"inference_eval.eval_every must be positive when eval_at_steps is unset, got {hook_every}"
+                )
+            trainer.add_hook(inference_callback, every=hook_every)
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:
             assert converter is not None, "converter must be set when saving HF checkpoints"
