@@ -19,8 +19,8 @@ import levanter.callbacks
 from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig
+from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
-from levanter.data.dataset import AsyncDataset, EpochDataset
 from levanter.data.text import (
     DpoExample,
     LmDataConfig,
@@ -123,9 +123,12 @@ def _build_dpo_dataset(
     Pos: Axis,
     *,
     key: jrandom.PRNGKey,
-    epochs: int | None,
 ) -> AsyncDataset[DpoExample]:
-    """Build a DPO training dataset from a single component config."""
+    """Build a DPO training dataset from a single component config.
+
+    Wraps the dataset in a MixtureDataset so that stop_strategy (default restart)
+    is respected and the iterator cycles indefinitely, matching train_lm behavior.
+    """
     training_components = _get_training_components(config)
     if len(training_components) != 1:
         raise ValueError(
@@ -156,10 +159,16 @@ def _build_dpo_dataset(
     elif isinstance(config.shuffle, int) and config.shuffle > 0:
         train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
 
-    if epochs:
-        train_dataset = EpochDataset(train_dataset, max_epochs=epochs)
+    mix_key, _ = jrandom.split(key)
+    mixture = MixtureDataset(
+        datasets={name: train_dataset},
+        weights={name: 1.0},
+        block_size=config.mixture_block_size,
+        key=mix_key,
+        stop_strategy=config.stop_strategy,
+    )
 
-    return cast(AsyncDataset[DpoExample], train_dataset)
+    return cast(AsyncDataset[DpoExample], mixture)
 
 
 def _build_validation_split(
@@ -167,7 +176,6 @@ def _build_validation_split(
     Pos: Axis,
     *,
     key: jrandom.PRNGKey,
-    epochs: int | None,
     fraction: float,
 ) -> tuple[AsyncDataset[DpoExample], dict[str, AsyncDataset[DpoExample]]]:
     """Build train/validation split from a single component config.
@@ -195,7 +203,7 @@ def _build_validation_split(
     total_len = len(base_dataset.as_sync_dataset())
     num_val = _num_validation_sequences(total_len, fraction)
     if num_val == 0:
-        train_dataset = _build_dpo_dataset(config, Pos, key=key, epochs=epochs)
+        train_dataset = _build_dpo_dataset(config, Pos, key=key)
         return train_dataset, {}
 
     train_base = base_dataset.slice_dataset(end_index=total_len - num_val)
@@ -213,10 +221,16 @@ def _build_validation_split(
     elif isinstance(config.shuffle, int) and config.shuffle > 0:
         train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
 
-    if epochs:
-        train_dataset = EpochDataset(train_dataset, max_epochs=epochs)
+    mix_key, _ = jrandom.split(key)
+    mixture = MixtureDataset(
+        datasets={name: train_dataset},
+        weights={name: 1.0},
+        block_size=config.mixture_block_size,
+        key=mix_key,
+        stop_strategy=config.stop_strategy,
+    )
 
-    train_dataset = cast(AsyncDataset[DpoExample], train_dataset)
+    train_dataset = cast(AsyncDataset[DpoExample], mixture)
     val_base = cast(AsyncDataset[DpoExample], val_base)
     return train_dataset, {name: val_base}
 
@@ -246,7 +260,6 @@ class TrainDpoConfig:
 
     data_seed: Optional[int] = None
     initialize_from_checkpoint_path: Optional[str] = None
-    epoch: int = 0
 
 
 def main(config: TrainDpoConfig):
@@ -346,7 +359,6 @@ def main(config: TrainDpoConfig):
                 config.data,
                 Pos,
                 key=data_key,
-                epochs=config.epoch,
                 fraction=fraction,
             )
         else:
@@ -354,7 +366,6 @@ def main(config: TrainDpoConfig):
                 config.data,
                 Pos,
                 key=data_key,
-                epochs=config.epoch,
             )
             # Build validation sets from the validation cache
             val_caches = config.data.build_caches("validation")
@@ -504,7 +515,7 @@ def main(config: TrainDpoConfig):
 
         last_info = trainer.train(state, train_loader)
 
-        if trainer.config.checkpointer is not None and config.epoch > 0:
+        if trainer.config.checkpointer is not None:
             trainer.run_hooks(last_info, force=True)
             checkpointer = trainer.config.checkpointer.create(trainer.run_id)
             checkpointer.wait_until_finished()
