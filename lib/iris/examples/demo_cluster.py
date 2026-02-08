@@ -48,7 +48,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
+from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.vm.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 
 # The iris project root (lib/iris/) - used as workspace for the example
@@ -114,6 +115,9 @@ class DemoCluster:
         cpu_sg = config.scale_groups["cpu"]
         cpu_sg.name = "cpu"
         cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        cpu_sg.resources.memory_bytes = int(16 * 1e9)
+        cpu_sg.resources.disk_bytes = int(128 * 1e9)
+        cpu_sg.resources.cpu = 1
         cpu_sg.min_slices = 0
         cpu_sg.max_slices = 4
 
@@ -121,6 +125,11 @@ class DemoCluster:
         tpu_sg.name = "tpu_v5e_16"
         tpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
         tpu_sg.accelerator_variant = "v5litepod-16"
+        tpu_sg.resources.memory_bytes = int(16 * 1e9)
+        tpu_sg.resources.disk_bytes = int(128 * 1e9)
+        tpu_sg.resources.cpu = 128
+        tpu_sg.resources.tpu_count = 4  # chips_per_vm for v5litepod-16
+        tpu_sg.slice_size = 4
         tpu_sg.min_slices = 0
         tpu_sg.max_slices = 4
 
@@ -358,6 +367,12 @@ class DemoCluster:
         # Set environment for the kernel (inherited by subprocess)
         os.environ["IRIS_CONTROLLER_ADDRESS"] = self.controller_url
         os.environ["IRIS_WORKSPACE"] = str(self._workspace)
+        pythonpath = os.environ.get("PYTHONPATH")
+        iris_src = str(IRIS_ROOT / "src")
+        if pythonpath:
+            os.environ["PYTHONPATH"] = f"{iris_src}:{pythonpath}"
+        else:
+            os.environ["PYTHONPATH"] = iris_src
 
         # Create executor
         ep = ExecutePreprocessor(

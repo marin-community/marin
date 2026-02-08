@@ -43,6 +43,20 @@ SCALING_ACTION_SCALE_UP: ScalingAction
 SCALING_ACTION_SCALE_DOWN: ScalingAction
 SCALING_ACTION_NONE: ScalingAction
 
+class ResourceSpec(_message.Message):
+    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")
+    CPU_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
+    GPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    TPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    cpu: int
+    memory_bytes: int
+    disk_bytes: int
+    gpu_count: int
+    tpu_count: int
+    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., gpu_count: _Optional[int] = ..., tpu_count: _Optional[int] = ...) -> None: ...
+
 class VmInfo(_message.Message):
     __slots__ = ("vm_id", "slice_id", "scale_group", "state", "address", "zone", "created_at", "state_changed_at", "worker_id", "worker_healthy", "init_phase", "init_log_tail", "init_error", "labels")
     class LabelsEntry(_message.Message):
@@ -144,8 +158,71 @@ class AutoscalerAction(_message.Message):
     status: str
     def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., action_type: _Optional[str] = ..., scale_group: _Optional[str] = ..., slice_id: _Optional[str] = ..., reason: _Optional[str] = ..., status: _Optional[str] = ...) -> None: ...
 
+class DemandEntryStatus(_message.Message):
+    __slots__ = ("task_ids", "coschedule_group_id", "accelerator_type", "accelerator_variant", "preemptible", "resources")
+    TASK_IDS_FIELD_NUMBER: _ClassVar[int]
+    COSCHEDULE_GROUP_ID_FIELD_NUMBER: _ClassVar[int]
+    ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
+    ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
+    PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
+    RESOURCES_FIELD_NUMBER: _ClassVar[int]
+    task_ids: _containers.RepeatedScalarFieldContainer[str]
+    coschedule_group_id: str
+    accelerator_type: _config_pb2.AcceleratorType
+    accelerator_variant: str
+    preemptible: bool
+    resources: ResourceSpec
+    def __init__(self, task_ids: _Optional[_Iterable[str]] = ..., coschedule_group_id: _Optional[str] = ..., accelerator_type: _Optional[_Union[_config_pb2.AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., preemptible: _Optional[bool] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ...) -> None: ...
+
+class UnmetDemand(_message.Message):
+    __slots__ = ("entry", "reason")
+    ENTRY_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    entry: DemandEntryStatus
+    reason: str
+    def __init__(self, entry: _Optional[_Union[DemandEntryStatus, _Mapping]] = ..., reason: _Optional[str] = ...) -> None: ...
+
+class RoutingDecision(_message.Message):
+    __slots__ = ("group_to_launch", "group_reasons", "routed_entries", "unmet_entries")
+    class GroupToLaunchEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+    class GroupReasonsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class RoutedEntriesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: DemandEntryStatusList
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[DemandEntryStatusList, _Mapping]] = ...) -> None: ...
+    GROUP_TO_LAUNCH_FIELD_NUMBER: _ClassVar[int]
+    GROUP_REASONS_FIELD_NUMBER: _ClassVar[int]
+    ROUTED_ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    UNMET_ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    group_to_launch: _containers.ScalarMap[str, int]
+    group_reasons: _containers.ScalarMap[str, str]
+    routed_entries: _containers.MessageMap[str, DemandEntryStatusList]
+    unmet_entries: _containers.RepeatedCompositeFieldContainer[UnmetDemand]
+    def __init__(self, group_to_launch: _Optional[_Mapping[str, int]] = ..., group_reasons: _Optional[_Mapping[str, str]] = ..., routed_entries: _Optional[_Mapping[str, DemandEntryStatusList]] = ..., unmet_entries: _Optional[_Iterable[_Union[UnmetDemand, _Mapping]]] = ...) -> None: ...
+
+class DemandEntryStatusList(_message.Message):
+    __slots__ = ("entries",)
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    entries: _containers.RepeatedCompositeFieldContainer[DemandEntryStatus]
+    def __init__(self, entries: _Optional[_Iterable[_Union[DemandEntryStatus, _Mapping]]] = ...) -> None: ...
+
 class AutoscalerStatus(_message.Message):
-    __slots__ = ("groups", "current_demand", "last_evaluation", "recent_actions")
+    __slots__ = ("groups", "current_demand", "last_evaluation", "recent_actions", "last_routing_decision")
     class CurrentDemandEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -157,8 +234,10 @@ class AutoscalerStatus(_message.Message):
     CURRENT_DEMAND_FIELD_NUMBER: _ClassVar[int]
     LAST_EVALUATION_FIELD_NUMBER: _ClassVar[int]
     RECENT_ACTIONS_FIELD_NUMBER: _ClassVar[int]
+    LAST_ROUTING_DECISION_FIELD_NUMBER: _ClassVar[int]
     groups: _containers.RepeatedCompositeFieldContainer[ScaleGroupStatus]
     current_demand: _containers.ScalarMap[str, int]
     last_evaluation: _time_pb2.Timestamp
     recent_actions: _containers.RepeatedCompositeFieldContainer[AutoscalerAction]
-    def __init__(self, groups: _Optional[_Iterable[_Union[ScaleGroupStatus, _Mapping]]] = ..., current_demand: _Optional[_Mapping[str, int]] = ..., last_evaluation: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., recent_actions: _Optional[_Iterable[_Union[AutoscalerAction, _Mapping]]] = ...) -> None: ...
+    last_routing_decision: RoutingDecision
+    def __init__(self, groups: _Optional[_Iterable[_Union[ScaleGroupStatus, _Mapping]]] = ..., current_demand: _Optional[_Mapping[str, int]] = ..., last_evaluation: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., recent_actions: _Optional[_Iterable[_Union[AutoscalerAction, _Mapping]]] = ..., last_routing_decision: _Optional[_Union[RoutingDecision, _Mapping]] = ...) -> None: ...

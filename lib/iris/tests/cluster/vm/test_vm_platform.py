@@ -40,6 +40,22 @@ from iris.rpc import config_pb2, vm_pb2
 # Test Helpers
 # =============================================================================
 
+DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
+    cpu=32,
+    memory_bytes=64 * 1024**3,
+    disk_bytes=200 * 1024**3,
+    gpu_count=0,
+    tpu_count=8,
+)
+
+
+def _with_resources(config: config_pb2.ScaleGroupConfig, *, slice_size: int = 1) -> config_pb2.ScaleGroupConfig:
+    if not config.HasField("resources"):
+        config.resources.CopyFrom(DEFAULT_RESOURCES)
+    if not config.HasField("slice_size"):
+        config.slice_size = slice_size
+    return config
+
 
 def make_mock_vm(
     vm_id: str,
@@ -119,7 +135,7 @@ def timeout_config() -> config_pb2.TimeoutConfig:
 @pytest.fixture
 def v5p8_scale_group() -> config_pb2.ScaleGroupConfig:
     """Single-host TPU scale group (v5p-8)."""
-    return config_pb2.ScaleGroupConfig(
+    config = config_pb2.ScaleGroupConfig(
         name="tpu-v5p-8",
         min_slices=0,
         max_slices=10,
@@ -128,12 +144,13 @@ def v5p8_scale_group() -> config_pb2.ScaleGroupConfig:
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
+    return _with_resources(config, slice_size=1)
 
 
 @pytest.fixture
 def v5p16_scale_group() -> config_pb2.ScaleGroupConfig:
     """Multi-host TPU scale group (v5p-16, 2 VMs per slice)."""
-    return config_pb2.ScaleGroupConfig(
+    config = config_pb2.ScaleGroupConfig(
         name="tpu-v5p-16",
         min_slices=0,
         max_slices=5,
@@ -142,12 +159,13 @@ def v5p16_scale_group() -> config_pb2.ScaleGroupConfig:
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
+    return _with_resources(config, slice_size=2)
 
 
 @pytest.fixture
 def manual_scale_group() -> config_pb2.ScaleGroupConfig:
     """Scale group config for manual hosts."""
-    return config_pb2.ScaleGroupConfig(
+    config = config_pb2.ScaleGroupConfig(
         name="manual-hosts",
         min_slices=0,
         max_slices=3,
@@ -155,6 +173,7 @@ def manual_scale_group() -> config_pb2.ScaleGroupConfig:
         runtime_version="manual",
         zones=["manual"],
     )
+    return _with_resources(config, slice_size=1)
 
 
 @pytest.fixture(params=["tpu", "manual"])
@@ -478,14 +497,17 @@ def test_tpu_manager_creates_correct_vm_count_for_topology(
     """TpuVmManager creates correct number of VMs based on accelerator topology."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-    config = config_pb2.ScaleGroupConfig(
-        name=f"tpu-{accelerator_variant}",
-        min_slices=0,
-        max_slices=10,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant=accelerator_variant,
-        runtime_version="v2-alpha-tpuv5",
-        zones=["us-central1-a"],
+    config = _with_resources(
+        config_pb2.ScaleGroupConfig(
+            name=f"tpu-{accelerator_variant}",
+            min_slices=0,
+            max_slices=10,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant=accelerator_variant,
+            runtime_version="v2-alpha-tpuv5",
+            zones=["us-central1-a"],
+        ),
+        slice_size=1 if accelerator_variant == "v5p-8" else 2,
     )
 
     manager = TpuVmManager(

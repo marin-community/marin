@@ -34,7 +34,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.vm.config import config_to_dict
+from iris.cluster.vm.autoscaler import Autoscaler
+
+from iris.cluster.controller.controller import (
+    Controller as _InnerController,
+    ControllerConfig as _InnerControllerConfig,
+    RpcWorkerStubFactory,
+)
+from iris.cluster.vm.config import config_to_dict, create_local_autoscaler
+from iris.cluster.vm.local_platform import find_free_port
 from iris.managed_thread import ThreadContainer
 from iris.cluster.vm.gcp_tpu_platform import (
     controller_address_metadata_key,
@@ -58,6 +66,8 @@ DEFAULT_CONTROLLER_PORT = 10000
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
 HEALTH_CHECK_TIMEOUT_SECONDS = 120
+RESTART_LOOP_THRESHOLD = 3  # Fail after N consecutive "restarting" statuses
+EARLY_TIMEOUT_SECONDS = 60  # Exit early after N seconds if in restart loop
 MAX_RETRIES = 5
 
 # Backoff parameters for health check polling: start at 2s, cap at 10s
@@ -106,14 +116,18 @@ def check_health(
     result = HealthCheckResult(healthy=False)
 
     try:
+        logger.info("Running health check: curl -sf http://localhost:%d/health", port)
         curl_result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
         if curl_result.returncode == 0:
             result.healthy = True
             result.curl_output = curl_result.stdout.strip()
+            logger.info("Health check succeeded")
             return result
         result.curl_error = curl_result.stderr.strip() or f"exit code {curl_result.returncode}"
+        logger.info("Health check failed: %s", result.curl_error)
     except Exception as e:
         result.curl_error = str(e)
+        logger.info("Health check exception: %s", e)
 
     # Gather diagnostics on failure
     try:
@@ -149,6 +163,9 @@ def wait_healthy_via_ssh(
     that can block external HTTP access to the controller port.
 
     On failure, logs diagnostic info including container status and logs.
+
+    Detects restart loops: fails early if container is restarting repeatedly
+    after 60 seconds instead of waiting for full timeout.
     """
     logger.info("Starting SSH-based health check (port=%d, timeout=%ds)", port, int(timeout))
     start_time = time.monotonic()
@@ -159,6 +176,7 @@ def wait_healthy_via_ssh(
 
     attempt = 0
     last_result = None
+    consecutive_restarts = 0
 
     while True:
         attempt += 1
@@ -171,6 +189,19 @@ def wait_healthy_via_ssh(
 
         logger.info("SSH health check attempt %d failed (%.1fs): %s", attempt, elapsed, last_result.summary())
 
+        # Detect restart loop: if container keeps restarting, fail early
+        if last_result.container_status == "restarting":
+            consecutive_restarts += 1
+            if consecutive_restarts >= RESTART_LOOP_THRESHOLD and elapsed >= EARLY_TIMEOUT_SECONDS:
+                logger.error(
+                    "Container is in restart loop (restarting %d times in %.1fs). Failing early.",
+                    consecutive_restarts,
+                    elapsed,
+                )
+                break
+        else:
+            consecutive_restarts = 0
+
         if elapsed >= timeout:
             break
 
@@ -180,7 +211,7 @@ def wait_healthy_via_ssh(
 
     # Health check failed - log detailed diagnostics
     logger.error("=" * 60)
-    logger.error("SSH health check FAILED after %d attempts (%.1fs)", attempt, timeout)
+    logger.error("SSH health check FAILED after %d attempts (%.1fs)", attempt, elapsed)
     logger.error("=" * 60)
     logger.error("Final status: %s", last_result.summary())
     if last_result.container_status:
@@ -188,16 +219,27 @@ def wait_healthy_via_ssh(
     if last_result.curl_error:
         logger.error("Health endpoint error: %s", last_result.curl_error)
 
-    # Try to get more detailed container logs (more lines than check_health fetches)
+    # Get detailed container logs and diagnostics
     try:
-        logs_result = conn.run(f"sudo docker logs {container_name} --tail 50 2>&1", timeout=Duration.from_seconds(15))
+        # Full container logs (not just tail)
+        logs_result = conn.run(f"sudo docker logs {container_name} 2>&1", timeout=Duration.from_seconds(30))
         if logs_result.returncode == 0 and logs_result.stdout.strip():
-            logger.error("Container logs (last 50 lines):\n%s", logs_result.stdout.strip())
+            logger.error("Container logs (full output):\n%s", logs_result.stdout.strip())
         elif last_result.container_logs:
             logger.error("Container logs:\n%s", last_result.container_logs)
         else:
             logger.error("No container logs available (container may not exist)")
-    except Exception:
+
+        # Get container inspect for detailed status
+        inspect_result = conn.run(
+            f"sudo docker inspect {container_name} 2>&1",
+            timeout=Duration.from_seconds(15),
+        )
+        if inspect_result.returncode == 0:
+            logger.error("Container inspect output:\n%s", inspect_result.stdout.strip())
+
+    except Exception as e:
+        logger.error("Failed to fetch diagnostics: %s", e)
         if last_result.container_logs:
             logger.error("Container logs:\n%s", last_result.container_logs)
         else:
@@ -321,34 +363,54 @@ sudo docker run -d --name {container_name} \
     -v /var/cache/iris:/var/cache/iris \
     {config_volume} \
     {docker_image} \
-    python -m iris.cluster.controller.main serve \
+    .venv/bin/python -m iris.cluster.controller.main serve \
         --host 0.0.0.0 --port {port} {config_flag}
 
 echo "[iris-controller] [5/5] Controller container started"
 
 # Wait for health
 echo "[iris-controller] Waiting for controller to become healthy..."
-for i in $(seq 1 60); do
-    echo "[iris-controller] Health check attempt $i/60 at $(date -Iseconds)..."
+RESTART_COUNT=0
+for i in $(seq 1 30); do
+    echo "[iris-controller] Health check attempt $i/30 at $(date -Iseconds)..."
     if curl -sf http://localhost:{port}/health > /dev/null 2>&1; then
         echo "[iris-controller] ================================================"
         echo "[iris-controller] Controller is healthy! Bootstrap complete."
         echo "[iris-controller] ================================================"
         exit 0
     fi
-    # Show brief container status every 5 attempts
-    if [ $((i % 5)) -eq 0 ]; then
-        STATUS=$(sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'unknown')
-        echo "[iris-controller] Container status: $STATUS"
+    # Check container status and detect restart loop
+    STATUS=$(sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'unknown')
+    echo "[iris-controller] Container status: $STATUS"
+
+    # Detect restart loop - if container keeps restarting, fail early
+    if [ "$STATUS" = "restarting" ]; then
+        RESTART_COUNT=$((RESTART_COUNT + 1))
+        if [ $RESTART_COUNT -ge 3 ]; then
+            echo "[iris-controller] ================================================"
+            echo "[iris-controller] ERROR: Container in restart loop (restarting $RESTART_COUNT times)"
+            echo "[iris-controller] ================================================"
+            echo "[iris-controller] Full container logs:"
+            sudo docker logs {container_name} 2>&1
+            echo "[iris-controller] ================================================"
+            echo "[iris-controller] Container inspect:"
+            sudo docker inspect {container_name} 2>&1
+            exit 1
+        fi
+    else
+        RESTART_COUNT=0
     fi
     sleep 2
 done
 
 echo "[iris-controller] ================================================"
-echo "[iris-controller] ERROR: Controller failed to become healthy"
+echo "[iris-controller] ERROR: Controller failed to become healthy after 60 seconds"
 echo "[iris-controller] ================================================"
-echo "[iris-controller] Container logs (last 50 lines):"
-sudo docker logs {container_name} --tail 50
+echo "[iris-controller] Full container logs:"
+sudo docker logs {container_name} 2>&1
+echo "[iris-controller] ================================================"
+echo "[iris-controller] Container inspect:"
+sudo docker inspect {container_name} 2>&1
 exit 1
 """
 
@@ -419,10 +481,17 @@ class GcpController:
 
     def __init__(self, config: config_pb2.IrisClusterConfig):
         self.config = config
-        self.project_id = config.project_id or ""
-        self.zone = config.zone or "us-central1-a"
-        self._gcp_config = config.controller_vm.gcp
-        self._vm_name = f"iris-controller-{config.label_prefix or 'iris'}"
+        platform = config.platform.gcp
+        self.project_id = platform.project_id
+        if platform.zone:
+            self.zone = platform.zone
+        elif platform.default_zones:
+            self.zone = platform.default_zones[0]
+        else:
+            raise RuntimeError("platform.gcp.zone or platform.gcp.default_zones is required for controller")
+        self._gcp_config = config.controller.gcp
+        self._label_prefix = config.platform.label_prefix or "iris"
+        self._vm_name = f"iris-controller-{self._label_prefix}"
 
     def _serialize_config(self) -> str:
         """Serialize cluster config to YAML for the controller VM."""
@@ -477,7 +546,7 @@ class GcpController:
         )
 
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", self._vm_name, line)
@@ -528,7 +597,7 @@ class GcpController:
         )
 
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", vm_name, line)
@@ -555,9 +624,8 @@ class GcpController:
         Looks for a running VM with the controller metadata tag and returns
         its controller address from metadata. Uses prefix-scoped metadata keys.
         """
-        label_prefix = self.config.label_prefix or "iris"
-        meta_key = controller_metadata_key(label_prefix)
-        addr_key = controller_address_metadata_key(label_prefix)
+        meta_key = controller_metadata_key(self._label_prefix)
+        addr_key = controller_address_metadata_key(self._label_prefix)
         cmd = [
             "gcloud",
             "compute",
@@ -595,8 +663,7 @@ class GcpController:
 
     def _find_controller_vm_name(self) -> str | None:
         """Find the name of the running controller VM."""
-        label_prefix = self.config.label_prefix or "iris"
-        meta_key = controller_metadata_key(label_prefix)
+        meta_key = controller_metadata_key(self._label_prefix)
         cmd = [
             "gcloud",
             "compute",
@@ -620,8 +687,7 @@ class GcpController:
         machine_type = self._gcp_config.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = self._gcp_config.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
         port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
-        label_prefix = self.config.label_prefix or "iris"
-        meta_key = controller_metadata_key(label_prefix)
+        meta_key = controller_metadata_key(self._label_prefix)
 
         cmd = [
             "gcloud",
@@ -719,8 +785,7 @@ class GcpController:
 
     def _tag_metadata(self, address: str) -> None:
         """Tag VM with controller address metadata for worker discovery."""
-        label_prefix = self.config.label_prefix or "iris"
-        addr_key = controller_address_metadata_key(label_prefix)
+        addr_key = controller_address_metadata_key(self._label_prefix)
         cmd = [
             "gcloud",
             "compute",
@@ -794,16 +859,16 @@ class ManualController:
     """Controller on a manually-managed host via SSH bootstrap.
 
     SSHs into the configured host to start/stop the controller container.
-    Requires controller_vm.manual.host to be configured.
+    Requires controller.manual.host to be configured.
     """
 
     def __init__(self, config: config_pb2.IrisClusterConfig):
         self.config = config
-        self._manual_config = config.controller_vm.manual
+        self._manual_config = config.controller.manual
         self._bootstrapped = False
 
         if not self._manual_config.host:
-            raise RuntimeError("controller_vm.manual.host is required for ManualController")
+            raise RuntimeError("controller.manual.host is required for ManualController")
 
         port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
         self.address = f"http://{self._manual_config.host}:{port}"
@@ -816,8 +881,8 @@ class ManualController:
 
     def start(self) -> str:
         """Start controller via SSH bootstrap."""
-        if not self.config.controller_vm.image:
-            raise RuntimeError("controller_vm.image required for SSH bootstrap")
+        if not self.config.controller.image:
+            raise RuntimeError("controller.image required for SSH bootstrap")
 
         host = self._manual_config.host
         port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
@@ -826,7 +891,7 @@ class ManualController:
 
         conn = self._create_ssh_connection(host)
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", host, line)
@@ -893,8 +958,11 @@ class ManualController:
         """Check health of controller via SSH."""
         host = self._manual_config.host
         port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
+        logger.info("Connecting to controller host %s via SSH...", host)
         conn = self._create_ssh_connection(host)
+        logger.info("Checking controller health via SSH (port %d, timeout 10s)...", port)
         result = check_health(conn, port, CONTROLLER_CONTAINER_NAME)
+        logger.info("Health check result: %s", "healthy" if result.healthy else result.summary())
         return ControllerStatus(
             running=result.healthy,
             address=self.address,
@@ -903,7 +971,7 @@ class ManualController:
 
     def _create_ssh_connection(self, host: str) -> DirectSshConnection:
         """Create SSH connection for the given host."""
-        ssh = self.config.ssh
+        ssh = self.config.defaults.ssh
         connect_timeout = (
             Duration.from_proto(ssh.connect_timeout)
             if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
@@ -968,49 +1036,35 @@ class LocalController:
         self._threads = threads
         self._controller: _InProcessController | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
+        self._autoscaler: Autoscaler | None = None
 
     def start(self) -> str:
-        from iris.cluster.controller.controller import (
-            Controller as _InnerController,
-            ControllerConfig as _InnerControllerConfig,
-            RpcWorkerStubFactory,
-        )
-        from iris.cluster.vm.local_platform import (
-            _create_local_autoscaler,
-            find_free_port,
-        )
-
-        self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_")
-        temp = Path(self._temp_dir.name)
-        bundle_dir = temp / "bundles"
+        # Create temp dir for controller's bundle storage
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_")
+        bundle_dir = Path(self._temp_dir.name) / "bundles"
         bundle_dir.mkdir()
-        cache_path = temp / "cache"
-        cache_path.mkdir()
-        fake_bundle = temp / "fake_bundle"
-        fake_bundle.mkdir()
-        (fake_bundle / "pyproject.toml").write_text("[project]\nname='local'\n")
 
-        port = self._config.controller_vm.local.port or find_free_port()
+        port = self._config.controller.local.port or find_free_port()
         address = f"http://127.0.0.1:{port}"
 
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
-        autoscaler = _create_local_autoscaler(
+        # Autoscaler creates its own temp dirs for worker resources
+        self._autoscaler = create_local_autoscaler(
             self._config,
             address,
-            cache_path,
-            fake_bundle,
             threads=autoscaler_threads,
         )
+
         self._controller = _InnerController(
             config=_InnerControllerConfig(
                 host="127.0.0.1",
                 port=port,
-                bundle_prefix=self._config.controller_vm.bundle_prefix or f"file://{bundle_dir}",
+                bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
-            autoscaler=autoscaler,
+            autoscaler=self._autoscaler,
             threads=controller_threads,
         )
         self._controller.start()
@@ -1020,6 +1074,11 @@ class LocalController:
         if self._controller:
             self._controller.stop()
             self._controller = None
+        # Clean up autoscaler's temp dir
+        if self._autoscaler and hasattr(self._autoscaler, "_temp_dir"):
+            self._autoscaler._temp_dir.cleanup()
+            self._autoscaler = None
+        # Clean up controller's temp dir
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None
@@ -1047,13 +1106,13 @@ class LocalController:
         return "(local controller — no startup logs)"
 
 
-def create_controller(
+def create_controller_vm(
     config: config_pb2.IrisClusterConfig,
     threads: ThreadContainer | None = None,
 ) -> ControllerProtocol:
-    """Factory function to create appropriate controller type.
+    """Factory function to create appropriate controller VM type.
 
-    Dispatches based on the controller_vm.controller oneof field:
+    Dispatches based on the controller.controller oneof field:
     - gcp: Creates GcpController for GCP-managed VMs
     - manual: Creates ManualController for SSH bootstrap to pre-existing hosts
     - local: Creates LocalController for in-process testing
@@ -1063,12 +1122,12 @@ def create_controller(
         threads: Optional parent ThreadContainer. Only used by LocalController
             to integrate in-process threads into the caller's hierarchy.
     """
-    controller_vm = config.controller_vm
-    which = controller_vm.WhichOneof("controller")
+    controller = config.controller
+    which = controller.WhichOneof("controller")
     if which == "gcp":
         return GcpController(config)
     if which == "manual":
         return ManualController(config)
     if which == "local":
         return LocalController(config, threads=threads)
-    raise ValueError("No controller config specified in controller_vm")
+    raise ValueError("No controller config specified in controller")

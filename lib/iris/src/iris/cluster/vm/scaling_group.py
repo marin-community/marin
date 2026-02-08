@@ -25,9 +25,9 @@ import threading
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.types import DeviceType, VmWorkerStatusMap
+from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmManagerProtocol
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -128,6 +128,18 @@ class ScalingGroup:
     def name(self) -> str:
         """Name of this scale group."""
         return self._config.name
+
+    @property
+    def slice_size(self) -> int:
+        """Number of tasks per slice (coscheduling group size)."""
+        return self._config.slice_size or 1
+
+    @property
+    def resources(self) -> config_pb2.ScaleGroupResources | None:
+        """Per-VM resource capacity for this scale group."""
+        if self._config.HasField("resources"):
+            return self._config.resources
+        return None
 
     @property
     def min_slices(self) -> int:
@@ -293,6 +305,29 @@ class ScalingGroup:
         """Update current demand."""
         self._current_demand = demand
         self._peak_demand = max(self._peak_demand, demand)
+
+    def can_fit_resources(self, resources: cluster_pb2.ResourceSpecProto) -> bool:
+        """Check whether a demand entry's resources fit within one VM."""
+        sg_resources = self.resources
+        if sg_resources is None:
+            return False
+
+        if resources.cpu and resources.cpu > sg_resources.cpu:
+            return False
+        if resources.memory_bytes and resources.memory_bytes > sg_resources.memory_bytes:
+            return False
+        if resources.disk_bytes and resources.disk_bytes > sg_resources.disk_bytes:
+            return False
+
+        gpu_count = get_gpu_count(resources.device)
+        if gpu_count > sg_resources.gpu_count:
+            return False
+
+        tpu_count = get_tpu_count(resources.device)
+        if tpu_count > sg_resources.tpu_count:
+            return False
+
+        return True
 
     def update_slice_activity(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp) -> None:
         """Update activity timestamps for all slices based on worker status.

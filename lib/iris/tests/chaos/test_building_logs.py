@@ -58,7 +58,7 @@ def test_build_logs_visible_during_building_state(cluster):
     timeout = 15.0  # Should be enough for 5s delay + some overhead
 
     while time.time() - start_time < timeout:
-        status = client.status(str(job.job_id))
+        status = client.status(job.job_id)
 
         # Check if any task is in BUILDING state
         task_states = [task.state for task in status.tasks]
@@ -70,7 +70,7 @@ def test_build_logs_visible_during_building_state(cluster):
                 job_running_during_building = True
 
             # Try to fetch logs for the building task
-            task_id = f"{job.job_id}/task-0"
+            task_id = job.job_id.task(0)
             try:
                 logs = client.fetch_task_logs(task_id)
                 # Look for build logs
@@ -91,7 +91,7 @@ def test_build_logs_visible_during_building_state(cluster):
     # Wait for job to complete
     deadline = time.time() + timeout
     while time.time() < deadline:
-        status = client.status(str(job.job_id))
+        status = client.status(job.job_id)
         if status.state in (
             cluster_pb2.JOB_STATE_SUCCEEDED,
             cluster_pb2.JOB_STATE_FAILED,
@@ -106,5 +106,5 @@ def test_build_logs_visible_during_building_state(cluster):
     assert build_logs_found, "Build logs were not available during BUILDING state"
 
     # Verify job completed successfully
-    final_status = client.status(str(job.job_id))
+    final_status = client.status(job.job_id)
     assert final_status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job failed with state: {final_status.state}"

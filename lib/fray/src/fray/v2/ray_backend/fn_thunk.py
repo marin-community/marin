@@ -18,10 +18,10 @@ This is primarily used to convert function invocations into Ray jobs -- the Ray
 "job" entrypoint only accepts a command to run, not callables.
 
 Usage as CLI:
-    python -m fray.v2.ray.fn_thunk <fsspec-path>
+    python -m fray.v2.ray_backend.fn_thunk <fsspec-path>
 
 Usage as library:
-    >>> from fray.v2.ray.fn_thunk import create_thunk_entrypoint
+    >>> from fray.v2.ray_backend.fn_thunk import create_thunk_entrypoint
     >>> def my_fn():
     ...     return "hello"
     >>> entrypoint = create_thunk_entrypoint(my_fn, prefix="/tmp/job")
@@ -67,7 +67,7 @@ def create_thunk_entrypoint(
         cloudpickle.dump((callable_fn, args, kwargs or {}), f, protocol=cloudpickle.DEFAULT_PROTOCOL)
         pickle_path = f.name
 
-    return Entrypoint.from_binary("python", ["-m", "fray.v2.ray.fn_thunk", pickle_path])
+    return Entrypoint.from_binary("python", ["-m", "fray.v2.ray_backend.fn_thunk", pickle_path])
 
 
 @click.command()

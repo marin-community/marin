@@ -44,7 +44,7 @@ from fray.v2.types import (
     ],
 )
 def test_compute_ray_retry_count(max_failure, max_preemption, expected):
-    from fray.v2.ray.backend import compute_ray_retry_count
+    from fray.v2.ray_backend.backend import compute_ray_retry_count
 
     request = JobRequest(
         name="test",
@@ -61,7 +61,7 @@ def test_compute_ray_retry_count(max_failure, max_preemption, expected):
 
 
 def test_entrypoint_params_cpu():
-    from fray.v2.ray.backend import get_entrypoint_params
+    from fray.v2.ray_backend.backend import get_entrypoint_params
 
     request = JobRequest(
         name="cpu-job",
@@ -75,7 +75,7 @@ def test_entrypoint_params_cpu():
 
 
 def test_entrypoint_params_gpu():
-    from fray.v2.ray.backend import get_entrypoint_params
+    from fray.v2.ray_backend.backend import get_entrypoint_params
 
     request = JobRequest(
         name="gpu-job",
@@ -87,7 +87,7 @@ def test_entrypoint_params_gpu():
 
 
 def test_entrypoint_params_tpu():
-    from fray.v2.ray.backend import get_entrypoint_params
+    from fray.v2.ray_backend.backend import get_entrypoint_params
 
     request = JobRequest(
         name="tpu-job",
@@ -164,7 +164,7 @@ def test_replicas_on_job_request():
 
 
 def test_as_remote_kwargs_cpu():
-    from fray.v2.ray.resources import as_remote_kwargs
+    from fray.v2.ray_backend.resources import as_remote_kwargs
 
     config = ResourceConfig(device=CpuConfig())
     kwargs = as_remote_kwargs(config)
@@ -172,7 +172,7 @@ def test_as_remote_kwargs_cpu():
 
 
 def test_as_remote_kwargs_gpu():
-    from fray.v2.ray.resources import as_remote_kwargs
+    from fray.v2.ray_backend.resources import as_remote_kwargs
 
     config = ResourceConfig(device=GpuConfig(variant="H100", count=2))
     kwargs = as_remote_kwargs(config)
@@ -181,7 +181,7 @@ def test_as_remote_kwargs_gpu():
 
 
 def test_as_remote_kwargs_gpu_auto():
-    from fray.v2.ray.resources import as_remote_kwargs
+    from fray.v2.ray_backend.resources import as_remote_kwargs
 
     config = ResourceConfig(device=GpuConfig(variant="auto", count=1))
     kwargs = as_remote_kwargs(config)
@@ -190,7 +190,7 @@ def test_as_remote_kwargs_gpu_auto():
 
 
 def test_as_remote_kwargs_tpu():
-    from fray.v2.ray.resources import as_remote_kwargs
+    from fray.v2.ray_backend.resources import as_remote_kwargs
 
     config = ResourceConfig(device=TpuConfig(variant="v4-32"))
     kwargs = as_remote_kwargs(config)
@@ -198,7 +198,7 @@ def test_as_remote_kwargs_tpu():
 
 
 def test_as_remote_kwargs_with_env_vars():
-    from fray.v2.ray.resources import as_remote_kwargs
+    from fray.v2.ray_backend.resources import as_remote_kwargs
 
     config = ResourceConfig(device=CpuConfig())
     kwargs = as_remote_kwargs(config, env_vars={"FOO": "bar"})
@@ -206,7 +206,7 @@ def test_as_remote_kwargs_with_env_vars():
 
 
 def test_accelerator_descriptor():
-    from fray.v2.ray.resources import accelerator_descriptor
+    from fray.v2.ray_backend.resources import accelerator_descriptor
 
     assert accelerator_descriptor(ResourceConfig(device=TpuConfig(variant="v4-8"))) == "v4-8"
     assert accelerator_descriptor(ResourceConfig(device=GpuConfig(variant="H100"))) == "H100"
@@ -219,7 +219,7 @@ def test_accelerator_descriptor():
 
 
 def test_build_runtime_env_cpu_sets_jax_platforms():
-    from fray.v2.ray.backend import build_runtime_env
+    from fray.v2.ray_backend.backend import build_runtime_env
 
     request = JobRequest(
         name="cpu-test",
@@ -231,7 +231,7 @@ def test_build_runtime_env_cpu_sets_jax_platforms():
 
 
 def test_build_runtime_env_tpu_clears_jax_platforms():
-    from fray.v2.ray.backend import build_runtime_env
+    from fray.v2.ray_backend.backend import build_runtime_env
 
     request = JobRequest(
         name="tpu-test",
@@ -243,7 +243,7 @@ def test_build_runtime_env_tpu_clears_jax_platforms():
 
 
 def test_build_runtime_env_gpu_clears_jax_platforms():
-    from fray.v2.ray.backend import build_runtime_env
+    from fray.v2.ray_backend.backend import build_runtime_env
 
     request = JobRequest(
         name="gpu-test",
@@ -260,7 +260,7 @@ def test_build_runtime_env_gpu_clears_jax_platforms():
 
 
 def test_actor_options_default_preemptible():
-    from fray.v2.ray.backend import _actor_ray_options
+    from fray.v2.ray_backend.backend import _actor_ray_options
 
     options = _actor_ray_options(ResourceConfig())
     assert options["num_cpus"] == 1
@@ -268,7 +268,7 @@ def test_actor_options_default_preemptible():
 
 
 def test_actor_options_non_preemptible_pins_head_node():
-    from fray.v2.ray.backend import _actor_ray_options
+    from fray.v2.ray_backend.backend import _actor_ray_options
 
     options = _actor_ray_options(ResourceConfig(preemptible=False))
     assert options["num_cpus"] == 1

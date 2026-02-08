@@ -55,7 +55,7 @@ def test_quota_exceeded_retry():
     group = manager.create_vm_group()
 
     # Tick to advance VM state transitions
-    manager.tick(Timestamp.now().to_proto())
+    manager.tick(Timestamp.now().epoch_ms())
 
     # Verify VMs reach READY state
     status = group.status()
@@ -79,7 +79,7 @@ def test_vm_init_stuck():
     group = manager.create_vm_group()
 
     # Tick to complete boot phase
-    manager.tick(Timestamp.now().to_proto())
+    manager.tick(Timestamp.now().epoch_ms())
 
     # VMs should transition from BOOTING -> INITIALIZING but not to READY
     status = group.status()
@@ -110,7 +110,7 @@ def test_vm_preempted():
     group = manager.create_vm_group()
 
     # Tick to advance VMs to READY state
-    manager.tick(Timestamp.now().to_proto())
+    manager.tick(Timestamp.now().epoch_ms())
 
     # Verify at least one VM is READY
     status = group.status()

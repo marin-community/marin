@@ -18,33 +18,42 @@ package iris.config;
 
 import "time.proto";
 
+// Enable explicit presence tracking for all fields to support HasField on scalars
+option features.field_presence = EXPLICIT;
+
 // ============================================================================
-// PROVIDER CONFIGURATION
+// PLATFORM CONFIGURATION
 // ============================================================================
 
-// Provider configuration for TPU scale groups
-message TpuProvider {
+message GcpPlatformConfig {
   string project_id = 1;
+  string region = 2;
+  string zone = 3;
+  repeated string default_zones = 4;
 }
 
-// Provider configuration for manual (pre-existing hosts) scale groups
+message ManualPlatformConfig {}
+
+message LocalPlatformConfig {}
+
+message PlatformConfig {
+  string label_prefix = 10;  // Default: "iris"
+  oneof platform {
+    GcpPlatformConfig gcp = 1;
+    ManualPlatformConfig manual = 2;
+    LocalPlatformConfig local = 3;
+  }
+}
+
+// ============================================================================
+// PROVIDER / GROUP CONFIGURATION
+// ============================================================================
+
+// Manual (pre-existing hosts) configuration for scale groups
 message ManualProvider {
   repeated string hosts = 1;
   string ssh_user = 2;           // Default: "root"
   string ssh_key_file = 3;
-  int32 ssh_port = 4;            // Default: 22
-}
-
-// Provider configuration for local (in-process) scale groups
-message LocalProvider {}
-
-// Per-scale-group provider configuration
-message ProviderConfig {
-  oneof provider {
-    TpuProvider tpu = 1;
-    ManualProvider manual = 2;
-    LocalProvider local = 3;
-  }
 }
 
 // ============================================================================
@@ -59,26 +68,48 @@ enum AcceleratorType {
   ACCELERATOR_TYPE_TPU = 3;
 }
 
+// VM manager implementation for a scale group
+enum VmType {
+  VM_TYPE_UNSPECIFIED = 0;
+  VM_TYPE_TPU_VM = 1;
+  VM_TYPE_GCE_VM = 2;
+  VM_TYPE_MANUAL_VM = 3;
+  VM_TYPE_LOCAL_VM = 4;
+}
+
+// Resources available per slice in a scale group.
+message ScaleGroupResources {
+  int32 cpu = 1;
+  int64 memory_bytes = 2;
+  int64 disk_bytes = 3;
+  int32 gpu_count = 4;
+  int32 tpu_count = 5;
+}
+
 // Configuration for a scale group
 message ScaleGroupConfig {
   string name = 1;
-  int32 min_slices = 2;
-  int32 max_slices = 3;
+  VmType vm_type = 2;
+  int32 min_slices = 3 [features.field_presence = EXPLICIT];
+  int32 max_slices = 4 [features.field_presence = EXPLICIT];
 
   // Device configuration
   AcceleratorType accelerator_type = 9;  // Device type: cpu, gpu, or tpu
   string accelerator_variant = 10;       // Device variant: e.g., "v5litepod-16", "A100"
-  string runtime_version = 11;
-  bool preemptible = 12;
+  string topology = 11;                  // Optional topology override (e.g., "4x4")
+  string runtime_version = 12;
+  bool preemptible = 13 [features.field_presence = EXPLICIT];
+  ScaleGroupResources resources = 14;
+  int32 slice_size = 15 [features.field_presence = EXPLICIT];
 
   // Zones to use (in priority order)
   repeated string zones = 20;
 
   // Priority for waterfall routing (lower = higher priority, default 100)
-  int32 priority = 30;
+  int32 priority = 30 [features.field_presence = EXPLICIT];
 
-  // Per-group provider configuration
-  ProviderConfig provider = 90;
+  // Manual provider configuration (required for manual vm_type)
+  ManualProvider manual = 40;
 }
 
 // ============================================================================
@@ -107,7 +138,6 @@ message TimeoutConfig {
 message SshConfig {
   string user = 1;                        // Default: "root"
   string key_file = 2;                    // Path to SSH private key
-  int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
 }
 
@@ -145,13 +175,21 @@ message ControllerVmConfig {
 }
 
 // ============================================================================
-// AUTOSCALER CONFIGURATION
+// DEFAULTS CONFIGURATION
 // ============================================================================
 
-// Configuration for the autoscaler
 message AutoscalerConfig {
   iris.time.Duration evaluation_interval = 1;  // Default: 10s
   iris.time.Duration requesting_timeout = 2;   // Default: 120s
+  iris.time.Duration scale_up_delay = 3;       // Default: 60s
+  iris.time.Duration scale_down_delay = 4;     // Default: 300s
+}
+
+message DefaultsConfig {
+  TimeoutConfig timeouts = 1;
+  SshConfig ssh = 2;
+  AutoscalerConfig autoscaler = 3;
+  BootstrapConfig bootstrap = 4;
 }
 
 // ============================================================================
@@ -160,26 +198,18 @@ message AutoscalerConfig {
 
 // Full cluster configuration - single source of truth
 message IrisClusterConfig {
-  // Provider settings
-  string provider_type = 1;     // "tpu" or "manual"
-  string project_id = 2;
-  string region = 3;
-  string zone = 4;
+  reserved 1 to 4;
+
+  // Platform settings
+  PlatformConfig platform = 10;
+  DefaultsConfig defaults = 11;
 
   // Controller settings
-  ControllerVmConfig controller_vm = 31;
-
-  reserved 40;  // Was: manual_hosts (now specified per-group in provider.manual.hosts)
+  ControllerVmConfig controller = 31;
 
   // Scale groups (name -> config)
   map<string, ScaleGroupConfig> scale_groups = 50;
 
-  // GCP label prefix
-  string label_prefix = 70;     // Default: "iris"
-
-  // Nested configuration
-  BootstrapConfig bootstrap = 80;
-  TimeoutConfig timeouts = 81;
-  SshConfig ssh = 82;
-  AutoscalerConfig autoscaler = 83;
+  reserved 70;  // label_prefix (moved to PlatformConfig)
+  reserved 80 to 83;  // Duplicate fields removed (use defaults.* instead)
 }

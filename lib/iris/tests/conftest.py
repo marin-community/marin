@@ -22,13 +22,43 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import Iterator
-from contextlib import contextmanager
 
 import pytest
-from iris.managed_thread import thread_container_scope
+from iris.cluster.types import DEFAULT_BASE_IMAGE
 from iris.test_util import SentinelFile
 from iris.time_utils import Deadline, Duration
+
+
+def _docker_image_exists(tag: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "images", "-q", tag],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return bool(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+_task_image_available: bool | None = None
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip docker-marked tests if the task image isn't available."""
+    global _task_image_available
+    if _task_image_available is None:
+        _task_image_available = _docker_image_exists(DEFAULT_BASE_IMAGE)
+
+    if _task_image_available:
+        return
+
+    skip = pytest.mark.skip(reason=f"Docker image {DEFAULT_BASE_IMAGE} not built")
+    for item in items:
+        if "docker" in item.keywords:
+            item.add_marker(skip)
+
 
 # httpx logs every HTTP request at INFO level, which floods test output
 # during polling loops (status checks, log fetching).
@@ -66,103 +96,10 @@ def _ensure_logging_health():
             pass
 
 
-def pytest_addoption(parser):
-    parser.addoption(
-        "--use-docker",
-        action="store_true",
-        default=False,
-        help="Use real Docker containers instead of in-process mocks",
-    )
-    parser.addoption(
-        "--update-snapshots",
-        action="store_true",
-        default=False,
-        help="Update golden snapshot files instead of comparing",
-    )
-
-
-@pytest.fixture(scope="session")
-def use_docker(request):
-    return request.config.getoption("--use-docker")
-
-
-# =============================================================================
-# Docker Cleanup Utilities
-# =============================================================================
-# TODO: This before/after snapshot approach can accidentally delete containers
-# created by other processes during the test window. Fix by patching
-# DockerRuntime -> TrackingDockerRuntime at the module level so all Docker
-# operations are tracked explicitly. See review.md for details.
-
-
-def _get_container_ids() -> set[str]:
-    """Get all container IDs (running and stopped)."""
-    result = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True, check=False)
-    return set(result.stdout.strip().split()) if result.stdout.strip() else set()
-
-
-def _get_image_ids() -> set[str]:
-    """Get all image IDs."""
-    result = subprocess.run(["docker", "images", "-q"], capture_output=True, text=True, check=False)
-    return set(result.stdout.strip().split()) if result.stdout.strip() else set()
-
-
-@contextmanager
-def _docker_cleanup(*, cleanup_images: bool = True) -> Iterator[None]:
-    """Context manager that cleans up Docker artifacts created during its scope."""
-    containers_before = _get_container_ids()
-    images_before = _get_image_ids() if cleanup_images else set()
-
-    try:
-        yield
-    finally:
-        for cid in _get_container_ids() - containers_before:
-            subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
-        if cleanup_images:
-            for iid in _get_image_ids() - images_before:
-                subprocess.run(["docker", "rmi", "-f", iid], capture_output=True, check=False)
-
-
-@pytest.fixture
-def docker_cleanup_scope():
-    """Cleans up all Docker containers and images created during the test."""
-    with _docker_cleanup(cleanup_images=True):
-        yield
-
-
-@pytest.fixture(scope="session")
-def docker_cleanup_session(use_docker):
-    """Session-scoped cleanup for e2e tests that use real Docker."""
-    if use_docker:
-        with _docker_cleanup(cleanup_images=True):
-            yield
-    else:
-        # Skip Docker cleanup when not using Docker
-        yield
-
-
 @pytest.fixture
 def sentinel(tmp_path) -> SentinelFile:
     """Per-test sentinel file for blocking/unblocking job threads."""
     return SentinelFile(str(tmp_path / "sentinel"))
-
-
-@pytest.fixture
-def container():
-    """Provides an isolated thread container for the test.
-
-    Automatically cleans up all threads spawned within the container when
-    the test completes. This is the recommended way to use ThreadContainer
-    in tests that need explicit thread management.
-
-    Example:
-        def test_with_threads(container):
-            container.spawn(my_thread_fn, name="test-thread")
-            # Test code...
-            # Cleanup happens automatically
-    """
-    with thread_container_scope("test") as cont:
-        yield cont
 
 
 @pytest.fixture(autouse=True)

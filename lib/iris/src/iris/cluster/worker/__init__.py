@@ -13,7 +13,3 @@
 # limitations under the License.
 
 """Iris worker implementation."""
-
-from iris.cluster.worker.worker import Worker, WorkerConfig
-
-__all__ = ["Worker", "WorkerConfig"]

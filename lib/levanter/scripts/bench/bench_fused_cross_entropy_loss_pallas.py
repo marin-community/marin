@@ -16,6 +16,8 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
 
 _V5P_TFLOPS_BF16_PER_CHIP = 459e12
 _V5P_HBM_BW_BYTES_PER_S_PER_CHIP = 2.765e12
+_V4_TFLOPS_BF16_PER_CHIP = 275e12
+_V4_HBM_BW_BYTES_PER_S_PER_CHIP = 1.2e12
 
 
 def _estimate_v5p_roofline(
@@ -43,6 +45,41 @@ def _estimate_v5p_roofline(
     bytes_per_elem = jnp.dtype(dtype).itemsize
     memory_bytes = (batch * embed + embed * vocab + batch) * bytes_per_elem
     peak_bw = _V5P_HBM_BW_BYTES_PER_S_PER_CHIP * chips
+    memory_time_s = memory_bytes / peak_bw
+
+    return {
+        "device_kind": device_kind,
+        "chips": float(chips),
+        "flops": float(flop_count),
+        "compute_time_s": float(compute_time_s),
+        "memory_time_s": float(memory_time_s),
+        "tokens_per_s": float(batch / max(compute_time_s, memory_time_s)),
+    }
+
+
+def _estimate_v4_roofline(
+    *,
+    batch: int,
+    embed: int,
+    vocab: int,
+    dtype: jnp.dtype,
+    num_devices: int,
+) -> dict[str, float] | None:
+    device_kind = jax.devices()[0].device_kind.lower() if jax.devices() else ""
+    if not device_kind:
+        return None
+    if "v4" not in device_kind:
+        return None
+
+    chips = max(1, num_devices)
+    peak_tflops = _V4_TFLOPS_BF16_PER_CHIP * chips
+
+    flop_count = 2.0 * batch * embed * vocab
+    compute_time_s = flop_count / peak_tflops
+
+    bytes_per_elem = jnp.dtype(dtype).itemsize
+    memory_bytes = (batch * embed + embed * vocab + batch) * bytes_per_elem
+    peak_bw = _V4_HBM_BW_BYTES_PER_S_PER_CHIP * chips
     memory_time_s = memory_bytes / peak_bw
 
     return {
@@ -96,6 +133,14 @@ def main() -> None:
         dtype=accum_dtype,
         num_devices=len(jax.devices()),
     )
+    if roofline is None:
+        roofline = _estimate_v4_roofline(
+            batch=batch * pos,
+            embed=embed,
+            vocab=vocab,
+            dtype=accum_dtype,
+            num_devices=len(jax.devices()),
+        )
     if roofline is not None:
         print("roofline.device_kind", roofline["device_kind"])
         print("roofline.chips", roofline["chips"])

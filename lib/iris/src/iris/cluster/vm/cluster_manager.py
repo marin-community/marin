@@ -25,36 +25,12 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from iris.cluster.vm.controller import ControllerProtocol, create_controller
-from iris.cluster.vm.debug import controller_tunnel
+from iris.cluster.vm.config import IrisConfig
+from iris.cluster.vm.controller_vm import ControllerProtocol, create_controller_vm
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
-
-
-def make_local_config(
-    base_config: config_pb2.IrisClusterConfig,
-) -> config_pb2.IrisClusterConfig:
-    """Override a GCP/manual config to run locally.
-
-    Replaces the controller oneof with LocalControllerConfig and every
-    scale group's provider oneof with LocalProvider. Everything else
-    (accelerator_type, accelerator_variant, min/max_slices) is preserved.
-    """
-    config = config_pb2.IrisClusterConfig()
-    config.CopyFrom(base_config)
-    config.controller_vm.ClearField("controller")
-    config.controller_vm.local.port = 0  # auto-assign
-    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
-    for sg in config.scale_groups.values():
-        sg.provider.ClearField("provider")
-        sg.provider.local.SetInParent()
-    # Local mode needs fast autoscaler evaluation for tests
-    if not config.autoscaler.HasField("evaluation_interval"):
-        config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
-    return config
 
 
 class ClusterManager:
@@ -87,7 +63,7 @@ class ClusterManager:
 
     @property
     def is_local(self) -> bool:
-        return self._config.controller_vm.WhichOneof("controller") == "local"
+        return self._config.controller.WhichOneof("controller") == "local"
 
     def start(self) -> str:
         """Start the controller. Returns the controller address.
@@ -95,7 +71,7 @@ class ClusterManager:
         For GCP: creates a GCE VM, bootstraps, returns internal IP.
         For local: starts in-process Controller, returns localhost URL.
         """
-        self._controller = create_controller(self._config, threads=self._threads)
+        self._controller = create_controller_vm(self._config, threads=self._threads)
         address = self._controller.start()
         logger.info("Controller started at %s (local=%s)", address, self.is_local)
         return address
@@ -131,7 +107,7 @@ class ClusterManager:
             RuntimeError: If controller VM doesn't exist
         """
         # Reload controller - it will re-bootstrap workers on startup
-        self._controller = create_controller(self._config, threads=self._threads)
+        self._controller = create_controller_vm(self._config, threads=self._threads)
         address = self._controller.reload()
         logger.info("Controller reloaded at %s", address)
 
@@ -146,14 +122,11 @@ class ClusterManager:
         """
         address = self.start()
         try:
-            if self.is_local:
-                yield address
-            else:
-                zone = self._config.zone
-                project = self._config.project_id
-                label_prefix = self._config.label_prefix or "iris"
-                with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
-                    yield tunnel_url
+            # Use Platform.tunnel() for consistent connection handling
+            iris_config = IrisConfig(self._config)
+            platform = iris_config.platform()
+            with platform.tunnel(address) as tunnel_url:
+                yield tunnel_url
         finally:
             self.stop()
 

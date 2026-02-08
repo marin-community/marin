@@ -19,9 +19,6 @@ automatic retry logic. When an actor name cannot be resolved immediately
 (e.g., actor server still starting), the client retries with exponential
 backoff until the timeout is reached.
 
-Typical actor startup: 2-8 seconds (Docker container + server initialization).
-Default timeout (30s) handles this gracefully.
-
 Example:
     resolver = ClusterResolver("http://controller:8080")
     client = ActorClient(resolver, "my-actor")
@@ -40,7 +37,7 @@ from typing import Any
 
 import cloudpickle
 
-from iris.actor.resolver import Resolver, ResolveResult
+from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -55,9 +52,10 @@ class ActorClient:
         self,
         resolver: Resolver,
         name: str,
-        timeout: float = 30.0,
+        resolve_timeout: float = 3600.0,
+        call_timeout: float | None = None,
         initial_backoff: float = 0.1,
-        max_backoff: float = 2.0,
+        max_backoff: float = 10.0,
         backoff_factor: float = 2.0,
         backoff_jitter: float = 0.25,
     ):
@@ -66,8 +64,9 @@ class ActorClient:
         Args:
             resolver: Resolver instance for endpoint discovery
             name: Name of the actor to invoke
-            timeout: Total timeout in seconds for resolution + RPC calls.
-                When resolving, retries continue until this timeout is reached.
+            resolve_timeout: Total timeout in seconds for initial worker resolution.
+            call_timeout: Timeout in seconds for RPC calls. Defaults to `timeout`
+                when not specified.
             initial_backoff: Initial retry delay in seconds
             max_backoff: Maximum delay between retries in seconds
             backoff_factor: Multiplier for exponential backoff
@@ -75,16 +74,15 @@ class ActorClient:
         """
         self._resolver = resolver
         self._name = name
-        self._timeout = timeout
+        self._resolve_timeout = resolve_timeout
+        self._call_timeout = resolve_timeout if call_timeout is None else call_timeout
         self._initial_backoff = initial_backoff
         self._max_backoff = max_backoff
         self._backoff_factor = backoff_factor
         self._backoff_jitter = backoff_jitter
-        self._cached_result: ResolveResult | None = None
-        self._client: ActorServiceClientSync | None = None
-        self._client_url: str | None = None
+        self._rpc_client: ActorServiceClientSync | None = None
 
-    def _resolve(self) -> ResolveResult:
+    def rpc_client(self) -> ActorServiceClientSync:
         """Resolve actor name with exponential backoff retry.
 
         Returns:
@@ -93,8 +91,8 @@ class ActorClient:
         Raises:
             TimeoutError: If no endpoints found within timeout
         """
-        if self._cached_result is not None and not self._cached_result.is_empty:
-            return self._cached_result
+        if self._rpc_client:
+            return self._rpc_client
 
         backoff = ExponentialBackoff(
             initial=self._initial_backoff,
@@ -106,47 +104,39 @@ class ActorClient:
         attempt = 0
 
         while True:
+            logger.info("Resolving name %s via %s", self._name, self._resolver)
             result = self._resolver.resolve(self._name)
 
             if not result.is_empty:
-                self._cached_result = result
-                if attempt > 0:
-                    logger.debug(
-                        f"Resolved actor '{self._name}' to {len(result.endpoints)} endpoint(s) "
-                        f"after {attempt} retries in {time.monotonic() - start_time:.2f}s"
-                    )
-                return result
+                logger.info(
+                    f"Resolved actor '{self._name}' to {len(result.endpoints)} endpoint(s) "
+                    f"after {attempt} retries in {time.monotonic() - start_time:.2f}s"
+                )
+                url = result.first().url
+                self._rpc_client = ActorServiceClientSync(
+                    address=url,
+                    timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
+                )
+                return self._rpc_client
 
             elapsed = time.monotonic() - start_time
-            if elapsed >= self._timeout:
-                raise TimeoutError(f"Failed to resolve actor '{self._name}' after {self._timeout}s ({attempt} retries)")
+            if elapsed >= self._resolve_timeout:
+                raise TimeoutError(
+                    f"Failed to resolve actor '{self._name}' after {self._resolve_timeout}s ({attempt} retries)"
+                )
 
             delay = backoff.next_interval()
-            remaining = self._timeout - elapsed
+            remaining = self._resolve_timeout - elapsed
             delay = min(delay, remaining)
 
             if delay > 0:
                 logger.debug(
                     f"Actor '{self._name}' not found, retrying in {delay:.3f}s "
-                    f"(attempt {attempt + 1}, elapsed {elapsed:.2f}s/{self._timeout}s)"
+                    f"(attempt {attempt + 1}, elapsed {elapsed:.2f}s/{self._resolve_timeout}s)"
                 )
                 time.sleep(delay)
 
             attempt += 1
-
-    def _invalidate_cache(self) -> None:
-        self._cached_result = None
-        self._client = None
-        self._client_url = None
-
-    def _get_client(self, url: str) -> ActorServiceClientSync:
-        if self._client is None or self._client_url != url:
-            self._client = ActorServiceClientSync(
-                address=url,
-                timeout_ms=int(self._timeout * 1000),
-            )
-            self._client_url = url
-        return self._client
 
     def __getattr__(self, method_name: str) -> "_RpcMethod":
         return _RpcMethod(self, method_name)
@@ -158,12 +148,6 @@ class _RpcMethod:
         self._method_name = method_name
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        result = self._client._resolve()
-        if result.is_empty:
-            raise RuntimeError(f"No endpoints found for actor '{self._client._name}'")
-
-        endpoint = result.first()
-
         call = actor_pb2.ActorCall(
             method_name=self._method_name,
             actor_name=self._client._name,
@@ -172,10 +156,10 @@ class _RpcMethod:
         )
 
         try:
-            client = self._client._get_client(endpoint.url)
+            client = self._client.rpc_client()
             resp = client.call(call)
         except Exception:
-            self._client._invalidate_cache()
+            self._client._rpc_client = None
             raise
 
         if resp.HasField("error"):
