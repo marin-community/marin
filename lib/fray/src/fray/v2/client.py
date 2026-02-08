@@ -21,7 +21,7 @@ import contextvars
 import logging
 import time
 from collections.abc import Generator, Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from fray.v2.actor import ActorGroup, ActorHandle
 from fray.v2.types import JobRequest, JobStatus, ResourceConfig
@@ -29,7 +29,6 @@ from fray.v2.types import JobRequest, JobStatus, ResourceConfig
 logger = logging.getLogger(__name__)
 
 
-@runtime_checkable
 class JobHandle(Protocol):
     @property
     def job_id(self) -> str: ...
@@ -43,7 +42,6 @@ class JobHandle(Protocol):
     def terminate(self) -> None: ...
 
 
-@runtime_checkable
 class Client(Protocol):
     def submit(self, request: JobRequest) -> JobHandle:
         """Submit a job for execution. Returns immediately."""

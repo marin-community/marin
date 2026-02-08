@@ -179,15 +179,25 @@ def route_demand(
             and (entry.preemptible is None or g.config.preemptible == entry.preemptible)
         ]
         if not matching_groups:
-            unmet.append(UnmetDemand(entry=entry, reason="no_matching_group"))
+            reason = (
+                f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
+                f", available groups={[g.name for g in sorted_groups]}"
+            )
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
         if entry.coschedule_group_id and not any(g.slice_size == len(entry.task_ids) for g in matching_groups):
-            unmet.append(UnmetDemand(entry=entry, reason="coschedule_mismatch"))
+            group_sizes = [g.slice_size for g in matching_groups]
+            reason = (
+                f"coschedule_mismatch: job needs {len(entry.task_ids)} tasks coscheduled"
+                f" but matching groups have slice_size={group_sizes}"
+            )
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
         if not any(g.can_fit_resources(entry.resources) for g in matching_groups):
-            unmet.append(UnmetDemand(entry=entry, reason="insufficient_resources"))
+            reason = f"insufficient_resources: task needs {entry.resources}" f" but no matching group can fit it"
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
         matched_pending = False
