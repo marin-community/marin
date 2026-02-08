@@ -35,7 +35,7 @@ from iris.cluster.types import parse_memory_string
 from iris.cluster.vm.gcp_tpu_platform import TpuVmManager
 from iris.cluster.vm.managed_vm import SshConfig, TrackedVmFactory, VmRegistry
 from iris.cluster.vm.manual_platform import ManualVmManager
-from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.cluster.vm.scaling_group import DEFAULT_HEARTBEAT_GRACE, DEFAULT_STARTUP_GRACE, ScalingGroup
 from iris.cluster.vm.vm_platform import VmManagerProtocol
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
@@ -352,6 +352,9 @@ def make_local_config(
     if not config.HasField("defaults"):
         config.defaults.CopyFrom(config_pb2.DefaultsConfig())
 
+    # Set fast worker timeout for local testing
+    config.controller.worker_timeout.CopyFrom(Duration.from_seconds(5).to_proto())
+
     # Set fast autoscaler timings for local testing
     config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
     config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
@@ -603,6 +606,16 @@ def create_autoscaler(
     # Extract autoscaler settings from config
     scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
     scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
+    startup_grace = (
+        Duration.from_proto(autoscaler_config.startup_grace_period)
+        if autoscaler_config.startup_grace_period.milliseconds > 0
+        else DEFAULT_STARTUP_GRACE
+    )
+    heartbeat_grace = (
+        Duration.from_proto(autoscaler_config.heartbeat_grace_period)
+        if autoscaler_config.heartbeat_grace_period.milliseconds > 0
+        else DEFAULT_HEARTBEAT_GRACE
+    )
 
     # Create scale groups using provided platform
     scaling_groups: dict[str, ScalingGroup] = {}
@@ -614,6 +627,8 @@ def create_autoscaler(
             vm_manager=vm_manager,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
+            startup_grace_period=startup_grace,
+            heartbeat_grace_period=heartbeat_grace,
         )
         logger.info("Created scale group %s", name)
 

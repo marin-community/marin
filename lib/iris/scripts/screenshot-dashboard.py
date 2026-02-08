@@ -97,6 +97,14 @@ def _retry_job():
     return "success after retry"
 
 
+def _zombie_worker_job():
+    """Long-running job whose worker heartbeat will be killed via chaos injection."""
+    import time as _time
+
+    _time.sleep(120)
+    return "done"
+
+
 def _pipeline_parent_job():
     """Parent job that submits child jobs to demonstrate hierarchical tree view."""
     import time as _time
@@ -312,6 +320,16 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     )
     job_ids["pipeline"] = str(job.job_id)
     logger.info("Submitted pipeline parent job (will spawn children): %s", job.job_id)
+
+    # 14. Zombie worker job — heartbeat killed via chaos to demonstrate worker timeout detection
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(_zombie_worker_job),
+        name="snapshot-zombie-worker",
+        resources=ResourceSpec(cpu=1, memory="1g"),
+        environment=EnvironmentSpec(),
+    )
+    job_ids["zombie"] = str(job.job_id)
+    logger.info("Submitted zombie worker job: %s", job.job_id)
 
     return job_ids
 
@@ -732,6 +750,28 @@ def main(config: Path, output_dir: Path, stay_open: bool):
 
         # Brief pause so the running job has time to start
         time.sleep(2.0)
+
+        # Trigger zombie worker scenario: kill heartbeats so the worker times out
+        # (local worker_timeout is 5s). After detection, the autoscaler should
+        # terminate the containing slice via notify_worker_failed.
+        if job_ids.get("zombie"):
+            from iris.chaos import enable_chaos, reset_chaos
+
+            zombie_jid = JobName.from_wire(job_ids["zombie"])
+            logger.info("Waiting for zombie job (%s) to enter RUNNING...", zombie_jid)
+            zombie_deadline = time.monotonic() + 15.0
+            while time.monotonic() < zombie_deadline:
+                status = client.status(zombie_jid)
+                if status.tasks and status.tasks[0].state == cluster_pb2.TASK_STATE_RUNNING:
+                    break
+                time.sleep(0.5)
+
+            logger.info("Enabling chaos: killing worker heartbeats to trigger zombie detection")
+            enable_chaos("worker.heartbeat", failure_rate=1.0)
+            # Wait for worker_timeout (5s) + detection cycle
+            time.sleep(8.0)
+            logger.info("Zombie detection window complete, resetting chaos")
+            reset_chaos()
 
         logger.info("Capturing controller screenshots to %s", output_dir)
         saved = capture_screenshots(url, job_ids, output_dir)

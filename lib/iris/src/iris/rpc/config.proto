@@ -167,6 +167,7 @@ message LocalControllerConfig {
 message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
   string bundle_prefix = 11;    // URI prefix for job bundles (e.g., gs://bucket/path)
+  iris.time.Duration worker_timeout = 12;  // Default: 60s
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;
@@ -183,6 +184,8 @@ message AutoscalerConfig {
   iris.time.Duration requesting_timeout = 2;   // Default: 120s
   iris.time.Duration scale_up_delay = 3;       // Default: 60s
   iris.time.Duration scale_down_delay = 4;     // Default: 300s
+  iris.time.Duration startup_grace_period = 5; // Default: 30min — time for new slices to boot and register workers
+  iris.time.Duration heartbeat_grace_period = 6; // Default: 5min — time after last worker heartbeat before reaping slice
 }
 
 message DefaultsConfig {

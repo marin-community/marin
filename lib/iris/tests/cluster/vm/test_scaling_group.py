@@ -114,6 +114,19 @@ def make_mock_vm_group(
     ]
     status = VmGroupStatus(vms=snapshots)
     mock.status.return_value = status
+
+    # Mock vms() to return objects with info.address for _verify_slice_idle / liveness
+    mock_vms = []
+    for i, state in enumerate(vm_states):
+        vm_mock = MagicMock()
+        vm_mock.info = vm_pb2.VmInfo(
+            vm_id=f"{slice_id}-vm-{i}",
+            state=state,
+            address=f"10.0.{slice_hash}.{i}",
+        )
+        mock_vms.append(vm_mock)
+    mock.vms.return_value = mock_vms
+
     mock.to_proto.return_value = vm_pb2.SliceInfo(
         slice_id=slice_id,
         scale_group=scale_group,
@@ -335,7 +348,8 @@ class TestScalingGroupBackoff:
         group.record_failure(timestamp=ts)
 
         assert group.consecutive_failures == 1
-        assert group.backoff_until_ms == 1005000
+        assert group._backoff_until is not None
+        assert group._backoff_until.as_timestamp().epoch_ms() == 1005000
 
     def test_record_failure_applies_exponential_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Consecutive failures double the backoff time."""
@@ -353,7 +367,8 @@ class TestScalingGroupBackoff:
         group.record_failure(timestamp=ts)  # 20000ms
 
         assert group.consecutive_failures == 3
-        assert group.backoff_until_ms == 1020000
+        assert group._backoff_until is not None
+        assert group._backoff_until.as_timestamp().epoch_ms() == 1020000
 
     def test_backoff_capped_at_maximum(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Backoff duration is capped at max value."""
@@ -371,7 +386,8 @@ class TestScalingGroupBackoff:
             group.record_failure(timestamp=ts)
 
         # Should be capped at max
-        assert group.backoff_until_ms == 1015000
+        assert group._backoff_until is not None
+        assert group._backoff_until.as_timestamp().epoch_ms() == 1015000
 
     def test_scale_up_resets_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Successful scale-up resets backoff state."""
@@ -386,7 +402,7 @@ class TestScalingGroupBackoff:
         group.scale_up(timestamp=Timestamp.from_ms(1100000))
 
         assert group.consecutive_failures == 0
-        assert group.backoff_until_ms == 0
+        assert group._backoff_until is None
 
 
 class TestScalingGroupDemandTracking:
@@ -876,7 +892,8 @@ class TestScalingGroupFailedSliceCleanup:
 
         # Only one failure recorded despite cleaning up 3 slices
         assert group.consecutive_failures == 1
-        assert group.backoff_until_ms == 6000
+        assert group._backoff_until is not None
+        assert group._backoff_until.as_timestamp().epoch_ms() == 6000
 
     def test_cleanup_failed_slices_returns_empty_when_no_failures(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """cleanup_failed_slices() returns empty list when no slices are failed."""
@@ -934,3 +951,116 @@ class TestScalingGroupFailedSliceCleanup:
 
         assert len(cleaned) == 1
         assert group.slice_count() == 0
+
+
+class TestVerifySliceIdle:
+    """Tests for _verify_slice_idle behavior with unknown workers."""
+
+    def test_unknown_workers_do_not_count_as_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """A slice with no workers in the status map is NOT idle (we don't know yet)."""
+        manager = make_mock_vm_manager()
+        group = ScalingGroup(unbounded_config, manager)
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+
+        # Empty status map — no workers known
+        assert not group._verify_slice_idle(vm_group, {})
+
+    def test_known_idle_workers_are_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """A slice where all known workers are idle IS idle."""
+        manager = make_mock_vm_manager()
+        group = ScalingGroup(unbounded_config, manager)
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+
+        # Get VM addresses from mock
+        vm_address = vm_group.vms()[0].info.address
+        status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset())}
+        assert group._verify_slice_idle(vm_group, status_map)
+
+    def test_known_busy_worker_blocks_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """A slice with a known busy worker is NOT idle."""
+        manager = make_mock_vm_manager()
+        group = ScalingGroup(unbounded_config, manager)
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+
+        vm_address = vm_group.vms()[0].info.address
+        status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset({"task-1"}))}
+        assert not group._verify_slice_idle(vm_group, status_map)
+
+
+class TestSliceLivenessTimeout:
+    """Tests for slice liveness tracking and reaping."""
+
+    def test_new_slice_gets_startup_grace(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """scale_up sets a liveness deadline at startup_grace from creation time."""
+        manager = make_mock_vm_manager()
+        grace = Duration.from_seconds(10)
+        group = ScalingGroup(unbounded_config, manager, startup_grace_period=grace)
+
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+
+        state = group._slices.get(vm_group.group_id)
+        assert state is not None
+        assert state.liveness_deadline is not None
+        assert not state.liveness_deadline.expired(now=ts)
+        assert not state.liveness_deadline.expired(now=Timestamp.from_ms(1009000))
+        assert state.liveness_deadline.expired(now=Timestamp.from_ms(1011000))
+
+    def test_liveness_extended_by_heartbeat(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """update_slice_liveness extends deadline when workers appear in status map."""
+        manager = make_mock_vm_manager()
+        startup = Duration.from_seconds(10)
+        heartbeat = Duration.from_seconds(5)
+        group = ScalingGroup(
+            unbounded_config,
+            manager,
+            startup_grace_period=startup,
+            heartbeat_grace_period=heartbeat,
+        )
+
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+        vm_address = vm_group.vms()[0].info.address
+
+        # At t=8s, worker shows up — extends deadline by heartbeat_grace (5s from now)
+        t_heartbeat = Timestamp.from_ms(1008000)
+        group.update_slice_liveness(
+            {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset())}, t_heartbeat
+        )
+
+        deadline = group._slices[vm_group.group_id].liveness_deadline
+        # Should expire at t_heartbeat + 5s = 1013000, not original 1010000
+        assert not deadline.expired(now=Timestamp.from_ms(1012000))
+        assert deadline.expired(now=Timestamp.from_ms(1014000))
+
+    def test_dead_slice_reaped(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Slice that misses its liveness deadline is terminated."""
+        manager = make_mock_vm_manager()
+        grace = Duration.from_seconds(10)
+        group = ScalingGroup(unbounded_config, manager, startup_grace_period=grace)
+
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+        assert group.slice_count() == 1
+
+        # No heartbeats arrive. After grace period, cleanup should reap it.
+        dead = group.cleanup_dead_slices(Timestamp.from_ms(1011000))
+        assert len(dead) == 1
+        assert dead[0].group_id == vm_group.group_id
+        assert group.slice_count() == 0
+
+    def test_alive_slice_not_reaped(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Slice within its grace period is not reaped."""
+        manager = make_mock_vm_manager()
+        grace = Duration.from_seconds(10)
+        group = ScalingGroup(unbounded_config, manager, startup_grace_period=grace)
+
+        ts = Timestamp.from_ms(1000000)
+        group.scale_up(timestamp=ts)
+
+        dead = group.cleanup_dead_slices(Timestamp.from_ms(1005000))
+        assert len(dead) == 0
+        assert group.slice_count() == 1
