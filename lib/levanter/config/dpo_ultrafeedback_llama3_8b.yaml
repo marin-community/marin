@@ -48,7 +48,7 @@ model:
 train_seq_len: 4096
 
 trainer:
-  seed: 1
+  seed: 0
   per_device_parallelism: -1
   per_device_eval_parallelism: -1
   tracker:
@@ -57,7 +57,7 @@ trainer:
     tags: ["dpo", "ultrafeedback", "llama3", "simpo"]
   mp: p=f32,c=bfloat16
   train_batch_size: 128
-  num_train_steps: 478
+  num_train_steps: 2150
   steps_per_eval: 200
   model_averaging: null
   checkpointer:
@@ -70,6 +70,7 @@ optimizer:
   min_lr_ratio: 0.0
   lr_schedule: "cosine"
   warmup: 0.1
+  max_grad_norm: 1.0
 
 reference_model_path: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
 reference_is_hf: true
@@ -79,5 +80,5 @@ validation_split_fraction: null
 initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
 use_hf_model_config: false
 
-hf_save_steps: 477
+hf_save_steps: 1000
 hf_save_path: gs://marin-us-central1/checkpoints/dpo/ultrafeedback_llama3_8b/hf
