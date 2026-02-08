@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Write report on initial Kelp tree diffusion findings with scaling law predictions (#47)
+- Evaluate best checkpoint and file improvement research issues (#42)
+- Run 5-hour training run with augmented subtree bank and checkpoint saving (#41)
 - Research programmatic subtree augmentation for the subtree bank (#39)
 - Run end-to-end training and evaluation loop on laptop to validate tree diffusion pipeline (#38)
 - Add execution-guided reranking using test feedback (#36)
