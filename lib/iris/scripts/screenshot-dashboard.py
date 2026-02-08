@@ -402,6 +402,28 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
         if not child_jobs_found:
             logger.warning("  Pipeline child jobs did not appear within timeout")
 
+        # Wait for pipeline parent to succeed while children are still running
+        logger.info("Waiting for pipeline parent to succeed...")
+        success_deadline = time.monotonic() + 90.0
+        parent_succeeded = False
+        while time.monotonic() < success_deadline:
+            status = client.status(pipeline_jid)
+            if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+                logger.info("  Pipeline parent succeeded")
+                parent_succeeded = True
+                # Verify children are still visible after parent success
+                all_jobs = client.list_jobs()
+                child_jobs = [j for j in all_jobs if j.name.startswith(str(pipeline_jid) + "/")]
+                logger.info("  Child jobs still visible after parent success: %d", len(child_jobs))
+                if len(child_jobs) >= 2:
+                    logger.info("  ✓ Child jobs remain visible after parent succeeds (issue #2694 validation)")
+                else:
+                    logger.warning("  ✗ Child jobs disappeared after parent success (issue #2694 bug reproduced!)")
+                break
+            time.sleep(0.5)
+        if not parent_succeeded:
+            logger.warning("  Pipeline parent did not succeed within timeout")
+
     # Kill the "killed" job after a brief delay so it has time to start
     killed_jid = JobName.from_wire(job_ids["killed"]) if job_ids.get("killed") else None
     if killed_jid:
@@ -529,6 +551,23 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
                 f"job detail {label}",
             )
             path = output_dir / f"job-{label}.png"
+            page.screenshot(path=str(path), full_page=True)
+            saved.append(path)
+
+        # Screenshot pipeline job (parent with children) - captures hierarchical job view
+        # This validates that child jobs remain visible after parent succeeds
+        pipeline_jid = job_ids.get("pipeline")
+        if pipeline_jid:
+            url = f"{dashboard_url}/job/{pipeline_jid}"
+            logger.info("Capturing pipeline job detail (parent with children): %s", pipeline_jid)
+            page.goto(url)
+            page.wait_for_load_state("domcontentloaded")
+            wait_for_ready(
+                "() => document.getElementById('root').children.length > 0"
+                " && !document.body.textContent.includes('Loading')",
+                "job detail pipeline",
+            )
+            path = output_dir / "job-pipeline-with-children.png"
             page.screenshot(path=str(path), full_page=True)
             saved.append(path)
 

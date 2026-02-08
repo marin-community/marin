@@ -473,6 +473,68 @@ def test_parent_job_failure_cascades_to_children(service, state, job_request):
     assert child2_status.job.state == cluster_pb2.JOB_STATE_KILLED, "Child 2 should be killed when parent fails"
 
 
+def test_parent_job_success_preserves_children(service, state, job_request):
+    """Verify when a parent job succeeds, children remain visible."""
+    # Launch parent and children via RPC
+    service.launch_job(job_request("parent"), None)
+    service.launch_job(job_request("/parent/child1"), None)
+    service.launch_job(job_request("/parent/child2"), None)
+
+    # Verify all 3 jobs exist before parent succeeds
+    all_jobs_before = state.list_all_jobs()
+    assert len(all_jobs_before) == 3, f"Should have 3 jobs before parent succeeds, got {len(all_jobs_before)}"
+
+    # Get parent task and mark it as succeeded
+    parent_job = state.get_job(JobName.root("parent"))
+    parent_tasks = state.get_job_tasks(parent_job.job_id)
+    parent_task = parent_tasks[0]
+
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=parent_task.task_id,
+            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            attempt_id=-1,
+        )
+    )
+
+    # Verify parent succeeded
+    parent_status = service.get_job_status(
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("parent").to_wire()), None
+    )
+    assert parent_status.job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Verify all 3 jobs still exist after parent succeeds
+    all_jobs_after = state.list_all_jobs()
+    assert len(all_jobs_after) == 3, f"Should still have 3 jobs after parent succeeds, got {len(all_jobs_after)}"
+
+    # Verify children are still in their original states (PENDING), not cancelled/killed
+    child1_job = state.get_job(JobName.from_string("/parent/child1"))
+    assert child1_job is not None, "Child 1 should still exist in state"
+    assert child1_job.state == cluster_pb2.JOB_STATE_PENDING, "Child 1 should remain PENDING when parent succeeds"
+
+    child2_job = state.get_job(JobName.from_string("/parent/child2"))
+    assert child2_job is not None, "Child 2 should still exist in state"
+    assert child2_job.state == cluster_pb2.JOB_STATE_PENDING, "Child 2 should remain PENDING when parent succeeds"
+
+    # Verify children are visible via get_job_status RPC
+    child1_status = service.get_job_status(
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child1").to_wire()), None
+    )
+    assert child1_status.job.state == cluster_pb2.JOB_STATE_PENDING, "Child 1 should be accessible via RPC"
+
+    child2_status = service.get_job_status(
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child2").to_wire()), None
+    )
+    assert child2_status.job.state == cluster_pb2.JOB_STATE_PENDING, "Child 2 should be accessible via RPC"
+
+    # Verify children are visible in list_jobs
+    list_response = service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
+    job_names = [job.name for job in list_response.jobs]
+    assert "parent" in job_names, "Parent should be in list_jobs"
+    assert "/parent/child1" in job_names, "Child 1 should be visible in list_jobs after parent succeeds"
+    assert "/parent/child2" in job_names, "Child 2 should be visible in list_jobs after parent succeeds"
+
+
 def test_launch_job_rejects_child_of_failed_parent(service, state, job_request):
     """Verify launch_job rejects submissions to a failed parent's namespace."""
     # Launch and fail parent
