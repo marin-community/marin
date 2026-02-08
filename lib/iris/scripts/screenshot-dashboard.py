@@ -148,6 +148,14 @@ def _pipeline_parent_job():
     return "pipeline complete"
 
 
+def _oom_job():
+    """Job that allocates more memory than available, triggering OOM killer."""
+    # Allocate ~200MB which will exceed container memory limit
+    # Use a bytearray for more predictable memory usage
+    data = bytearray(200 * 1024 * 1024)
+    return len(data)
+
+
 # =============================================================================
 # Job submission
 # =============================================================================
@@ -313,6 +321,16 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["pipeline"] = str(job.job_id)
     logger.info("Submitted pipeline parent job (will spawn children): %s", job.job_id)
 
+    # 14. OOM job — allocates more memory than available (demonstrates OOM error display)
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(_oom_job),
+        name="snapshot-oom",
+        resources=ResourceSpec(cpu=1, memory="64m"),  # Limit to 64MB, job will allocate 200MB
+        environment=EnvironmentSpec(),
+    )
+    job_ids["oom"] = str(job.job_id)
+    logger.info("Submitted OOM job (will exceed memory limit): %s", job.job_id)
+
     return job_ids
 
 
@@ -329,9 +347,9 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
         cluster_pb2.JOB_STATE_WORKER_FAILED,
     )
 
-    # Wait for succeeded, failed, and retry jobs first
+    # Wait for succeeded, failed, retry, and oom jobs first
     deadline = time.monotonic() + timeout
-    for name in ["succeeded", "failed", "retry"]:
+    for name in ["succeeded", "failed", "retry", "oom"]:
         jid = JobName.from_wire(job_ids[name])
         logger.info("Waiting for %s job (%s) to finish...", name, jid)
         while time.monotonic() < deadline:
@@ -473,7 +491,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             saved.append(path)
 
         # Screenshot job detail pages
-        for name, label in [("building", "building"), ("failed", "failed"), ("running", "running")]:
+        for name, label in [("building", "building"), ("failed", "failed"), ("running", "running"), ("oom", "failed-oom")]:
             jid = job_ids.get(name)
             if not jid:
                 continue
