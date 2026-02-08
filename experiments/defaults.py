@@ -346,6 +346,7 @@ def default_train(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
+            per_device_parallelism=train_config.per_device_parallelism,
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
@@ -377,6 +378,7 @@ def default_train(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
+        pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,
         train_seq_len=train_length,
         model=model_config,
@@ -469,16 +471,8 @@ def default_sft(
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
-    initialize_from_hf = sft_config.initialize_from_hf
-
-    if initialize_from_hf is None:
-        initialize_from_hf = (
-            sft_config.model_name_or_path is not None and sft_config.initialize_from_checkpoint_path is None
-        )
-    elif initialize_from_hf is True and sft_config.model_name_or_path is None:
-        raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
-    elif initialize_from_hf is False and sft_config.initialize_from_checkpoint_path is None:
-        raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
+    if sft_config.initialize_from_hf is not None and sft_config.initialize_from_checkpoint_path is not None:
+        raise ValueError("Cannot specify both initialize_from_hf and initialize_from_checkpoint_path!")
 
     # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
@@ -487,7 +481,7 @@ def default_sft(
         num_train_steps=sft_config.num_train_steps,
         learning_rate=sft_config.learning_rate,
         lr_schedule=sft_config.lr_schedule,
-        decay=sft_config.cooldown,
+        decay=sft_config.decay,
         weight_decay=sft_config.weight_decay,
         min_lr_ratio=sft_config.min_lr_ratio,
         max_grad_norm=sft_config.max_grad_norm,
@@ -496,10 +490,15 @@ def default_sft(
         steps_per_export=sft_config.steps_per_checkpoint,
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
-        initialize_from_hf=sft_config.model_name_or_path if initialize_from_hf else None,
+        initialize_from_hf=sft_config.initialize_from_hf,
         initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
+        train_seq_len=sft_config.max_seq_len,
         data_seed=sft_config.seed,
         z_loss_weight=sft_config.z_loss_weight,
+        beta1=sft_config.beta1,
+        beta2=sft_config.beta2,
+        pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
+        per_device_parallelism=sft_config.per_device_parallelism,
     )
 
     if sft_config.reinit_tokens:

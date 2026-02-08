@@ -32,10 +32,10 @@ from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
 
 
-def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
-    """Create a minimal Entrypoint proto for testing."""
-    entrypoint = cluster_pb2.Entrypoint()
-    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
+    """Create a minimal RuntimeEntrypoint proto for testing."""
+    entrypoint = cluster_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
@@ -169,7 +169,7 @@ def test_launch_job_returns_job_id(service, job_request):
 
 
 def test_launch_job_rejects_duplicate_name(service, job_request):
-    """Verify launch_job rejects duplicate job names."""
+    """Verify launch_job rejects duplicate job names for running jobs."""
     request = job_request("duplicate-job")
 
     response = service.launch_job(request, None)
@@ -179,7 +179,78 @@ def test_launch_job_rejects_duplicate_name(service, job_request):
         service.launch_job(request, None)
 
     assert exc_info.value.code == Code.ALREADY_EXISTS
-    assert JobName.root("duplicate-job").to_wire() in exc_info.value.message
+    assert "still running" in exc_info.value.message
+
+
+def test_launch_job_replaces_finished_job_by_default(service, state, job_request):
+    """Verify launch_job replaces finished jobs by default."""
+    request = job_request("replaceable-job")
+
+    # Submit initial job
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("replaceable-job").to_wire()
+
+    # Mark the job as failed
+    job = state.get_job(JobName.root("replaceable-job"))
+    assert job is not None
+    tasks = state.get_job_tasks(job.job_id)
+    assert len(tasks) == 1
+    task = tasks[0]
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=task.task_id,
+            new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=-1,
+            error="Test failure",
+        )
+    )
+
+    # Verify job is now failed
+    job = state.get_job(JobName.root("replaceable-job"))
+    assert job.state == cluster_pb2.JOB_STATE_FAILED
+
+    # Submit again - should succeed (replaces the finished job)
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("replaceable-job").to_wire()
+
+    # Verify the new job is pending
+    job = state.get_job(JobName.root("replaceable-job"))
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_request):
+    """Verify fail_if_exists=true prevents replacing finished jobs."""
+    request = job_request("no-replace-job")
+
+    # Submit initial job
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("no-replace-job").to_wire()
+
+    # Mark the job as succeeded
+    job = state.get_job(JobName.root("no-replace-job"))
+    tasks = state.get_job_tasks(job.job_id)
+    task = tasks[0]
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=task.task_id,
+            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            attempt_id=-1,
+        )
+    )
+
+    # Verify job is now succeeded
+    job = state.get_job(JobName.root("no-replace-job"))
+    assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Submit again with fail_if_exists=true - should fail
+    request_no_replace = job_request("no-replace-job")
+    request_no_replace.fail_if_exists = True
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request_no_replace, None)
+
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+    assert "SUCCEEDED" in exc_info.value.message
 
 
 def test_launch_job_rejects_empty_name(service, state):
@@ -333,7 +404,6 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
         job_id=JobName.from_string("/parent/child-succeeded"),
         request=job_request("/parent/child-succeeded"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
-        parent_job_id=JobName.root("parent"),
         finished_at=Timestamp.from_ms(12345),
     )
     state.add_job(child_succeeded)
@@ -363,6 +433,69 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
         None,
     )
     assert parent_status.job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_parent_job_failure_cascades_to_children(service, state, job_request):
+    """Verify when a parent job fails, all children are automatically cancelled."""
+    # Launch parent and children via RPC
+    service.launch_job(job_request("parent"), None)
+    service.launch_job(job_request("/parent/child1"), None)
+    service.launch_job(job_request("/parent/child2"), None)
+
+    # Get parent task and mark it as failed
+    parent_job = state.get_job(JobName.root("parent"))
+    parent_tasks = state.get_job_tasks(parent_job.job_id)
+    parent_task = parent_tasks[0]
+
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=parent_task.task_id,
+            new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=-1,
+            error="Parent task failed",
+        )
+    )
+
+    # Verify all jobs are now in terminal states via get_job_status RPC
+    parent_status = service.get_job_status(
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("parent").to_wire()), None
+    )
+    assert parent_status.job.state == cluster_pb2.JOB_STATE_FAILED
+
+    child1_status = service.get_job_status(
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child1").to_wire()), None
+    )
+    assert child1_status.job.state == cluster_pb2.JOB_STATE_KILLED, "Child 1 should be killed when parent fails"
+
+    child2_status = service.get_job_status(
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child2").to_wire()), None
+    )
+    assert child2_status.job.state == cluster_pb2.JOB_STATE_KILLED, "Child 2 should be killed when parent fails"
+
+
+def test_launch_job_rejects_child_of_failed_parent(service, state, job_request):
+    """Verify launch_job rejects submissions to a failed parent's namespace."""
+    # Launch and fail parent
+    service.launch_job(job_request("failed-parent"), None)
+    parent_job = state.get_job(JobName.root("failed-parent"))
+    parent_tasks = state.get_job_tasks(parent_job.job_id)
+    parent_task = parent_tasks[0]
+
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=parent_task.task_id,
+            new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=-1,
+            error="Parent task failed",
+        )
+    )
+
+    # Try to submit a child job - should fail
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(job_request("/failed-parent/new-child"), None)
+
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert "terminated" in exc_info.value.message.lower() or "failed" in exc_info.value.message.lower()
 
 
 # =============================================================================

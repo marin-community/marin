@@ -51,7 +51,7 @@ scale_groups:
       tpu_count: 8
       gpu_count: 0
     min_slices: 1
-    max_slices: 2
+    max_slices: 4
     zones: [europe-west4-b]
     preemptible: true
     priority: 100
