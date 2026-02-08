@@ -79,5 +79,5 @@ validation_split_fraction: null
 initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
 use_hf_model_config: false
 
-hf_save_steps: 500
+hf_save_steps: 477
 hf_save_path: gs://marin-us-central1/checkpoints/dpo/ultrafeedback_llama3_8b/hf
