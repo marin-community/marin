@@ -39,10 +39,8 @@ import random
 
 from experiments.kelp.tree.subtree_bank import (
     EXPRESSION_TYPES,
-    STATEMENT_TYPES,
     SubtreeBank,
     SubtreeEntry,
-    count_statements,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,9 +50,28 @@ logger = logging.getLogger(__name__)
 # Pools of replacement names, grouped by common usage patterns.
 _SINGLE_LETTER_NAMES = list("abcdefghijklmnopqrstuvwxyz")
 _DESCRIPTIVE_NAMES = [
-    "result", "value", "item", "data", "total", "count", "index",
-    "temp", "output", "current", "prev", "next_val", "acc", "elem",
-    "key", "val", "num", "flag", "start", "end", "size", "length",
+    "result",
+    "value",
+    "item",
+    "data",
+    "total",
+    "count",
+    "index",
+    "temp",
+    "output",
+    "current",
+    "prev",
+    "next_val",
+    "acc",
+    "elem",
+    "key",
+    "val",
+    "num",
+    "flag",
+    "start",
+    "end",
+    "size",
+    "length",
 ]
 _NAME_POOL = _SINGLE_LETTER_NAMES + _DESCRIPTIVE_NAMES
 
@@ -63,17 +80,59 @@ class _NameRewriter(ast.NodeTransformer):
     """Renames non-builtin identifiers according to a mapping."""
 
     # Names we never rename -- builtins, keywords, common stdlib.
-    PROTECTED = frozenset({
-        "True", "False", "None", "self", "cls", "super",
-        "print", "len", "range", "int", "float", "str", "bool",
-        "list", "dict", "set", "tuple", "type", "isinstance",
-        "enumerate", "zip", "map", "filter", "sorted", "reversed",
-        "min", "max", "sum", "abs", "any", "all", "open", "input",
-        "Exception", "ValueError", "TypeError", "KeyError",
-        "IndexError", "RuntimeError", "StopIteration",
-        "__init__", "__str__", "__repr__", "__len__", "__iter__",
-        "__next__", "__getitem__", "__setitem__", "__contains__",
-    })
+    PROTECTED = frozenset(
+        {
+            "True",
+            "False",
+            "None",
+            "self",
+            "cls",
+            "super",
+            "print",
+            "len",
+            "range",
+            "int",
+            "float",
+            "str",
+            "bool",
+            "list",
+            "dict",
+            "set",
+            "tuple",
+            "type",
+            "isinstance",
+            "enumerate",
+            "zip",
+            "map",
+            "filter",
+            "sorted",
+            "reversed",
+            "min",
+            "max",
+            "sum",
+            "abs",
+            "any",
+            "all",
+            "open",
+            "input",
+            "Exception",
+            "ValueError",
+            "TypeError",
+            "KeyError",
+            "IndexError",
+            "RuntimeError",
+            "StopIteration",
+            "__init__",
+            "__str__",
+            "__repr__",
+            "__len__",
+            "__iter__",
+            "__next__",
+            "__getitem__",
+            "__setitem__",
+            "__contains__",
+        }
+    )
 
     def __init__(self, mapping: dict[str, str]):
         self.mapping = mapping
@@ -254,14 +313,43 @@ def perturb_operators(source: str, rng: random.Random, swap_prob: float = 0.3) -
 # slots filled from pools of expressions/names.
 
 _EXPR_ATOMS = [
-    "x", "y", "a", "b", "n", "i", "0", "1", "2", "True", "False", "None",
-    "x + 1", "x - 1", "n + 1", "n - 1", "len(x)", "x[0]", "x[-1]",
+    "x",
+    "y",
+    "a",
+    "b",
+    "n",
+    "i",
+    "0",
+    "1",
+    "2",
+    "True",
+    "False",
+    "None",
+    "x + 1",
+    "x - 1",
+    "n + 1",
+    "n - 1",
+    "len(x)",
+    "x[0]",
+    "x[-1]",
 ]
 
 _COND_ATOMS = [
-    "x > 0", "x < 0", "x == 0", "n > 0", "n <= 1", "x is None",
-    "x is not None", "len(x) > 0", "len(x) == 0", "a > b", "a < b",
-    "a == b", "not x", "x and y", "x or y",
+    "x > 0",
+    "x < 0",
+    "x == 0",
+    "n > 0",
+    "n <= 1",
+    "x is None",
+    "x is not None",
+    "len(x) > 0",
+    "len(x) == 0",
+    "a > b",
+    "a < b",
+    "a == b",
+    "not x",
+    "x and y",
+    "x or y",
 ]
 
 _RETURN_TEMPLATES = [
@@ -343,11 +431,13 @@ def generate_synthetic_subtrees(
                 return
             seen.add(normalized)
             stmt_count = sum(1 for n in ast.walk(tree) if isinstance(n, ast.stmt))
-            entries.append(SubtreeEntry(
-                source=normalized,
-                node_type=node_type,
-                stmt_count=stmt_count,
-            ))
+            entries.append(
+                SubtreeEntry(
+                    source=normalized,
+                    node_type=node_type,
+                    stmt_count=stmt_count,
+                )
+            )
         except SyntaxError:
             return
 
@@ -380,11 +470,13 @@ def generate_synthetic_subtrees(
             node_type = type(tree.body).__name__
             if node_type in EXPRESSION_TYPES and normalized not in seen and len(normalized) >= 5:
                 seen.add(normalized)
-                entries.append(SubtreeEntry(
-                    source=normalized,
-                    node_type=node_type,
-                    stmt_count=0,
-                ))
+                entries.append(
+                    SubtreeEntry(
+                        source=normalized,
+                        node_type=node_type,
+                        stmt_count=0,
+                    )
+                )
         except SyntaxError:
             continue
 
@@ -433,11 +525,13 @@ def augment_bank(
                 variant = rename_variables(entry.source, rng)
                 if variant is not None and (node_type, variant) not in seen:
                     seen.add((node_type, variant))
-                    augmented.add(SubtreeEntry(
-                        source=variant,
-                        node_type=node_type,
-                        stmt_count=entry.stmt_count,
-                    ))
+                    augmented.add(
+                        SubtreeEntry(
+                            source=variant,
+                            node_type=node_type,
+                            stmt_count=entry.stmt_count,
+                        )
+                    )
                     renamed_count += 1
 
     # Generate operator-perturbed variants.
@@ -447,11 +541,13 @@ def augment_bank(
                 variant = perturb_operators(entry.source, rng)
                 if variant is not None and (node_type, variant) not in seen:
                     seen.add((node_type, variant))
-                    augmented.add(SubtreeEntry(
-                        source=variant,
-                        node_type=node_type,
-                        stmt_count=entry.stmt_count,
-                    ))
+                    augmented.add(
+                        SubtreeEntry(
+                            source=variant,
+                            node_type=node_type,
+                            stmt_count=entry.stmt_count,
+                        )
+                    )
                     perturbed_count += 1
 
     # Add synthetic templates.
