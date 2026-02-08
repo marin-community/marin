@@ -24,12 +24,62 @@ of tests they pass, combined with the model's log-probability score.
 """
 
 import logging
+import math
+import multiprocessing
 from dataclasses import dataclass
 
-from experiments.kelp.eval.metrics import execute_python_with_tests
 from experiments.kelp.tree.beam_search import BeamCandidate
 
 logger = logging.getLogger(__name__)
+
+
+def _run_test_in_subprocess(code: str, test: str, queue: multiprocessing.Queue) -> None:
+    """Execute a single test in a subprocess. Must be module-level for pickling."""
+    try:
+        exec_globals: dict = {}
+        exec(code, exec_globals)
+        exec(test, exec_globals)
+        queue.put(True)
+    except Exception:
+        queue.put(False)
+
+
+def execute_python_with_tests(code: str, test_cases: list[str], timeout: float = 5.0) -> list[bool]:
+    """Execute generated code with test cases.
+
+    Each test is run in a separate subprocess with a timeout to handle
+    infinite loops and crashes safely.
+
+    Args:
+        code: Generated Python code.
+        test_cases: List of test assertion strings to execute.
+        timeout: Timeout in seconds for each test.
+
+    Returns:
+        List of booleans indicating whether each test passed.
+    """
+    # Use "fork" context: "spawn" (macOS default) would require the child to
+    # re-import this module and all its heavy dependencies (JAX, etc.), which
+    # is slow and fragile. "fork" copies the parent process memory directly.
+    ctx = multiprocessing.get_context("fork")
+
+    results = []
+    for test in test_cases:
+        queue = ctx.Queue()
+        process = ctx.Process(target=_run_test_in_subprocess, args=(code, test, queue))
+        process.start()
+        process.join(timeout=timeout)
+
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            results.append(False)  # Timeout
+        elif queue.empty():
+            results.append(False)  # Process died without result
+        else:
+            results.append(queue.get())
+
+    return results
 
 
 @dataclass(frozen=True)
@@ -83,8 +133,6 @@ def score_candidate(
     # Normalize model score to roughly [0, 1] range. Log-probs are negative,
     # so we use a sigmoid-like transform. A score of 0 maps to 0.5, very
     # negative scores approach 0.
-    import math
-
     normalized_model_score = 1.0 / (1.0 + math.exp(-candidate.score / 10.0))
 
     combined_score = execution_weight * test_pass_rate + model_weight * normalized_model_score
