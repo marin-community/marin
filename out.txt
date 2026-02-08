@@ -1,670 +1,555 @@
-(<lambda> pid=2088, ip=10.164.0.115) 2026-02-07T13:44:45 - 39 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41500.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2087, ip=10.164.0.116) 2026-02-07T13:44:51 - 21 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41510.0 seconds. Waiting for 32 image items. [repeated 12x across cluster]
-(<lambda> pid=2087, ip=10.164.0.106) 2026-02-07T13:44:56 - 27 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41510.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2089, ip=10.164.0.103) 2026-02-07T13:45:01 - 26 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41520.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-(autoscaler +12h7m37s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +12h7m37s) Resized to 15960 CPUs, 532 TPUs.
-(<lambda> pid=2088, ip=10.164.0.222) 2026-02-07T13:45:06 - 33 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41520.0 seconds. Waiting for 32 image items. [repeated 19x across cluster]
-(<lambda> pid=2087, ip=10.164.0.230) 2026-02-07T13:45:12 - 38 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41530.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T13:45:18 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41540.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2087, ip=10.164.0.219) 2026-02-07T13:45:23 - 42 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41540.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2088, ip=10.164.0.97) 2026-02-07T13:45:28 - 56 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41540.0 seconds. Waiting for 32 image items. [repeated 13x across cluster]
-(autoscaler +12h8m4s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +12h8m4s) Resized to 15960 CPUs, 532 TPUs.
-(<lambda> pid=2087, ip=10.164.0.102) 2026-02-07T13:45:34 - 14 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41540.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2086, ip=10.164.0.90) 2026-02-07T13:45:40 - 62 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41550.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-(<lambda> pid=2088, ip=10.164.0.115) 2026-02-07T13:45:45 - 39 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41560.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2087, ip=10.164.0.116) 2026-02-07T13:45:51 - 21 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41570.0 seconds. Waiting for 32 image items. [repeated 12x across cluster]
-(<lambda> pid=2087, ip=10.164.0.106) 2026-02-07T13:45:56 - 27 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41570.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2089, ip=10.164.0.103) 2026-02-07T13:46:01 - 26 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41580.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-(<lambda> pid=2087, ip=10.164.0.229) 2026-02-07T13:46:06 - 36 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41580.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2087, ip=10.164.0.91) 2026-02-07T13:46:12 - 46 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41590.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-(<lambda> pid=2088, ip=10.164.0.222) 2026-02-07T13:46:17 - 33 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41590.0 seconds. Waiting for 32 image items. [repeated 18x across cluster]
-(<lambda> pid=2087, ip=10.164.0.230) 2026-02-07T13:46:22 - 38 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41600.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-(<lambda> pid=2087, ip=10.164.0.125) 2026-02-07T13:46:28 - 24 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41610.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2087, ip=10.164.0.219) 2026-02-07T13:46:34 - 42 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41610.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2088, ip=10.164.0.97) 2026-02-07T13:46:39 - 56 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41610.0 seconds. Waiting for 32 image items. [repeated 13x across cluster]
-(<lambda> pid=2087, ip=10.164.0.102) 2026-02-07T13:46:44 - 14 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41610.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2086, ip=10.164.0.90) 2026-02-07T13:46:50 - 62 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41620.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-(<lambda> pid=2088, ip=10.164.0.115) 2026-02-07T13:46:56 - 39 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41630.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2087, ip=10.164.0.116) 2026-02-07T13:47:01 - 21 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41640.0 seconds. Waiting for 32 image items. [repeated 12x across cluster]
-(<lambda> pid=2087, ip=10.164.0.106) 2026-02-07T13:47:06 - 27 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41640.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2089, ip=10.164.0.103) 2026-02-07T13:47:12 - 26 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41650.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-(<lambda> pid=2087, ip=10.164.0.229) 2026-02-07T13:47:17 - 36 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41650.0 seconds. Waiting for 32 image items. [repeated 17x across cluster]
-(<lambda> pid=2087, ip=10.164.0.91) 2026-02-07T13:47:22 - 46 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41660.0 seconds. Waiting for 32 image items. [repeated 11x across cluster]
-*** SIGTERM received at time=1770500842 on cpu 4 ***
-PC: @     0x75d07e65c7f8  (unknown)  clock_nanosleep
-    @     0x75d07e5b9520  (unknown)  (unknown)
-    @ ... and at least 7 more frames
-[2026-02-07 13:47:22,838 E 1965423 1965423] logging.cc:474: *** SIGTERM received at time=1770500842 on cpu 4 ***
-[2026-02-07 13:47:22,838 E 1965423 1965423] logging.cc:474: PC: @     0x75d07e65c7f8  (unknown)  clock_nanosleep
-[2026-02-07 13:47:22,838 E 1965423 1965423] logging.cc:474:     @     0x75d07e5b9520  (unknown)  (unknown)
-[2026-02-07 13:47:22,838 E 1965423 1965423] logging.cc:474:     @ ... and at least 7 more frames
-(<lambda> pid=2086, ip=10.164.0.100) 2026-02-07T13:47:22 - 54 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 41660.0 seconds. Waiting for 32 image items. [repeated 4x across cluster]
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-1.7b-stage3_4096-correct-0  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round3_eu_west4.py --force_run_failed true 
-Uninstalled 1 package in 1ms
-Installed 1 package in 90ms
-2026-02-07 23:05:43,128 - INFO - Creating SSH proxy chain through marin-eu-west4
-2026-02-07 23:05:43,128 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-eu-west4': RayPortMapping(dashboard_port=8266, gcs_port=6380, api_port=10002)}
-2026-02-07 23:05:43,133 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '34.6.60.99' (ED25519) to the list of known hosts.
-2026-02-07 23:05:44,135 - INFO - SSH tunnel not ready, retrying in 1s... (2/3)
-2026-02-07 23:05:45,431 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-02-07 23:05:46,033 - INFO - Submitting job with entrypoint:  python experiments/VLM/demo_vlm_train_round3_eu_west4.py --force_run_failed true
-2026-02-07 23:05:46,034 - INFO - Extras: 
-2026-02-07 23:05:46,034 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "EXP_NAME": "vlm-official-qwen3-1.7b-stage3_4096-correct-0",
-    "HF_DATASETS_TRUST_REMOTE_CODE": "true",
-    "TPU_TYPE": "v5litepod-256",
-    "GIT_COMMIT": "357096dd25850b8d6b4d67227f83cfab79d0adb7",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 393 packages in 21ms
-2026-02-07 23:05:46,099 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "EXP_NAME": "vlm-official-qwen3-1.7b-stage3_4096-correct-0", "HF_DATASETS_TRUST_REMOTE_CODE": "true", "TPU_TYPE": "v5litepod-256", "GIT_COMMIT": "357096dd25850b8d6b4d67227f83cfab79d0adb7", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_a49a633c4ec46bb8.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_private3", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-demo_vlm_train_round3_eu_west4-20260207-230540  -- pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4.py --force_run_failed true
-2026-02-07 23:05:46,107 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-02-07 23:05:46,211 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-02-07 23:05:46,218 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-02-07 23:05:46,297 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-02-07 23:05:46,353 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-02-07 23:05:46,394 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-02-07 23:05:46,401 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-02-07 23:05:46,406 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-02-07 23:05:46,508 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-02-07 23:05:46,514 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-02-07 23:05:46,593 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-02-07 23:05:46,650 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-02-07 23:05:46,691 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-02-07 23:05:46,697 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-02-07 23:05:46,999 INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_2a2e591d1b9bce76.zip.
-2026-02-07 23:05:46,999 INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_private3'.
-2026-02-07 23:05:47,000 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-02-07 23:05:47,143 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-02-07 23:05:47,151 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-02-07 23:05:47,251 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-02-07 23:05:47,324 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-02-07 23:05:47,385 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-02-07 23:05:47,396 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-02-07 23:05:50,534 - INFO - Job submitted with ID: ray-run-ruili-demo_vlm_train_round3_eu_west4-20260207-230540
-2026-02-07 23:05:50,534 - INFO - Job URL: http://localhost:8266/#/jobs/ray-run-ruili-demo_vlm_train_round3_eu_west4-20260207-230540
-2026-02-07 15:05:50,456 INFO job_manager.py:579 -- Runtime env is setting up.
-Running entrypoint for job ray-run-ruili-demo_vlm_train_round3_eu_west4-20260207-230540: pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4.py --force_run_failed true
-Found existing installation: opencv-python-headless 4.13.0.92
-Uninstalling opencv-python-headless-4.13.0.92:
-  Successfully uninstalled opencv-python-headless-4.13.0.92
-Collecting opencv-python-headless
-  Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl.metadata (19 kB)
-Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl (60.4 MB)
-Installing collected packages: opencv-python-headless
-Successfully installed opencv-python-headless-4.13.0.92
-
-[notice] A new release of pip is available: 24.3.1 -> 26.0
-[notice] To update, run: pip install --upgrade pip
-2026-02-07 15:06:00,567 - INFO - Using cluster from FRAY_CLUSTER_SPEC=ray
-2026-02-07 15:06:00,685 INFO cluster.py:103 -- Created new namespace: fray_704bba0a
-2026-02-07 15:06:00,685 INFO cluster.py:114 -- Set default job context to RayContext
-2026-02-07 15:06:00,686 INFO executor.py:719 -- ### Inspecting the 1 provided steps ###
-2026-02-07 15:06:00,689 INFO executor.py:727 -- ### Reading 1 statuses ###
-2026-02-07 15:06:00,689 INFO executor.py:737 -- ### Writing metadata ###
-2026-02-07 15:06:00,689 INFO executor.py:1104 -- Writing executor info to gs://marin-eu-west4/experiments/demo_vlm_train_round3_eu_west4-7388b9.json
-2026-02-07 15:06:00,689 INFO executor.py:1107 -- To view the experiment page, go to:
-2026-02-07 15:06:00,690 INFO executor.py:1108 -- 
-2026-02-07 15:06:00,690 INFO executor.py:1109 -- https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/demo_vlm_train_round3_eu_west4-7388b9.json
-2026-02-07 15:06:00,690 INFO executor.py:1110 -- 
-2026-02-07 15:06:00,970 INFO executor.py:740 -- ### Launching 1 steps ###
-2026-02-07 15:06:00,970 INFO executor.py:810 -- checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0>
-2026-02-07 15:06:00,970 INFO executor.py:811 --   output_path = gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-2026-02-07 15:06:00,971 INFO executor.py:812 --   config = {}
-2026-02-07 15:06:01,073 INFO executor.py:1142 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Status checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0>: RUNNING
-2026-02-07 15:06:01,151 INFO executor.py:1161 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Step checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0> has no active lock, taking over.
-2026-02-07 15:06:01,151 INFO executor.py:1163 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Attempting to acquire lock for checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0>
-2026-02-07 15:06:01,220 INFO executor_step_status.py:236 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Found stale lock from ray-marin-eu-west4-head-af1481f3-compute-129538333296448, attempting takeover
-2026-02-07 15:06:01,461 INFO executor.py:1166 -- [ray-marin-eu-west4-head-af1481f3-compute-130418979931968] Acquired lock for checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0: <function run_levanter_train_vlm at 0x769cebd749a0>
-2026-02-07 15:06:01,597 INFO cluster.py:149 -- Launching job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0
-2026-02-07 15:06:01,597 INFO cluster.py:278 -- Building environment for device: cpu/cpu
-2026-02-07 15:06:01,597 INFO cluster.py:283 -- Building environment with [], extras [] for job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0
-2026-02-07 15:06:01,597 INFO cluster.py:298 -- Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'JAX_PLATFORMS': 'cpu', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_704bba0a'}}
-2026-02-07 15:06:01,598 INFO worker.py:1680 -- Using address 10.164.0.2:6379 set in the environment variable RAY_ADDRESS
-2026-02-07 15:06:01,600 INFO worker.py:1821 -- Connecting to existing Ray cluster at address: 10.164.0.2:6379...
-2026-02-07 15:06:01,611 INFO worker.py:1998 -- Connected to Ray cluster. View the dashboard at http://10.164.0.2:8265 
-(raylet) The node with node id: e9e86eca02ca0950f7a3ecf725548e90a5412bc133f0ab11867890c5 and address: 10.164.0.30 and node name: 10.164.0.30 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a (1) raylet crashes unexpectedly (OOM, etc.) 
+(<lambda> pid=5509, ip=10.164.2.71) 2026-02-08T02:30:57 - 2 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5088 rows) in 26.56s
+(<lambda> pid=5509, ip=10.164.2.71) 2026-02-08T02:30:57 - 2 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1858_parquet
+(<lambda> pid=5456, ip=10.164.2.73) 2026-02-08T02:31:06 - 7 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1799_cleaned_parquet
+(<lambda> pid=5520, ip=10.164.2.97) 2026-02-08T02:31:17 - 51 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5016 rows) in 31.71s
+(<lambda> pid=5520, ip=10.164.2.97) 2026-02-08T02:31:17 - 51 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1907_parquet
+(<lambda> pid=5500, ip=10.164.2.94) 2026-02-08T02:31:21 - 54 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.2kit/39.1kit rate:1.5s/it remaining:1:58:25 elapsed:4:11:09 postfix:loss=1.02
+(<lambda> pid=5456, ip=10.164.2.73) 2026-02-08T02:31:29 - 7 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5024 rows) in 22.90s [repeated 2x across cluster]
+(<lambda> pid=5456, ip=10.164.2.73) 2026-02-08T02:31:29 - 7 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1863_parquet [repeated 2x across cluster]
+(<lambda> pid=5504, ip=10.164.2.35) 2026-02-08T02:31:21 - 44 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.2kit/39.1kit rate:1.5s/it remaining:1:58:25 elapsed:4:11:09 postfix:loss=1.02 [repeated 63x across cluster]
+(<lambda> pid=5509, ip=10.164.2.71) 2026-02-08T02:31:39 - 2 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (5074 rows) in 42.74s [repeated 2x across cluster]
+(<lambda> pid=5538, ip=10.164.2.64) 2026-02-08T02:31:30 - 38 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1894_parquet
+(<lambda> pid=5512, ip=10.164.2.67) 2026-02-08T02:31:44 - 17 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1809_parquet
+(raylet) The node with node id: 89f07f72f6eb77cc1e46c272b458ece80a118ef3480536aac774d01f and address: 10.164.0.238 and node name: 10.164.0.238 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
         (2) raylet has lagging heartbeats due to slow network or busy workload.
-(autoscaler +57s) Tip: use `ray status` to view detailed cluster status. To disable these messages, set RAY_SCHEDULER_EVENTS=0.
-(autoscaler +57s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +57s) Resized to 600 CPUs, 20 TPUs.
-(autoscaler +2m12s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +2m12s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +2m12s) Resized to 600 CPUs, 20 TPUs.
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Using provided namespace: fray_704bba0a
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Set default job context to RayContext
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Launching job: train_vlm
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Building environment for device: tpu/v5litepod-256
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Building environment with [], extras ['tpu'] for job: train_vlm
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Resolved 393 packages in 4ms
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '357096dd25850b8d6b4d67227f83cfab79d0adb7', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_704bba0a', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
-(run_levanter_train_vlm pid=2284, ip=10.164.0.113) Launching TPU job train_vlm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '357096dd25850b8d6b4d67227f83cfab79d0adb7', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_704bba0a', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
-(autoscaler +4m42s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +4m42s) Resized to 600 CPUs, 20 TPUs.
-(autoscaler +5m13s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +5m13s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +5m13s) Resized to 840 CPUs, 28 TPUs.
-(autoscaler +8m10s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +8m10s) Resized to 840 CPUs, 28 TPUs.
-(autoscaler +11m0s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +11m0s) Resized to 840 CPUs, 28 TPUs.
-(autoscaler +11m31s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +11m31s) Resized to 840 CPUs, 28 TPUs.
-(autoscaler +11m56s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +11m56s) Resized to 840 CPUs, 28 TPUs.
-(autoscaler +13m5s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +13m5s) Resized to 840 CPUs, 28 TPUs.
-(autoscaler +15m17s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +15m17s) Resized to 4560 CPUs, 152 TPUs.
-(autoscaler +16m5s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +16m5s) Resized to 4560 CPUs, 152 TPUs.
-(autoscaler +16m46s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +16m46s) Resized to 4560 CPUs, 152 TPUs.
-(raylet, ip=10.164.0.238) [2026-02-07 15:22:53,532 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +17m26s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +17m26s) Resized to 4560 CPUs, 152 TPUs.
-(autoscaler +18m6s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +18m6s) Removing 31 nodes of type tpu_slice_v5e_128 (idle).
-(autoscaler +18m6s) Resized to 840 CPUs, 28 TPUs.
-(autoscaler +18m23s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +18m23s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +18m40s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +18m40s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +19m8s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +19m8s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +19m35s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +19m35s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +20m2s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +20m2s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +20m20s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +20m20s) Resized to 8400 CPUs, 280 TPUs.
-(<lambda> pid=2156, ip=10.164.2.92) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-(raylet, ip=10.164.2.64) [2026-02-07 15:22:53,535 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 8x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
-(<lambda> pid=2088, ip=10.164.2.100) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 2x across cluster]
-(autoscaler +21m2s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +21m2s) Resized to 8400 CPUs, 280 TPUs.
-(<lambda> pid=2156, ip=10.164.2.92) 2026-02-07T15:27:34 - 41 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
-(<lambda> pid=2087, ip=10.164.0.251) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 61x across cluster]
-(<lambda> pid=2087, ip=10.164.0.245) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=2088, ip=10.164.0.246) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec.
-(<lambda> pid=2087, ip=10.164.0.245) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=2089, ip=10.164.2.15) wandb: Tracking run with wandb version 0.24.0
-(<lambda> pid=2089, ip=10.164.2.15) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=2089, ip=10.164.2.15) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/wandb/offline-run-20260207_152734-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(autoscaler +21m41s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +21m41s) Resized to 8400 CPUs, 280 TPUs.
-(<lambda> pid=2087, ip=10.164.0.245) wandb: setting up run vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2087, ip=10.164.0.245) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=2087, ip=10.164.0.245) wandb: Resuming run vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2087, ip=10.164.0.245) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
-(<lambda> pid=2087, ip=10.164.0.245) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2089, ip=10.164.2.105) 2026-02-07T15:27:35 - 58 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:35 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:35 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2089, ip=10.164.2.19) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:38 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:38 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2087, ip=10.164.0.243) 2026-02-07T15:27:38 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=2087, ip=10.164.2.93) 2026-02-07T15:27:40 - 27 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:38 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 127x across cluster]
-(<lambda> pid=2087, ip=10.164.2.0) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec. [repeated 62x across cluster]
-(<lambda> pid=2087, ip=10.164.0.245) wandb: Tracking run with wandb version 0.24.0 [repeated 63x across cluster]
-(<lambda> pid=2086, ip=10.164.2.65) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 62x across cluster]
-(<lambda> pid=2087, ip=10.164.0.245) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/wandb/run-20260207_152734-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec [repeated 63x across cluster]
-(<lambda> pid=2086, ip=10.164.2.65) 2026-02-07T15:27:40 - 20 - levanter.checkpoint - checkpoint.py:131 - INFO :: Found prior temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003. We will delete it after saving a new checkpoint.
-(autoscaler +22m24s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +22m24s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +23m0s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +23m0s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +23m33s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +23m33s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +23m54s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +23m54s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +24m11s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +24m11s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +24m43s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +24m43s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +25m10s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +25m10s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +25m43s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +25m43s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +26m10s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +26m10s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +26m48s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +26m48s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +27m35s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +27m35s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +27m53s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +27m53s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +28m10s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +28m10s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +28m38s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +28m38s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +29m10s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +29m10s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +29m38s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +29m38s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +30m0s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +30m0s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +30m17s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +30m17s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +30m30s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +30m30s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +30m47s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +30m47s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +31m4s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +31m4s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +31m37s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +31m37s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +32m9s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +32m9s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +32m31s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +32m31s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +32m59s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +32m59s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +33m16s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +33m16s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +33m43s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +33m43s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +34m16s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +34m16s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +34m38s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +34m38s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +34m55s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +34m55s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +35m22s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +35m22s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +35m40s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +35m40s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +36m7s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +36m7s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +36m35s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +36m35s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +36m52s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +36m52s) Resized to 8400 CPUs, 280 TPUs.
-(autoscaler +37m24s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +37m24s) Resized to 8400 CPUs, 280 TPUs.
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:43:43 - 0 - levanter.data.image - image.py:2497 - INFO :: Initializing streaming dataset (step-based mode)...
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:43:43 - 0 - levanter.data.image - image.py:2507 - INFO :: Found 9437 total shards in 0.00s
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:43:43 - 0 - levanter.data.image - image.py:2516 - INFO :: Worker 0/64: assigned 148 shards (indices 0, 64, ...)
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:43:43 - 0 - levanter.data.image - image.py:3576 - INFO :: Built streaming dataset for train (train): streaming mode
-(<lambda> pid=2087, ip=10.164.2.73) 2026-02-07T15:27:38 - 37 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec [repeated 125x across cluster]
-(<lambda> pid=2087, ip=10.164.0.245) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 63x across cluster]
-(<lambda> pid=2087, ip=10.164.0.245) 2026-02-07T15:27:38 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
-(<lambda> pid=2087, ip=10.164.2.103) 2026-02-07T15:27:40 - 7 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003 [repeated 63x across cluster]
-(<lambda> pid=2089, ip=10.164.2.70) 2026-02-07T15:27:40 - 28 - levanter.checkpoint - checkpoint.py:131 - INFO :: Found prior temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003. We will delete it after saving a new checkpoint. [repeated 63x across cluster]
-(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:44 - 43 - levanter.main.train_vlm - train_vlm.py:683 - INFO :: Using max_num_patches=0 from model config
-(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:44 - 43 - levanter.main.train_vlm - train_vlm.py:691 - INFO :: Using config-based image shape: C=3, H=384, W=384
-(<lambda> pid=2086, ip=10.164.2.65) 2026-02-07T15:43:44 - 20 - levanter.main.train_vlm - train_vlm.py:702 - INFO :: Using compute dtype <class 'jax.numpy.bfloat16'> for pixel values
-(<lambda> pid=2087, ip=10.164.2.24) 2026-02-07T15:43:44 - 13 - levanter.main.train_vlm - train_vlm.py:711 - INFO :: Using VLM checkpoint vocab size 151936 (tokenizer has 151669)
-(autoscaler +37m52s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +37m52s) Resized to 8400 CPUs, 280 TPUs.
-(<lambda> pid=2089, ip=10.164.2.23) 2026-02-07T15:43:46 - 35 - levanter.checkpoint - checkpoint.py:452 - INFO :: Loading checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003
-(<lambda> pid=2089, ip=10.164.2.15) 2026-02-07T15:43:46 - 47 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
-(<lambda> pid=2089, ip=10.164.2.15) 2026-02-07T15:43:46 - 47 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
-(<lambda> pid=2089, ip=10.164.2.15) 2026-02-07T15:43:46 - 47 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'>
-(<lambda> pid=2087, ip=10.164.2.13) I0207 15:43:46.382004    3773 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
-(<lambda> pid=2087, ip=10.164.0.219) 2026-02-07T15:43:52 - 57 - levanter.main.train_vlm - train_vlm.py:810 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory.
-(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:43 - 43 - levanter.data.image - image.py:2497 - INFO :: Initializing streaming dataset (step-based mode)... [repeated 63x across cluster]
-(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:43 - 43 - levanter.data.image - image.py:2507 - INFO :: Found 9437 total shards in 0.00s [repeated 63x across cluster]
-(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:43 - 43 - levanter.data.image - image.py:2516 - INFO :: Worker 43/64: assigned 147 shards (indices 43, 107, ...) [repeated 63x across cluster]
-(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:43:43 - 43 - levanter.data.image - image.py:3576 - INFO :: Built streaming dataset for train (train): streaming mode [repeated 63x across cluster]
-(<lambda> pid=2089, ip=10.164.2.70) 2026-02-07T15:43:46 - 28 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003 [repeated 64x across cluster]
-(<lambda> pid=2089, ip=10.164.2.23) 2026-02-07T15:43:44 - 35 - levanter.main.train_vlm - train_vlm.py:683 - INFO :: Using max_num_patches=0 from model config [repeated 63x across cluster]
-(<lambda> pid=2089, ip=10.164.2.23) 2026-02-07T15:43:44 - 35 - levanter.main.train_vlm - train_vlm.py:691 - INFO :: Using config-based image shape: C=3, H=384, W=384 [repeated 63x across cluster]
-(<lambda> pid=2089, ip=10.164.2.23) 2026-02-07T15:43:44 - 35 - levanter.main.train_vlm - train_vlm.py:702 - INFO :: Using compute dtype <class 'jax.numpy.bfloat16'> for pixel values [repeated 63x across cluster]
-(<lambda> pid=2086, ip=10.164.2.98) 2026-02-07T15:43:44 - 36 - levanter.main.train_vlm - train_vlm.py:711 - INFO :: Using VLM checkpoint vocab size 151936 (tokenizer has 151669) [repeated 63x across cluster]
-(<lambda> pid=2089, ip=10.164.2.70) 2026-02-07T15:43:46 - 28 - levanter.checkpoint - checkpoint.py:452 - INFO :: Loading checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003 [repeated 63x across cluster]
-(<lambda> pid=2087, ip=10.164.0.243) 2026-02-07T15:43:46 - 30 - levanter.tensorstore_serialization - tensorstore_serialization.py:165 - WARNING :: Unknown leaf type <class 'NoneType'> [repeated 2749x across cluster]
-(<lambda> pid=2088, ip=10.164.2.12) I0207 15:43:46.498545    3706 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 63x across cluster]
-(<lambda> pid=2089, ip=10.164.2.19) 2026-02-07T15:43:52 - 56 - levanter.main.train_vlm - train_vlm.py:870 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16)
-(<lambda> pid=2087, ip=10.164.2.14) 2026-02-07T15:43:52 - 10 - levanter.main.train_vlm - train_vlm.py:890 - INFO :: Resume: train -> seek to item 84016/process (total=5377024, step=21004, batch_size=256)
-(<lambda> pid=2089, ip=10.164.2.15) 2026-02-07T15:43:52 - 47 - levanter.data.image - image.py:2770 - INFO :: Starting pipeline with resume: seeking to item 84016
-(<lambda> pid=2087, ip=10.164.2.93) 2026-02-07T15:44:01 - 27 - levanter.data.image - image.py:2570 - WARNING :: shard_num_rows not available for 1243_parquet, loading full shard to count
-(<lambda> pid=2089, ip=10.164.0.99) 2026-02-07T15:43:52 - 38 - levanter.main.train_vlm - train_vlm.py:810 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory. [repeated 63x across cluster]
-(<lambda> pid=2089, ip=10.164.0.99) 2026-02-07T15:43:52 - 38 - levanter.main.train_vlm - train_vlm.py:870 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16) [repeated 63x across cluster]
-(<lambda> pid=2087, ip=10.164.2.0) 2026-02-07T15:43:52 - 53 - levanter.main.train_vlm - train_vlm.py:890 - INFO :: Resume: train -> seek to item 84016/process (total=5377024, step=21004, batch_size=256) [repeated 63x across cluster]
-(<lambda> pid=2087, ip=10.164.0.242) 2026-02-07T15:43:52 - 49 - levanter.data.image - image.py:2770 - INFO :: Starting pipeline with resume: seeking to item 84016 [repeated 63x across cluster]
-(<lambda> pid=2087, ip=10.164.2.93) 2026-02-07T15:44:01 - 27 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
-(<lambda> pid=2087, ip=10.164.2.93) wandb: 
-(<lambda> pid=2087, ip=10.164.2.93) wandb: Run summary:
-(<lambda> pid=2087, ip=10.164.2.93) wandb:                                 backend tpu
-(<lambda> pid=2087, ip=10.164.2.93) wandb:                             num_devices 256
-(<lambda> pid=2087, ip=10.164.2.93) wandb:                               num_hosts 64
-(<lambda> pid=2087, ip=10.164.2.93) wandb:                         parameter_count 2140151024
-(<lambda> pid=2087, ip=10.164.2.93) wandb:                  throughput/device_kind TPU v5 lite
-(<lambda> pid=2087, ip=10.164.2.93) wandb:            throughput/theoretical_flops 5.0432e+16
-(<lambda> pid=2087, ip=10.164.2.93) wandb: throughput/theoretical_flops_per_device 197000000000000.0
-(<lambda> pid=2087, ip=10.164.2.93) wandb: 
-(<lambda> pid=2087, ip=10.164.2.93) wandb: You can sync this run to the cloud by running:
-(<lambda> pid=2087, ip=10.164.2.93) wandb: wandb sync /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/wandb/offline-run-20260207_152734-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2087, ip=10.164.2.93) wandb: Find logs at: ./wandb/offline-run-20260207_152734-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/logs
-(<lambda> pid=2087, ip=10.164.2.93) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7fc768337740>
-(<lambda> pid=2087, ip=10.164.2.93) Traceback (most recent call last):
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=2087, ip=10.164.2.93)     conn.teardown(hooks.exit_code)
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=2087, ip=10.164.2.93)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
-(<lambda> pid=2087, ip=10.164.2.93)     return future.result()
-(<lambda> pid=2087, ip=10.164.2.93)            ^^^^^^^^^^^^^^^
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=2087, ip=10.164.2.93)     return self.__get_result()
-(<lambda> pid=2087, ip=10.164.2.93)            ^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=2087, ip=10.164.2.93)     raise self._exception
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=2087, ip=10.164.2.93)     return await fn()
-(<lambda> pid=2087, ip=10.164.2.93)            ^^^^^^^^^^
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=2087, ip=10.164.2.93)     await self._client.close()
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=2087, ip=10.164.2.93)     await self._writer.wait_closed()
-(<lambda> pid=2087, ip=10.164.2.93)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=2087, ip=10.164.2.93)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=2087, ip=10.164.2.93) BrokenPipeError: [Errno 32] Broken pipe
-(SliceActor pid=2012, ip=10.164.2.92) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2087, ip=10.164.2.93)
-(SliceActor pid=2012, ip=10.164.2.92)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/sharded_datasource.py", line 162, in shard_num_rows
-(SliceActor pid=2012, ip=10.164.2.92)     with fsspec.open(url, "rb") as f:
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
-(SliceActor pid=2012, ip=10.164.2.92)     f = self.fs.open(self.path, mode=mode)
-(SliceActor pid=2012, ip=10.164.2.92)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
-(SliceActor pid=2012, ip=10.164.2.92)     f = self._open(
-(SliceActor pid=2012, ip=10.164.2.92)         ^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
-(SliceActor pid=2012, ip=10.164.2.92)     return GCSFile(
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
-(SliceActor pid=2012, ip=10.164.2.92)     super().__init__(
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
-(SliceActor pid=2012, ip=10.164.2.92)     self.size = self.details["size"]
-(SliceActor pid=2012, ip=10.164.2.92)                 ^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
-(SliceActor pid=2012, ip=10.164.2.92)     self._details = self.fs.info(self.path, generation=self.generation)
-(SliceActor pid=2012, ip=10.164.2.92)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-(SliceActor pid=2012, ip=10.164.2.92)     return sync(self.loop, func, *args, **kwargs)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-(SliceActor pid=2012, ip=10.164.2.92)     raise return_result
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-(SliceActor pid=2012, ip=10.164.2.92)     result[0] = await coro
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
-(SliceActor pid=2012, ip=10.164.2.92)     out = await self._ls(path, **kwargs)
-(SliceActor pid=2012, ip=10.164.2.92)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
-(SliceActor pid=2012, ip=10.164.2.92)     for entry in await self._list_objects(
-(SliceActor pid=2012, ip=10.164.2.92)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
-(SliceActor pid=2012, ip=10.164.2.92)     return [await self._get_object(path)]
-(SliceActor pid=2012, ip=10.164.2.92)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
-(SliceActor pid=2012, ip=10.164.2.92)     res = await self._call(
-(SliceActor pid=2012, ip=10.164.2.92)           ^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-(SliceActor pid=2012, ip=10.164.2.92)     status, headers, info, contents = await self._request(
-(SliceActor pid=2012, ip=10.164.2.92)                                       ^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-(SliceActor pid=2012, ip=10.164.2.92)     return await caller(func, *(extras + args), **kw)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-(SliceActor pid=2012, ip=10.164.2.92)     return await func(*args, **kwargs)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-(SliceActor pid=2012, ip=10.164.2.92)     validate_response(status, contents, path, args)
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
-(SliceActor pid=2012, ip=10.164.2.92)     raise FileNotFoundError(path)
-(SliceActor pid=2012, ip=10.164.2.92) FileNotFoundError: b/marin-vlm/o/stage3_sharded_full%2Ftrain-01243.parquet
-(SliceActor pid=2012, ip=10.164.2.92) 
-(SliceActor pid=2012, ip=10.164.2.92) During handling of the above exception, another exception occurred:
-(SliceActor pid=2012, ip=10.164.2.92) 
-(SliceActor pid=2012, ip=10.164.2.92) ray::<lambda>() (pid=2087, ip=10.164.2.93)
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=2012, ip=10.164.2.92)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=2012, ip=10.164.2.92)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/main/train_vlm.py", line 896, in main
-(SliceActor pid=2012, ip=10.164.2.92)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=2012, ip=10.164.2.92)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 4343, in __init__
-(SliceActor pid=2012, ip=10.164.2.92)     super().__init__(
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=2012, ip=10.164.2.92)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=2012, ip=10.164.2.92)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=2012, ip=10.164.2.92)     return asyncio.run(coro)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)     return runner.run(main)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)     return self._loop.run_until_complete(task)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=2012, ip=10.164.2.92)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=2012, ip=10.164.2.92)     return (await self.get_batch([index]))[0]
-(SliceActor pid=2012, ip=10.164.2.92)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2813, in get_batch
-(SliceActor pid=2012, ip=10.164.2.92)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=2012, ip=10.164.2.92)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2773, in _get_from_cache_or_process
-(SliceActor pid=2012, ip=10.164.2.92)     self._start_pipeline(items_to_skip)
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2549, in _start_pipeline
-(SliceActor pid=2012, ip=10.164.2.92)     self._seek_to_item(items_to_skip)
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2571, in _seek_to_item
-(SliceActor pid=2012, ip=10.164.2.92)     shard_data = list(self.source.open_shard(shard_name))
-(SliceActor pid=2012, ip=10.164.2.92)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 185, in open_shard_at_row
-(SliceActor pid=2012, ip=10.164.2.92)     with fsspec.open(url, "rb") as f:
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
-(SliceActor pid=2012, ip=10.164.2.92)     f = self.fs.open(self.path, mode=mode)
-(SliceActor pid=2012, ip=10.164.2.92)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
-(SliceActor pid=2012, ip=10.164.2.92)     f = self._open(
-(SliceActor pid=2012, ip=10.164.2.92)         ^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
-(SliceActor pid=2012, ip=10.164.2.92)     return GCSFile(
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
-(SliceActor pid=2012, ip=10.164.2.92)     super().__init__(
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
-(SliceActor pid=2012, ip=10.164.2.92)     self.size = self.details["size"]
-(SliceActor pid=2012, ip=10.164.2.92)                 ^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
-(SliceActor pid=2012, ip=10.164.2.92)     self._details = self.fs.info(self.path, generation=self.generation)
-(SliceActor pid=2012, ip=10.164.2.92)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-(SliceActor pid=2012, ip=10.164.2.92)     return sync(self.loop, func, *args, **kwargs)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-(SliceActor pid=2012, ip=10.164.2.92)     raise return_result
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-(SliceActor pid=2012, ip=10.164.2.92)     result[0] = await coro
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
-(SliceActor pid=2012, ip=10.164.2.92)     out = await self._ls(path, **kwargs)
-(SliceActor pid=2012, ip=10.164.2.92)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
-(SliceActor pid=2012, ip=10.164.2.92)     for entry in await self._list_objects(
-(SliceActor pid=2012, ip=10.164.2.92)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
-(SliceActor pid=2012, ip=10.164.2.92)     return [await self._get_object(path)]
-(SliceActor pid=2012, ip=10.164.2.92)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
-(SliceActor pid=2012, ip=10.164.2.92)     res = await self._call(
-(SliceActor pid=2012, ip=10.164.2.92)           ^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-(SliceActor pid=2012, ip=10.164.2.92)     status, headers, info, contents = await self._request(
-(SliceActor pid=2012, ip=10.164.2.92)                                       ^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-(SliceActor pid=2012, ip=10.164.2.92)     return await caller(func, *(extras + args), **kw)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-(SliceActor pid=2012, ip=10.164.2.92)     return await func(*args, **kwargs)
-(SliceActor pid=2012, ip=10.164.2.92)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-(SliceActor pid=2012, ip=10.164.2.92)     validate_response(status, contents, path, args)
-(SliceActor pid=2012, ip=10.164.2.92)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
-(SliceActor pid=2012, ip=10.164.2.92)     raise FileNotFoundError(path)
-(SliceActor pid=2012, ip=10.164.2.92) FileNotFoundError: b/marin-vlm/o/stage3_sharded_full%2Ftrain-01243.parquet
-(run_on_pod_ray pid=2285, ip=10.164.0.113) Task error ray::<lambda>() (pid=2087, ip=10.164.2.93)
-(run_on_pod_ray pid=2285, ip=10.164.0.113) 
-(run_on_pod_ray pid=2285, ip=10.164.0.113) 
-(run_on_pod_ray pid=2285, ip=10.164.0.113) ray::<lambda>() (pid=2087, ip=10.164.2.93)
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return func(*args, **kwargs)
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=2285, ip=10.164.0.113) ray.exceptions.RayTaskError(FileNotFoundError): ray::<lambda>() (pid=2087, ip=10.164.2.93)
-(run_on_pod_ray pid=2285, ip=10.164.0.113) 
-(run_on_pod_ray pid=2285, ip=10.164.0.113) 
-(run_on_pod_ray pid=2285, ip=10.164.0.113) ray::<lambda>() (pid=2087, ip=10.164.2.93)
-(<lambda> pid=2087, ip=10.164.2.93) E0207 15:44:02.901008    2284 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=2087, ip=10.164.2.93) F0207 15:44:02.901032    2284 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=2087, ip=10.164.2.93) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=2087, ip=10.164.2.93) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
-(run_on_pod_ray pid=2285, ip=10.164.0.113) Failed 1 times. Continuing to retry.
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return func(*args, **kwargs)
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=2285, ip=10.164.0.113) ray.exceptions.RayTaskError(FileNotFoundError): ray::<lambda>() (pid=2087, ip=10.164.2.93)
-(run_on_pod_ray pid=2285, ip=10.164.0.113) 
-(run_on_pod_ray pid=2285, ip=10.164.0.113) 
-(run_on_pod_ray pid=2285, ip=10.164.0.113) ray::<lambda>() (pid=2087, ip=10.164.2.93)
-(<lambda> pid=2089, ip=10.164.0.246) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-(<lambda> pid=2088, ip=10.164.2.16) 2026-02-07T15:44:01 - 43 - levanter.data.image - image.py:2570 - WARNING :: shard_num_rows not available for 1259_parquet, loading full shard to count [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113) Traceback (most recent call last): [repeated 2x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run [repeated 12x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                 ^^^^^^^^^^ [repeated 10x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/sharded_datasource.py", line 162, in shard_num_rows [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     with fsspec.open(url, "rb") as f: [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     f = self.fs.open(self.path, mode=mode) [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     f = self._open( [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)         ^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return GCSFile( [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__ [repeated 18x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     super().__init__( [repeated 9x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     self.size = self.details["size"] [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                 ^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     self._details = self.fs.info(self.path, generation=self.generation) [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper [repeated 8x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return sync(self.loop, func, *args, **kwargs) [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     raise return_result [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     result[0] = await coro [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     out = await self._ls(path, **kwargs) [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     for entry in await self._list_objects( [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                  ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return [await self._get_object(path)] [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     res = await self._call( [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)           ^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     status, headers, info, contents = await self._request( [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                                       ^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return await caller(func, *(extras + args), **kw) [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return await func(*args, **kwargs) [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     validate_response(status, contents, path, args) [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     raise FileNotFoundError(path) [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113) FileNotFoundError: b/marin-vlm/o/stage3_sharded_full%2Ftrain-01243.parquet [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113) During handling of the above exception, another exception occurred: [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/main/train_vlm.py", line 896, in main [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     initial_example = blocking_wait(self.data_store.getitem_async(0)) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return asyncio.run(coro) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return runner.run(main) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return self._loop.run_until_complete(task) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async [repeated 6x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return await dataset.getitem_async(dataset_index) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return (await self.get_batch([index]))[0] [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2813, in get_batch [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     result = self.fn(*self.args, **self.kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2773, in _get_from_cache_or_process [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     self._start_pipeline(items_to_skip) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2549, in _start_pipeline [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     self._seek_to_item(items_to_skip) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 2571, in _seek_to_item [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)     shard_data = list(self.source.open_shard(shard_name)) [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2285, ip=10.164.0.113)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/lib/levanter/src/levanter/data/image.py", line 185, in open_shard_at_row [repeated 3x across cluster]
-(autoscaler +38m24s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +38m24s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +38m24s) Resized to 8400 CPUs, 280 TPUs.
-(<lambda> pid=2089, ip=10.164.2.95) 2026-02-07T15:44:22 - 18 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
-(<lambda> pid=2089, ip=10.164.2.16) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 63x across cluster]
-(<lambda> pid=2088, ip=10.164.0.245) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=2088, ip=10.164.2.14) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec.
-(<lambda> pid=2089, ip=10.164.2.95) wandb: Tracking run with wandb version 0.24.0
-(<lambda> pid=2089, ip=10.164.2.95) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=2089, ip=10.164.2.95) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_2a2e591d1b9bce76/wandb/offline-run-20260207_154422-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2088, ip=10.164.0.245) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=2088, ip=10.164.0.245) wandb: setting up run vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2088, ip=10.164.0.245) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=2088, ip=10.164.0.245) wandb: Resuming run vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2088, ip=10.164.0.245) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
-(<lambda> pid=2088, ip=10.164.0.245) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2089, ip=10.164.0.244) 2026-02-07T15:44:24 - 6 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:24 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
-(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:24 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2091, ip=10.164.0.248) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:26 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
-(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:26 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec
-(<lambda> pid=2091, ip=10.164.2.1) 2026-02-07T15:44:26 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=2089, ip=10.164.0.247) 2026-02-07T15:44:27 - 1 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003
-(<lambda> pid=2088, ip=10.164.0.245) 2026-02-07T15:44:26 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 127x across cluster]
-(<lambda> pid=2089, ip=10.164.0.252) 2026-02-07T15:44:27 - 26 - levanter.checkpoint - checkpoint.py:131 - INFO :: Found prior temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-21003. We will delete it after saving a new checkpoint.
+(<lambda> pid=5520, ip=10.164.2.97) 2026-02-08T02:31:49 - 51 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4941 rows) in 31.72s
+(<lambda> pid=5478, ip=10.164.2.49) 2026-02-08T02:31:44 - 13 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1805_parquet [repeated 2x across cluster]
+(<lambda> pid=5497, ip=10.164.2.44) 2026-02-08T02:31:53 - 25 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4925 rows) in 33.55s
+(<lambda> pid=5477, ip=10.164.2.107) 2026-02-08T02:32:01 - 60 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1852_parquet [repeated 2x across cluster]
+(<lambda> pid=5456, ip=10.164.2.73) 2026-02-08T02:32:02 - 7 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4969 rows) in 33.61s
+(<lambda> pid=5512, ip=10.164.2.67) 2026-02-08T02:32:15 - 17 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1873_parquet
+(<lambda> pid=5512, ip=10.164.2.67) 2026-02-08T02:32:15 - 17 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4978 rows) in 30.66s [repeated 2x across cluster]
+(<lambda> pid=5493, ip=10.164.2.51) 2026-02-08T02:32:21 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.3kit/39.1kit rate:1.2s/it remaining:1:38:41 elapsed:4:12:09 postfix:loss=0.92
+(<lambda> pid=5414, ip=10.164.2.38) 2026-02-08T02:32:19 - 35 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1891_parquet
+(<lambda> pid=5414, ip=10.164.2.38) 2026-02-08T02:32:19 - 35 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5018 rows) in 34.57s
+(<lambda> pid=5474, ip=10.164.2.104) 2026-02-08T02:32:21 - 20 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1812_parquet
+(<lambda> pid=5478, ip=10.164.2.49) 2026-02-08T02:32:23 - 13 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5070 rows) in 38.66s
+(<lambda> pid=5550, ip=10.164.2.93) 2026-02-08T02:32:21 - 32 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.3kit/39.1kit rate:1.2s/it remaining:1:38:41 elapsed:4:12:09 postfix:loss=0.92 [repeated 63x across cluster]
+(<lambda> pid=5478, ip=10.164.2.49) 2026-02-08T02:32:23 - 13 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1869_parquet [repeated 3x across cluster]
+(<lambda> pid=5558, ip=10.164.2.99) 2026-02-08T02:32:28 - 24 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5064 rows) in 36.02s
+(<lambda> pid=5477, ip=10.164.2.107) 2026-02-08T02:32:32 - 60 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4919 rows) in 30.40s
+(<lambda> pid=5483, ip=10.164.2.22) 2026-02-08T02:32:42 - 48 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1840_parquet [repeated 3x across cluster]
+(<lambda> pid=5493, ip=10.164.2.51) 2026-02-08T02:32:50 - 3 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1795_cleaned_parquet [repeated 2x across cluster]
+(autoscaler +5h33m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h33m10s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5478, ip=10.164.2.49) 2026-02-08T02:32:54 - 13 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (5016 rows) in 31.28s
+(<lambda> pid=5474, ip=10.164.2.104) 2026-02-08T02:32:58 - 20 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1876_parquet [repeated 4x across cluster]
+(<lambda> pid=5518, ip=10.164.2.31) 2026-02-08T02:32:58 - 56 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5088 rows) in 37.00s [repeated 4x across cluster]
+(<lambda> pid=5514, ip=10.164.2.60) 2026-02-08T02:33:00 - 53 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1909_parquet [repeated 4x across cluster]
+(<lambda> pid=5558, ip=10.164.2.99) 2026-02-08T02:33:06 - 24 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (5075 rows) in 37.85s [repeated 3x across cluster]
+(<lambda> pid=5483, ip=10.164.2.22) 2026-02-08T02:33:10 - 48 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1904_parquet [repeated 2x across cluster]
+(<lambda> pid=5493, ip=10.164.2.51) 2026-02-08T02:33:11 - 3 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4927 rows) in 21.06s [repeated 2x across cluster]
+(<lambda> pid=5450, ip=10.164.2.50) 2026-02-08T02:33:17 - 46 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1902_parquet [repeated 3x across cluster]
+(<lambda> pid=5450, ip=10.164.2.50) 2026-02-08T02:33:17 - 46 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4944 rows) in 35.41s [repeated 2x across cluster]
+(<lambda> pid=5518, ip=10.164.2.31) 2026-02-08T02:33:22 - 56 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.3kit/39.1kit rate:1.3s/it remaining:1:44:04 elapsed:4:13:09 postfix:loss=1.21
+(<lambda> pid=5492, ip=10.164.2.102) 2026-02-08T02:33:19 - 59 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1851_parquet
+(<lambda> pid=5454, ip=10.164.2.105) 2026-02-08T02:33:22 - 43 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5025 rows) in 31.76s
+(<lambda> pid=5454, ip=10.164.2.105) 2026-02-08T02:33:22 - 43 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1899_parquet
+(<lambda> pid=5562, ip=10.164.2.25) 2026-02-08T02:33:22 - 33 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5012 rows) in 32.20s
+(<lambda> pid=5454, ip=10.164.2.105) 2026-02-08T02:33:22 - 43 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.3kit/39.1kit rate:1.3s/it remaining:1:44:40 elapsed:4:13:09 postfix:loss=1.21 [repeated 63x across cluster]
+(<lambda> pid=5643, ip=10.164.2.52) 2026-02-08T02:33:28 - 21 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1877_parquet [repeated 2x across cluster]
+(<lambda> pid=5643, ip=10.164.2.52) 2026-02-08T02:33:28 - 21 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5000 rows) in 28.82s
+(<lambda> pid=5448, ip=10.164.2.66) 2026-02-08T02:33:29 - 30 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4957 rows) in 29.27s
+(<lambda> pid=5550, ip=10.164.2.93) 2026-02-08T02:33:32 - 32 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1824_parquet [repeated 3x across cluster]
+(<lambda> pid=5514, ip=10.164.2.60) 2026-02-08T02:33:39 - 53 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4993 rows) in 39.51s [repeated 4x across cluster]
+(<lambda> pid=5558, ip=10.164.2.21) 2026-02-08T02:33:42 - 47 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1839_parquet [repeated 2x across cluster]
+(<lambda> pid=5493, ip=10.164.2.51) 2026-02-08T02:33:46 - 3 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4987 rows) in 34.55s [repeated 2x across cluster]
+(<lambda> pid=5470, ip=10.164.2.43) 2026-02-08T02:33:52 - 22 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1814_parquet
+(<lambda> pid=5488, ip=10.164.2.33) 2026-02-08T02:33:52 - 62 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1854_parquet
+(raylet) The node with node id: c5da519c568c60b8bfb9b50ff433c7aa9025f9cd8ffe47fa07e3f44b and address: 10.164.0.253 and node name: 10.164.0.253 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 63x across cluster]
+(<lambda> pid=5492, ip=10.164.2.102) 2026-02-08T02:33:53 - 59 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5065 rows) in 34.50s
+(<lambda> pid=5492, ip=10.164.2.102) 2026-02-08T02:33:53 - 59 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1915_parquet [repeated 4x across cluster]
+(<lambda> pid=5562, ip=10.164.2.25) 2026-02-08T02:33:58 - 33 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (5098 rows) in 35.62s [repeated 4x across cluster]
+(raylet) The node with node id: 8b783176518c40b37e16303b4471a6c1d7c3cffb9f35a7e133fb52ad and address: 10.164.15.199 and node name: 10.164.15.199 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(<lambda> pid=5453, ip=10.164.2.47) 2026-02-08T02:34:01 - 14 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1806_parquet [repeated 2x across cluster]
+(<lambda> pid=5550, ip=10.164.2.93) 2026-02-08T02:34:08 - 32 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4979 rows) in 36.40s [repeated 4x across cluster]
+(<lambda> pid=5546, ip=10.164.2.57) 2026-02-08T02:34:12 - 15 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1807_parquet [repeated 2x across cluster]
+(autoscaler +5h34m30s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h34m30s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +5h34m30s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +5h34m30s) Resized to 8520 CPUs, 284 TPUs.
+(<lambda> pid=5558, ip=10.164.2.21) 2026-02-08T02:34:13 - 47 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5008 rows) in 31.00s
+(<lambda> pid=5473, ip=10.164.2.58) 2026-02-08T02:34:14 - 52 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4897 rows) in 31.59s
+(<lambda> pid=5470, ip=10.164.2.43) 2026-02-08T02:34:19 - 22 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1878_parquet [repeated 4x across cluster]
+(<lambda> pid=5470, ip=10.164.2.43) 2026-02-08T02:34:19 - 22 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5116 rows) in 26.78s
+(<lambda> pid=5488, ip=10.164.2.33) 2026-02-08T02:34:21 - 62 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4906 rows) in 28.96s
+(<lambda> pid=5473, ip=10.164.2.56) 2026-02-08T02:34:22 - 42 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.4kit/39.1kit rate:1.1s/it remaining:1:24:02 elapsed:4:14:10 postfix:loss=1.18
+(<lambda> pid=5530, ip=10.164.2.53) 2026-02-08T02:34:26 - 28 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1884_parquet [repeated 4x across cluster]
+(<lambda> pid=5530, ip=10.164.2.53) 2026-02-08T02:34:26 - 28 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5039 rows) in 34.36s [repeated 2x across cluster]
+(<lambda> pid=5558, ip=10.164.2.99) 2026-02-08T02:34:22 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.4kit/39.1kit rate:1.1s/it remaining:1:24:02 elapsed:4:14:10 postfix:loss=1.18 [repeated 63x across cluster]
+(<lambda> pid=5430, ip=10.164.2.46) 2026-02-08T02:34:34 - 58 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1914_parquet [repeated 5x across cluster]
+(<lambda> pid=5430, ip=10.164.2.46) 2026-02-08T02:34:34 - 58 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4974 rows) in 32.81s [repeated 3x across cluster]
+(<lambda> pid=6243, ip=10.164.2.103) 2026-02-08T02:34:42 - 18 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1810_parquet [repeated 2x across cluster]
+(<lambda> pid=5453, ip=10.164.2.47) 2026-02-08T02:34:39 - 14 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5031 rows) in 37.62s
+(<lambda> pid=5546, ip=10.164.2.57) 2026-02-08T02:34:42 - 15 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4858 rows) in 30.05s
+(<lambda> pid=5482, ip=10.164.2.100) 2026-02-08T02:34:46 - 63 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1919_parquet [repeated 4x across cluster]
+(<lambda> pid=5558, ip=10.164.2.21) 2026-02-08T02:34:47 - 47 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4888 rows) in 34.07s [repeated 2x across cluster]
+(<lambda> pid=5543, ip=10.164.2.45) 2026-02-08T02:34:53 - 29 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1821_parquet [repeated 2x across cluster]
+(<lambda> pid=5624, ip=10.164.2.72) 2026-02-08T02:34:51 - 37 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5064 rows) in 30.59s [repeated 2x across cluster]
+(<lambda> pid=5439, ip=10.164.2.65) 2026-02-08T02:34:55 - 6 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1862_parquet [repeated 2x across cluster]
+(<lambda> pid=5493, ip=10.164.2.69) 2026-02-08T02:35:00 - 39 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (5007 rows) in 38.44s [repeated 4x across cluster]
+(<lambda> pid=5495, ip=10.164.2.92) 2026-02-08T02:35:05 - 16 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1808_parquet [repeated 3x across cluster]
+(<lambda> pid=5535, ip=10.164.2.32) 2026-02-08T02:35:04 - 45 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5082 rows) in 32.73s [repeated 4x across cluster]
+(<lambda> pid=6243, ip=10.164.2.103) 2026-02-08T02:35:08 - 18 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1874_parquet [repeated 3x across cluster]
+(<lambda> pid=5430, ip=10.164.2.46) 2026-02-08T02:35:12 - 58 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4921 rows) in 37.56s [repeated 3x across cluster]
+(<lambda> pid=5473, ip=10.164.2.56) 2026-02-08T02:35:17 - 42 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1834_parquet [repeated 3x across cluster]
+(<lambda> pid=5513, ip=10.164.2.36) 2026-02-08T02:35:16 - 61 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5067 rows) in 34.06s [repeated 3x across cluster]
+(<lambda> pid=5493, ip=10.164.2.69) 2026-02-08T02:35:23 - 39 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.4kit/39.1kit rate:1.1s/it remaining:1:28:49 elapsed:4:15:10 postfix:loss=1.08
+(<lambda> pid=5686, ip=10.164.2.95) 2026-02-08T02:35:17 - 26 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1818_parquet
+(<lambda> pid=5624, ip=10.164.2.72) 2026-02-08T02:35:21 - 37 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4931 rows) in 30.32s [repeated 2x across cluster]
+(<lambda> pid=5472, ip=10.164.2.101) 2026-02-08T02:35:27 - 1 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1857_parquet
+(<lambda> pid=5477, ip=10.164.2.106) 2026-02-08T02:35:23 - 19 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.4kit/39.1kit rate:1.1s/it remaining:1:28:48 elapsed:4:15:10 postfix:loss=1.08 [repeated 63x across cluster]
+(<lambda> pid=5509, ip=10.164.2.30) 2026-02-08T02:35:28 - 49 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5033 rows) in 34.32s [repeated 4x across cluster]
+(<lambda> pid=5477, ip=10.164.2.68) 2026-02-08T02:35:36 - 8 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1800_parquet [repeated 5x across cluster]
+(<lambda> pid=5543, ip=10.164.2.45) 2026-02-08T02:35:29 - 29 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4992 rows) in 35.88s
+(<lambda> pid=5479, ip=10.164.2.96) 2026-02-08T02:35:38 - 31 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4972 rows) in 34.93s
+(<lambda> pid=5504, ip=10.164.2.35) 2026-02-08T02:35:39 - 44 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1900_parquet
+(<lambda> pid=5494, ip=10.164.2.42) 2026-02-08T02:35:44 - 40 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4945 rows) in 30.60s [repeated 4x across cluster]
+(<lambda> pid=5495, ip=10.164.2.92) 2026-02-08T02:35:44 - 16 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1872_parquet
+(<lambda> pid=5500, ip=10.164.2.94) 2026-02-08T02:35:56 - 54 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4904 rows) in 29.21s [repeated 3x across cluster]
+(<lambda> pid=5500, ip=10.164.2.94) 2026-02-08T02:35:56 - 54 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1910_parquet [repeated 4x across cluster]
+(<lambda> pid=5513, ip=10.164.2.36) 2026-02-08T02:36:01 - 61 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4926 rows) in 45.82s [repeated 5x across cluster]
+(<lambda> pid=5553, ip=10.164.2.23) 2026-02-08T02:35:57 - 27 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1883_parquet [repeated 2x across cluster]
+(<lambda> pid=5457, ip=10.164.2.28) 2026-02-08T02:36:08 - 55 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1847_parquet
+(<lambda> pid=5477, ip=10.164.2.68) 2026-02-08T02:36:09 - 8 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5004 rows) in 33.32s
+(<lambda> pid=5477, ip=10.164.2.68) 2026-02-08T02:36:09 - 8 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1864_parquet
+(<lambda> pid=5515, ip=10.164.2.55) 2026-02-08T02:36:17 - 57 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4922 rows) in 30.73s [repeated 2x across cluster]
+(<lambda> pid=5515, ip=10.164.2.55) 2026-02-08T02:36:17 - 57 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1913_parquet
+(<lambda> pid=5492, ip=10.164.2.54) 2026-02-08T02:36:18 - 34 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1826_parquet
+(<lambda> pid=5473, ip=10.164.2.58) 2026-02-08T02:36:23 - 52 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.5kit/39.1kit rate:1.2s/it remaining:1:30:04 elapsed:4:16:10 postfix:loss=1.07
+(<lambda> pid=5477, ip=10.164.2.106) 2026-02-08T02:36:21 - 19 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5037 rows) in 35.57s [repeated 3x across cluster]
+(<lambda> pid=5497, ip=10.164.2.98) 2026-02-08T02:36:24 - 50 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 34456.
+(<lambda> pid=5497, ip=10.164.2.98) 2026-02-08T02:36:24 - 50 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 34456 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456
+(<lambda> pid=5477, ip=10.164.2.106) 2026-02-08T02:36:21 - 19 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1875_parquet
+(<lambda> pid=5500, ip=10.164.2.94) 2026-02-08T02:36:24 - 54 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456 for step 34456
+(<lambda> pid=6243, ip=10.164.2.103) 2026-02-08T02:36:23 - 18 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.5kit/39.1kit rate:1.2s/it remaining:1:30:04 elapsed:4:16:10 postfix:loss=1.07 [repeated 63x across cluster]
+(<lambda> pid=5686, ip=10.164.2.95) 2026-02-08T02:36:30 - 26 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4980 rows) in 32.63s [repeated 3x across cluster]
+(<lambda> pid=5514, ip=10.164.2.60) 2026-02-08T02:36:24 - 53 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 34456. [repeated 63x across cluster]
+(<lambda> pid=5514, ip=10.164.2.60) 2026-02-08T02:36:24 - 53 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 34456 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456 [repeated 63x across cluster]
+(<lambda> pid=5553, ip=10.164.2.23) 2026-02-08T02:36:24 - 27 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456 for step 34456 [repeated 63x across cluster]
+(<lambda> pid=5511, ip=10.164.2.37) 2026-02-08T02:36:31 - 11 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1803_parquet
+(<lambda> pid=5553, ip=10.164.2.23) 2026-02-08T02:36:36 - 27 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (5095 rows) in 38.54s
+(<lambda> pid=5497, ip=10.164.2.98) 2026-02-08T02:36:40 - 50 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1842_parquet [repeated 2x across cluster]
+(<lambda> pid=5457, ip=10.164.2.28) 2026-02-08T02:36:47 - 55 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4996 rows) in 38.98s
+(<lambda> pid=5457, ip=10.164.2.28) 2026-02-08T02:36:47 - 55 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1911_parquet
+(<lambda> pid=5477, ip=10.164.2.106) 2026-02-08T02:36:54 - 19 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (5002 rows) in 32.64s [repeated 4x across cluster]
+(<lambda> pid=5492, ip=10.164.2.54) 2026-02-08T02:36:51 - 34 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1890_parquet
+(<lambda> pid=5545, ip=10.164.2.70) 2026-02-08T02:36:58 - 12 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1804_parquet
+(<lambda> pid=5483, ip=10.164.2.48) 2026-02-08T02:37:00 - 36 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4937 rows) in 29.29s
+(<lambda> pid=5511, ip=10.164.2.37) 2026-02-08T02:37:06 - 11 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5008 rows) in 34.58s
+(<lambda> pid=5483, ip=10.164.2.48) 2026-02-08T02:37:00 - 36 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1892_parquet
+(<lambda> pid=5511, ip=10.164.2.37) 2026-02-08T02:37:06 - 11 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1867_parquet
+(<lambda> pid=5497, ip=10.164.2.98) 2026-02-08T02:37:14 - 50 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (5035 rows) in 34.13s
+(<lambda> pid=5497, ip=10.164.2.98) 2026-02-08T02:37:14 - 50 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1906_parquet [repeated 2x across cluster]
+(<lambda> pid=5457, ip=10.164.2.28) 2026-02-08T02:37:23 - 55 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4977 rows) in 35.73s
+(<lambda> pid=5484, ip=10.164.2.20) 2026-02-08T02:37:18 - 4 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1796_cleaned_parquet
+(<lambda> pid=5545, ip=10.164.2.70) 2026-02-08T02:37:24 - 12 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1868_parquet
+(<lambda> pid=5553, ip=10.164.2.23) 2026-02-08T02:37:24 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.5kit/39.1kit rate:1.4s/it remaining:1:44:37 elapsed:4:17:12 postfix:loss=1.08
+(<lambda> pid=5483, ip=10.164.2.48) 2026-02-08T02:37:33 - 36 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4983 rows) in 32.34s [repeated 3x across cluster]
+(<lambda> pid=5450, ip=10.164.2.50) 2026-02-08T02:37:24 - 46 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.5kit/39.1kit rate:1.4s/it remaining:1:44:37 elapsed:4:17:12 postfix:loss=1.08 [repeated 63x across cluster]
+(<lambda> pid=5484, ip=10.164.2.20) 2026-02-08T02:37:40 - 4 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1860_parquet
+(<lambda> pid=5484, ip=10.164.2.20) 2026-02-08T02:37:40 - 4 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4971 rows) in 21.59s
+(<lambda> pid=5478, ip=10.164.2.26) 2026-02-08T02:37:42 - 23 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4796 rows) in 33.16s
+(<lambda> pid=5478, ip=10.164.2.26) 2026-02-08T02:37:42 - 23 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1879_parquet
+(<lambda> pid=5497, ip=10.164.2.98) 2026-02-08T02:37:56 - 50 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (5027 rows) in 42.05s [repeated 2x across cluster]
+(<lambda> pid=5545, ip=10.164.2.70) 2026-02-08T02:38:02 - 12 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4889 rows) in 37.85s
+(<lambda> pid=5484, ip=10.164.2.20) 2026-02-08T02:38:11 - 4 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4996 rows) in 31.18s
+(<lambda> pid=5515, ip=10.164.2.55) 2026-02-08T02:38:25 - 57 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.6kit/39.1kit rate:1.3s/it remaining:1:35:48 elapsed:4:18:12 postfix:loss=1.11
+(<lambda> pid=5478, ip=10.164.2.26) 2026-02-08T02:38:16 - 23 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4978 rows) in 34.56s
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:38:47 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456 for step 34456
+(<lambda> pid=5478, ip=10.164.2.49) 2026-02-08T02:38:25 - 13 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.6kit/39.1kit rate:1.3s/it remaining:1:35:48 elapsed:4:18:12 postfix:loss=1.11 [repeated 63x across cluster]
+(autoscaler +5h39m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h39m31s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=5479, ip=10.164.2.96) 2026-02-08T02:39:25 - 31 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.6kit/39.1kit rate:1.0s/it remaining:1:17:32 elapsed:4:19:13 postfix:loss=1.24
+(<lambda> pid=5483, ip=10.164.2.48) 2026-02-08T02:39:25 - 36 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.6kit/39.1kit rate:1.0s/it remaining:1:17:32 elapsed:4:19:13 postfix:loss=1.24
+(autoscaler +5h40m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h40m10s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:40:26 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.7kit/39.1kit rate:1.1s/it remaining:1:17:19 elapsed:4:20:13 postfix:loss=1.13 [repeated 63x across cluster]
+(autoscaler +5h41m20s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h41m20s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=5524, ip=10.164.2.24) 2026-02-08T02:41:21 - 9 - levanter.data.image - image.py:2642 - INFO :: Loading shard 28: 1801_parquet
+(<lambda> pid=5439, ip=10.164.2.65) 2026-02-08T02:40:26 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.7kit/39.1kit rate:1.1s/it remaining:1:17:19 elapsed:4:20:13 postfix:loss=1.13 [repeated 63x across cluster]
+(<lambda> pid=5538, ip=10.164.2.64) 2026-02-08T02:41:26 - 38 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.7kit/39.1kit rate:1.0s/it remaining:1:13:20 elapsed:4:21:14 postfix:loss=1.14
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:41:26 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.7kit/39.1kit rate:1.0s/it remaining:1:13:20 elapsed:4:21:14 postfix:loss=1.14
+(<lambda> pid=5524, ip=10.164.2.24) 2026-02-08T02:41:50 - 9 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 28 (4911 rows) in 28.44s
+(<lambda> pid=5524, ip=10.164.2.24) 2026-02-08T02:41:50 - 9 - levanter.data.image - image.py:2616 - INFO :: Loading shard 29: 1865_parquet
+(<lambda> pid=5478, ip=10.164.2.26) 2026-02-08T02:41:26 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.7kit/39.1kit rate:1.0s/it remaining:1:13:20 elapsed:4:21:14 postfix:loss=1.14 [repeated 62x across cluster]
+(autoscaler +5h42m18s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h42m18s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=5524, ip=10.164.2.24) 2026-02-08T02:42:22 - 9 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 29 (4926 rows) in 32.77s
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:42:26 - 41 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=7, template_text='<|im_start|>user \n<image>\nWhich country is reprented by Red line?\nAnswer the question using a single word or phrase.<|im_end|><|im_start|>assistant \nFrance<|im_end|>', messages=[{"content": [{"text": "<image>\nWhich country is reprented by Red line?\nAnswer the question using a single word or phrase.", "type": "text"}], "role": "user"}, {"content": [{"text": "France", "type": "text"}], "role": "assistant"}]
+(<lambda> pid=5538, ip=10.164.2.59) Exception in thread Thread-3 (prefetch_worker):
+(<lambda> pid=5538, ip=10.164.2.59) Traceback (most recent call last):
+(<lambda> pid=5538, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
+(<lambda> pid=5538, ip=10.164.2.59)     self.run()
+(<lambda> pid=5538, ip=10.164.2.59)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
+(<lambda> pid=5538, ip=10.164.2.59)     self._target(*self._args, **self._kwargs)
+(<lambda> pid=5538, ip=10.164.2.59)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f86500cf317adfe3/lib/levanter/src/levanter/data/image.py", line 2726, in prefetch_worker
+(<lambda> pid=5538, ip=10.164.2.59)     processed = self._batch_processor(raw_items)
+(<lambda> pid=5538, ip=10.164.2.59)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=5538, ip=10.164.2.59)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f86500cf317adfe3/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
+(<lambda> pid=5538, ip=10.164.2.59)     raise ValueError(
+(<lambda> pid=5538, ip=10.164.2.59) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=7, template_text='<|im_start|>user \n<image>\nWhich country is reprented by Red line?\nAnswer the question using a single word or phrase.<|im_end|><|im_start|>assistant \nFrance<|im_end|>', messages=[{"content": [{"text": "<image>\nWhich country is reprented by Red line?\nAnswer the question using a single word or phrase.", "type": "text"}], "role": "user"}, {"content": [{"text": "France", "type": "text"}], "role": "assistant"}]
+(<lambda> pid=6243, ip=10.164.2.103) 2026-02-08T02:42:27 - 18 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.8kit/39.1kit rate:1.2s/it remaining:1:23:56 elapsed:4:22:15 postfix:loss=1.1
+(autoscaler +5h42m47s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h42m47s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +5h43m4s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h43m4s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +5h43m37s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h43m37s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=5558, ip=10.164.2.99) 2026-02-08T02:43:27 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.8kit/39.1kit rate:1.3s/it remaining:1:31:54 elapsed:4:23:15 postfix:loss=0.97 [repeated 64x across cluster]
+(autoscaler +5h44m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h44m10s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=5493, ip=10.164.2.51) 2026-02-08T02:44:29 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.9kit/39.1kit rate:1.4s/it remaining:1:38:05 elapsed:4:24:16 postfix:loss=1.03 [repeated 64x across cluster]
+(autoscaler +5h44m47s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h44m47s) Resized to 8400 CPUs, 280 TPUs.
+(autoscaler +5h45m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h45m31s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=5492, ip=10.164.2.54) 2026-02-08T02:45:30 - 34 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.9kit/39.1kit rate:1.1s/it remaining:1:17:59 elapsed:4:25:17 postfix:loss=1.17 [repeated 64x across cluster]
+(autoscaler +5h46m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h46m10s) Resized to 8400 CPUs, 280 TPUs.
+(<lambda> pid=5530, ip=10.164.2.53) 2026-02-08T02:46:28 - 28 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 34974.
+(<lambda> pid=5530, ip=10.164.2.53) 2026-02-08T02:46:28 - 28 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 34974 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34974
+(<lambda> pid=5643, ip=10.164.2.52) 2026-02-08T02:45:30 - 21 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 34.9kit/39.1kit rate:1.1s/it remaining:1:17:59 elapsed:4:25:17 postfix:loss=1.17 [repeated 63x across cluster]
+(<lambda> pid=5514, ip=10.164.2.60) 2026-02-08T02:46:28 - 53 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34974 for step 34974
+(autoscaler +5h47m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h47m2s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=5473, ip=10.164.2.56) 2026-02-08T02:47:03 - 42 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 35000.
+(<lambda> pid=5493, ip=10.164.2.69) 2026-02-08T02:46:28 - 39 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 34974. [repeated 63x across cluster]
+(<lambda> pid=5473, ip=10.164.2.56) 2026-02-08T02:47:03 - 42 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 35000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-35000 [repeated 64x across cluster]
+(<lambda> pid=5492, ip=10.164.2.102) 2026-02-08T02:46:32 - 59 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.0kit/39.1kit rate:1.9s/it remaining:2:11:28 elapsed:4:26:20 postfix:loss=1.26 [repeated 64x across cluster]
+(<lambda> pid=5494, ip=10.164.2.42) 2026-02-08T02:46:28 - 40 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34974 for step 34974 [repeated 63x across cluster]
+(autoscaler +5h47m41s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h47m41s) Resized to 19680 CPUs, 656 TPUs.
+(autoscaler +5h47m59s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h47m59s) Resized to 19680 CPUs, 656 TPUs.
+(autoscaler +5h48m45s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h48m45s) Resized to 19680 CPUs, 656 TPUs.
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:15 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34974 for step 34974
+(<lambda> pid=5509, ip=10.164.2.30) 2026-02-08T02:47:03 - 49 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 35000. [repeated 63x across cluster]
+(<lambda> pid=5509, ip=10.164.2.30) 2026-02-08T02:47:03 - 49 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 35000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-35000 [repeated 63x across cluster]
+(<lambda> pid=5520, ip=10.164.2.97) 2026-02-08T02:47:03 - 51 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-35000 for step 35000 [repeated 64x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:15 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456 after saving new checkpoint.
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:15 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:15 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456
+(<lambda> pid=5473, ip=10.164.2.61) 2026-02-08T02:49:15 - 10 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000
+(<lambda> pid=5473, ip=10.164.2.61) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096
+(<lambda> pid=5473, ip=10.164.2.61) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096
+(<lambda> pid=5473, ip=10.164.2.61) 2026-02-08T02:49:15 - 10 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000
+(<lambda> pid=5473, ip=10.164.2.56) 2026-02-08T02:49:15 - 42 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/4280302048 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=5473, ip=10.164.2.56) 2026-02-08T02:49:15 - 42 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 1 shards with max size 4.28 GB
+(<lambda> pid=5473, ip=10.164.2.56) 2026-02-08T02:49:15 - 42 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpsiq8r2lz
+(<lambda> pid=5472, ip=10.164.2.101) 2026-02-08T02:49:15 - 1 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpdllyptsq
+(<lambda> pid=5483, ip=10.164.2.22) 2026-02-08T02:49:15 - 48 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpjyplyumr
+(<lambda> pid=5515, ip=10.164.2.55) 2026-02-08T02:49:15 - 57 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpnkmxkocv
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:15 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34456 in 0.74 seconds
+(<lambda> pid=5504, ip=10.164.2.35) 2026-02-08T02:49:20 - 44 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model.safetensors (4.28 GB, 100.00% of model)
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:19 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 [repeated 63x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=4096 [repeated 126x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:19 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 [repeated 63x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:19 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/4280302048 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:19 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 1 shards with max size 4.28 GB [repeated 63x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:19 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmp20ej1xnp [repeated 60x across cluster]
+(<lambda> pid=5493, ip=10.164.2.51) 2026-02-08T02:49:27 - 3 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000
+(<lambda> pid=5482, ip=10.164.2.100) 2026-02-08T02:49:20 - 63 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model.safetensors (4.28 GB, 100.00% of model) [repeated 63x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:49:27 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000
+(<lambda> pid=5562, ip=10.164.2.25) 2026-02-08T02:50:05 - 33 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpkwfp5ocz
+(<lambda> pid=5562, ip=10.164.2.25) 2026-02-08T02:50:05 - 33 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer
+(<lambda> pid=5545, ip=10.164.2.70) 2026-02-08T02:49:27 - 12 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 [repeated 62x across cluster]
+(<lambda> pid=5492, ip=10.164.2.54) 2026-02-08T02:50:05 - 34 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpmqcrsosa
+(<lambda> pid=5509, ip=10.164.2.30) 2026-02-08T02:50:05 - 49 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpakllzkqh
+(<lambda> pid=5502, ip=10.164.2.29) 2026-02-08T02:50:05 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpxawsikaw
+(<lambda> pid=5504, ip=10.164.2.35) 2026-02-08T02:50:05 - 44 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpavpspmpq
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:50:05 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000
+(<lambda> pid=5493, ip=10.164.2.69) 2026-02-08T02:50:05 - 39 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmpixnu_bwu
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:50:06 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000
+(<lambda> pid=5456, ip=10.164.2.73) 2026-02-08T02:50:06 - 7 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000
+(<lambda> pid=5456, ip=10.164.2.73) 2026-02-08T02:50:06 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:352,488,017.8B/s remaining:00:00 elapsed:00:50 postfix:-
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:50:06 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000
+(<lambda> pid=5470, ip=10.164.2.43) 2026-02-08T02:50:07 - 22 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.0kit/39.1kit rate:56.3s/it remaining:63:32:09 elapsed:4:29:55 postfix:loss=1.19
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:50:05 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 via temp path /tmp/tmp3fa8c147 [repeated 58x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:50:05 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer [repeated 63x across cluster]
+(<lambda> pid=5530, ip=10.164.2.53) 2026-02-08T02:50:05 - 28 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 [repeated 63x across cluster]
+(<lambda> pid=5453, ip=10.164.2.47) 2026-02-08T02:50:06 - 14 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-35000 [repeated 63x across cluster]
+(<lambda> pid=5453, ip=10.164.2.47) 2026-02-08T02:50:06 - 14 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:355,057,680.2B/s remaining:00:00 elapsed:00:50 postfix:- [repeated 63x across cluster]
+(<lambda> pid=5484, ip=10.164.2.20) 2026-02-08T02:51:08 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.1kit/39.1kit rate:1.3s/it remaining:1:28:50 elapsed:4:30:56 postfix:loss=1.21 [repeated 64x across cluster]
+(autoscaler +5h51m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h51m31s) Resized to 19680 CPUs, 656 TPUs.
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:52:01 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-35000 for step 35000
+(<lambda> pid=5474, ip=10.164.2.104) 2026-02-08T02:51:08 - 20 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.1kit/39.1kit rate:1.3s/it remaining:1:28:50 elapsed:4:30:56 postfix:loss=1.21 [repeated 63x across cluster]
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:52:01 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34974 after saving new checkpoint.
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:52:01 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34974
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:52:01 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34974
+(autoscaler +5h52m18s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h52m18s) Resized to 19680 CPUs, 656 TPUs.
+(<lambda> pid=5503, ip=10.164.2.27) 2026-02-08T02:52:01 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/checkpoints/step-34974 in 0.26 seconds
+(<lambda> pid=5493, ip=10.164.2.69) 2026-02-08T02:52:08 - 39 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.1kit/39.1kit rate:1.0s/it remaining:1:07:52 elapsed:4:31:56 postfix:loss=1.19
+(<lambda> pid=5495, ip=10.164.2.92) 2026-02-08T02:52:08 - 16 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.1kit/39.1kit rate:1.0s/it remaining:1:07:52 elapsed:4:31:56 postfix:loss=1.19
+(autoscaler +5h52m41s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h52m41s) Resized to 19680 CPUs, 656 TPUs.
+(autoscaler +5h53m14s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h53m14s) Resized to 19680 CPUs, 656 TPUs.
+(<lambda> pid=5473, ip=10.164.2.61) 2026-02-08T02:52:59 - 10 - levanter.data.image - image.py:2642 - INFO :: Loading shard 29: 1866_parquet
+(<lambda> pid=5515, ip=10.164.2.55) 2026-02-08T02:52:08 - 57 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.1kit/39.1kit rate:1.0s/it remaining:1:07:52 elapsed:4:31:56 postfix:loss=1.19 [repeated 62x across cluster]
+(<lambda> pid=5439, ip=10.164.2.65) 2026-02-08T02:53:08 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.2kit/39.1kit rate:1.1it/s remaining:1:01:14 elapsed:4:32:56 postfix:loss=1.05
+(<lambda> pid=5512, ip=10.164.2.67) 2026-02-08T02:53:08 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.2kit/39.1kit rate:1.1it/s remaining:1:01:14 elapsed:4:32:56 postfix:loss=1.05
+(autoscaler +5h53m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h53m31s) Removing 31 nodes of type tpu_slice_v5e_128 (idle).
+(autoscaler +5h53m31s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5473, ip=10.164.2.61) 2026-02-08T02:53:30 - 10 - levanter.data.image - image.py:2646 - INFO :: Loaded shard 29 (5004 rows) in 31.04s
+(<lambda> pid=5477, ip=10.164.2.106) 2026-02-08T02:53:08 - 19 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.2kit/39.1kit rate:1.1it/s remaining:1:01:14 elapsed:4:32:56 postfix:loss=1.05 [repeated 62x across cluster]
+(<lambda> pid=5473, ip=10.164.2.61) 2026-02-08T02:53:30 - 10 - levanter.data.image - image.py:2616 - INFO :: Loading shard 30: 1930_parquet
+(autoscaler +5h53m50s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h53m50s) Resized to 15960 CPUs, 532 TPUs.
+(autoscaler +5h54m12s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h54m12s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5512, ip=10.164.2.67) 2026-02-08T02:54:09 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.2kit/39.1kit rate:1.1s/it remaining:1:11:48 elapsed:4:33:57 postfix:loss=1.22
+(<lambda> pid=5504, ip=10.164.2.35) 2026-02-08T02:54:09 - 44 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.2kit/39.1kit rate:1.1s/it remaining:1:11:48 elapsed:4:33:57 postfix:loss=1.22
+(<lambda> pid=5473, ip=10.164.2.61) 2026-02-08T02:54:10 - 10 - levanter.data.image - image.py:2621 - INFO :: Loaded shard 30 (4916 rows) in 39.52s
+(autoscaler +5h54m30s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h54m30s) Resized to 15960 CPUs, 532 TPUs.
+(autoscaler +5h54m48s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h54m48s) Resized to 15960 CPUs, 532 TPUs.
+(autoscaler +5h55m6s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h55m6s) Resized to 15960 CPUs, 532 TPUs.
+(autoscaler +5h55m24s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h55m24s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5456, ip=10.164.2.73) 2026-02-08T02:55:10 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.3kit/39.1kit rate:1.2s/it remaining:1:17:59 elapsed:4:34:57 postfix:loss=1.01 [repeated 63x across cluster]
+(autoscaler +5h55m42s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h55m42s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:55:36 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 10.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5478, ip=10.164.2.26) 2026-02-08T02:55:10 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 35.3kit/39.1kit rate:1.2s/it remaining:1:18:00 elapsed:4:34:57 postfix:loss=1.01 [repeated 63x across cluster]
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:55:46 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 20.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:55:56 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 30.0 seconds. Waiting for 32 image items.
+(autoscaler +5h56m15s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h56m15s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:56:06 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 40.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:56:16 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 50.0 seconds. Waiting for 32 image items.
+(autoscaler +5h56m36s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +5h56m36s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:56:26 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 60.0 seconds. Waiting for 32 image items.
+(autoscaler +5h56m52s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h56m52s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:56:36 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 70.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:56:46 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 80.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:56:56 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 90.0 seconds. Waiting for 32 image items.
+(autoscaler +5h57m15s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +5h57m15s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:57:06 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 100.0 seconds. Waiting for 32 image items.
+(autoscaler +5h57m32s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h57m32s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:57:16 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 110.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:57:27 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 120.0 seconds. Waiting for 32 image items.
+(autoscaler +5h57m49s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +5h57m49s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:57:37 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 130.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:57:47 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 140.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:57:57 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 150.0 seconds. Waiting for 32 image items.
+(autoscaler +5h58m22s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +5h58m22s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:58:07 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 160.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:58:17 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 170.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:58:27 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 180.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:58:37 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 190.0 seconds. Waiting for 32 image items.
+(autoscaler +5h58m59s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +5h58m59s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:58:47 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 200.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:58:57 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 210.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:59:07 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 220.0 seconds. Waiting for 32 image items.
+(autoscaler +5h59m30s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +5h59m30s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:59:17 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 230.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:59:27 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 240.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:59:37 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 250.0 seconds. Waiting for 32 image items.
+(autoscaler +6h1s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h1s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:59:47 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 260.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T02:59:57 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 270.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:00:07 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 280.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:00:17 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 290.0 seconds. Waiting for 32 image items.
+(autoscaler +6h38s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h38s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:00:27 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 300.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:00:37 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 310.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:00:47 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 320.0 seconds. Waiting for 32 image items.
+(autoscaler +6h1m15s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h1m15s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:00:58 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 330.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:01:08 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 340.0 seconds. Waiting for 32 image items.
+(autoscaler +6h1m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h1m31s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:01:18 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 350.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:01:28 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 360.0 seconds. Waiting for 32 image items.
+(autoscaler +6h1m50s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h1m50s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:01:38 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 370.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:01:48 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 380.0 seconds. Waiting for 32 image items.
+(autoscaler +6h2m7s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h2m7s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:01:58 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 390.0 seconds. Waiting for 32 image items.
+(autoscaler +6h2m24s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h2m24s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:02:08 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 400.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:02:18 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 410.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:02:28 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 420.0 seconds. Waiting for 32 image items.
+(autoscaler +6h2m45s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h2m45s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:02:38 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 430.0 seconds. Waiting for 32 image items.
+(autoscaler +6h3m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h3m2s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:02:48 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 440.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:02:58 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 450.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:03:08 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 460.0 seconds. Waiting for 32 image items.
+(autoscaler +6h3m30s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h3m30s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:03:18 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 470.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:03:28 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 480.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:03:38 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 490.0 seconds. Waiting for 32 image items.
+(autoscaler +6h4m1s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h4m1s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:03:48 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 500.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:03:58 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 510.0 seconds. Waiting for 32 image items.
+(autoscaler +6h4m17s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h4m17s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:04:08 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 520.0 seconds. Waiting for 32 image items.
+(autoscaler +6h4m35s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h4m35s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:04:18 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 530.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:04:29 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 540.0 seconds. Waiting for 32 image items.
+(autoscaler +6h4m53s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h4m53s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:04:39 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 550.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:04:49 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 560.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:04:59 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 570.0 seconds. Waiting for 32 image items.
+(autoscaler +6h5m19s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h5m19s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:05:09 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 580.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:05:19 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 590.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:05:29 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 600.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:05:39 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 610.0 seconds. Waiting for 32 image items.
+(autoscaler +6h6m1s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h6m1s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:05:49 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 620.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:05:59 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 630.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:06:09 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 640.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:06:19 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 650.0 seconds. Waiting for 32 image items.
+(autoscaler +6h6m39s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h6m39s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:06:29 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 660.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:06:39 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 670.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:06:49 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 680.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:06:59 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 690.0 seconds. Waiting for 32 image items.
+(autoscaler +6h7m20s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h7m20s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:07:09 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 700.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:07:19 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 710.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:07:29 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 720.0 seconds. Waiting for 32 image items.
+(autoscaler +6h7m51s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h7m51s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:07:39 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 730.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:07:50 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 740.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:08:00 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 750.0 seconds. Waiting for 32 image items.
+(autoscaler +6h8m22s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h8m22s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:08:10 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 760.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:08:20 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 770.0 seconds. Waiting for 32 image items.
+(autoscaler +6h8m38s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h8m38s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:08:30 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 780.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:08:40 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 790.0 seconds. Waiting for 32 image items.
+(autoscaler +6h9m1s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h9m1s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:08:50 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 800.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:09:00 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 810.0 seconds. Waiting for 32 image items.
+(autoscaler +6h9m17s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h9m17s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:09:10 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 820.0 seconds. Waiting for 32 image items.
+(autoscaler +6h9m35s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h9m35s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:09:20 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 830.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:09:30 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 840.0 seconds. Waiting for 32 image items.
+(autoscaler +6h9m56s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h9m56s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:09:40 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 850.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:09:50 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 860.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:10:00 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 870.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:10:10 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 880.0 seconds. Waiting for 32 image items.
+(autoscaler +6h10m34s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h10m34s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:10:20 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 890.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:10:30 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 900.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:10:40 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 910.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:10:50 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 920.0 seconds. Waiting for 32 image items.
+(autoscaler +6h11m11s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h11m11s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:11:00 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 930.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:11:10 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 940.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:11:21 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 950.0 seconds. Waiting for 32 image items.
+(autoscaler +6h11m47s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h11m47s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:11:31 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 960.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:11:41 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 970.0 seconds. Waiting for 32 image items.
+(autoscaler +6h12m5s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h12m5s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:11:51 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 980.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:12:01 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 990.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:12:11 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1000.0 seconds. Waiting for 32 image items.
+(autoscaler +6h12m32s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h12m32s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:12:21 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1010.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:12:31 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1020.0 seconds. Waiting for 32 image items.
+(autoscaler +6h12m48s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h12m48s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:12:41 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1030.0 seconds. Waiting for 32 image items.
+(autoscaler +6h13m6s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h13m6s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:12:51 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1040.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:13:01 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1050.0 seconds. Waiting for 32 image items.
+(autoscaler +6h13m23s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h13m23s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:13:11 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1060.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:13:21 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1070.0 seconds. Waiting for 32 image items.
+(autoscaler +6h13m45s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h13m45s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:13:31 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1080.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:13:41 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1090.0 seconds. Waiting for 32 image items.
+(autoscaler +6h14m3s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h14m3s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:13:51 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1100.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:14:01 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1110.0 seconds. Waiting for 32 image items.
+(autoscaler +6h14m19s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h14m19s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:14:11 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1120.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:14:21 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1130.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:14:31 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1140.0 seconds. Waiting for 32 image items.
+(autoscaler +6h14m57s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h14m57s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:14:41 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1150.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:14:52 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1160.0 seconds. Waiting for 32 image items.
+(autoscaler +6h15m18s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h15m18s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:15:02 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1170.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:15:12 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1180.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:15:22 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1190.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:15:32 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1200.0 seconds. Waiting for 32 image items.
+(autoscaler +6h15m55s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h15m55s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:15:42 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1210.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:15:52 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1220.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:16:02 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1230.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:16:12 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1240.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:16:22 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1250.0 seconds. Waiting for 32 image items.
+(autoscaler +6h16m42s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h16m42s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:16:32 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1260.0 seconds. Waiting for 32 image items.
+(autoscaler +6h16m58s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +6h16m58s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:16:42 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1270.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:16:52 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1280.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:17:02 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1290.0 seconds. Waiting for 32 image items.
+(autoscaler +6h17m21s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +6h17m21s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:17:12 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1300.0 seconds. Waiting for 32 image items.
+(<lambda> pid=5538, ip=10.164.2.59) 2026-02-08T03:17:22 - 41 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 1310.0 seconds. Waiting for 32 image items.

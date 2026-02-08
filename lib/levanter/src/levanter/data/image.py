@@ -2472,6 +2472,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         # Background sequential prefetch
         self._prefetch_thread: Optional[threading.Thread] = None
         self._stop_prefetch = threading.Event()
+        self._prefetch_error: Optional[BaseException] = None
 
         # Pipeline start is deferred until first get_batch() call to support seeking
         self._pipeline_started: bool = False
@@ -2734,10 +2735,11 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
                         while len(self._processed_cache) > self.cache_size:
                             self._processed_cache.popitem(last=False)
                 except ValueError as e:
-                    # ValueError from data validation (e.g., messages/images inconsistency)
-                    # should NOT be silently swallowed - re-raise to crash loudly
+                    # Store exception for main thread to detect, then exit cleanly
                     logger.error(f"Prefetch hit data error: {e}")
-                    raise
+                    self._prefetch_error = e
+                    self._stop_prefetch.set()
+                    return
                 except Exception as e:
                     logger.warning(f"Prefetch failed (transient): {e}")
                     self._stop_prefetch.wait(0.1)
@@ -2777,6 +2779,11 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
 
         # Wait for cache to have enough items (only prefetch thread produces data)
         while len(results) < batch_size:
+            if self._prefetch_error is not None:
+                raise RuntimeError(
+                    f"Prefetch thread died with error: {self._prefetch_error}"
+                ) from self._prefetch_error
+
             with self._cache_lock:
                 sorted_keys = sorted(self._processed_cache.keys())
                 needed = batch_size - len(results)
