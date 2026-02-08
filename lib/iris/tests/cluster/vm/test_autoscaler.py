@@ -598,7 +598,7 @@ class TestAutoscalerExecution:
         autoscaler._wait_for_inflight()  # Wait for async scale-up
 
         assert group.consecutive_failures == 1
-        assert group.backoff_until_ms > 0
+        assert group._backoff_until is not None
 
     def test_run_once_evaluates_and_executes(self, empty_autoscaler: Autoscaler):
         """run_once() performs evaluate then execute."""
@@ -830,7 +830,7 @@ class TestAutoscalerFailedSliceCleanup:
 
         # Backoff should be active from cleanup
         assert group.consecutive_failures == 1
-        assert group.backoff_until_ms > 0
+        assert group._backoff_until is not None
 
     def test_evaluate_returns_only_scale_up(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """evaluate() only returns SCALE_UP decisions; failed cleanup happens in run_once()."""
