@@ -21,12 +21,10 @@ Generates training data by:
 4. Training the AR model to predict that edit (position + replacement tokens)
 """
 
-import json
 import logging
-import pickle
 import random as pyrandom
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 import jax
@@ -35,6 +33,7 @@ import optax
 from jax.tree_util import register_dataclass
 from jaxtyping import Array
 
+from experiments.kelp.checkpointing import save_checkpoint
 from experiments.kelp.model.config import TreeDiffusionConfig
 from experiments.kelp.model.model import (
     TreeDiffusionAttentionParams,
@@ -183,9 +182,9 @@ def make_edit_train_step(
         state: EditTrainingState,
         batch: dict[str, Array],
     ) -> tuple[EditTrainingState, dict]:
-        key, step_key = jax.random.split(state.key)
+        key, _step_key = jax.random.split(state.key)
 
-        (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+        (_loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
             state.params,
             batch["token_ids"],
             batch["loss_mask"],
@@ -403,38 +402,19 @@ def train_edit_model(
                 log_callback(step, metrics)
 
         if config.output_dir and config.checkpoint_interval > 0 and (step + 1) % config.checkpoint_interval == 0:
-            _save_checkpoint(state.params, config, step + 1)
+            ckpt_dir = Path(config.output_dir) / f"step-{step + 1:06d}"
+            save_checkpoint(state.params, config.model, ckpt_dir)
 
     # Save final checkpoint.
     if config.output_dir:
-        _save_checkpoint(state.params, config, config.total_steps)
+        ckpt_dir = Path(config.output_dir) / f"step-{config.total_steps:06d}"
+        save_checkpoint(state.params, config.model, ckpt_dir)
 
     if wandb_run is not None:
         wandb_run.finish()
 
     logger.info("Training complete")
     return state.params
-
-
-def _save_checkpoint(params: EditModelParams, config: EditTrainingConfig, step: int) -> None:
-    """Save model parameters and config to a checkpoint directory."""
-    ckpt_dir = Path(config.output_dir) / f"step-{step:06d}"
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save config as JSON.
-    config_dict = asdict(config.model)
-    # RotaryConfig needs special handling for JSON serialization.
-    if hasattr(config.model.rope, "__dict__"):
-        config_dict["rope"] = asdict(config.model.rope)
-    with open(ckpt_dir / "config.json", "w") as f:
-        json.dump(config_dict, f, indent=2)
-
-    # Save params as numpy arrays via pickle (compact, fast for CPU).
-    params_np = jax.tree.map(lambda x: jnp.array(x), params)
-    with open(ckpt_dir / "params.pkl", "wb") as f:
-        pickle.dump(params_np, f)
-
-    logger.info(f"Saved checkpoint to {ckpt_dir}")
 
 
 def _log_edit_metrics(step: int, metrics: dict) -> None:
