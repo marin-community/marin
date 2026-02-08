@@ -42,15 +42,7 @@ dclm_components_llama3 = {
     "starcoderdata": tokenized["starcoderdata"],
     "proofpile_2": tokenized["proofpile_2"],
 }
-dclm_mixture_config_llama3_old = lm_mixture_data_config(
-    components=dclm_components_llama3,
-    weights=DCLM_MIXTURE_WEIGHTS,
-    permutation_type="feistel",
-)
-
-dclm_mixture_config_llama3 = lm_mixture_data_config(
-    components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS, permutation_type="feistel"
-)
+dclm_mixture_config_llama3 = lm_mixture_data_config(components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS)
 
 
 ## NOTE: on 20250211, we discovered that the DCLM baseline data in us-central2 was corrupted/partial.
@@ -81,7 +73,6 @@ dclm_components_llama3_wrong = {
 dclm_mixture_config_llama3_wrong = lm_mixture_data_config(
     components=dclm_components_llama3_wrong,
     weights=DCLM_MIXTURE_WEIGHTS,
-    permutation_type="feistel",
 )
 
 if __name__ == "__main__":

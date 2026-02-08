@@ -16,6 +16,9 @@
 Train 32B on on Nemotron with Starcoderdata and Proofpile 2
 """
 
+# NOTE: This historical file originally used linear permutation through Marin's old mixture helpers.
+# Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
+
 import dataclasses
 
 import haliax
@@ -95,7 +98,6 @@ nemotron_mix = lm_mixture_data_config(
         "starcoderdata": 0.25,
         "proofpile_2": 0.055,
     },
-    permutation_type="feistel",
 )
 
 llama_32b_tootsie = default_train(

@@ -221,7 +221,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             resources=pod_config,
             env_vars=train_env_vars,
             train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step, permutation_type="feistel"),
+                data=lm_data_config(tokenize_step),
                 hf_save_steps=1,
                 model=Gpt2Config(
                     num_layers=2,

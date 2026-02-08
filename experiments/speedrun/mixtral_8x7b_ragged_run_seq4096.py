@@ -30,7 +30,6 @@ nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
 nemotron_cc_mixture = lm_mixture_data_config(
     components=nemotron_cc_steps,
     weights=NEMOTRON_WEIGHTS,
-    permutation_type="feistel",
 )
 
 # Full Mixtral 8x7B configuration using ragged-dot MoE kernels.

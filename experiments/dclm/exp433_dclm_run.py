@@ -69,12 +69,10 @@ DCLM_MIXTURE_COMPONENTS_NEOX_WRONG = {
 dclm_mixture_config_wrong = lm_mixture_data_config(
     components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG,
     weights=DCLM_MIXTURE_WEIGHTS,
-    permutation_type="feistel",
 )
 dclm_baseline_only_config_wrong = lm_mixture_data_config(
     components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG,
     weights=DCLM_BASELINE_ONLY_MIXTURE,
-    permutation_type="feistel",
 )
 
 ### Define the model and training configurations

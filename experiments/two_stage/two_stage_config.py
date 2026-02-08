@@ -256,7 +256,6 @@ class TwoStageConfig:
         data_config = lm_varying_mixture_data_config(
             components=components,
             weights_list=weights_list,
-            permutation_type="feistel",
             max_train_batches=max_train_batches,
             num_validation_sequences=num_validation_sequences,
         )

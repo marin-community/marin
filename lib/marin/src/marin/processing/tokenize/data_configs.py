@@ -16,7 +16,6 @@ import dataclasses
 import logging
 import os
 from functools import lru_cache
-from typing import Literal
 
 import numpy
 import transformers
@@ -26,9 +25,6 @@ from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.utils import load_tokenizer_with_backoff
-
-PermutationType = Literal["feistel"]
-"""Permutation type for shuffle. Only `feistel` is supported."""
 
 TokenizerStep = ExecutorStep[TokenizeConfig]
 
@@ -57,7 +53,6 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
 
 def lm_data_config(
     training_set: TokenizerStep | InputName,
-    permutation_type: PermutationType = "feistel",
     *,
     validation_sets: dict[str, TokenizerStep] | None = None,
     shuffle: bool | int = True,
@@ -72,7 +67,6 @@ def lm_data_config(
 
     Args:
         training_set: The training set to use
-        permutation_type: Strategy used to permute data. Defaults to "feistel".
         validation_sets: A sequence of validation sets to use
         shuffle: Whether to shuffle the data. If int, uses era shuffling.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
@@ -94,7 +88,6 @@ def lm_data_config(
     return lm_mixture_data_config(
         {train_set_name: training_set, **(validation_sets or {})},
         {train_set_name: 1.0},
-        permutation_type=permutation_type,
         shuffle=shuffle,
         missing_weights_are_validation=True,
         max_train_batches=max_train_batches,
@@ -106,7 +99,6 @@ def lm_data_config(
 def lm_mixture_data_config(
     components: dict[str, TokenizerStep | TokenizeConfig],
     weights: dict[str, float],
-    permutation_type: PermutationType = "feistel",
     *,
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
@@ -122,7 +114,6 @@ def lm_mixture_data_config(
     Args:
         components: dict from names of datasets to the steps that produced them.
         weights: dict from names of datasets to their weights.
-        permutation_type: shuffling permutation strategy to use when drawing sequences. Defaults to "feistel".
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
@@ -134,9 +125,6 @@ def lm_mixture_data_config(
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
         for name, step in components.items()
     }
-
-    if permutation_type != "feistel":
-        raise ValueError(f"Unsupported permutation_type {permutation_type!r}; only 'feistel' is supported.")
 
     if missing_weights_are_validation:
         missing_keys = {k: 0.0 for k in components if k not in weights}
@@ -154,7 +142,7 @@ def lm_mixture_data_config(
         tokenizer=tokenizer,
         cache_dir=None,
         shuffle=shuffle,
-        permutation_type=permutation_type,
+        permutation_type="feistel",
         max_train_batches=max_train_batches,
         num_validation_sequences=num_validation_sequences,
         block_cross_document_attention=block_cross_document_attention,
@@ -202,7 +190,6 @@ def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights
 def lm_varying_mixture_data_config(
     components: dict[str, TokenizerStep],
     weights_list: list[tuple[int, dict[str, float]]],
-    permutation_type: PermutationType = "feistel",
     *,
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
@@ -222,7 +209,6 @@ def lm_varying_mixture_data_config(
             The weights will change at each start_seq_index. start_seq_index's must be sorted in ascending order.
             Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
-        permutation_type: Strategy used to permute data. Defaults to "feistel".
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
         mixture_block_size: The block size to use for the mixture.
@@ -236,9 +222,6 @@ def lm_varying_mixture_data_config(
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
         for name, step in components.items()
     }
-
-    if permutation_type != "feistel":
-        raise ValueError(f"Unsupported permutation_type {permutation_type!r}; only 'feistel' is supported.")
 
     # Validate and normalize weights
     if not weights_list:
@@ -264,7 +247,7 @@ def lm_varying_mixture_data_config(
         cache_dir=None,
         shuffle=shuffle,
         mixture_block_size=mixture_block_size or 2048,
-        permutation_type=permutation_type,
+        permutation_type="feistel",
         max_train_batches=max_train_batches,
         num_validation_sequences=num_validation_sequences,
         block_cross_document_attention=block_cross_document_attention,
@@ -331,7 +314,6 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetC
     return lm_mixture_data_config(
         {name: step for name, step in inputs.items()},
         {name: 0.0 for name in inputs},
-        permutation_type="feistel",
         shuffle=False,
         missing_weights_are_validation=True,
     )

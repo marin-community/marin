@@ -124,7 +124,6 @@ def _build_varying_mixture_for_steps(
             (0, NEMOTRON_PT_MIX_WEIGHTS),  # Pretraining
             (cooldown_start_step, mantis_cooldown_weights_with_stackv2_python),  # Midtraining
         ],
-        permutation_type="feistel",
         mixture_block_size=mixture_block_size,
     )
 

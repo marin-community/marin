@@ -47,7 +47,7 @@ tulu3_llama_tokenize_step = default_tokenize(
 )
 
 # This dataset should only by used for older runs. Don't use this in new experiments.
-tulu3_llama_data_old = lm_data_config(tulu3_llama_tokenize_step, permutation_type="feistel")
+tulu3_llama_data_old = lm_data_config(tulu3_llama_tokenize_step)
 
 tulu_sft_config = SimpleSFTConfig(
     train_batch_size=128,
