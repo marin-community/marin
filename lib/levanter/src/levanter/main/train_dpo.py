@@ -72,6 +72,7 @@ def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
 def _validate_preference_chat_formats(config: LmDataConfig) -> None:
     formats = {name: comp.format for name, comp in config.components.items()}
 
+    # TODO: remove this once we support other formats
     non_preference = {name: fmt for name, fmt in formats.items() if not isinstance(fmt, PreferenceChatLmDatasetFormat)}
     if non_preference:
         bad = ", ".join(sorted(non_preference.keys()))
