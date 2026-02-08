@@ -600,3 +600,156 @@ def test_get_process_logs_no_buffer():
 
     response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
     assert len(response.records) == 0
+
+
+def test_parent_job_success_preserves_finished_children(job_request):
+    """Test that when parent succeeds and then children succeed, children remain visible.
+
+    This is a regression test for issue #2694: child jobs were disappearing from the UI
+    when the parent job succeeded and all children also succeeded.
+
+    Scenario:
+    1. Launch parent job with 1 task
+    2. Launch 2 child jobs under the parent, each with 1 task
+    3. Complete parent task -> parent transitions to SUCCEEDED
+    4. Complete both child tasks -> children transition to SUCCEEDED
+    5. Verify all jobs (parent + children) are still present in state
+    6. Verify children are accessible via get_job RPC
+    7. Verify children appear in list_jobs response
+    """
+    state = ControllerState()
+    mock_scheduler = MockSchedulerWake()
+    service = ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles")
+
+    # Register a worker
+    worker_id = WorkerId("worker-1")
+    state.handle_event(
+        WorkerRegisteredEvent(
+            worker_id=worker_id,
+            resources=cluster_pb2.ResourceSpecProto(cpu=10, memory_bytes=10 * 1024**3),
+        )
+    )
+
+    # Launch parent job
+    parent_name = "/test-parent"
+    parent_req = job_request(name=parent_name, replicas=1)
+    parent_response = service.launch_job(parent_req, None)
+    parent_job_id = JobName.from_wire(parent_response.job_id)
+
+    # Launch two child jobs under the parent
+    child1_name = f"{parent_name}/child-1"
+    child1_req = job_request(name=child1_name, replicas=1)
+    child1_response = service.launch_job(child1_req, None)
+    child1_job_id = JobName.from_wire(child1_response.job_id)
+
+    child2_name = f"{parent_name}/child-2"
+    child2_req = job_request(name=child2_name, replicas=1)
+    child2_response = service.launch_job(child2_req, None)
+    child2_job_id = JobName.from_wire(child2_response.job_id)
+
+    # Get tasks for all jobs
+    parent_tasks = state.get_job_tasks(parent_job_id)
+    child1_tasks = state.get_job_tasks(child1_job_id)
+    child2_tasks = state.get_job_tasks(child2_job_id)
+
+    assert len(parent_tasks) == 1
+    assert len(child1_tasks) == 1
+    assert len(child2_tasks) == 1
+
+    parent_task = parent_tasks[0]
+    child1_task = child1_tasks[0]
+    child2_task = child2_tasks[0]
+
+    # Step 1: Dispatch and complete parent task -> parent job should succeed
+    dispatch_task(state, parent_task, worker_id)
+    transition_task(state, parent_task, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    # Verify parent succeeded
+    parent_job = state.get_job(parent_job_id)
+    assert parent_job is not None
+    assert parent_job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Verify children are still pending (not killed)
+    child1_job = state.get_job(child1_job_id)
+    child2_job = state.get_job(child2_job_id)
+    assert child1_job is not None
+    assert child2_job is not None
+    assert child1_job.state == cluster_pb2.JOB_STATE_PENDING
+    assert child2_job.state == cluster_pb2.JOB_STATE_PENDING
+
+    # Step 2: Dispatch and complete first child task -> child1 job should succeed
+    dispatch_task(state, child1_task, worker_id)
+    transition_task(state, child1_task, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    # Verify child1 succeeded
+    child1_job = state.get_job(child1_job_id)
+    assert child1_job is not None
+    assert child1_job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Step 3: Dispatch and complete second child task -> child2 job should succeed
+    dispatch_task(state, child2_task, worker_id)
+    transition_task(state, child2_task, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    # Verify child2 succeeded
+    child2_job = state.get_job(child2_job_id)
+    assert child2_job is not None
+    assert child2_job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # CRITICAL CHECKS: Verify all jobs are still present in state after whole tree succeeded
+
+    # Check 1: All jobs accessible via get_job
+    parent_job = state.get_job(parent_job_id)
+    child1_job = state.get_job(child1_job_id)
+    child2_job = state.get_job(child2_job_id)
+
+    assert parent_job is not None, "Parent job disappeared after whole tree succeeded"
+    assert child1_job is not None, "Child1 job disappeared after whole tree succeeded"
+    assert child2_job is not None, "Child2 job disappeared after whole tree succeeded"
+
+    assert parent_job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert child1_job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert child2_job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Check 2: All jobs accessible via RPC
+    try:
+        parent_status = service.get_job(
+            cluster_pb2.Controller.GetJobRequest(job_id=parent_job_id.to_wire()), None
+        )
+        assert parent_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    except ConnectError:
+        pytest.fail("Parent job not accessible via RPC after whole tree succeeded")
+
+    try:
+        child1_status = service.get_job(
+            cluster_pb2.Controller.GetJobRequest(job_id=child1_job_id.to_wire()), None
+        )
+        assert child1_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    except ConnectError:
+        pytest.fail("Child1 job not accessible via RPC after whole tree succeeded")
+
+    try:
+        child2_status = service.get_job(
+            cluster_pb2.Controller.GetJobRequest(job_id=child2_job_id.to_wire()), None
+        )
+        assert child2_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    except ConnectError:
+        pytest.fail("Child2 job not accessible via RPC after whole tree succeeded")
+
+    # Check 3: All jobs appear in list_jobs
+    list_response = service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
+    job_ids_in_list = {job.job_id for job in list_response.jobs}
+
+    assert parent_job_id.to_wire() in job_ids_in_list, "Parent job missing from list_jobs after whole tree succeeded"
+    assert child1_job_id.to_wire() in job_ids_in_list, "Child1 job missing from list_jobs after whole tree succeeded"
+    assert child2_job_id.to_wire() in job_ids_in_list, "Child2 job missing from list_jobs after whole tree succeeded"
+
+    # Check 4: Job count is correct (no jobs removed)
+    assert list_response.total_count == 3, f"Expected 3 jobs, got {list_response.total_count}"
+    assert len(list_response.jobs) == 3, f"Expected 3 jobs in response, got {len(list_response.jobs)}"
+
+    # Check 5: Verify children are returned by get_children
+    children = state.get_children(parent_job_id)
+    assert len(children) == 2, f"Expected 2 children, got {len(children)}"
+    child_ids = {child.job_id for child in children}
+    assert child1_job_id in child_ids, "Child1 missing from get_children"
+    assert child2_job_id in child_ids, "Child2 missing from get_children"
