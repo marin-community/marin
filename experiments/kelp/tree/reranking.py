@@ -120,10 +120,7 @@ def rerank_candidates(
     Returns:
         Candidates sorted by combined score (best first).
     """
-    ranked = [
-        score_candidate(c, test_cases, timeout, model_weight, execution_weight)
-        for c in candidates
-    ]
+    ranked = [score_candidate(c, test_cases, timeout, model_weight, execution_weight) for c in candidates]
 
     ranked.sort(key=lambda r: (r.combined_score, r.candidate.score), reverse=True)
 
