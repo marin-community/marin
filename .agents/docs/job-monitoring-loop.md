@@ -13,6 +13,7 @@ When the user asks you to start a monitoring loop, gather the required informati
 Ask the user for any missing information before proceeding. Example:
 
 > "I need a few details to start the monitoring loop:
+>
 > - Job ID?
 > - Cluster?
 > - Experiment script path?"
@@ -36,7 +37,7 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
 
 ```
 1. SLEEP
-   sleep 570
+   sleep 120 (once we know job did not die immediately upon submission, sleep 570)
 
 2. CHECK
    uv run scripts/ray/cluster.py --cluster <CLUSTER> job-logs -n 50 -g "loss\|error" <JOB_ID>
@@ -72,16 +73,20 @@ When step 3 (EVALUATE) detects an error, before restarting:
    - Report to user and exit the loop
 
 Examples of small fixes:
+
 - `NameError: name 'foo' is not defined` → typo in variable name
 - `ImportError: cannot import 'bar'` → missing or misspelled import
 - `SyntaxError` → missing comma, bracket, colon
 - `KeyError` → wrong dict key name (if obvious from context)
 
 Examples of complex issues (do not auto-fix):
+
 - OOM errors
 - Distributed training failures
 - Data loading issues
 - Unclear stack traces spanning multiple files
+
+Special note: for TPU related errors such as "RuntimeError: No accelerator found. Please run on a TPU or GPU.", "Failed to cleanup driver after error: INTERNAL: FAILED_PRECONDITION", "Device or resource busy", etc., this points to a bad TPU node. You should identify it by its IP addressa and kill it with `gcloud compute tpus tpu-vm delete`, then restart.
 
 ## Notes
 
