@@ -45,7 +45,7 @@ import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
-from fray.job.context import get_default_job_ctx
+from fray.v1.job.context import get_default_job_ctx
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree

@@ -179,15 +179,25 @@ def route_demand(
             and (entry.preemptible is None or g.config.preemptible == entry.preemptible)
         ]
         if not matching_groups:
-            unmet.append(UnmetDemand(entry=entry, reason="no_matching_group"))
+            reason = (
+                f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
+                f", available groups={[g.name for g in sorted_groups]}"
+            )
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
         if entry.coschedule_group_id and not any(g.slice_size == len(entry.task_ids) for g in matching_groups):
-            unmet.append(UnmetDemand(entry=entry, reason="coschedule_mismatch"))
+            group_sizes = [g.slice_size for g in matching_groups]
+            reason = (
+                f"coschedule_mismatch: job needs {len(entry.task_ids)} tasks coscheduled"
+                f" but matching groups have slice_size={group_sizes}"
+            )
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
         if not any(g.can_fit_resources(entry.resources) for g in matching_groups):
-            unmet.append(UnmetDemand(entry=entry, reason="insufficient_resources"))
+            reason = f"insufficient_resources: task needs {entry.resources}" f" but no matching group can fit it"
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
         matched_pending = False
@@ -480,12 +490,7 @@ class Autoscaler:
         # Priority 2: Scale UP for demand exceeding capacity
         if demand > capacity and total < group.max_slices:
             if not group.can_scale_up(ts):
-                logger.debug(
-                    "Scale group %s: scale up blocked (backoff_until=%d, last_scale_up=%d)",
-                    group.name,
-                    group.backoff_until_ms,
-                    group.last_scale_up_ms,
-                )
+                logger.debug("Scale group %s: scale up blocked", group.name)
                 return None
 
             return ScalingDecision(
@@ -602,6 +607,18 @@ class Autoscaler:
                     group.name,
                     slice_id=slice_obj.slice_id,
                     reason="cleaning up failed slice",
+                )
+
+            # Update liveness from worker status, then reap dead slices
+            group.update_slice_liveness(vm_status_map, timestamp)
+            dead = group.cleanup_dead_slices(timestamp)
+            for slice_obj in dead:
+                self._slice_created_at.pop(slice_obj.slice_id, None)
+                self._log_action(
+                    "liveness_reap",
+                    group.name,
+                    slice_id=slice_obj.slice_id,
+                    reason="slice missed liveness deadline",
                 )
 
         # Step 2: Evaluate (scale-up only)

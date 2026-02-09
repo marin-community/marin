@@ -15,8 +15,8 @@
 """Tests for execution contexts."""
 
 import pytest
-from fray.job import RayContext, SimpleActor, SyncContext, ThreadContext, create_job_ctx
-from fray.job.context import _apply_default_jax_platforms
+from fray.v1.job import RayContext, SimpleActor, SyncContext, ThreadContext, create_job_ctx
+from fray.v1.job.context import _apply_default_jax_platforms
 
 
 @pytest.fixture(params=["sync", "threadpool", "ray"])

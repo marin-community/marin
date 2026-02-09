@@ -29,10 +29,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
-from iris.cluster.types import Entrypoint, JobName, is_task_finished
-from iris.cluster.worker.builder import ImageProvider
+from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime
+from iris.cluster.types import DEFAULT_BASE_IMAGE, JobName, is_task_finished
 from iris.cluster.worker.bundle_cache import BundleProvider
-from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker_types import TaskLogs
@@ -42,6 +41,39 @@ from iris.rpc.errors import format_exception_with_traceback
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+# Signal numbers for interpreting exit codes > 128
+_SIGNAL_NAMES = {
+    6: "SIGABRT",
+    9: "SIGKILL",
+    11: "SIGSEGV",
+    15: "SIGTERM",
+}
+
+
+def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
+    """Format an exit code into a human-readable error message.
+
+    Exit codes > 128 typically indicate the process was killed by a signal,
+    where signal_number = exit_code - 128.
+    """
+    if exit_code is None:
+        return "Unknown exit code"
+
+    # Check for OOM first (most specific)
+    if oom_killed:
+        return f"Exit code {exit_code}: OOM killed (container exceeded memory limit)"
+
+    # Interpret signal-based exit codes
+    if exit_code > 128:
+        signal_num = exit_code - 128
+        signal_name = _SIGNAL_NAMES.get(signal_num, f"signal {signal_num}")
+        # Exit 137 (SIGKILL) without OOMKilled flag could still be resource-related
+        if signal_num == 9:
+            return f"Exit code {exit_code}: killed by {signal_name} (possibly OOM or resource limit)"
+        return f"Exit code {exit_code}: killed by {signal_name}"
+
+    return f"Exit code: {exit_code}"
 
 
 class TaskCancelled(Exception):
@@ -60,6 +92,8 @@ class TaskAttemptConfig:
     request: cluster_pb2.Worker.RunTaskRequest
     ports: dict[str, int]
     workdir: Path
+    cache_dir: Path
+    uv_cache_dir: Path
 
 
 def _get_host_ip() -> str:
@@ -123,12 +157,15 @@ def build_iris_env(
     # get_job_info().advertise_host without needing its own socket tricks.
     env["IRIS_BIND_HOST"] = "0.0.0.0"
     env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
+    env["IRIS_WORKDIR"] = "/app"
 
-    # Propagate the dockerfile so child jobs can inherit it via get_job_info().dockerfile
-    # instead of regenerating (which would lose extras like --package marin --extra cpu).
-    dockerfile = task.request.environment.dockerfile
-    if dockerfile:
-        env["IRIS_DOCKERFILE"] = dockerfile
+    # Propagate extras and pip_packages so child jobs can inherit them
+    extras = list(task.request.environment.extras)
+    if extras:
+        env["IRIS_JOB_EXTRAS"] = json.dumps(extras)
+    pip_packages = list(task.request.environment.pip_packages)
+    if pip_packages:
+        env["IRIS_JOB_PIP_PACKAGES"] = json.dumps(pip_packages)
 
     # Serialize the explicit user env vars so child jobs can inherit them
     # via JobInfo.env without picking up infrastructure vars from os.environ.
@@ -165,7 +202,6 @@ class TaskAttempt:
         self,
         config: TaskAttemptConfig,
         bundle_provider: BundleProvider,
-        image_provider: ImageProvider | None,
         container_runtime: ContainerRuntime,
         worker_metadata: WorkerMetadata,
         worker_id: str | None,
@@ -179,7 +215,6 @@ class TaskAttempt:
         Args:
             config: Immutable configuration for this attempt
             bundle_provider: Provider for downloading code bundles
-            image_provider: Provider for building container images (may be None)
             container_runtime: Runtime for creating and managing containers
             worker_metadata: Worker's hardware/environment metadata
             worker_id: Worker identifier for env injection
@@ -189,7 +224,6 @@ class TaskAttempt:
             poll_interval_seconds: How often to poll container status
         """
         self._bundle_provider = bundle_provider
-        self._image_provider = image_provider
         self._runtime = container_runtime
         self._worker_metadata = worker_metadata
         self._worker_id = worker_id
@@ -205,6 +239,9 @@ class TaskAttempt:
         self.request: cluster_pb2.Worker.RunTaskRequest = config.request
         self.ports: dict[str, int] = config.ports
         self.workdir: Path | None = config.workdir
+        self._cache_dir: Path = config.cache_dir
+        self._uv_cache_dir: Path = config.uv_cache_dir
+        self._bundle_path: Path | None = None
 
         # Task state
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
@@ -228,7 +265,7 @@ class TaskAttempt:
         self.image_tag: str = ""
 
         # Internals
-        self.container_id: str | None = None
+        self._container_handle: ContainerHandle | None = None
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
@@ -237,6 +274,19 @@ class TaskAttempt:
         self.logs: TaskLogs = TaskLogs()
 
         self.result: bytes | None = None  # cloudpickle serialized return value from container
+
+    @property
+    def container_id(self) -> str | None:
+        """Return the container ID from the handle, if available."""
+        if self._container_handle:
+            return self._container_handle.container_id
+        return None
+
+    def stop(self, force: bool = False) -> None:
+        """Stop the container, if running."""
+        self.should_stop = True
+        if self._container_handle:
+            self._container_handle.stop(force=force)
 
     def transition_to(
         self,
@@ -306,7 +356,16 @@ class TaskAttempt:
             raise TaskCancelled("Task was cancelled")
 
     def run(self) -> None:
-        """Execute the full task lifecycle. Intended to run in a background thread."""
+        """Execute the full task lifecycle. Intended to run in a background thread.
+
+        The lifecycle is:
+        1. Download bundle from GCS
+        2. Resolve base image
+        3. Create container handle
+        4. Build phase: run setup_commands (uv sync) - BUILDING state
+        5. Run phase: start main command - RUNNING state
+        6. Monitor until completion
+        """
         logger.info(
             "TaskAttempt starting: task_id=%s attempt=%s num_tasks=%s",
             self.task_id,
@@ -317,10 +376,14 @@ class TaskAttempt:
             self._check_cancelled()
             self._download_bundle()
             self._check_cancelled()
-            self._build_image()
+            self._resolve_image()
             self._check_cancelled()
-            container_id = self._start_container()
-            self._monitor(container_id)
+            self._create_container()
+            self._check_cancelled()
+            self._build_container()
+            self._check_cancelled()
+            self._run_container()
+            self._monitor()
         except TaskCancelled:
             self.transition_to(cluster_pb2.TASK_STATE_KILLED)
         except Exception as e:
@@ -372,69 +435,21 @@ class TaskAttempt:
             time.monotonic() - download_start,
         )
 
-    def _build_image(self) -> None:
-        """Build the container image from the downloaded bundle.
+    def _resolve_image(self) -> None:
+        """Resolve the task image.
 
-        Uses the pre-generated dockerfile from the client rather than
-        regenerating it, which preserves extras like package:extra syntax.
+        No per-job Docker build — the pre-built base image has a pre-warmed
+        uv cache. The remote client wraps the entrypoint with uv sync.
         """
-        self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
-        self.build_started = Timestamp.now()
-        self._report_state()  # Report BUILDING state to controller
-        build_start = time.monotonic()
+        self.image_tag = DEFAULT_BASE_IMAGE
+        logger.info("Using task image %s for task %s", self.image_tag, self.task_id)
 
-        env_config = self.request.environment
-        dockerfile = env_config.dockerfile
-        if not dockerfile:
-            raise RuntimeError(
-                f"Task {self.task_id} has no dockerfile in environment config. "
-                "The client must provide a dockerfile when submitting jobs."
-            )
+    def _create_container(self) -> None:
+        """Create container handle from config.
 
-        self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
-        self.logs.add("build", "Building Docker image...")
-        self._report_state()
-
-        if not self._image_provider:
-            raise RuntimeError("Image provider not configured")
-
-        job_id, _ = self.task_id.require_task()
-        build_result = self._image_provider.build(
-            bundle_path=self._bundle_path,
-            dockerfile=dockerfile,
-            job_id=job_id.to_wire(),
-            task_logs=self.logs,
-        )
-
-        self.build_finished = Timestamp.now()
-        self.build_from_cache = build_result.from_cache
-        self.image_tag = build_result.image_tag
-        logger.info(
-            "Image build complete for task %s in %.2fs (cached=%s, tag=%s)",
-            self.task_id,
-            time.monotonic() - build_start,
-            build_result.from_cache,
-            build_result.image_tag,
-        )
-
-        # Protect image from eviction while task is running
-        self._image_provider.protect(build_result.image_tag)
-
-    def _start_container(self) -> str:
-        """Create and start the container for the task.
-
-        Builds environment variables, creates container config, and handles
-        port binding retries. Returns the container ID.
-
-        Returns:
-            Container ID string
-
-        Raises:
-            RuntimeError: If container creation fails after retries
+        Prepares the container configuration including environment variables,
+        mounts, and workdir setup. The actual container is not started yet.
         """
-        self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-        self._report_state()
-
         # Build environment from user-provided vars + EnvironmentConfig
         env_config = self.request.environment
         env = dict(env_config.env_vars)
@@ -446,89 +461,104 @@ class TaskAttempt:
         )
         env.update(iris_env)
 
-        # Convert proto entrypoint to typed Entrypoint
-        entrypoint = Entrypoint.from_proto(self.request.entrypoint)
+        # uv needs a writable directory for Python downloads.
+        # Use a subdirectory of the cache which is bind-mounted from the worker.
+        env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
+
+        # Get RuntimeEntrypoint proto directly
+        rt_ep = self.request.entrypoint
+
+        # Copy bundle into task context dir so everything is in one place
+        assert self.workdir is not None
+        shutil.copytree(self._bundle_path, self.workdir, dirs_exist_ok=True)
+
+        # Unpack any files the entrypoint needs in the workdir
+        if rt_ep.workdir_files:
+            assert self.workdir is not None
+            for name, data in rt_ep.workdir_files.items():
+                (self.workdir / name).write_bytes(data)
 
         # Extract timeout from proto (0 or unset means no timeout)
         timeout_seconds = None
         if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
             timeout_seconds = self.request.timeout.milliseconds / 1000
 
+        assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
+
         config = ContainerConfig(
             image=self.image_tag,
-            entrypoint=entrypoint,
+            entrypoint=rt_ep,
             env=env,
             resources=self.request.resources if self.request.HasField("resources") else None,
             timeout_seconds=timeout_seconds,
-            ports=self.ports,
-            mounts=[(str(self.workdir), "/workdir", "rw")],
+            mounts=[
+                (str(self.workdir), "/app", "rw"),
+                (str(self._uv_cache_dir), "/uv/cache", "rw"),
+            ],
             task_id=self.task_id.to_wire(),
             job_id=job_id.to_wire(),
             worker_metadata=self._worker_metadata,
         )
 
-        # Create and start container with retry on port binding failures
-        container_id = None
-        max_port_retries = 3
-        for attempt in range(max_port_retries):
-            try:
-                chaos_raise("worker.create_container")
-                container_id = self._runtime.create_container(config)
-                self.container_id = container_id
-                self._runtime.start_container(container_id)
-                logger.info(
-                    "Container started for task %s (container_id=%s, ports=%s, timeout=%s)",
-                    self.task_id,
-                    container_id,
-                    self.ports,
-                    timeout_seconds,
-                )
-                break
-            except RuntimeError as e:
-                if "address already in use" in str(e) and attempt < max_port_retries - 1:
-                    logger.warning(
-                        "Port conflict for task %s, retrying with new ports (attempt %d)",
-                        self.task_id,
-                        attempt + 2,
-                    )
-                    self.logs.add("build", f"Port conflict, retrying with new ports (attempt {attempt + 2})")
-                    # Release current ports and allocate new ones
-                    self._port_allocator.release(list(self.ports.values()))
-                    port_names = list(self.ports.keys())
-                    new_ports = self._port_allocator.allocate(len(port_names))
-                    self.ports = dict(zip(port_names, new_ports, strict=True))
+        chaos_raise("worker.create_container")
+        self._container_handle = self._runtime.create_container(config)
+        logger.info("Container handle created for task %s", self.task_id)
 
-                    # Update config with new ports
-                    config.ports = self.ports
-                    for name, port in self.ports.items():
-                        config.env[f"IRIS_PORT_{name.upper()}"] = str(port)
+    def _build_container(self) -> None:
+        """Run setup commands (uv sync, pip install, etc) during BUILDING state.
 
-                    # Try to remove failed container if it was created
-                    if container_id:
-                        try:
-                            self._runtime.remove(container_id)
-                        except RuntimeError:
-                            pass
-                        container_id = None
-                else:
-                    raise
+        This is the build phase where dependencies are synced. The container
+        handle runs setup_commands in a blocking fashion. If there are no
+        setup_commands, this is a no-op.
+        """
+        assert self._container_handle is not None
 
-        # container_id is guaranteed to be set here (loop breaks on success, raises on failure)
-        assert container_id is not None
-        return container_id
+        if self.request.entrypoint.setup_commands:
+            self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
+            self.build_started = Timestamp.now()
+            self._report_state()
 
-    def _monitor(self, container_id: str) -> None:
+        build_logs = self._container_handle.build()
+
+        # Capture build logs into task.logs
+        for log_line in build_logs:
+            ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
+            self.logs.add(log_line.source, log_line.data, timestamp=ts)
+
+        self.build_finished = Timestamp.now()
+        if self.request.entrypoint.setup_commands:
+            logger.info("Build phase completed for task %s", self.task_id)
+
+    def _run_container(self) -> None:
+        """Start the main command during RUNNING state.
+
+        Non-blocking - returns immediately after starting.
+        """
+        assert self._container_handle is not None
+
+        self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
+        self._report_state()
+
+        self._container_handle.run()
+        logger.info(
+            "Container started for task %s (container_id=%s, ports=%s)",
+            self.task_id,
+            self.container_id,
+            self.ports,
+        )
+
+    def _monitor(self) -> None:
         """Monitor task execution: check status, collect stats, stream logs, handle timeouts.
 
         Polls container status at regular intervals until the container stops.
         Streams logs incrementally into task.logs (single source of truth).
         Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
-
-        Args:
-            container_id: Container to monitor
         """
+        assert self._container_handle is not None
+        handle = self._container_handle
+
         # Create deadline from timeout if specified (0 or unset means no timeout)
         deadline = None
         if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
@@ -546,14 +576,16 @@ class TaskAttempt:
 
             # Check if we should stop
             if self.should_stop:
-                self._runtime.kill(container_id, force=True)
-                logger.info("Task %s requested stop; killing container %s", self.task_id, container_id)
+                handle.stop(force=True)
+                logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
+                self._stream_logs(last_log_time)  # Capture final logs
                 self.transition_to(cluster_pb2.TASK_STATE_KILLED)
                 break
 
             # Check timeout
             if deadline and deadline.expired():
-                self._runtime.kill(container_id, force=True)
+                handle.stop(force=True)
+                self._stream_logs(last_log_time)  # Capture final logs
                 self.transition_to(
                     cluster_pb2.TASK_STATE_FAILED,
                     error="Timeout exceeded",
@@ -562,17 +594,17 @@ class TaskAttempt:
                 break
 
             # Check container status
-            status = self._runtime.inspect(container_id)
+            status = handle.status()
             if not status.running:
                 logger.info(
                     "Container exited for task %s (container_id=%s, exit_code=%s, error=%s)",
                     self.task_id,
-                    container_id,
+                    self.container_id,
                     status.exit_code,
                     status.error,
                 )
                 # Final log fetch before container stops
-                last_log_time = self._stream_logs(container_id, last_log_time)
+                last_log_time = self._stream_logs(last_log_time)
 
                 # Read result file only if container succeeded
                 if status.exit_code == 0 and self.workdir:
@@ -594,13 +626,15 @@ class TaskAttempt:
                     self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
                     stderr_line = None
-                    for entry in reversed(self._runtime.get_logs(container_id)):
+                    for entry in reversed(handle.logs()):
                         if entry.source == "stderr" and entry.data:
                             stderr_line = entry.data
                             break
-                    error = f"Exit code: {status.exit_code}"
+                    error = _format_exit_error(status.exit_code, status.oom_killed)
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
+                    if status.oom_killed:
+                        self.logs.add("error", "Container was OOM killed by the kernel")
                     self.transition_to(
                         cluster_pb2.TASK_STATE_FAILED,
                         error=error,
@@ -609,11 +643,11 @@ class TaskAttempt:
                 break
 
             # Stream logs incrementally
-            last_log_time = self._stream_logs(container_id, last_log_time)
+            last_log_time = self._stream_logs(last_log_time)
 
             # Collect stats
             try:
-                stats = self._runtime.get_stats(container_id)
+                stats = handle.stats()
                 if stats.available:
                     self.current_memory_mb = stats.memory_mb
                     self.current_cpu_percent = stats.cpu_percent
@@ -629,23 +663,27 @@ class TaskAttempt:
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
 
-    def _stream_logs(self, container_id: str, since: Timestamp | None) -> Timestamp | None:
+    def _stream_logs(self, since: Timestamp | None) -> Timestamp | None:
         """Fetch new logs from container and append to task.logs.
 
         Args:
-            container_id: Container to fetch logs from
             since: Timestamp to fetch logs after (None for all logs)
 
         Returns:
-            Timestamp of the last log line, or the input 'since' if no new logs
+            Timestamp of the last log line + 1ms, or the input 'since' if no new logs.
+            We add 1ms because Docker's --since is inclusive at the timestamp boundary,
+            and we lose nanosecond precision when converting to milliseconds.
         """
+        if not self._container_handle:
+            return since
         try:
-            new_logs = self._runtime.get_logs(container_id, since=since)
+            new_logs = self._container_handle.logs(since=since)
             for log_line in new_logs:
                 ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
                 self.logs.add(log_line.source, log_line.data, timestamp=ts)
             if new_logs:
-                return Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
+                last_ts = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
+                return last_ts.add_ms(1)
         except Exception:
             pass  # Don't fail task on log streaming errors
         return since
@@ -664,12 +702,12 @@ class TaskAttempt:
             return
         self.cleanup_done = True
 
-        # Remove container (logs already captured in monitor loop)
-        if self.container_id:
+        # Clean up container handle (logs already captured in monitor loop)
+        if self._container_handle:
             try:
-                self._runtime.remove(self.container_id)
+                self._container_handle.cleanup()
             except Exception as e:
-                logger.warning("Failed to remove container %s: %s", self.container_id, e)
+                logger.warning("Failed to cleanup container handle for task %s: %s", self.task_id, e)
 
         # Release ports
         try:
@@ -677,16 +715,9 @@ class TaskAttempt:
         except Exception as e:
             logger.warning("Failed to release ports for task %s: %s", self.task_id, e)
 
-        # Unprotect image from eviction now that task is done
-        if self._image_provider and self.image_tag:
-            try:
-                self._image_provider.unprotect(self.image_tag)
-            except Exception as e:
-                logger.warning("Failed to unprotect image %s: %s", self.image_tag, e)
-
         # Remove working directory
         if self.workdir and self.workdir.exists():
             try:
                 shutil.rmtree(self.workdir)
             except Exception as e:
-                logger.warning("Failed to remove workdir %s: %s", self.workdir, e)
+                logger.warning("Failed to remove %s: %s", self.workdir, e)

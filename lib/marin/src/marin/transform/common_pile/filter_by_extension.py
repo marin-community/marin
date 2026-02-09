@@ -27,7 +27,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -132,4 +132,5 @@ def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig
         .filter(lambda record: record is not None)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    Backend.execute(pipeline)
+    with ZephyrContext(name="filter-by-extension") as ctx:
+        ctx.execute(pipeline)

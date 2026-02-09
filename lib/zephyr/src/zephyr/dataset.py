@@ -294,16 +294,15 @@ class Dataset(Generic[T]):
     operations. Operations are stored as dataclasses, making the pipeline
     inspectable and treating transformations as data.
 
-    Execution is handled by Backend classes via backend.execute(dataset).
+    Execution is handled by ZephyrContext via ctx.execute(dataset).
 
     Example:
-        >>> from zephyr import Backend
         >>> ds = (Dataset
         ...     .from_list([1, 2, 3, 4, 5])
         ...     .filter(lambda x: x % 2 == 0)
         ...     .map(lambda x: x * 2)
         ... )
-        >>> results = Backend.execute(ds, max_parallelism=10)
+        >>> results = ctx.execute(ds)
         [4, 8]
     """
 
@@ -348,13 +347,12 @@ class Dataset(Generic[T]):
             FileNotFoundError: If no files match the pattern and empty_glob_ok is False
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = (Dataset
             ...     .from_files("/input/*.txt")
             ...     .map(lambda path: process_file(path))
             ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=10)
+            >>> output_files = ctx.execute(ds)
         """
         # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
         pattern = re.sub(r"(?<!:)//+", "/", pattern)
@@ -386,9 +384,8 @@ class Dataset(Generic[T]):
             New dataset with map operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [2, 4, 6]
         """
         return Dataset(self.source, [*self.operations, MapOp(fn)])
@@ -404,9 +401,8 @@ class Dataset(Generic[T]):
             New dataset with filter operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([1, 2, 3, 4]).filter(lambda x: x % 2 == 0)
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [2, 4]
             >>> # Using expression (enables pushdown)
             >>> from zephyr.expr import col
@@ -428,12 +424,11 @@ class Dataset(Generic[T]):
             New dataset with only the specified columns
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([
             ...     {"id": 1, "name": "alice", "score": 80},
             ...     {"id": 2, "name": "bob", "score": 60},
             ... ]).select("id", "name")
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]
         """
         return Dataset(self.source, [*self.operations, SelectOp(tuple(columns))])
@@ -453,9 +448,8 @@ class Dataset(Generic[T]):
             New dataset with take operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([1, 2, 3, 4, 5]).take_per_shard(3)
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [1, 2, 3]
         """
         return Dataset(self.source, [*self.operations, TakePerShardOp(n)])
@@ -470,9 +464,8 @@ class Dataset(Generic[T]):
             New dataset with window operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([1, 2, 3, 4, 5]).window(2)
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [[1, 2], [3, 4], [5]]
         """
 
@@ -498,7 +491,6 @@ class Dataset(Generic[T]):
             New dataset with window operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> # Window files by total size < 10GB
             >>> ds = (Dataset
             ...     .from_list([{"size": 5_000_000_000}, {"size": 6_000_000_000}, {"size": 3_000_000_000}])
@@ -520,14 +512,14 @@ class Dataset(Generic[T]):
             New dataset with flat_map operation appended
 
         Example:
-            >>> from zephyr import Backend, load_jsonl
+            >>> from zephyr.execution import load_jsonl
             >>> ds = (Dataset
             ...     .from_files("/input", "*.jsonl.gz")
             ...     .flat_map(load_jsonl)  # Each file yields many records
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=10)
+            >>> output_files = ctx.execute(ds)
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
@@ -541,14 +533,13 @@ class Dataset(Generic[T]):
             Dataset yielding records as dictionaries
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = (Dataset
             ...     .from_files("data/*.parquet")
             ...     .load_file()
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=10)
+            >>> output_files = ctx.execute(ds)
         """
         return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
 
@@ -578,7 +569,7 @@ class Dataset(Generic[T]):
             New dataset with map_shard operation appended
 
         Example:
-            >>> from zephyr import Backend, load_jsonl
+            >>> from zephyr.execution import load_jsonl
             >>> # Deduplicate items within each shard
             >>> def deduplicate_shard(items: Iterator):
             ...     seen = set()
@@ -594,7 +585,7 @@ class Dataset(Generic[T]):
             ...     .map_shard(deduplicate_shard)
             ...     .write_jsonl("output/deduped-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=10)
+            >>> output_files = ctx.execute(ds)
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
@@ -613,7 +604,7 @@ class Dataset(Generic[T]):
             New dataset with reshard operation appended or self if num_shards is None
 
         Example:
-            >>> from zephyr import Backend, load_jsonl
+            >>> from zephyr.execution import load_jsonl
             >>> ds = (Dataset
             ...     .from_files("/input", "*.jsonl.gz")  # 3 files = 3 shards
             ...     .flat_map(load_jsonl)                 # Still 3 shards
@@ -621,7 +612,7 @@ class Dataset(Generic[T]):
             ...     .reshard(num_shards=20)              # Redistribute to 20 shards
             ...     .map(expensive_transform)            # Now uses up to 20 workers
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=20)
+            >>> output_files = ctx.execute(ds)
         """
         if num_shards is not None and num_shards <= 0:
             raise ValueError(f"num_shards must be positive, got {num_shards}")
@@ -765,7 +756,6 @@ class Dataset(Generic[T]):
             New dataset with group_by operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> # Count items by category
             >>> ds = (Dataset
             ...     .from_list([{"cat": "A", "val": 1}, {"cat": "A", "val": 2}, {"cat": "B", "val": 3}])
@@ -774,7 +764,7 @@ class Dataset(Generic[T]):
             ...         reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
             ...     )
             ... )
-            >>> Backend.execute(ds, max_parallelism=10)
+            >>> ctx.execute(ds)
             [{"cat": "A", "count": 2}, {"cat": "B", "count": 1}]
         """
         return Dataset(self.source, [*self.operations, GroupByOp(key, reducer, num_output_shards)])
@@ -783,12 +773,11 @@ class Dataset(Generic[T]):
         """Deduplicate items by key.
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = (Dataset
             ...     .from_list([{"id": 1, "val": "a"}, {"id": 2, "val": "b"}, {"id": 1, "val": "c"}])
             ...     .deduplicate(key=lambda x: x["id"])
             ... )
-            >>> Backend.execute(ds, max_parallelism=10)
+            >>> ctx.execute(ds)
             [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
         """
 
@@ -826,7 +815,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).reduce(sum)
-            >>> result = list(Backend.execute(ds))[0]
+            >>> result = list(ctx.execute(ds))[0]
             4950
         """
         if global_reducer is None:
@@ -842,7 +831,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0)
-            >>> count = list(Backend.execute(ds.count()))[0]
+            >>> count = list(ctx.execute(ds.count()))[0]
             50
         """
         return self.reduce(

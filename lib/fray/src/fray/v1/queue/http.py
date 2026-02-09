@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 from fastapi import Body, FastAPI, Request, Response
-from fray.queue.base import Lease, MemoryQueue
+from fray.v1.queue.base import Lease, MemoryQueue
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 

@@ -23,7 +23,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
-from fray.cluster.base import (
+from fray.v1.cluster.base import (
     Cluster,
     CpuConfig,
     EnvironmentConfig,
@@ -35,9 +35,9 @@ from fray.cluster.base import (
     TaskStatus,
     TpuConfig,
 )
-from fray.isolated_env import TemporaryVenv
-from fray.job.context import SyncContext, fray_default_job_ctx
-from fray.environment_context import temporary_env_vars
+from fray.v1.isolated_env import TemporaryVenv
+from fray.v1.job.context import SyncContext, fray_default_job_ctx
+from fray.v1.environment_context import temporary_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +243,7 @@ class LocalCluster(Cluster):
         return self._jobs[job_id]
 
     def _build_command(self, request: JobRequest, process_env: TemporaryVenv) -> list[str]:
-        from fray.fn_thunk import create_thunk_entrypoint
+        from fray.v1.fn_thunk import create_thunk_entrypoint
 
         entrypoint = request.entrypoint
 

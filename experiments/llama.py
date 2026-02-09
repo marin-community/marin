@@ -18,6 +18,7 @@ Specifies a sequence of Llama 3 models from small to large.
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
+from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
@@ -248,6 +249,56 @@ llama_3_2_1b = LlamaConfig(
     num_layers=16,
     rope=Llama3RotaryEmbeddingsConfig(),
     tie_word_embeddings=True,
+)
+
+# Llama-3.1-8B
+llama_3_1_8b_tokenizer = "meta-llama/Llama-3.1-8B"
+llama_3_1_8b = LlamaConfig(
+    # Matching defaults in https://huggingface.co/meta-llama/Llama-3.1-8B/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=4096,
+    intermediate_dim=14336,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=32,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-5,
+    reference_checkpoint="meta-llama/Llama-3.1-8B",
+    rope=Llama3RotaryEmbeddingsConfig(
+        theta=500000.0,
+        factor=8.0,
+        high_freq_factor=4.0,
+        low_freq_factor=1.0,
+        original_max_position_embeddings=8192,
+    ),
+    tie_word_embeddings=False,
+)
+
+# Llama-3.1-8B-Instruct
+llama_3_1_8b_instruct_tokenizer = (
+    "meta-llama/Llama-3.1-8B-Instruct"  # NOTE: Instruct and base eos_token_id values are different
+)
+llama_3_1_8b_instruct = LlamaConfig(
+    # Matching defaults in https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=4096,
+    intermediate_dim=14336,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=32,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-5,
+    reference_checkpoint="meta-llama/Llama-3.1-8B-Instruct",
+    rope=Llama3RotaryEmbeddingsConfig(
+        theta=500000.0,
+        factor=8.0,
+        high_freq_factor=4.0,
+        low_freq_factor=1.0,
+        original_max_position_embeddings=8192,
+    ),
+    tie_word_embeddings=False,
 )
 
 llama_3_5b = LlamaConfig(

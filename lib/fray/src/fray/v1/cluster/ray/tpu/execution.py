@@ -47,7 +47,7 @@ from ray.exceptions import (
 from ray.remote_function import RemoteFunction
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from fray.cluster.base import get_tpu_topology
+from fray.v1.cluster.base import get_tpu_topology
 
 logger = logging.getLogger(__name__)
 

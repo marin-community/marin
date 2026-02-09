@@ -598,7 +598,7 @@ class TestAutoscalerExecution:
         autoscaler._wait_for_inflight()  # Wait for async scale-up
 
         assert group.consecutive_failures == 1
-        assert group.backoff_until_ms > 0
+        assert group._backoff_until is not None
 
     def test_run_once_evaluates_and_executes(self, empty_autoscaler: Autoscaler):
         """run_once() performs evaluate then execute."""
@@ -830,7 +830,7 @@ class TestAutoscalerFailedSliceCleanup:
 
         # Backoff should be active from cleanup
         assert group.consecutive_failures == 1
-        assert group.backoff_until_ms > 0
+        assert group._backoff_until is not None
 
     def test_evaluate_returns_only_scale_up(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """evaluate() only returns SCALE_UP decisions; failed cleanup happens in run_once()."""
@@ -1286,17 +1286,16 @@ class TestAutoscalerWaterfallEndToEnd:
 
         autoscaler.shutdown()
 
-    def test_backoff_cascades_to_fallback(self):
-        """Generic failure triggers backoff, which cascades to fallback."""
+    def test_full_group_cascades_to_fallback(self):
+        """When primary group hits max_slices, demand cascades to fallback."""
 
-        from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig, FailureMode
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig
 
         config_primary = make_scale_group_config(
             name="primary",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5p-8",
-            max_slices=5,
+            max_slices=1,
             priority=10,
         )
         config_fallback = make_scale_group_config(
@@ -1307,19 +1306,12 @@ class TestAutoscalerWaterfallEndToEnd:
             priority=20,
         )
 
-        # Primary will fail with generic error (triggers backoff)
-        manager_primary = FakeVmManager(
-            FakeVmManagerConfig(config=config_primary, failure_mode=FailureMode.CREATE_FAILS)
-        )
+        manager_primary = FakeVmManager(FakeVmManagerConfig(config=config_primary))
         manager_fallback = FakeVmManager(FakeVmManagerConfig(config=config_fallback))
 
-        backoff = Duration.from_seconds(60.0)
-        group_primary = ScalingGroup(
-            config_primary, manager_primary, scale_up_cooldown=Duration.from_ms(0), backoff_initial=backoff
-        )
+        group_primary = ScalingGroup(config_primary, manager_primary, scale_up_cooldown=Duration.from_ms(0))
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown=Duration.from_ms(0))
 
-        # Use short evaluation interval to allow rapid re-evaluation
         config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
@@ -1327,19 +1319,17 @@ class TestAutoscalerWaterfallEndToEnd:
             config=config,
         )
 
+        # First run: fill primary to max_slices=1
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
-
-        # First run: primary fails, triggers backoff
-        autoscaler.run_once(demand, {})
-        time.sleep(0.1)  # Wait for async scale-up to complete
-
-        # Primary should be in backoff (not quota)
-        assert group_primary.availability().status == GroupAvailability.BACKOFF
-        assert group_primary.consecutive_failures == 1
-
-        # Second run: should route to fallback
         autoscaler.run_once(demand, {})
         autoscaler._wait_for_inflight()
+        assert group_primary.slice_count() == 1
+
+        # Second run: demand=2, primary is full, overflow cascades to fallback
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        autoscaler.run_once(demand, {})
+        autoscaler._wait_for_inflight()
+        assert group_primary.slice_count() == 1
         assert group_fallback.slice_count() == 1
 
     def test_multiple_accelerator_types_route_independently(self):

@@ -23,7 +23,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, cast
 
-from fray.v2.actor import ActorFuture, ActorGroup, ActorHandle
+from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.types import (
     BinaryEntrypoint,
     CallableEntrypoint,
@@ -33,6 +33,9 @@ from fray.v2.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Global registry mapping endpoint names to actor instances for LocalActorHandle resolution
+_local_actor_registry: dict[str, Any] = {}
 
 
 class LocalJobHandle:
@@ -133,9 +136,22 @@ class LocalClient:
         handles: list[LocalActorHandle] = []
         jobs: list[LocalJobHandle] = []
         for i in range(count):
-            instance = actor_class(*args, **kwargs)
-            handle = LocalActorHandle(instance)
+            # Create endpoint-based handle BEFORE instance so actor can access it
+            endpoint = f"local/{name}-{i}"
+            handle = LocalActorHandle(endpoint)
+
+            # Set actor context with handle so actor can pass it to other actors
+            ctx = ActorContext(handle=handle, index=i, group_name=name)
+            token = _set_current_actor(ctx)
+            try:
+                instance = actor_class(*args, **kwargs)
+            finally:
+                _reset_current_actor(token)
+
+            # Register instance so handle can resolve it
+            _local_actor_registry[endpoint] = instance
             handles.append(handle)
+
             # Create a synthetic job handle that is immediately succeeded
             future: Future[None] = Future()
             future.set_result(None)
@@ -148,36 +164,75 @@ class LocalClient:
 
 
 class LocalActorHandle:
-    """In-process actor handle.
+    """In-process actor handle using endpoint-based resolution.
+
+    Uses an endpoint name to look up the actor instance from a global registry.
+    This allows the handle to be created before the actor instance exists,
+    enabling actors to access their own handle during __init__.
 
     Actors are responsible for their own thread safety. This matches Iris/Ray
     behavior where actor methods can be called concurrently and the actor
     implementation must handle synchronization internally.
     """
 
-    def __init__(self, instance: Any):
-        self._instance = instance
-        self._executor = ThreadPoolExecutor(max_workers=16)
+    def __init__(self, endpoint: str):
+        self._endpoint = endpoint
+
+    def _resolve(self) -> Any:
+        """Look up the actor instance from the global registry."""
+        instance = _local_actor_registry.get(self._endpoint)
+        if instance is None:
+            raise RuntimeError(f"Actor not found in registry: {self._endpoint}")
+        return instance
 
     def __getattr__(self, method_name: str) -> LocalActorMethod:
         if method_name.startswith("_"):
             raise AttributeError(method_name)
-        method = getattr(self._instance, method_name)
+        instance = self._resolve()
+        method = getattr(instance, method_name)
         if not callable(method):
-            raise AttributeError(f"{method_name} is not callable on {type(self._instance).__name__}")
-        return LocalActorMethod(method, self._executor)
+            raise AttributeError(f"{method_name} is not callable on {type(instance).__name__}")
+        return LocalActorMethod(method)
+
+    def shutdown(self) -> None:
+        """Shutdown the actor instance."""
+        instance = _local_actor_registry.get(self._endpoint)
+        if instance is not None:
+            instance.shutdown()
+
+    def __getstate__(self) -> dict:
+        """Serialize to just the endpoint name."""
+        return {"endpoint": self._endpoint}
+
+    def __setstate__(self, state: dict) -> None:
+        """Deserialize from endpoint name."""
+        self._endpoint = state["endpoint"]
 
 
 class LocalActorMethod:
     """Wraps a method on a local actor."""
 
-    def __init__(self, method: Any, executor: ThreadPoolExecutor):
+    def __init__(self, method: Any):
         self._method = method
-        self._executor = executor
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
-        """Submit method call to thread pool, returning a future."""
-        return self._executor.submit(self._method, *args, **kwargs)
+        """Spawn a dedicated thread for this call, returning a future.
+
+        Uses a dedicated thread per call instead of a thread pool to avoid
+        backpressure when many actors make concurrent remote calls.
+        """
+        future: Future[Any] = Future()
+
+        def run():
+            try:
+                result = self._method(*args, **kwargs)
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return future
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call method synchronously."""
@@ -212,8 +267,12 @@ class LocalActorGroup:
         return self._handles
 
     def shutdown(self) -> None:
-        """Terminate all local actors."""
+        """Terminate all local actors and clean up registry."""
         for job in self._jobs:
             job.terminate()
         for handle in self._handles:
-            handle._executor.shutdown(wait=False)
+            try:
+                handle.shutdown()
+            except Exception as e:
+                logger.warning("Error shutting down actor %s: %s", handle._endpoint, e)
+            _local_actor_registry.pop(handle._endpoint, None)

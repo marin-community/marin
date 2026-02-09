@@ -42,22 +42,18 @@ _job_context: ContextVar[Any | None] = ContextVar("fray_job_context", default=No
 def _requests_gpu_or_tpu(ray_options: dict[str, Any]) -> bool:
     """Return True when Ray options explicitly request GPU/TPU resources."""
     num_gpus = ray_options.get("num_gpus")
-    if isinstance(num_gpus, int | float) and num_gpus > 0:
+    if isinstance(num_gpus, (int, float)) and num_gpus > 0:
         return True
 
     if ray_options.get("accelerator_type"):
         return True
 
-    resources = ray_options.get("resources")
-    if not isinstance(resources, dict):
-        return False
-
+    resources = ray_options.get("resources") or {}
     for resource_name, amount in resources.items():
-        if not isinstance(amount, int | float) or amount <= 0:
+        if not isinstance(amount, (int, float)) or amount <= 0:
             continue
-        if resource_name == "TPU" or resource_name.startswith("TPU-"):
-            return True
-        if resource_name.upper().startswith("GPU"):
+        normalized_resource_name = resource_name.upper()
+        if normalized_resource_name.startswith("TPU") or normalized_resource_name.startswith("GPU"):
             return True
 
     return False

@@ -25,6 +25,7 @@ from functools import lru_cache
 from typing import Any
 
 import jmp
+from fray.v2 import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -38,17 +39,8 @@ from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
-
-from experiments.evals.task_configs import (
-    CORE_TASKS,
-    convert_to_levanter_task_config,
-)
-from experiments.llama import compute_num_parameters
-from experiments.paloma import paloma_tokenized
-from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.simple_train_config import SimpleTrainConfig
+from levanter.utils.mesh import MeshConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
@@ -59,6 +51,20 @@ from marin.execution.executor import (
     this_output_path,
     unwrap_versioned_value,
 )
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
+from marin.training.training import (
+    TrainLmOnPodConfig,
+    run_levanter_train_lm,
+)
+
+from experiments.evals.task_configs import (
+    CORE_TASKS,
+    convert_to_levanter_task_config,
+)
+from experiments.llama import compute_num_parameters
+from experiments.paloma import paloma_tokenized
+from experiments.simple_sft_config import SimpleSFTConfig
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.processing.tokenize import (
     HfDatasetSpec,
     TokenizeConfig,
@@ -66,11 +72,6 @@ from marin.processing.tokenize import (
     add_validation_sets_to_mixture,
     lm_data_config,
     tokenize,
-)
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
-from marin.training.training import (
-    TrainLmOnPodConfig,
-    run_levanter_train_lm,
 )
 
 logger = logging.getLogger("ray")
@@ -178,6 +179,14 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
+        resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+        pip_dependency_groups=["cpu"],
+        env_vars={
+            "TRANSFORMERS_NO_TORCH": "1",
+            "TRANSFORMERS_NO_TORCHVISION": "1",
+            "USE_TORCH": "0",
+            "TORCH_DISABLE_GLOBAL_DEPS": "1",
+        },
     )
 
 
@@ -342,6 +351,7 @@ def default_train(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
+            per_device_parallelism=train_config.per_device_parallelism,
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
@@ -373,6 +383,7 @@ def default_train(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
+        pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,
         train_seq_len=train_length,
         model=model_config,
@@ -465,16 +476,8 @@ def default_sft(
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
-    initialize_from_hf = sft_config.initialize_from_hf
-
-    if initialize_from_hf is None:
-        initialize_from_hf = (
-            sft_config.model_name_or_path is not None and sft_config.initialize_from_checkpoint_path is None
-        )
-    elif initialize_from_hf is True and sft_config.model_name_or_path is None:
-        raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
-    elif initialize_from_hf is False and sft_config.initialize_from_checkpoint_path is None:
-        raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
+    if sft_config.initialize_from_hf is not None and sft_config.initialize_from_checkpoint_path is not None:
+        raise ValueError("Cannot specify both initialize_from_hf and initialize_from_checkpoint_path!")
 
     # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
@@ -483,7 +486,7 @@ def default_sft(
         num_train_steps=sft_config.num_train_steps,
         learning_rate=sft_config.learning_rate,
         lr_schedule=sft_config.lr_schedule,
-        decay=sft_config.cooldown,
+        decay=sft_config.decay,
         weight_decay=sft_config.weight_decay,
         min_lr_ratio=sft_config.min_lr_ratio,
         max_grad_norm=sft_config.max_grad_norm,
@@ -492,10 +495,15 @@ def default_sft(
         steps_per_export=sft_config.steps_per_checkpoint,
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
-        initialize_from_hf=sft_config.model_name_or_path if initialize_from_hf else None,
+        initialize_from_hf=sft_config.initialize_from_hf,
         initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
+        train_seq_len=sft_config.max_seq_len,
         data_seed=sft_config.seed,
         z_loss_weight=sft_config.z_loss_weight,
+        beta1=sft_config.beta1,
+        beta2=sft_config.beta2,
+        pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
+        per_device_parallelism=sft_config.per_device_parallelism,
     )
 
     if sft_config.reinit_tokens:
@@ -546,7 +554,6 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
-            permutation_type="feistel",
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures

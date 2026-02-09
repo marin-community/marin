@@ -28,22 +28,21 @@ import uvicorn
 from iris.chaos import chaos
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.events import (
-    TaskAssignedEvent,
-    TaskStateChangedEvent,
-    WorkerHeartbeatEvent,
-    WorkerHeartbeatFailedEvent,
+from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
+from iris.cluster.controller.scheduler import (
+    Scheduler,
+    SchedulingContext,
+    TaskScheduleResult,
 )
-from iris.cluster.controller.scheduler import Scheduler, SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
     ControllerWorker,
+    HeartbeatSnapshot,
 )
 from iris.cluster.types import (
     JobName,
-    WorkerId,
     VmWorkerStatus,
     VmWorkerStatusMap,
     PREEMPTIBLE_ATTRIBUTE_KEY,
@@ -54,20 +53,9 @@ from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, Timestamp
+from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class WorkerDispatch:
-    """Transient per-worker dispatch state owned by the controller scheduling loop.
-
-    Separate from ControllerWorker (state.py) which holds durable worker metadata.
-    """
-
-    dispatch_outbox: list[cluster_pb2.Worker.RunTaskRequest] = field(default_factory=list)
-    kill_outbox: list[str] = field(default_factory=list)
 
 
 def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
@@ -285,11 +273,6 @@ class Controller:
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None
 
-        # Per-worker dispatch state (outboxes). Protected by _dispatch_lock since
-        # the scheduling thread writes and the heartbeat thread reads+drains.
-        self._dispatch: dict[WorkerId, WorkerDispatch] = {}
-        self._dispatch_lock = threading.Lock()
-
         # Thread pool for parallel heartbeat dispatch, owned by the ThreadContainer
         # so it is shut down automatically during stop().
         self._dispatch_executor = self._threads.spawn_executor(
@@ -411,8 +394,8 @@ class Controller:
     ) -> None:
         """Commit resources and buffer task assignments for heartbeat delivery.
 
-        Groups assignments by job and buffers RunTaskRequest protos into per-worker outboxes.
-        Resource commitment happens via TaskAssignedEvent.
+        Groups assignments by job, commits resources via TaskAssignedEvent, and
+        buffers RunTaskRequest protos via state.buffer_dispatch().
         """
         # Group assignments by job for coscheduled handling
         by_job: dict[JobName, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
@@ -425,32 +408,31 @@ class Controller:
                 continue
 
             for task, worker in job_assignments:
-                # Commit resources and buffer dispatch atomically under _dispatch_lock.
-                # This prevents the heartbeat thread from seeing the task in
-                # worker.running_tasks (via TaskAssignedEvent) before the
-                # RunTaskRequest is in the outbox.
-                with self._dispatch_lock:
-                    self._state.handle_event(
-                        TaskAssignedEvent(
-                            task_id=task.task_id,
-                            worker_id=worker.worker_id,
-                        )
+                # Commit resources via event
+                self._state.handle_event(
+                    TaskAssignedEvent(
+                        task_id=task.task_id,
+                        worker_id=worker.worker_id,
                     )
-                    request = cluster_pb2.Worker.RunTaskRequest(
-                        task_id=task.task_id.to_wire(),
-                        num_tasks=len(self._state.get_job_tasks(task.job_id)),
-                        entrypoint=job.request.entrypoint,
-                        environment=job.request.environment,
-                        bundle_gcs_path=job.request.bundle_gcs_path,
-                        resources=job.request.resources,
-                        ports=list(job.request.ports),
-                        attempt_id=task.current_attempt_id,
-                    )
-                    # Copy timeout if set (check milliseconds field > 0)
-                    if job.request.timeout.milliseconds > 0:
-                        request.timeout.CopyFrom(job.request.timeout)
-                    wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-                    wd.dispatch_outbox.append(request)
+                )
+
+                # Build the run request
+                request = cluster_pb2.Worker.RunTaskRequest(
+                    task_id=task.task_id.to_wire(),
+                    num_tasks=len(self._state.get_job_tasks(task.job_id)),
+                    entrypoint=job.request.entrypoint,
+                    environment=job.request.environment,
+                    bundle_gcs_path=job.request.bundle_gcs_path,
+                    resources=job.request.resources,
+                    ports=list(job.request.ports),
+                    attempt_id=task.current_attempt_id,
+                )
+                # Copy timeout if set (check milliseconds field > 0)
+                if job.request.timeout.milliseconds > 0:
+                    request.timeout.CopyFrom(job.request.timeout)
+
+                # Buffer dispatch (state handles the lock)
+                self._state.buffer_dispatch(worker.worker_id, request)
 
             # Wake heartbeat thread to deliver buffered dispatches immediately
             if job_assignments:
@@ -497,10 +479,8 @@ class Controller:
             worker = self._state.get_worker(task.worker_id)
             if not worker:
                 continue
-            with self._dispatch_lock:
-                wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-                wd.kill_outbox.append(task_id.to_wire())
-                any_buffered = True
+            self._state.buffer_kill(worker.worker_id, task_id.to_wire())
+            any_buffered = True
 
         # Wake heartbeat thread to deliver buffered kills immediately
         if any_buffered:
@@ -509,154 +489,93 @@ class Controller:
     def _heartbeat_all_workers(self) -> None:
         """Send heartbeats to all registered workers.
 
-        Uses a lock-copy-unlock-send-lock-apply pattern: snapshots dispatch outboxes
-        under lock, sends RPCs without holding the lock, then re-locks to apply results.
+        Uses state-owned transitions: begin_heartbeat() atomically snapshots worker
+        state and drains dispatch buffers, then RPCs proceed without locks, and
+        complete_heartbeat()/fail_heartbeat() apply results.
         """
-        # Phase 1: snapshot worker list (no lock), then drain outboxes (under lock)
-        all_workers = self._state.get_available_workers()
-        with self._dispatch_lock:
-            worker_dispatches: dict[WorkerId, tuple[ControllerWorker, list, list]] = {}
-            for w in all_workers:
-                wd = self._dispatch.pop(w.worker_id, WorkerDispatch())
-                worker_dispatches[w.worker_id] = (w, wd.dispatch_outbox, wd.kill_outbox)
+        # Phase 1: create snapshots for all healthy workers
+        snapshots: list[HeartbeatSnapshot] = []
+        for w in self._state.get_available_workers():
+            snapshot = self._state.begin_heartbeat(w.worker_id)
+            if snapshot:
+                snapshots.append(snapshot)
 
-        # Phase 2: send RPCs (no lock held)
-        futures = {}
-        for _worker_id, (worker, tasks_to_run, tasks_to_kill) in worker_dispatches.items():
-            future = self._dispatch_executor.submit(self._heartbeat_worker, worker, tasks_to_run, tasks_to_kill)
-            futures[future] = (worker, tasks_to_run, tasks_to_kill)
+        # Phase 2: send RPCs in parallel (no lock held)
+        futures: dict[Future, HeartbeatSnapshot] = {}
+        for snapshot in snapshots:
+            future = self._dispatch_executor.submit(self._do_heartbeat_rpc, snapshot)
+            futures[future] = snapshot
 
-        # Phase 3: process results, requeue failures
+        # Phase 3: process results via state transitions
         try:
             for future in as_completed(futures, timeout=10):
-                worker, tasks_to_run, tasks_to_kill = futures.pop(future)
-                self._handle_heartbeat_future(future, worker, tasks_to_run, tasks_to_kill)
+                snapshot = futures.pop(future)
+                try:
+                    response = future.result()
+                    self._state.complete_heartbeat(snapshot, response)
+                except Exception as e:
+                    logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
+                    self._state.fail_heartbeat(snapshot, str(e))
         except TimeoutError:
             # Process any futures that completed before timeout
-            for future, (worker, tasks_to_run, tasks_to_kill) in futures.items():
+            for future, snapshot in futures.items():
                 if future.done():
-                    self._handle_heartbeat_future(future, worker, tasks_to_run, tasks_to_kill)
+                    try:
+                        response = future.result()
+                        self._state.complete_heartbeat(snapshot, response)
+                    except Exception as e:
+                        logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
+                        self._state.fail_heartbeat(snapshot, str(e))
                 else:
-                    logger.warning(f"Heartbeat timed out for {worker.worker_id}")
-                    self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+                    logger.warning(f"Heartbeat timed out for {snapshot.worker_id}")
+                    self._state.fail_heartbeat(snapshot, "Heartbeat timed out")
                     future.cancel()
 
-    def _handle_heartbeat_future(
+    def _do_heartbeat_rpc(
         self,
-        future: Future,
-        worker: ControllerWorker,
-        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
-        tasks_to_kill: list[str],
-    ) -> None:
-        """Process a completed heartbeat future."""
-        try:
-            response = future.result()
-            self._process_heartbeat_response(worker, response)
-        except Exception as e:
-            logger.warning(f"Heartbeat error for {worker.worker_id}: {e}")
-            self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
-
-    def _heartbeat_worker(
-        self,
-        worker: ControllerWorker,
-        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
-        tasks_to_kill: list[str],
+        snapshot: HeartbeatSnapshot,
     ) -> cluster_pb2.HeartbeatResponse:
-        """Send a heartbeat to a single worker.
+        """Send a heartbeat RPC to a single worker.
 
         Raises:
-            Exception on RPC failure (caught and handled by _handle_heartbeat_future)
+            Exception on RPC failure (handled by caller via state.fail_heartbeat)
         """
         if rule := chaos("controller.heartbeat"):
             sleep(rule.delay_seconds)
             raise Exception("chaos: heartbeat unavailable")
-        stub = self._stub_factory.get_stub(worker.address)
-        expected_tasks = [
-            cluster_pb2.Controller.RunningTaskEntry(
-                task_id=tid.to_wire(),
-                attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
+        stub = self._stub_factory.get_stub(snapshot.worker_address)
+
+        # Build expected_tasks list using the pre-snapshotted running_tasks.
+        # Chaos injection point for race condition testing.
+        expected_tasks = []
+        for tid in snapshot.running_tasks:
+            if rule := chaos("controller.heartbeat.iteration"):
+                sleep(rule.delay_seconds)
+            expected_tasks.append(
+                cluster_pb2.Controller.RunningTaskEntry(
+                    task_id=tid.to_wire(),
+                    attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
+                )
             )
-            for tid in worker.running_tasks
-        ]
         request = cluster_pb2.HeartbeatRequest(
-            tasks_to_run=tasks_to_run,
-            tasks_to_kill=tasks_to_kill,
+            tasks_to_run=snapshot.tasks_to_run,
+            tasks_to_kill=snapshot.tasks_to_kill,
             expected_tasks=expected_tasks,
         )
         return stub.heartbeat(request)
 
-    def _process_heartbeat_response(
-        self,
-        worker: ControllerWorker,
-        response: cluster_pb2.HeartbeatResponse,
-    ) -> None:
-        """Process a successful heartbeat response.
-
-        Updates heartbeat timestamp and processes completed tasks. Reconciliation
-        of running vs expected tasks is handled worker-side using expected_tasks.
-        """
-        self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp=Timestamp.now()))
-
-        # Update task states from running tasks (e.g. ASSIGNED -> BUILDING -> RUNNING)
-        for entry in response.running_tasks:
-            if entry.state != cluster_pb2.TASK_STATE_UNSPECIFIED:
-                task_id = JobName.from_wire(entry.task_id)
-                task = self._state.get_task(task_id)
-                if task and task.state != entry.state and not task.is_finished():
-                    self._state.handle_event(
-                        TaskStateChangedEvent(
-                            task_id=task_id,
-                            new_state=entry.state,
-                            attempt_id=entry.attempt_id,
-                        )
-                    )
-
-        for entry in response.completed_tasks:
-            task_id = JobName.from_wire(entry.task_id)
-            task = self._state.get_task(task_id)
-            if task and not task.is_finished():
-                self._state.handle_event(
-                    TaskStateChangedEvent(
-                        task_id=task_id,
-                        new_state=entry.state,
-                        error=entry.error or None,
-                        exit_code=entry.exit_code,
-                        attempt_id=entry.attempt_id,
-                    )
-                )
-
-    def _requeue_and_fail(
-        self,
-        worker: ControllerWorker,
-        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
-        tasks_to_kill: list[str],
-    ) -> None:
-        """Re-queue outbox entries and record a heartbeat failure for a worker."""
-        with self._dispatch_lock:
-            wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-            if tasks_to_run:
-                wd.dispatch_outbox.extend(tasks_to_run)
-            if tasks_to_kill:
-                wd.kill_outbox.extend(tasks_to_kill)
-        self._handle_heartbeat_failure(worker)
-
-    def _handle_heartbeat_failure(self, worker: ControllerWorker) -> None:
-        """Handle a failed heartbeat RPC via the state layer."""
-        self._state.handle_event(
-            WorkerHeartbeatFailedEvent(
-                worker_id=worker.worker_id,
-                error=f"Heartbeat failed for worker {worker.worker_id}",
-            )
-        )
-
     def _check_worker_timeouts(self) -> None:
-        """Check for worker timeouts and send kill RPCs for affected tasks."""
-        # State computes failed workers and marks them atomically under lock
-        tasks_to_kill = self._state.check_worker_timeouts(self._config.worker_timeout)
+        """Check for worker timeouts, send kill RPCs, and notify autoscaler."""
+        result = self._state.check_worker_timeouts(self._config.worker_timeout)
 
         # Send kill RPCs outside lock
-        if tasks_to_kill:
-            self.kill_tasks_on_workers(tasks_to_kill)
+        if result.tasks_to_kill:
+            self.kill_tasks_on_workers(result.tasks_to_kill)
+
+        # Notify autoscaler so it can terminate the containing slice
+        if self._autoscaler and result.failed_vm_addresses:
+            for vm_address in result.failed_vm_addresses:
+                self._autoscaler.notify_worker_failed(vm_address)
 
     def _run_autoscaler_once(self) -> None:
         """Run one autoscaler evaluation cycle.
@@ -699,7 +618,8 @@ class Controller:
 
             result[vm_addr] = VmWorkerStatus(
                 vm_address=vm_addr,
-                running_task_ids=frozenset(tid.to_wire() for tid in worker.running_tasks),
+                # Snapshot the set to prevent concurrent modification errors
+                running_task_ids=frozenset(tid.to_wire() for tid in list(worker.running_tasks)),
             )
         return result
 

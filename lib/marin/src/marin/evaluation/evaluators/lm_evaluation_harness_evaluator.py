@@ -20,8 +20,8 @@ import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from fray.cluster import ResourceConfig
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+from fray.v1.cluster import ResourceConfig
+from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
 
 import fsspec
 

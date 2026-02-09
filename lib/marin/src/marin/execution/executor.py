@@ -110,16 +110,9 @@ import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 
-from fray import (
-    Cluster,
-    Entrypoint,
-    EnvironmentConfig,
-    JobId,
-    JobRequest,
-    JobStatus,
-    ResourceConfig,
-    current_cluster,
-)
+from fray.v2 import client as fray_client
+from fray.v2.client import JobHandle, JobStatus
+from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.execution.executor_step_status import (
     HEARTBEAT_INTERVAL,
@@ -182,30 +175,32 @@ class StepRunner:
     executors from running the same step.
     """
 
-    def __init__(self, cluster: Cluster, status_file: StatusFile):
-        self.cluster = cluster
+    def __init__(self, client: fray_client.Client, status_file: StatusFile):
+        self.client = client
         self._status_file = status_file
-        self._job_id: JobId | None = None
+        self._job: JobHandle | None = None
         self._heartbeat_thread: Thread | None = None
         self._stop_event = Event()
 
     @property
-    def job_id(self) -> JobId | None:
-        return self._job_id
+    def job_id(self) -> str | None:
+        return None if self._job is None else self._job.job_id
 
     def launch(self, job_request: JobRequest) -> None:
         """Launch job and start heartbeat thread."""
         self._status_file.write_status(STATUS_RUNNING)
-        self._job_id = self.cluster.launch(job_request)
+        self._job = self.client.submit(job_request)
         self._start_heartbeat()
 
     def wait(self) -> None:
         """Wait for job to complete, stop heartbeat, write final status."""
         try:
-            result = self.cluster.wait(self._job_id)
-            if result.status == JobStatus.FAILED:
+            if self._job is None:
+                raise RuntimeError("StepRunner.wait called before launch")
+            result = self._job.wait(raise_on_failure=False)
+            if result == JobStatus.FAILED:
                 self._status_file.write_status(STATUS_FAILED)
-                raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
+                raise RuntimeError(f"Job {self.job_id} failed")
             self._status_file.write_status(STATUS_SUCCESS)
         except Exception:
             if self._status_file.status != STATUS_FAILED:
@@ -217,9 +212,9 @@ class StepRunner:
 
     def poll(self) -> bool:
         """Return True if job is finished."""
-        if self._job_id is None:
+        if self._job is None:
             return True
-        return JobStatus.finished(self.cluster.poll(self._job_id).status)
+        return JobStatus.finished(self._job.status())
 
     def _start_heartbeat(self) -> None:
         """Start background thread that periodically refreshes the lease."""
@@ -267,6 +262,13 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     return d
 
 
+def _sanitize_job_name(name: str) -> str:
+    """Ensure job names are compatible with Iris and Docker image tags."""
+    sanitized = re.sub(r"[^a-z0-9_.-]+", "-", name.lower())
+    sanitized = sanitized.strip("-.")
+    return sanitized or "job"
+
+
 @dataclass(frozen=True)
 class ExecutorStep(Generic[ConfigT]):
     """
@@ -308,6 +310,9 @@ class ExecutorStep(Generic[ConfigT]):
 
     resources: ResourceConfig | None = None
     """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
+
+    env_vars: dict[str, str] | None = None
+    """Additional environment variables to set for this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -678,7 +683,7 @@ class Executor:
         executor_info_base_path: str,
         description: str | None = None,
     ):
-        self.cluster = current_cluster()
+        self.client = fray_client.current_client()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -873,15 +878,21 @@ class Executor:
             step_fn = _call_remote
 
         # Use the step's resources if specified, otherwise default to CPU
-        step_resources = step.resources if step.resources is not None else ResourceConfig.with_cpu(preemptible=False)
+        step_resources = step.resources if step.resources is not None else ResourceConfig.with_cpu()
+        job_name = _sanitize_job_name(f"{get_fn_name(step.fn, short=True)}:{step.name}")
+        env_vars = step.env_vars or {}
+
         fray_job = JobRequest(
-            name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
+            name=job_name,
             entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
             resources=step_resources,
-            environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
+            environment=create_environment(
+                extras=step.pip_dependency_groups or [],
+                env_vars=env_vars,
+            ),
         )
 
-        runner = StepRunner(self.cluster, status_file)
+        runner = StepRunner(self.client, status_file)
         runner.launch(fray_job)
         return runner
 
@@ -1256,6 +1267,8 @@ class ExecutorMainConfig:
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     time_in = time.time()
 
     prefix = config.prefix

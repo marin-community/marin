@@ -464,68 +464,58 @@ class ResourceSpec:
         return spec
 
 
-DOCKERFILE_TEMPLATE = """FROM {base_image}
-
-RUN apt-get update && apt-get install -y git curl build-essential && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /usr/local/bin/uv
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-ENV PATH="/root/.cargo/bin:$PATH"
-
-ENV UV_CACHE_DIR=/opt/uv-cache
-ENV UV_LINK_MODE=copy
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv
-WORKDIR /app
-
-COPY . .
-
-RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
-    --mount=type=cache,id=iris-cargo,sharing=shared,target=/root/.cargo/registry \\
-    --mount=type=cache,id=iris-cargo-git,sharing=shared,target=/root/.cargo/git \\
-    uv sync {extras_flags}
-
-ENV PATH="/app/.venv/bin:$PATH"
-
-RUN uv pip install cloudpickle
-{pip_install_step}"""
+DEFAULT_BASE_IMAGE = "iris-task:latest"
 
 
-def generate_dockerfile(
-    python_version: str,
-    extras: list[str] | None = None,
-    pip_packages: list[str] | None = None,
-) -> str:
-    """Generate a Dockerfile for an Iris job container.
+CALLABLE_RUNNER = """\
+import cloudpickle
+import os
+import sys
+import traceback
+import logging
 
-    Uses the full Python image when pip_packages are specified (native wheels
-    often depend on system libraries stripped from slim images).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
+)
 
-    Extras can be specified in two formats:
-    - "extra_name" -> "--extra extra_name"
-    - "package:extra_name" -> "--package package --extra extra_name"
+workdir = os.environ["IRIS_WORKDIR"]
+
+try:
+    with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
+        fn, args, kwargs = cloudpickle.loads(f.read())
+    result = fn(*args, **kwargs)
+    with open(os.path.join(workdir, "_result.pkl"), "wb") as f:
+        f.write(cloudpickle.dumps(result))
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
+"""
+
+
+def _build_uv_sync_flags(extras: Sequence[str] | None) -> str:
+    """Build uv sync flags from extras list.
+
+    Accepts 'extra' or 'package:extra' syntax. The package prefix is stripped
+    since --all-packages syncs every workspace member and --extra applies
+    to whichever package defines that extra name.
     """
-    base_image = f"python:{python_version}" if pip_packages else f"python:{python_version}-slim"
-
-    # Parse extras: support both "extra" and "package:extra" syntax
-    extras_parts = []
+    sync_parts = ["--all-packages", "--no-group", "dev"]
     for e in extras or []:
         if ":" in e:
-            package, extra = e.split(":", 1)
-            extras_parts.append(f"--package {package} --extra {extra}")
+            _package, extra = e.split(":", 1)
+            sync_parts.append(f"--extra {extra}")
         else:
-            extras_parts.append(f"--extra {e}")
-    extras_flags = " ".join(extras_parts)
+            sync_parts.append(f"--extra {e}")
+    return " ".join(sync_parts)
 
-    pip_install_step = ""
-    if pip_packages:
-        packages_str = " ".join(f'"{pkg}"' for pkg in pip_packages)
-        pip_install_step = f"\nRUN uv pip install {packages_str}\n"
 
-    return DOCKERFILE_TEMPLATE.format(
-        base_image=base_image,
-        extras_flags=extras_flags,
-        pip_install_step=pip_install_step,
-    )
+def _build_pip_install_args(pip_packages: Sequence[str] | None) -> str:
+    """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
+    packages = ["cloudpickle", *list(pip_packages or [])]
+    return " ".join(f'"{pkg}"' for pkg in packages)
 
 
 @dataclass
@@ -544,14 +534,9 @@ class EnvironmentSpec:
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
-    dockerfile: str | None = None
 
     def to_proto(self) -> cluster_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied.
-
-        Generates the dockerfile on the client side so the worker can use it
-        directly without regenerating (which would lose extras like package:extra).
-        """
+        """Convert to wire format with sensible defaults applied."""
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -561,23 +546,18 @@ class EnvironmentSpec:
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
-        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        uv_sync_flags = _build_uv_sync_flags(self.extras)
+        if uv_sync_flags:
+            merged_env_vars["IRIS_UV_SYNC_FLAGS"] = uv_sync_flags
+        merged_env_vars["IRIS_PIP_INSTALL"] = _build_pip_install_args(self.pip_packages)
 
-        if self.dockerfile is not None:
-            dockerfile = self.dockerfile
-        else:
-            dockerfile = generate_dockerfile(
-                python_version=py_version,
-                extras=list(self.extras or []),
-                pip_packages=list(self.pip_packages or []),
-            )
+        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
         return cluster_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
             python_version=py_version,
-            dockerfile=dockerfile,
         )
 
 
@@ -725,73 +705,58 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
 class Entrypoint:
     """Job entrypoint specification.
 
-    Supports two execution modes:
-    1. Callable: A Python function with args/kwargs (cloudpickled)
-    2. Command: A command-line invocation (e.g., ["python", "train.py", "--epochs", "10"])
-
-    Callable entrypoints are stored as cloudpickle bytes. The bytes are the
-    single source of truth — they pass from client to worker to task container
-    without deserialization, avoiding Python version mismatches between the
-    client and worker processes.
+    Every entrypoint has a command (what to run) and optional workdir_files
+    that the worker writes to $IRIS_WORKDIR/{name} before executing the command.
 
     Examples:
-        # Callable entrypoint
         entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
-
-        # Command entrypoint
         entrypoint = Entrypoint.from_command("python", "train.py", "--epochs", "10")
     """
 
     def __init__(
         self,
         *,
-        callable_bytes: bytes | None = None,
-        command: list[str] | None = None,
+        command: list[str],
+        workdir_files: dict[str, bytes] | None = None,
     ):
-        has_callable = callable_bytes is not None
-        has_command = command is not None
-        if has_callable == has_command:
-            raise ValueError("Exactly one of 'callable_bytes' or 'command' must be set")
-        self._callable_bytes = callable_bytes
+        if not command:
+            raise ValueError("Command must have at least one argument")
         self.command = command
-
-    @property
-    def callable_bytes(self) -> bytes | None:
-        return self._callable_bytes
-
-    @property
-    def is_callable(self) -> bool:
-        return self._callable_bytes is not None
-
-    @property
-    def is_command(self) -> bool:
-        return self.command is not None
+        self.workdir_files: dict[str, bytes] = workdir_files or {}
 
     def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
         """Deserialize the callable, args, kwargs from pickle bytes.
 
         Only call this when you need to actually invoke the function locally
-        (e.g. local_client). Avoid on the worker — use callable_bytes directly
+        (e.g. local_client). Avoid on the worker — use workdir_files directly
         to pass through to the task container without version-sensitive unpickling.
         """
-        if self._callable_bytes is None:
+        payload = self.workdir_files.get("_callable.pkl")
+        if payload is None:
             raise ValueError("Not a callable entrypoint")
         import cloudpickle
 
-        return cloudpickle.loads(self._callable_bytes)
+        return cloudpickle.loads(payload)
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        import cloudpickle
         import sys
         from pathlib import Path
+
+        import cloudpickle
 
         module = sys.modules.get(fn.__module__)
         module_path = Path(module.__file__).parts if module and getattr(module, "__file__", None) else ()
         if module and (module.__package__ is None or module.__spec__ is None or "tests" in module_path):
             cloudpickle.register_pickle_by_value(module)
 
-        return cls(callable_bytes=cloudpickle.dumps((fn, args, kwargs)))
+        return cls(
+            command=["bash", "-c", "exec python -u $IRIS_WORKDIR/_callable_runner.py"],
+            workdir_files={
+                "_callable.pkl": cloudpickle.dumps((fn, args, kwargs)),
+                "_callable_runner.py": CALLABLE_RUNNER.encode(),
+            },
+        )
 
     @classmethod
     def from_command(cls, *argv: str) -> "Entrypoint":
@@ -799,35 +764,26 @@ class Entrypoint:
 
         Args:
             *argv: Command and arguments (e.g., "python", "train.py", "--epochs", "10")
-
-        Returns:
-            Entrypoint configured for command execution
         """
         if not argv:
             raise ValueError("Command must have at least one argument")
-        return cls(command=list(argv))
+        return cls(command=list(argv), workdir_files={})
 
-    def to_proto(self) -> cluster_pb2.Entrypoint:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.Entrypoint()
-        if self._callable_bytes is not None:
-            proto.callable = self._callable_bytes
-        elif self.command is not None:
-            proto.command.argv[:] = self.command
+    def to_proto(self) -> cluster_pb2.RuntimeEntrypoint:
+        """Convert to protobuf representation.
+
+        Produces a RuntimeEntrypoint with no setup_commands (those are added
+        by build_runtime_entrypoint when submitting to the cluster).
+        """
+        proto = cluster_pb2.RuntimeEntrypoint()
+        proto.run_command.argv[:] = self.command
+        for name, data in self.workdir_files.items():
+            proto.workdir_files[name] = data
         return proto
 
     @classmethod
-    def from_proto(cls, proto: cluster_pb2.Entrypoint) -> "Entrypoint":
-        """Create from protobuf representation.
-
-        For callable entrypoints, stores the raw pickle bytes without
-        deserializing. This avoids Python version mismatches when the
-        worker runs a different Python than the client.
-        """
-        kind = proto.WhichOneof("kind")
-        if kind == "callable":
-            return cls(callable_bytes=proto.callable)
-        elif kind == "command":
-            return cls(command=list(proto.command.argv))
-        else:
-            raise ValueError(f"Unknown entrypoint kind: {kind}")
+    def from_proto(cls, proto: cluster_pb2.RuntimeEntrypoint) -> "Entrypoint":
+        """Create from protobuf representation."""
+        command = list(proto.run_command.argv)
+        workdir_files = dict(proto.workdir_files) if proto.workdir_files else None
+        return cls(command=command, workdir_files=workdir_files)
