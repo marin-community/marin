@@ -490,12 +490,7 @@ class Autoscaler:
         # Priority 2: Scale UP for demand exceeding capacity
         if demand > capacity and total < group.max_slices:
             if not group.can_scale_up(ts):
-                logger.debug(
-                    "Scale group %s: scale up blocked (backoff_until=%d, last_scale_up=%d)",
-                    group.name,
-                    group.backoff_until_ms,
-                    group.last_scale_up_ms,
-                )
+                logger.debug("Scale group %s: scale up blocked", group.name)
                 return None
 
             return ScalingDecision(
@@ -612,6 +607,18 @@ class Autoscaler:
                     group.name,
                     slice_id=slice_obj.slice_id,
                     reason="cleaning up failed slice",
+                )
+
+            # Update liveness from worker status, then reap dead slices
+            group.update_slice_liveness(vm_status_map, timestamp)
+            dead = group.cleanup_dead_slices(timestamp)
+            for slice_obj in dead:
+                self._slice_created_at.pop(slice_obj.slice_id, None)
+                self._log_action(
+                    "liveness_reap",
+                    group.name,
+                    slice_id=slice_obj.slice_id,
+                    reason="slice missed liveness deadline",
                 )
 
         # Step 2: Evaluate (scale-up only)

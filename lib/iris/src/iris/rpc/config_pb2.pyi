@@ -188,30 +188,36 @@ class LocalControllerConfig(_message.Message):
     def __init__(self, port: _Optional[int] = ...) -> None: ...
 
 class ControllerVmConfig(_message.Message):
-    __slots__ = ("image", "bundle_prefix", "gcp", "manual", "local")
+    __slots__ = ("image", "bundle_prefix", "worker_timeout", "gcp", "manual", "local")
     IMAGE_FIELD_NUMBER: _ClassVar[int]
     BUNDLE_PREFIX_FIELD_NUMBER: _ClassVar[int]
+    WORKER_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
     LOCAL_FIELD_NUMBER: _ClassVar[int]
     image: str
     bundle_prefix: str
+    worker_timeout: _time_pb2.Duration
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
     local: LocalControllerConfig
-    def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., worker_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ...) -> None: ...
 
 class AutoscalerConfig(_message.Message):
-    __slots__ = ("evaluation_interval", "requesting_timeout", "scale_up_delay", "scale_down_delay")
+    __slots__ = ("evaluation_interval", "requesting_timeout", "scale_up_delay", "scale_down_delay", "startup_grace_period", "heartbeat_grace_period")
     EVALUATION_INTERVAL_FIELD_NUMBER: _ClassVar[int]
     REQUESTING_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
     SCALE_UP_DELAY_FIELD_NUMBER: _ClassVar[int]
     SCALE_DOWN_DELAY_FIELD_NUMBER: _ClassVar[int]
+    STARTUP_GRACE_PERIOD_FIELD_NUMBER: _ClassVar[int]
+    HEARTBEAT_GRACE_PERIOD_FIELD_NUMBER: _ClassVar[int]
     evaluation_interval: _time_pb2.Duration
     requesting_timeout: _time_pb2.Duration
     scale_up_delay: _time_pb2.Duration
     scale_down_delay: _time_pb2.Duration
-    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., requesting_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    startup_grace_period: _time_pb2.Duration
+    heartbeat_grace_period: _time_pb2.Duration
+    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., requesting_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., startup_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class DefaultsConfig(_message.Message):
     __slots__ = ("timeouts", "ssh", "autoscaler", "bootstrap")
