@@ -124,12 +124,22 @@ def _find_candidates(
     3. The bank has replacement candidates of the same type.
     4. It has valid source position info.
     5. Its source segment is non-trivial (>= 5 chars).
+    6. It is not a root-level node (direct child of Module.body).
     """
     candidates = []
+
+    # Skip root-level nodes to prevent catastrophic corruption that replaces
+    # entire top-level definitions. For single-function programs (the common
+    # case in our corpus), replacing the root FunctionDef effectively requires
+    # the model to synthesize a new program from scratch rather than repair
+    # local edits. See DIAGNOSTIC_REPORT.md Finding 1.
+    root_node_ids = {id(node) for node in tree.body}
 
     for node in ast.walk(tree):
         type_name = type(node).__name__
         if type_name not in EXTRACTABLE_TYPES:
+            continue
+        if id(node) in root_node_ids:
             continue
         if not bank.has_type(type_name):
             continue
