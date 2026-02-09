@@ -39,7 +39,7 @@ from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
-from iris.cluster.vm.scaling_group import GroupAvailability, ScalingGroup
+from iris.cluster.vm.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -152,7 +152,11 @@ def route_demand(
 
     def make_pending(group: ScalingGroup) -> PendingGroup:
         counts = group.slice_state_counts()
-        pending_slices = counts.get("requesting", 0) + counts.get("booting", 0) + counts.get("initializing", 0)
+        pending_slices = (
+            counts.get(SliceLifecycleState.REQUESTING.key, 0)
+            + counts.get(SliceLifecycleState.BOOTING.key, 0)
+            + counts.get(SliceLifecycleState.INITIALIZING.key, 0)
+        )
         current = sum(counts.values())
         headroom = group.max_slices - current
         return PendingGroup(
@@ -453,8 +457,8 @@ class Autoscaler:
     ) -> ScalingDecision | None:
         """Evaluate scaling decision for a single group."""
         counts = group.slice_state_counts()
-        ready = counts["ready"]
-        pending = counts["booting"] + counts["initializing"]
+        ready = counts[SliceLifecycleState.READY.key]
+        pending = counts[SliceLifecycleState.BOOTING.key] + counts[SliceLifecycleState.INITIALIZING.key]
         total = sum(counts.values())
 
         capacity = ready + pending

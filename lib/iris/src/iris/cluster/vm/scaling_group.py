@@ -33,6 +33,30 @@ from iris.time_utils import Deadline, Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
+class SliceLifecycleState(Enum):
+    """Lifecycle state for a slice (VM group) in the autoscaler.
+
+    These states represent the dominant state of a slice based on its constituent VMs.
+    Maps to VmState proto enum values for consistency.
+    """
+
+    REQUESTING = vm_pb2.VM_STATE_REQUESTING
+    BOOTING = vm_pb2.VM_STATE_BOOTING
+    INITIALIZING = vm_pb2.VM_STATE_INITIALIZING
+    READY = vm_pb2.VM_STATE_READY
+    FAILED = vm_pb2.VM_STATE_FAILED
+
+    @property
+    def key(self) -> str:
+        """String key for use in dictionaries and proto maps."""
+        return self.name.lower()
+
+    @classmethod
+    def all_keys(cls) -> list[str]:
+        """All state keys in a stable order."""
+        return [state.key for state in cls]
+
+
 class GroupAvailability(Enum):
     """Availability state for a scale group in waterfall routing."""
 
@@ -411,8 +435,8 @@ class ScalingGroup:
 
         # Use ready + pending for capacity check to prevent churn during boot
         counts = self.slice_state_counts()
-        ready = counts["ready"]
-        pending = counts["booting"] + counts["initializing"]
+        ready = counts[SliceLifecycleState.READY.key]
+        pending = counts[SliceLifecycleState.BOOTING.key] + counts[SliceLifecycleState.INITIALIZING.key]
 
         # Don't scale down if total capacity (ready + pending) is at or below target
         if ready + pending <= target_capacity:
@@ -533,10 +557,11 @@ class ScalingGroup:
         - "ready": all VMs in the group are ready
         - "initializing": at least one VM is initializing (but none failed)
         - "booting": at least one VM is booting (but none failed or initializing)
+        - "requesting": scale-up in progress (tracked separately from VM state)
 
-        Returns dict with keys: "booting", "initializing", "ready", "failed"
+        Returns dict with keys matching SliceLifecycleState enum keys.
         """
-        counts = {"booting": 0, "initializing": 0, "ready": 0, "failed": 0}
+        counts = {state.key: 0 for state in SliceLifecycleState}
         with self._slices_lock:
             snapshot = [s.vm_group for s in self._slices.values()]
         for g in snapshot:
@@ -548,13 +573,18 @@ class ScalingGroup:
                 continue
 
             if status.any_failed:
-                counts["failed"] += 1
+                counts[SliceLifecycleState.FAILED.key] += 1
             elif status.all_ready:
-                counts["ready"] += 1
+                counts[SliceLifecycleState.READY.key] += 1
             elif any(vm.state == vm_pb2.VM_STATE_INITIALIZING for vm in vms):
-                counts["initializing"] += 1
+                counts[SliceLifecycleState.INITIALIZING.key] += 1
             elif any(vm.state == vm_pb2.VM_STATE_BOOTING for vm in vms):
-                counts["booting"] += 1
+                counts[SliceLifecycleState.BOOTING.key] += 1
+
+        # Add requesting state if active
+        if self._requesting_until is not None and not self._requesting_until.expired():
+            counts[SliceLifecycleState.REQUESTING.key] += 1
+
         return counts
 
     def update_slice_liveness(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp) -> None:
@@ -679,8 +709,6 @@ class ScalingGroup:
             snapshot = [s.vm_group for s in self._slices.values()]
         backoff_ts = self._backoff_until.as_timestamp() if self._backoff_until else Timestamp.from_ms(0)
         counts = self.slice_state_counts()
-        if self._requesting_until is not None:
-            counts["requesting"] = counts.get("requesting", 0) + 1
         status = vm_pb2.ScaleGroupStatus(
             name=self.name,
             config=self._config,
