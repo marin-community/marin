@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import numpy as np
 import jax
 import jax.numpy as jnp

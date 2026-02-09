@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 # Pooling operations, inspired by Flax
 from functools import reduce
 from typing import Callable, Literal

@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 # Support for FP8
 # Much of this is lifted from FLAX
 # https://github.com/google/flax/blob/main/flax/linen/fp8_ops.py

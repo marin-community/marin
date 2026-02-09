@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import typing
 from dataclasses import dataclass
 from math import prod

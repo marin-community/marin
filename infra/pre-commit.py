@@ -1,4 +1,7 @@
 #!/usr/bin/env -S uv run --script
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
@@ -6,20 +9,6 @@
 #     "pyyaml",
 # ]
 # ///
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
 Run pre-commits and lint checks for Marin.
 
@@ -75,6 +64,20 @@ EXCLUDE_PATTERNS = [
     "**/__pycache__/**",
     "**/*.pyc",
     "**/*-template.yaml",
+]
+
+LEGACY_APACHE_HEADER_LINES = [
+    'Licensed under the Apache License, Version 2.0 (the "License");',
+    "you may not use this file except in compliance with the License.",
+    "You may obtain a copy of the License at",
+    "",
+    "    https://www.apache.org/licenses/LICENSE-2.0",
+    "",
+    "Unless required by applicable law or agreed to in writing, software",
+    'distributed under the License is distributed on an "AS IS" BASIS,',
+    "WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.",
+    "See the License for the specific language governing permissions and",
+    "limitations under the License.",
 ]
 
 
@@ -234,12 +237,41 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
 
             if fix:
                 has_shebang = content.startswith("#!")
-                if has_shebang:
-                    shebang_line = lines[0]
-                    rest_content = "\n".join(lines[1:])
+                shebang_line = lines[0] if has_shebang else None
+                body_lines = lines[1:] if has_shebang else lines
+
+                # Replace legacy Apache boilerplate with SPDX instead of stacking headers.
+                top_comment_texts = []
+                for line in body_lines:
+                    stripped = line.lstrip()
+                    if not stripped.startswith("#"):
+                        break
+                    text = stripped[1:]
+                    if text.startswith(" "):
+                        text = text[1:]
+                    top_comment_texts.append(text)
+
+                remove_count = 0
+                idx = 0
+                if top_comment_texts and top_comment_texts[0].startswith("Copyright "):
+                    idx = 1
+                if idx < len(top_comment_texts) and top_comment_texts[idx] == "":
+                    idx += 1
+
+                legacy_len = len(LEGACY_APACHE_HEADER_LINES)
+                if top_comment_texts[idx : idx + legacy_len] == LEGACY_APACHE_HEADER_LINES:
+                    remove_count = idx + legacy_len
+                    while remove_count < len(top_comment_texts) and top_comment_texts[remove_count] == "":
+                        remove_count += 1
+
+                if remove_count:
+                    body_lines = body_lines[remove_count:]
+
+                rest_content = "\n".join(body_lines)
+                if shebang_line is not None:
                     new_content = f"{shebang_line}\n{expected_header}\n{rest_content}"
                 else:
-                    new_content = f"{expected_header}\n{content}"
+                    new_content = f"{expected_header}\n{rest_content}"
 
                 with open(file_path, "w") as f:
                     f.write(new_content)
