@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Add MBPP-based evaluation with held-out test programs and executable test cases (#51)
+- Add diagnostic analysis of model repair outputs for failed eval tasks (#54)
+- Add corpus preparation script to scale training data from 15 to 10K+ programs (#49)
 - Write report on initial Kelp tree diffusion findings with scaling law predictions (#47)
 - Evaluate best checkpoint and file improvement research issues (#42)
 - Run 5-hour training run with augmented subtree bank and checkpoint saving (#41)
@@ -40,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Remove dead code: freeze_embeddings and freeze_attention config options (#8)
 
 ### Fixed
+- Fix eval-time subtree bank to use training corpus instead of tiny eval-only bank (#52)
 - Fix unused tree/ module - model operates on flat tokens, not ASTs (#3)
 - Fix fsspec filesystem detection that breaks for local paths (#7)
 - Fix loss computed on padding tokens instead of only real content (#2)
