@@ -25,7 +25,7 @@ import pytest
 
 from iris.cluster.types import VmWorkerStatus
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
-from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.cluster.vm.scaling_group import ScalingGroup, SliceLifecycleState
 from iris.rpc import time_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -639,19 +639,19 @@ class TestScalingGroupVmGroupStateCounts:
     """Tests for slice_state_counts() aggregation."""
 
     @pytest.mark.parametrize(
-        "vm_state,expected_category",
+        "vm_state,expected_state",
         [
-            (vm_pb2.VM_STATE_READY, "ready"),
-            (vm_pb2.VM_STATE_BOOTING, "booting"),
-            (vm_pb2.VM_STATE_INITIALIZING, "initializing"),
-            (vm_pb2.VM_STATE_FAILED, "failed"),
+            (vm_pb2.VM_STATE_READY, SliceLifecycleState.READY),
+            (vm_pb2.VM_STATE_BOOTING, SliceLifecycleState.BOOTING),
+            (vm_pb2.VM_STATE_INITIALIZING, SliceLifecycleState.INITIALIZING),
+            (vm_pb2.VM_STATE_FAILED, SliceLifecycleState.FAILED),
         ],
     )
     def test_counts_vm_groups_by_state(
         self,
         scale_group_config: config_pb2.ScaleGroupConfig,
         vm_state: vm_pb2.VmState,
-        expected_category: str,
+        expected_state: SliceLifecycleState,
     ):
         """VM groups are counted in the correct category based on VM state."""
         discovered = [make_mock_vm_group("slice-001", vm_states=[vm_state])]
@@ -661,10 +661,10 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts[expected_category] == 1
-        for category in ["ready", "booting", "initializing", "failed"]:
-            if category != expected_category:
-                assert counts[category] == 0
+        assert counts[expected_state] == 1
+        for state in SliceLifecycleState:
+            if state != expected_state:
+                assert counts[state] == 0
 
     def test_failed_takes_precedence(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """A VM group with any failed VM is counted as failed."""
@@ -680,8 +680,8 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts["failed"] == 1
-        assert counts["ready"] == 0
+        assert counts[SliceLifecycleState.FAILED] == 1
+        assert counts[SliceLifecycleState.READY] == 0
 
     def test_skips_terminated_vm_groups(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Terminated VM groups are not counted."""
@@ -694,10 +694,10 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts["ready"] == 0
-        assert counts["booting"] == 0
-        assert counts["initializing"] == 0
-        assert counts["failed"] == 0
+        assert counts[SliceLifecycleState.READY] == 0
+        assert counts[SliceLifecycleState.BOOTING] == 0
+        assert counts[SliceLifecycleState.INITIALIZING] == 0
+        assert counts[SliceLifecycleState.FAILED] == 0
 
 
 class TestScalingGroupAvailability:
