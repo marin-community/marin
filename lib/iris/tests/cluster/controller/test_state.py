@@ -323,6 +323,42 @@ def test_worker_failure_cascades_to_running_tasks(job_request, worker_metadata):
     assert len(pending) == 1
 
 
+def test_failed_worker_is_pruned_from_state(job_request, worker_metadata):
+    """E2E: Worker failure removes worker from state, preventing dead worker accumulation."""
+    state = ControllerState()
+
+    w1 = register_worker(state, "w1", "host1:8080", worker_metadata())
+    w2 = register_worker(state, "w2", "host2:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 1
+    tasks = submit_job(state, "j1", req)
+    dispatch_task(state, tasks[0], w1)
+
+    # Worker w1 fails
+    state.handle_event(WorkerFailedEvent(worker_id=w1, error="Connection lost"))
+
+    # w1 is gone from state entirely
+    assert state.get_worker(w1) is None
+    # w2 is still present
+    assert state.get_worker(w2) is not None
+
+    # list_all_workers only returns w2
+    all_workers = state.list_all_workers()
+    assert len(all_workers) == 1
+    assert all_workers[0].worker_id == w2
+
+    # Task was requeued despite worker removal
+    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
+    assert tasks[0].can_be_scheduled()
+
+    # A re-registering worker creates a fresh entry
+    w1_again = register_worker(state, "w1", "host1:8080", worker_metadata())
+    assert state.get_worker(w1_again) is not None
+    assert state.get_worker(w1_again).healthy is True
+    assert len(state.list_all_workers()) == 2
+
+
 def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, worker_metadata):
     """E2E: Dispatch RPC failure (task in PENDING) -> worker failed event cascades to task."""
     state = ControllerState()
