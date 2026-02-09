@@ -38,16 +38,18 @@ def _build_uv_sync_flags(extras: Sequence[str]) -> str:
     for e in extras:
         if ":" in e:
             _package, extra = e.split(":", 1)
-            sync_parts.append(f"--extra {extra}")
         else:
-            sync_parts.append(f"--extra {e}")
+            extra = e
+        # Quote the extra name to prevent shell injection when building the sync command.
+        sync_parts.extend(["--extra", shlex.quote(extra)])
     return " ".join(sync_parts)
 
 
 def _build_pip_install_args(pip_packages: Sequence[str]) -> str:
     """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
     packages = ["cloudpickle", *list(pip_packages)]
-    return " ".join(f'"{pkg}"' for pkg in packages)
+    # Use shlex.quote to safely escape each package spec for the shell.
+    return " ".join(shlex.quote(pkg) for pkg in packages)
 
 
 def build_runtime_entrypoint(
