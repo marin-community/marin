@@ -39,6 +39,58 @@ logger = logging.getLogger(__name__)
 _job_context: ContextVar[Any | None] = ContextVar("fray_job_context", default=None)
 
 
+def _requests_gpu_or_tpu(ray_options: dict[str, Any]) -> bool:
+    """Return True when Ray options explicitly request GPU/TPU resources."""
+    num_gpus = ray_options.get("num_gpus")
+    if isinstance(num_gpus, int | float) and num_gpus > 0:
+        return True
+
+    if ray_options.get("accelerator_type"):
+        return True
+
+    resources = ray_options.get("resources")
+    if not isinstance(resources, dict):
+        return False
+
+    for resource_name, amount in resources.items():
+        if not isinstance(amount, int | float) or amount <= 0:
+            continue
+        if resource_name == "TPU" or resource_name.startswith("TPU-"):
+            return True
+        if resource_name.upper().startswith("GPU"):
+            return True
+
+    return False
+
+
+def _apply_default_jax_platforms(ray_options: dict[str, Any]) -> dict[str, Any]:
+    """Ensure CPU-only Ray tasks default to JAX_PLATFORMS=cpu."""
+    options = dict(ray_options)
+    if _requests_gpu_or_tpu(options):
+        return options
+
+    runtime_env = options.get("runtime_env")
+    if runtime_env is None:
+        runtime_env_dict: dict[str, Any] = {}
+    elif isinstance(runtime_env, dict):
+        runtime_env_dict = dict(runtime_env)
+    else:
+        return options
+
+    env_vars = runtime_env_dict.get("env_vars")
+    if env_vars is None:
+        env_vars_dict: dict[str, str] = {}
+    elif isinstance(env_vars, dict):
+        env_vars_dict = dict(env_vars)
+    else:
+        return options
+
+    env_vars_dict.setdefault("JAX_PLATFORMS", "cpu")
+    runtime_env_dict["env_vars"] = env_vars_dict
+    options["runtime_env"] = runtime_env_dict
+    return options
+
+
 class JobContext(Protocol):
     """Protocol for execution contexts that abstract put/get/run/wait primitives.
 
@@ -394,10 +446,9 @@ class RayContext:
 
         Uses SPREAD scheduling strategy to avoid running on head node.
         """
-        if self.ray_options:
-            remote_fn = ray.remote(**self.ray_options)(fn)
-        else:
-            remote_fn = ray.remote(max_retries=100)(fn)
+        remote_options = dict(self.ray_options) if self.ray_options else {"max_retries": 100}
+        remote_options = _apply_default_jax_platforms(remote_options)
+        remote_fn = ray.remote(**remote_options)(fn)
 
         options = {"scheduling_strategy": "SPREAD"}
         if name:

@@ -16,6 +16,7 @@
 
 import pytest
 from fray.job import RayContext, SimpleActor, SyncContext, ThreadContext, create_job_ctx
+from fray.job.context import _apply_default_jax_platforms
 
 
 @pytest.fixture(params=["sync", "threadpool", "ray"])
@@ -106,3 +107,29 @@ def test_actor_named_without_get_if_exists(job_context):
 
     with pytest.raises(ValueError):
         job_context.create_actor(SimpleActor, 20, name="actor", get_if_exists=False)
+
+
+def test_ray_cpu_defaults_set_jax_platforms():
+    options = _apply_default_jax_platforms({})
+    assert options["runtime_env"]["env_vars"]["JAX_PLATFORMS"] == "cpu"
+
+
+def test_ray_cpu_defaults_preserve_other_env_vars():
+    options = _apply_default_jax_platforms({"runtime_env": {"env_vars": {"FOO": "bar"}}})
+    assert options["runtime_env"]["env_vars"]["FOO"] == "bar"
+    assert options["runtime_env"]["env_vars"]["JAX_PLATFORMS"] == "cpu"
+
+
+def test_ray_cpu_defaults_do_not_override_existing_jax_platforms():
+    options = _apply_default_jax_platforms({"runtime_env": {"env_vars": {"JAX_PLATFORMS": "tpu,cpu"}}})
+    assert options["runtime_env"]["env_vars"]["JAX_PLATFORMS"] == "tpu,cpu"
+
+
+def test_ray_gpu_request_does_not_force_cpu_jax_platforms():
+    options = _apply_default_jax_platforms({"num_gpus": 1})
+    assert "runtime_env" not in options
+
+
+def test_ray_tpu_request_does_not_force_cpu_jax_platforms():
+    options = _apply_default_jax_platforms({"resources": {"TPU": 4}})
+    assert "runtime_env" not in options
