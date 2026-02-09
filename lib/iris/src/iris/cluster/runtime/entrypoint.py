@@ -21,9 +21,33 @@ from the user's actual command. This lets each runtime handle them appropriately
 """
 
 import shlex
+from collections.abc import Sequence
 
 from iris.cluster.types import Entrypoint
 from iris.rpc import cluster_pb2
+
+
+def _build_uv_sync_flags(extras: Sequence[str]) -> str:
+    """Build uv sync flags from extras list.
+
+    Accepts 'extra' or 'package:extra' syntax. The package prefix is stripped
+    since --all-packages syncs every workspace member and --extra applies
+    to whichever package defines that extra name.
+    """
+    sync_parts = ["--all-packages", "--no-group", "dev"]
+    for e in extras:
+        if ":" in e:
+            _package, extra = e.split(":", 1)
+            sync_parts.append(f"--extra {extra}")
+        else:
+            sync_parts.append(f"--extra {e}")
+    return " ".join(sync_parts)
+
+
+def _build_pip_install_args(pip_packages: Sequence[str]) -> str:
+    """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
+    packages = ["cloudpickle", *list(pip_packages)]
+    return " ".join(f'"{pkg}"' for pkg in packages)
 
 
 def build_runtime_entrypoint(
@@ -36,8 +60,8 @@ def build_runtime_entrypoint(
     activating venv). The run_command is the user's original command, kept separate
     so runtimes that don't need setup can skip it cleanly.
     """
-    uv_sync_flags = env_config.env_vars.get("IRIS_UV_SYNC_FLAGS", "")
-    pip_install_args = env_config.env_vars.get("IRIS_PIP_INSTALL", "")
+    uv_sync_flags = _build_uv_sync_flags(list(env_config.extras))
+    pip_install_args = _build_pip_install_args(list(env_config.pip_packages))
 
     # Use the client's Python version to ensure pickle compatibility.
     # cloudpickle can fail when deserializing functions pickled in a different
