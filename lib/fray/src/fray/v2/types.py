@@ -289,7 +289,8 @@ class TpuConfig:
     topology: str | None = None
 
     def chip_count(self) -> int:
-        return get_tpu_topology(self.variant).chip_count
+        """Return the number of chips per VM for this TPU type."""
+        return get_tpu_topology(self.variant).chips_per_vm
 
     def vm_count(self) -> int:
         return get_tpu_topology(self.variant).vm_count
@@ -334,7 +335,8 @@ class ResourceConfig:
     max_concurrency: int = 1
 
     def chip_count(self) -> int:
-        return self.device.chip_count()
+        """Total accelerator chips across all replicas."""
+        return self.device.chip_count() * self.replicas
 
     def device_flops(self, dtype: str = "bf16") -> float:
         return self.device.device_flops(dtype)
@@ -345,21 +347,18 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str, *, slice_count: int | None = None, **kwargs: Any) -> ResourceConfig:
-        topo = get_tpu_topology(tpu_type)
-        if slice_count is None:
-            slice_count = topo.vm_count
-        elif slice_count != topo.vm_count:
-            raise ValueError(
-                f"slice_count must match TPU slice size ({topo.vm_count}) for {tpu_type}, got {slice_count}"
-            )
-
+    def with_tpu(tpu_type: str, *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
         device = TpuConfig(variant=tpu_type)
+        try:
+            topo = get_tpu_topology(tpu_type)
+            replicas = slice_count * topo.vm_count
+        except ValueError:
+            replicas = slice_count
         kwargs = dict(kwargs)
         kwargs.setdefault("cpu", 32)
         kwargs.setdefault("ram", "128g")
         kwargs.setdefault("disk", "50g")
-        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
+        return ResourceConfig(device=device, replicas=replicas, **kwargs)
 
     @staticmethod
     def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs: Any) -> ResourceConfig:

@@ -14,9 +14,10 @@
 
 import logging
 
-from experiments.pretraining_datasets.simple import downloads
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.classification.deduplication.dedup_commons import DedupConfig, DedupMode, deduplicate
+
+from experiments.pretraining_datasets.simple import downloads
 
 logger = logging.getLogger(__name__)
 

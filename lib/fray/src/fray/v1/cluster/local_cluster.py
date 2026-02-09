@@ -23,12 +23,32 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
-from fray.cluster.base import Cluster, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
-from fray.isolated_env import TemporaryVenv
-from fray.job.context import SyncContext, fray_default_job_ctx
-from fray.environment_context import temporary_env_vars
+from fray.v1.cluster.base import (
+    Cluster,
+    CpuConfig,
+    EnvironmentConfig,
+    GpuConfig,
+    JobId,
+    JobInfo,
+    JobRequest,
+    ResourceConfig,
+    TaskStatus,
+    TpuConfig,
+)
+from fray.v1.isolated_env import TemporaryVenv
+from fray.v1.job.context import SyncContext, fray_default_job_ctx
+from fray.v1.environment_context import temporary_env_vars
 
 logger = logging.getLogger(__name__)
+
+
+def _default_jax_config_for_resources(resources: ResourceConfig) -> dict[str, str]:
+    """Return default JAX environment variables for the requested resources."""
+    if isinstance(resources.device, CpuConfig):
+        return {"JAX_PLATFORMS": "cpu"}
+    elif isinstance(resources.device, (TpuConfig, GpuConfig)):
+        return {"JAX_PLATFORMS": ""}
+    return {}
 
 
 @dataclass(frozen=True)
@@ -121,7 +141,9 @@ class LocalCluster(Cluster):
             processes = []
 
             # Wrap callable to apply environment variables
-            env_vars = dict(request.environment.env_vars) if request.environment.env_vars else {}
+            env_vars = dict(request.environment.env_vars)
+            for key, value in _default_jax_config_for_resources(request.resources).items():
+                env_vars.setdefault(key, value)
             env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
 
             for replica_id in range(replica_count):
@@ -154,7 +176,13 @@ class LocalCluster(Cluster):
             # Launch all replicas using shared venv
             try:
                 for replica_id in range(replica_count):
-                    replica_env = self._build_replica_env(process_env, request.environment, replica_id, replica_count)
+                    replica_env = self._build_replica_env(
+                        process_env,
+                        request.environment,
+                        request.resources,
+                        replica_id,
+                        replica_count,
+                    )
 
                     process = process_env.run_async(
                         cmd,
@@ -215,7 +243,7 @@ class LocalCluster(Cluster):
         return self._jobs[job_id]
 
     def _build_command(self, request: JobRequest, process_env: TemporaryVenv) -> list[str]:
-        from fray.fn_thunk import create_thunk_entrypoint
+        from fray.v1.fn_thunk import create_thunk_entrypoint
 
         entrypoint = request.entrypoint
 
@@ -236,7 +264,12 @@ class LocalCluster(Cluster):
         return [entrypoint.binary_entrypoint.command, *entrypoint.binary_entrypoint.args]
 
     def _build_replica_env(
-        self, process_env: TemporaryVenv, env_config: EnvironmentConfig, replica_id: int, replica_count: int
+        self,
+        process_env: TemporaryVenv,
+        env_config: EnvironmentConfig,
+        resources: ResourceConfig,
+        replica_id: int,
+        replica_count: int,
     ) -> dict[str, str]:
         env = process_env.get_env()
         env.update(
@@ -248,6 +281,8 @@ class LocalCluster(Cluster):
             }
         )
         env.update(env_config.env_vars)
+        for key, value in _default_jax_config_for_resources(resources).items():
+            env.setdefault(key, value)
         return env
 
 

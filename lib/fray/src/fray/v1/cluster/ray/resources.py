@@ -19,7 +19,7 @@ from typing import Any
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from fray.cluster.base import GpuConfig, ResourceConfig, TpuConfig
+from fray.v1.cluster.base import GpuConfig, ResourceConfig, TpuConfig
 
 
 def as_remote_kwargs(

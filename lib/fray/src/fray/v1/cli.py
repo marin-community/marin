@@ -27,8 +27,16 @@ from pathlib import Path
 import click
 import yaml
 
-from fray.cluster import Cluster, create_cluster
-from fray.cluster.base import CpuConfig, Entrypoint, EnvironmentConfig, GpuConfig, JobRequest, ResourceConfig, TpuConfig
+from fray.v1.cluster import Cluster, create_cluster
+from fray.v1.cluster.base import (
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    GpuConfig,
+    JobRequest,
+    ResourceConfig,
+    TpuConfig,
+)
 
 logger = logging.getLogger(__name__)
 

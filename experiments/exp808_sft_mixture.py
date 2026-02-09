@@ -105,7 +105,6 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    permutation_type="linear",
     shuffle=True,
     missing_weights_are_validation=True,
 )

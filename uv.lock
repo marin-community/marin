@@ -3141,6 +3141,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "starlette" },
+    { name = "tabulate" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -3180,6 +3181,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "starlette", specifier = ">=0.50.0" },
+    { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
@@ -11333,6 +11335,7 @@ dependencies = [
     { name = "fray", extra = ["ray"] },
     { name = "fsspec" },
     { name = "humanfriendly" },
+    { name = "iris" },
     { name = "msgspec" },
     { name = "numpy" },
     { name = "tqdm-loggable" },
@@ -11346,11 +11349,13 @@ dev = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -11360,6 +11365,7 @@ requires-dist = [
     { name = "fray", extras = ["ray"], editable = "lib/fray" },
     { name = "fsspec", specifier = ">=2023.1.0" },
     { name = "humanfriendly", specifier = ">=10.0" },
+    { name = "iris", editable = "lib/iris" },
     { name = "msgspec", specifier = ">=0.18.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
@@ -11373,11 +11379,13 @@ dev = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]

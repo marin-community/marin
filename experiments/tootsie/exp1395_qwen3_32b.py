@@ -40,7 +40,7 @@ qwen3_32b_remat = dataclasses.replace(
 qwen_32b_warmstart_train = dataclasses.replace(
     llama_32b_train_config,
     initialize_from_checkpoint_path=warmstart_checkpoint,
-    resources=ResourceConfig.with_tpu("v4-2048", 1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     reset_data_loader_on_init=False,
     allow_partial_checkpoint=True,
     optimizer_config=AdamConfig(
@@ -82,7 +82,7 @@ marin_32b_qwen = default_train(
 qwen_32b_warmstart_train_v5p = dataclasses.replace(
     qwen_32b_warmstart_train,
     initialize_from_checkpoint_path=None,
-    resources=ResourceConfig.with_tpu("v5p-2048", 1),
+    resources=ResourceConfig.with_tpu("v5p-2048", slice_count=1),
     reset_data_loader_on_init=False,
     allow_partial_checkpoint=False,
 )

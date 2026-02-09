@@ -23,7 +23,7 @@ This script demonstrates how to:
 For GPU training, see train_tiny_model_gpu.py
 """
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main, versioned
 
