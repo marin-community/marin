@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import draccus
 import pytest
-from marin.utils import asdict_excluding
+from marin.utils import asdict_excluding, rebase_file_path
 
 
 def parameterize_with_configs(pattern: str, config_path: str | None = None) -> Callable:
@@ -101,3 +101,35 @@ def test_asdict_excluding_invalid():
     """Test asdict_excluding with non-dataclass input."""
     with pytest.raises(ValueError, match="Only dataclasses are supported"):
         asdict_excluding({"key": "value"}, exclude=set())
+
+
+def test_rebase_file_path_requires_new_extension_when_old_provided(tmp_path):
+    base_in = tmp_path / "input"
+    base_out = tmp_path / "out"
+    base_in.mkdir()
+    base_out.mkdir()
+    file_path = base_in / "sample.parquet"
+    file_path.write_text("data")
+
+    with pytest.raises(ValueError, match="old_extension requires new_extension"):
+        rebase_file_path(str(base_in), str(file_path), str(base_out), old_extension=".parquet")
+
+
+def test_rebase_file_path_with_matching_extension(tmp_path):
+    base_in = tmp_path / "input"
+    base_out = tmp_path / "out"
+    base_in.mkdir()
+    base_out.mkdir()
+    file_path = base_in / "nested" / "sample.parquet"
+    file_path.parent.mkdir()
+    file_path.write_text("data")
+
+    rebased = rebase_file_path(
+        str(base_in),
+        str(file_path),
+        str(base_out),
+        new_extension=".parquet",
+        old_extension=".parquet",
+    )
+
+    assert rebased == os.path.join(str(base_out), "nested", "sample.parquet")

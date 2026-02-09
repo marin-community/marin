@@ -324,7 +324,11 @@ def mark_duplicates_bloom(
             .map_shard(process_shard_with_bloom)
             .write_jsonl(
                 output_pattern=lambda shard_idx, total: rebase_file_path(
-                    base_path, all_files[shard_idx], output_path, old_extension=_get_extension(all_files[shard_idx])
+                    base_path,
+                    all_files[shard_idx],
+                    output_path,
+                    new_extension=_get_extension(all_files[shard_idx]),
+                    old_extension=_get_extension(all_files[shard_idx]),
                 ),
                 skip_existing=True,
             ),
