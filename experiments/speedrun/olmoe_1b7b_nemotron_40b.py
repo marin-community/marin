@@ -113,7 +113,6 @@ nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
 nemotron_cc_mixture = lm_mixture_data_config(
     components=nemotron_cc_steps,
     weights=NEMOTRON_WEIGHTS,
-    permutation_type="linear",
 )
 
 DATASET_OPTIONS = {
@@ -144,7 +143,6 @@ def nemotron_only_speedrun(
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=[],
-            permutation_type="linear",
         )
     else:
         pretraining_data = config.tokenized_dataset

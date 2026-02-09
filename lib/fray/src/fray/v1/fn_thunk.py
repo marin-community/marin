@@ -21,7 +21,7 @@ Usage as CLI:
     python -m fray.fn_thunk <fsspec-path>
 
 Usage as library:
-    >>> from fray.fn_thunk import create_thunk_entrypoint
+    >>> from fray.v1.fn_thunk import create_thunk_entrypoint
     >>> def my_fn():
     ...     return "hello"
     >>> entrypoint = create_thunk_entrypoint(my_fn, prefix="/tmp/job")
@@ -42,7 +42,7 @@ import click
 import cloudpickle
 import fsspec
 
-from fray.cluster.base import Entrypoint
+from fray.v1.cluster.base import Entrypoint
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def create_thunk_entrypoint(
         cloudpickle.dump((callable_fn, args, kwargs or {}), f, protocol=cloudpickle.DEFAULT_PROTOCOL)
         pickle_path = f.name
 
-    return Entrypoint.from_binary("python", ["-m", "fray.fn_thunk", pickle_path])
+    return Entrypoint.from_binary("python", ["-m", "fray.v1.fn_thunk", pickle_path])
 
 
 @click.command()

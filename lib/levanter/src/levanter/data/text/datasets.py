@@ -643,6 +643,16 @@ class LmDataConfig:
         doc_caches = self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos, split="train")
 
+        # Slice off validation sequences before shuffling so that the train/val split is
+        # determined by position in the original (unshuffled) cache. This avoids overlap
+        # between the training set and the validation set produced by validation_sets().
+        if self.num_validation_sequences is not None:
+            for name, ds in datasets.items():
+                if name in self.num_validation_sequences:
+                    num_sequences = self.num_validation_sequences[name]
+                    len_dataset = len(ds.as_sync_dataset())
+                    datasets[name] = ds.slice_dataset(start_index=0, end_index=len_dataset - num_sequences)
+
         if key is None:
             key = jax.random.PRNGKey(0)
 
@@ -678,13 +688,6 @@ class LmDataConfig:
                 simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
                 sliced_datasets[name] = ds.slice_dataset(end_index=simulated_length_of_dataset)
             datasets = sliced_datasets
-
-        if self.num_validation_sequences is not None:
-            for name, ds in datasets.items():
-                if name in self.num_validation_sequences:
-                    num_sequences = self.num_validation_sequences[name]
-                    len_dataset = len(ds.as_sync_dataset())
-                    datasets[name] = ds.slice_dataset(start_index=0, end_index=len_dataset - num_sequences)
 
         if self.max_train_batches is not None:
             assert (

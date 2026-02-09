@@ -26,16 +26,14 @@ import logging
 import os
 import re
 from collections.abc import Iterator, Sequence
-from typing import Any
-
-import fsspec
 
 import draccus
-from fray.job.context import JobContext
+import fsspec
 import humanfriendly
 import transformers
 from datasets import load_dataset_builder
-from fray.job import create_job_ctx
+from fray.v2 import ResourceConfig
+from fray.v2.local_backend import LocalClient
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -45,7 +43,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext, shard_ctx
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
@@ -258,15 +256,21 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
         yield current_group
 
 
-def _tokenize_batches(
-    *, ctx: JobContext, tokenizer_ref: Any, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]
-) -> Iterator[dict]:
+def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = ctx.get(tokenizer_ref)
+    tokenizer: transformers.PreTrainedTokenizer = shard_ctx().get_shared("tokenizer")
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
+    batch_count = 0
+    record_count = 0
     for batch in batches:
-        yield from batch_processor(batch)
+        batch_count += 1
+        for record in batch_processor(batch):
+            record_count += 1
+            yield record
+        if batch_count % 100 == 0:
+            logger.info("Tokenized %d batches, %d records so far", batch_count, record_count)
+    logger.info("Tokenization done: %d batches, %d records total", batch_count, record_count)
 
 
 def tokenize(config: TokenizeConfigBase):
@@ -306,7 +310,7 @@ def tokenize(config: TokenizeConfigBase):
     if not train_paths and not validation_paths:
         raise ValueError("No input files specified. Nothing to do.")
 
-    def run_pipeline(paths: list[str], split_name: str) -> None:
+    def run_pipeline(ctx: ZephyrContext, paths: list[str], split_name: str) -> None:
         prefix = os.path.join(config.cache_path, split_name)
         ledger_path = os.path.join(prefix, "shard_ledger.json")
 
@@ -318,14 +322,14 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
-        thread_ctx = create_job_ctx("threadpool")
-        file_stats = list(
-            Backend.execute(
-                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
-                context=thread_ctx,
-                verbose=False,
+        # Use local backend for lightweight file stats - no remote workers needed
+        with ZephyrContext(client=LocalClient(), num_workers=8, name="tokenize-filescan") as local_ctx:
+            file_stats = list(
+                local_ctx.execute(
+                    Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+                    verbose=False,
+                )
             )
-        )
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
         logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size.")
 
@@ -335,40 +339,28 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        cluster_ctx = create_job_ctx(context_type="auto", num_cpus=config.zephyr_num_cpus, memory=config.zephyr_memory)
-        # NOTE: "broadcast" the tokenizer on the cluster context
-        tokenizer_ref = cluster_ctx.put(transformers.AutoTokenizer.from_pretrained(config.tokenizer))
-
         temp_shards = (
             ds.window(64)
-            .map_shard(
-                lambda batches: _tokenize_batches(
-                    ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=batches
-                )
-            )
+            .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = Backend.execute(temp_shards, context=cluster_ctx)
+        # Broadcast the tokenizer to all workers via ZephyrContext
+        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+
+        shard_paths = ctx.execute(temp_shards)
 
         logger.info("Computing exemplar for cache consolidation")
-        exemplar = Backend.execute(
+        exemplar = ctx.execute(
             Dataset.from_list(paths[0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(
-                lambda example: _tokenize_batches(
-                    ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=[example]
-                )
-            ),
-            context=cluster_ctx,
+            .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
             verbose=False,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
-        consolidate_shard_caches(
-            shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, context=cluster_ctx
-        )
+        consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
 
         # Aggregate token counts from shard stats
         total_tokens = 0
@@ -387,11 +379,16 @@ def tokenize(config: TokenizeConfigBase):
         with fsspec.open(stats_path, "w") as f:
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
-    if train_paths:
-        run_pipeline(train_paths, "train")
+    with ZephyrContext(
+        resources=ResourceConfig(ram="16g", disk="16g"),
+        num_workers=min(128, len(train_paths) + len(validation_paths)),
+        name="tokenize",
+    ) as ctx:
+        if train_paths:
+            run_pipeline(ctx, train_paths, "train")
 
-    if validation_paths:
-        run_pipeline(validation_paths, "validation")
+        if validation_paths:
+            run_pipeline(ctx, validation_paths, "validation")
 
 
 @draccus.wrap()

@@ -136,6 +136,7 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
         "experiments",
         "lib/fray/src",
         "lib/haliax/src",
+        "lib/iris/src",
         "lib/levanter/src",
         "lib/marin/src",
         "lib/zephyr/src",

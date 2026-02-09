@@ -21,10 +21,10 @@ from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 
 
-def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
-    """Create a minimal Entrypoint proto for testing."""
-    entrypoint = cluster_pb2.Entrypoint()
-    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
+    """Create a minimal RuntimeEntrypoint proto for testing."""
+    entrypoint = cluster_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 

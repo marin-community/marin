@@ -17,7 +17,7 @@ import traceback
 from dataclasses import dataclass
 from typing import ClassVar
 
-from fray.cluster import ResourceConfig
+from fray.v1.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray

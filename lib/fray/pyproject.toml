@@ -7,19 +7,19 @@ name = "fray"
 version = "0.1.0"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "typing-extensions>=4.0",
-    "zstandard>=0.22.0",
-    "mergedeep",
-    "cloudpickle>=3.1.2",
     "click>=8.0",
-    "humanfriendly>=10.0",
+    "cloudpickle>=3.1.2",
+    "fastapi>=0.100.0",
     "flask",
     "fsspec>=2024.0.0",
-    "pyyaml>=6.0",
     "httpx>=0.28.1",
-    "fastapi>=0.100.0",
-    "uvicorn[standard]>=0.23.0",
+    "humanfriendly>=10.0",
     "iris",
+    "mergedeep",
+    "pyyaml>=6.0",
+    "typing-extensions>=4.0",
+    "uvicorn[standard]>=0.23.0",
+    "zstandard>=0.22.0",
 ]
 
 [project.scripts]
