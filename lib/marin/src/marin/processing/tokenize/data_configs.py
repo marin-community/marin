@@ -124,6 +124,7 @@ def lm_mixture_data_config(
     include_raw_paths: bool = True,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
+    shuffle_before_validation_split: bool = True,
     mixture_block_size: int | None = None,
     block_cross_document_attention: bool = True,
 ) -> LmDataConfig:
@@ -139,6 +140,7 @@ def lm_mixture_data_config(
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
+        shuffle_before_validation_split: Whether to shuffle before splitting into train/val. Defaults to True.
         block_cross_document_attention: Whether to mask attention across document boundaries.
     """
     component_configs = {
@@ -165,6 +167,7 @@ def lm_mixture_data_config(
         permutation_type=permutation_type,
         max_train_batches=max_train_batches,
         num_validation_sequences=num_validation_sequences,
+        shuffle_before_validation_split=shuffle_before_validation_split,
         block_cross_document_attention=block_cross_document_attention,
         **kwargs,
     )

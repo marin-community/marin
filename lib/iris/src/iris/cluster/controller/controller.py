@@ -565,13 +565,17 @@ class Controller:
         return stub.heartbeat(request)
 
     def _check_worker_timeouts(self) -> None:
-        """Check for worker timeouts and send kill RPCs for affected tasks."""
-        # State computes failed workers and marks them atomically under lock
-        tasks_to_kill = self._state.check_worker_timeouts(self._config.worker_timeout)
+        """Check for worker timeouts, send kill RPCs, and notify autoscaler."""
+        result = self._state.check_worker_timeouts(self._config.worker_timeout)
 
         # Send kill RPCs outside lock
-        if tasks_to_kill:
-            self.kill_tasks_on_workers(tasks_to_kill)
+        if result.tasks_to_kill:
+            self.kill_tasks_on_workers(result.tasks_to_kill)
+
+        # Notify autoscaler so it can terminate the containing slice
+        if self._autoscaler and result.failed_vm_addresses:
+            for vm_address in result.failed_vm_addresses:
+                self._autoscaler.notify_worker_failed(vm_address)
 
     def _run_autoscaler_once(self) -> None:
         """Run one autoscaler evaluation cycle.
