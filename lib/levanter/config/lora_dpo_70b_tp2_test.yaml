@@ -1,0 +1,72 @@
+# Temporary test config: 70B LoRA-DPO with model parallelism (model=2, data=32)
+# Testing if tensor parallelism allows higher pdp for better throughput
+data:
+  tokenizer: marin-community/marin-tokenizer
+  shuffle: true
+  permutation_type: feistel
+  components:
+    ultrafeedback_train_prefs:
+      source:
+        type: url
+        train_urls:
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
+    ultrafeedback_test_prefs:
+      source:
+        type: url
+        validation_urls:
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_test_prefs_marin_tokenizer-29ecfb
+  train_weights:
+    ultrafeedback_train_prefs: 1.0
+    ultrafeedback_test_prefs: 0.0
+
+train_seq_len: 4096
+
+trainer:
+  seed: 0
+  per_device_parallelism: 2
+  per_device_eval_parallelism: 2
+  mesh:
+    axes:
+      data: -1
+      model: 2
+  tracker:
+    type: wandb
+    project: "dpo"
+    tags: ["lora-dpo", "ultrafeedback", "llama3", "70b", "tp2-test"]
+  mp: p=f32,c=bfloat16
+  train_batch_size: 128
+  num_train_steps: 5
+  steps_per_eval: 9999
+  model_averaging: null
+  checkpointer:
+    save_interval: 999999m
+    base_path: gs://marin-us-central1/checkpoints/lora_dpo/70b_tp2_test
+
+optimizer:
+  learning_rate: 5e-6
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: "cosine"
+  warmup: 0.1
+  max_grad_norm: 1.0
+
+lora:
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true
+  target_modules: null
+
+initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-70B--main
+use_hf_model_config: false
+beta: 0.01
+validation_split_fraction: null
+hf_save_steps: 999999
