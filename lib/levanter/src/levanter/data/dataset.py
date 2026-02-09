@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
-import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Generic, Optional, Sequence, TypeAlias, TypeVar
 
 import jax.random
@@ -28,9 +26,6 @@ U = TypeVar("U")
 MapFunction: TypeAlias = Callable[..., U]
 
 
-_executor = ThreadPoolExecutor(max_workers=10)
-
-
 class DatasetBase(abc.ABC, Generic[T_co]):
     """
     Base class for sync and async datasets. This class is not meant to be used directly.
@@ -47,44 +42,22 @@ class DatasetBase(abc.ABC, Generic[T_co]):
 
 class AsyncDataset(DatasetBase[T_co]):
     """
-    An asynchronous dataset that can be used with async/await syntax. In Levanter, we use AsyncDataset for two purposes:
-    * To represent datasets that are inherently asynchronous (e.g. reading from disk, network, etc.).
-    * To represent datasets that are still being constructed.
+    An asynchronous dataset that can be used with async/await syntax.
 
     The core methods in this class are:
     * `async_len`: Returns the final length of the dataset.
     * `get_batch`: Returns a batch of items from the dataset.
-    * `current_len`: Returns the current length of the dataset. This may be None if no current length is known.
     """
-
-    def __init__(self):
-        self._min_known_len = 0
 
     @abc.abstractmethod
     async def async_len(self) -> int:
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def final_length_is_known(self) -> bool:
-        """Returns whether the final length of the dataset is known.
-        If this returns False, the current_len of the dataset may change in the future."""
-        raise NotImplementedError
-
-    @abc.abstractmethod
     def is_finite(self) -> bool:
         """
-        Returns whether the dataset will have a known length in the future (e.g. if it's being constructed).
-        If this returns False, the length of the dataset is infinite or unknowable.
-        """
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    async def current_len(self) -> Optional[int]:
-        """
-        Returns the current length of the dataset that won't require (expensive) waiting.
-
-        If the current length is not known, returns None. This might block temporarily for a short time to get the
-        current length.
+        Returns whether the dataset has a known finite length.
+        If this returns False, the dataset is infinite.
         """
         raise NotImplementedError
 
@@ -99,20 +72,6 @@ class AsyncDataset(DatasetBase[T_co]):
     @abc.abstractmethod
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         raise NotImplementedError
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        """
-        Returns the length of the dataset once it is at least `length` or if the dataset has a known (finished) length.
-
-        The default implementation is a naive busy-wait loop. You should override this method for more efficient
-        implementations.
-        """
-        if length <= self._min_known_len:
-            return self._min_known_len
-
-        res_len = await naive_busy_wait_until_len_at_least(self, length)
-        self._min_known_len = max(self._min_known_len, res_len)
-        return res_len
 
     def as_sync_dataset(self):
         return SyncifiedDataset(self)
@@ -149,27 +108,6 @@ class AsyncDataset(DatasetBase[T_co]):
         return permutation.EraShufflingDataset(self, era_length, key=key, perm_type=perm_type)
 
 
-async def naive_busy_wait_until_len_at_least(dataset: AsyncDataset[T_co], length: int) -> int:
-    """
-    Runs a busy-wait loop until the dataset has at least `length` items or the final length is known.
-
-    Returns the current length of the dataset when either the dataset has at least `length` items or the final length is
-    known.
-
-    You should probably implement this in a more efficient way. This is just a naive implementation.
-    """
-    while not await dataset.final_length_is_known():
-        current_len = await dataset.current_len()
-        if current_len is None:
-            raise ValueError("Dataset has unknown length")
-        if current_len <= length:
-            await asyncio.sleep(0.1)
-        else:
-            return current_len
-
-    return await dataset.async_len()
-
-
 class SyncDataset(DatasetBase[T_co]):
     """
     A synchronous dataset that can be used with regular Python syntax. In Levanter, we mainly do not use this class.
@@ -185,17 +123,9 @@ class SyncDataset(DatasetBase[T_co]):
         """
 
     @abc.abstractmethod
-    def has_len(self) -> bool:
+    def is_finite(self) -> bool:
         """
-        Whether the data store currently has a known length. If this returns False, then the length of the data store
-        may change in the future.
-        """
-        pass
-
-    @abc.abstractmethod
-    def current_len(self) -> Optional[int]:
-        """
-        Returns the current length of the data store. If the length is infinite or not known, returns None.
+        Whether the dataset has a known finite length.
         """
         pass
 
@@ -223,11 +153,8 @@ class SyncifiedDataset(SyncDataset[T_co]):
     def __len__(self) -> int:
         return self._run_coroutine(self.dataset.async_len())
 
-    def has_len(self) -> bool:
+    def is_finite(self) -> bool:
         return self.dataset.is_finite()
-
-    def current_len(self) -> Optional[int]:
-        return self._run_coroutine(self.dataset.current_len())
 
     def get_batch(self, indices: Sequence[int] | np.ndarray) -> Sequence[T_co]:
         return self._run_coroutine(self.dataset.get_batch(indices))
@@ -238,20 +165,13 @@ class SyncifiedDataset(SyncDataset[T_co]):
 
 class AsyncifiedDataset(AsyncDataset[T_co]):
     def __init__(self, dataset: SyncDataset[T_co]):
-        super().__init__()
         self.dataset = dataset
 
     async def async_len(self) -> int:
         return len(self.dataset)
 
-    async def final_length_is_known(self) -> bool:
-        return self.dataset.has_len()
-
     def is_finite(self) -> bool:
-        return self.dataset.has_len()
-
-    async def current_len(self) -> Optional[int]:
-        return self.dataset.current_len()
+        return self.dataset.is_finite()
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         return self.dataset.get_batch(indices)
@@ -271,67 +191,19 @@ class ListAsyncDataset(AsyncDataset[T]):
     A simple dataset that wraps a list. Mostly for testing.
     """
 
-    def __init__(self, data: list[T], is_complete: bool = False):
-        super().__init__()
+    def __init__(self, data: list[T]):
         self.data = data
-        self.is_complete = is_complete
-        if not is_complete:
-            self.complete_promise: Optional[asyncio.Future[None]] = asyncio.Future()
-            self.length_updated: Optional[asyncio.Condition] = asyncio.Condition()
-        else:
-            self.complete_promise = None
-            self.length_updated = None
 
     async def async_len(self) -> int:
-        # this is the final length
-        if not self.is_complete:
-            assert self.complete_promise is not None
-            await self.complete_promise
         return len(self.data)
-
-    async def final_length_is_known(self) -> bool:
-        return self.is_complete
 
     def is_finite(self) -> bool:
         return True
 
-    async def current_len(self) -> Optional[int]:
-        return len(self.data)
-
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T]:
-        await self.wait_until_len_at_least(max(indices) + 1)
+        if not indices:
+            return []
         return [self.data[i] for i in indices]
-
-    def append(self, item: T):
-        if self.is_complete:
-            raise ValueError("Cannot append to a finalized dataset")
-        self.data.append(item)
-        asyncio.create_task(self.notify_length_update())
-
-    def finalize(self):
-        self.is_complete = True
-        if self.complete_promise is not None:
-            self.complete_promise.set_result(None)
-            if not asyncio.get_event_loop().is_running():
-                _executor.submit(lambda: asyncio.run(self.notify_length_update()))
-            else:
-                asyncio.create_task(self.notify_length_update())
-
-    async def notify_length_update(self):
-        async with self.length_updated:
-            self.length_updated.notify_all()
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        if self.is_complete:
-            return len(self.data)
-
-        assert self.length_updated is not None
-
-        async with self.length_updated:
-            while len(self.data) < length and not self.is_complete:
-                await self.length_updated.wait()
-
-        return len(self.data)
 
 
 class MappedAsyncDataset(AsyncDataset[U], Generic[T, U]):
@@ -349,7 +221,6 @@ class MappedAsyncDataset(AsyncDataset[U], Generic[T, U]):
         *extra_args,
         **extra_kwargs,
     ):
-        super().__init__()
         self.dataset = dataset
         self.fn = fn
         self._extra_args = extra_args
@@ -358,14 +229,8 @@ class MappedAsyncDataset(AsyncDataset[U], Generic[T, U]):
     async def async_len(self) -> int:
         return await self.dataset.async_len()
 
-    async def final_length_is_known(self) -> bool:
-        return await self.dataset.final_length_is_known()
-
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
-
-    async def current_len(self) -> Optional[int]:
-        return await self.dataset.current_len()
 
     def _maybe_fold_in_key(self, key, index):
         if key is not None:
@@ -378,9 +243,6 @@ class MappedAsyncDataset(AsyncDataset[U], Generic[T, U]):
 
     async def getitem_async(self, index: int) -> U:
         return self._call_fn(index, await self.dataset.getitem_async(index))
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        return await self.dataset.wait_until_len_at_least(length)
 
     def _call_fn(self, index, item):
         if "key" in self._extra_kwargs:
@@ -398,7 +260,6 @@ class SlicedAsyncDataset(AsyncDataset[U]):
         start_index: Optional[int] = None,
         end_index: Optional[int] = None,
     ):
-        super().__init__()
         if start_index is None:
             start_index = 0
         if end_index is not None and start_index > end_index:
@@ -407,42 +268,32 @@ class SlicedAsyncDataset(AsyncDataset[U]):
         self.start_index: int = start_index
         self.end_index: int | None = end_index
         self.dataset = dataset
-        self._min_known_len = dataset._min_known_len if end_index is None else (end_index - start_index)
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[U]:
+        if not indices:
+            return []
+
         shifted_indices = [(index + self.start_index) for index in indices]
         max_index = max(shifted_indices)
 
-        if self.end_index is not None and max_index > self.end_index:
+        if self.end_index is not None and max_index >= self.end_index:
             raise ValueError("Requested indices beyond the end of the dataset")
 
         return await self.dataset.get_batch(shifted_indices)
 
     async def async_len(self) -> int:
+        if self.end_index is not None and not self.dataset.is_finite():
+            return self.end_index - self.start_index
+
         underlying_length = await self.dataset.async_len()
 
         if self.end_index is None:
-            return underlying_length - self.start_index
+            return max(underlying_length - self.start_index, 0)
         else:
-            return min(self.end_index, underlying_length) - self.start_index
-
-    async def final_length_is_known(self) -> bool:
-        underlying_is_known = await self.dataset.final_length_is_known()
-        return underlying_is_known and self.end_index is not None
+            return max(min(self.end_index, underlying_length) - self.start_index, 0)
 
     def is_finite(self) -> bool:
-        return self.dataset.is_finite() and self.end_index is not None
-
-    async def current_len(self) -> Optional[int]:
-        underlying_length = await self.dataset.current_len()
-        if self.end_index is not None:
-            if underlying_length is None:
-                return self.end_index - self.start_index
-            return min(self.end_index, underlying_length) - self.start_index
-        elif underlying_length is not None:
-            return underlying_length - self.start_index
-        else:
-            return underlying_length
+        return self.end_index is not None or self.dataset.is_finite()
 
 
 class BatchMappedAsyncDataset(AsyncDataset[U]):
@@ -460,7 +311,6 @@ class BatchMappedAsyncDataset(AsyncDataset[U]):
         *extra_args,
         **extra_kwargs,
     ):
-        super().__init__()
         self.dataset = dataset
         self.fn = fn
         self._extra_args = extra_args
@@ -469,14 +319,8 @@ class BatchMappedAsyncDataset(AsyncDataset[U]):
     async def async_len(self) -> int:
         return await self.dataset.async_len()
 
-    async def final_length_is_known(self) -> bool:
-        return await self.dataset.final_length_is_known()
-
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
-
-    async def current_len(self) -> Optional[int]:
-        return await self.dataset.current_len()
 
     def _maybe_fold_in_key(self, key, indices: Sequence[int]):
         if key is not None:
@@ -489,9 +333,6 @@ class BatchMappedAsyncDataset(AsyncDataset[U]):
 
     async def getitem_async(self, index: int) -> U:
         return self._call_fn([index], [await self.dataset.getitem_async(index)])[0]
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        return await self.dataset.wait_until_len_at_least(length)
 
     def _call_fn(self, indices: Sequence[int], items):
         if "key" in self._extra_kwargs:

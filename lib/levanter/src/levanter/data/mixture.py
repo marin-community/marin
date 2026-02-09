@@ -188,23 +188,11 @@ class MixtureDataset(AsyncDataset[T]):
 
         raise NotImplementedError("Length is not implemented for other strategies")
 
-    async def final_length_is_known(self) -> bool:
-        if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
-            return False
-
-        raise NotImplementedError("Length is not known for other strategies")
-
     def is_finite(self) -> bool:
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             return False
 
         return True
-
-    async def current_len(self) -> Optional[int]:
-        if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
-            return None
-
-        raise NotImplementedError("Length is not known for other strategies")
 
     def _get_stage_for_block(self, block_id: int) -> int:
         block_start = block_id * self.block_size
@@ -292,8 +280,12 @@ class MixtureDataset(AsyncDataset[T]):
         """
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             if ds.is_finite():
-                max_elem = max(indices_into_ds)
-                length_of_dataset = await ds.wait_until_len_at_least(max_elem + 1)
+                length_of_dataset = await ds.async_len()
+                if length_of_dataset <= 0:
+                    raise ValueError(
+                        "MixtureDataset in RESTART_STRATEGY encountered an empty finite dataset "
+                        "(`async_len()` returned 0). Restart strategy does not support empty datasets."
+                    )
                 indices_into_ds = [idx % length_of_dataset for idx in indices_into_ds]
 
             return indices_into_ds

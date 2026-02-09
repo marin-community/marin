@@ -100,7 +100,7 @@ def test_train_lm_direct_dataset():
             for i in range(8):
                 tokens = hax.named(jnp.full((seq_len,), i % vocab_size, dtype=jnp.int32), Pos)
                 data.append(LmExample.causal(tokens))
-            dataset = ListAsyncDataset(data, is_complete=True)
+            dataset = ListAsyncDataset(data)
 
             component = DirectDatasetComponent(datasets={"train": dataset})
             data_config = LmDataConfig(
