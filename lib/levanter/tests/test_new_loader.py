@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from typing import Optional, Sequence
+from typing import Sequence
 
 import jax
 import numpy as np
@@ -22,7 +22,7 @@ from .test_utils import skip_if_not_enough_devices, use_test_mesh
 def _small_dataset(seq_len=128, num_sequences=200) -> AsyncDataset[Sequence[int]]:
     sequences = [np.arange(seq_len) + 1000 * i for i in range(num_sequences)]
 
-    return ListAsyncDataset(sequences, is_complete=True)
+    return ListAsyncDataset(sequences)
 
 
 @skip_if_not_enough_devices(2)
@@ -56,6 +56,13 @@ def test_local_batched_data_loading_model_axis_1():
             check_sharded_consistency(batch, check_disjoint_indices_are_different=True)
 
 
+def test_loader_rejects_empty_finite_dataset():
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+        dataset = ListAsyncDataset([])
+        with pytest.raises(ValueError, match="finite but has length 0"):
+            DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
+
+
 class StructuredDataset(AsyncDataset):
     def __init__(self, seq_len):
         super().__init__()
@@ -78,14 +85,8 @@ class StructuredDataset(AsyncDataset):
             },
         }
 
-    async def final_length_is_known(self) -> bool:
-        return True
-
     def is_finite(self) -> bool:
         return True
-
-    async def current_len(self) -> Optional[int]:
-        return await self.async_len()
 
     async def get_batch(self, indices: Sequence[int]):
         out = await asyncio.gather(*(self.getitem_async(i) for i in indices))
@@ -130,13 +131,7 @@ class StructuredDatasetWithNames(AsyncDataset):
         self.end = end
         self.stride = stride
 
-    async def final_length_is_known(self) -> bool:
-        return True
-
     def is_finite(self) -> bool:
-        return True
-
-    async def current_len(self) -> Optional[int]:
         return True
 
     async def get_batch(self, indices: Sequence[int]):

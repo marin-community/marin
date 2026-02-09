@@ -148,15 +148,8 @@ class DomainTaggedDataset(AsyncDataset[tuple[T, hax.NamedArray]]):
 
         return batch
 
-    async def final_length_is_known(self) -> bool:
-        return all(await asyncio.gather(*[dataset.final_length_is_known() for dataset, _ in self.datasets]))
-
     def is_finite(self) -> bool:
         return all(dataset.is_finite() for dataset, _ in self.datasets)
-
-    async def current_len(self) -> Optional[int]:
-        # We currently require all datasets to be finished before we do anything with this dataset, so...
-        return await self.async_len()
 
 
 def _join_prefix(prefix: str, tag: str) -> str:

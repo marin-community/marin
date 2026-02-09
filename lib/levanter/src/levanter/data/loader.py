@@ -130,9 +130,13 @@ class DataLoader(Iterable[Ex]):
 
         with local_cpu_mesh():
             # It's important that all data loading happens CPU side. We might relax this one day.
-            current_len = blocking_wait(self.data_store.current_len())
-            if current_len is not None and current_len <= 0:
-                logger.warning("Data store currently has no data. We will block until data is available.")
+            if self.data_store.is_finite():
+                current_len = blocking_wait(self.data_store.async_len())
+                if current_len <= 0:
+                    raise ValueError(
+                        "AsyncDataset is finite but has length 0. DataLoader cannot be initialized on an empty "
+                        "finite dataset."
+                    )
 
             initial_example = blocking_wait(self.data_store.getitem_async(0))
             self._ex_leaves, self._ex_structure = jax.tree.flatten(initial_example, is_leaf=is_named_array)
@@ -229,7 +233,7 @@ class DataLoader(Iterable[Ex]):
     def __len__(self):
         if not self.has_len():
             raise ValueError("DataLoader has no length")
-        total_length = blocking_wait(self.data_store.current_len())
+        total_length = blocking_wait(self.data_store.async_len())
         step = self.scheduler.find_step_containing_offset(total_length) + 1
         return step
 
@@ -316,10 +320,8 @@ class DataLoaderIterator(Iterator[Ex]):
 
     async def _dataset_get_available_batch_number(self, target_max_batch_number: int) -> tuple[int, int | None]:
         """
-        Wait until the data store has enough data to support the given batch number. If
-        the data store is finite, this will wait until the data store has at least `target_max_batch_number` batches
-        or until the data store is exhausted, in which case it will return the last batch number that the data store
-        has data for.
+        Check if the data store has enough data to support the given batch number.
+        For finite datasets, this returns the highest reachable batch.
 
         Returns:
             int: The batch number that the data store has data for.
@@ -327,7 +329,7 @@ class DataLoaderIterator(Iterator[Ex]):
         """
         if self.dl.data_store.is_finite():
             next_end = self.dl.scheduler.global_data_offset_by_step(target_max_batch_number)
-            available_len = await self.dl.data_store.wait_until_len_at_least(next_end)
+            available_len = await self.dl.data_store.async_len()
 
             at_the_end = available_len < next_end
 
