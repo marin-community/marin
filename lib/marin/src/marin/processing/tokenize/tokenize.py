@@ -107,7 +107,7 @@ class TokenizeConfig(TokenizeConfigBase):
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
-    zephyr_max_parallelism: int = 32
+    zephyr_max_parallelism: int = 128
     """Maximum number of concurrent Zephyr tasks per tokenization step.
 
     Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
@@ -172,7 +172,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
-    zephyr_max_parallelism: int = 32
+    zephyr_max_parallelism: int = 128
     """Maximum number of concurrent Zephyr tasks per tokenization step.
 
     Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.

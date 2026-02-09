@@ -150,13 +150,19 @@ class StatusFile:
     def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
         """Read LOCK file and its generation. Returns (0, None) if doesn't exist."""
         if self._is_gcs:
+            from google.api_core.exceptions import NotFound
+
             client = storage.Client()
             bucket_name, blob_path = self._parse_gcs_path(self._lock_path)
             bucket = client.bucket(bucket_name)
             blob = bucket.get_blob(blob_path)
             if blob is None:
                 return (0, None)
-            data = json.loads(blob.download_as_string())
+            try:
+                data = json.loads(blob.download_as_string())
+            except NotFound:
+                # Lock was deleted between get_blob() and download_as_string()
+                return (0, None)
             return (blob.generation, Lease(**data))
         else:
             import fcntl
@@ -207,11 +213,26 @@ class StatusFile:
                 f.write(data)
 
     def refresh_lock(self) -> None:
-        """Refresh a lock held by the current worker."""
+        """Refresh a lock held by the current worker.
+
+        Raises ValueError if the lock is held by a different worker.
+        If the lock was deleted (e.g. by a concurrent release), re-acquires it.
+        """
         generation, lock_data = self._read_lock_with_generation()
         if lock_data and lock_data.worker_id == self.worker_id:
             logger.debug("Refreshing lock for worker %s at generation %s", self.worker_id, generation)
-            self._write_lock(Lease(self.worker_id, time.time()), generation)
+            try:
+                self._write_lock(Lease(self.worker_id, time.time()), generation)
+            except Exception as e:
+                if self._is_gcs and ("PreconditionFailed" in type(e).__name__ or "NotFound" in type(e).__name__):
+                    logger.warning("[%s] Lock was modified during refresh, re-acquiring", self.worker_id)
+                    self.try_acquire_lock()
+                else:
+                    raise
+        elif lock_data is None:
+            # Lock was deleted (e.g. by a concurrent release_lock), re-acquire it
+            logger.warning("[%s] Lock disappeared, re-acquiring", self.worker_id)
+            self.try_acquire_lock()
         else:
             lock_worker = lock_data.worker_id if lock_data else "unknown"
             raise ValueError(
@@ -242,7 +263,7 @@ class StatusFile:
             logger.info("[%s] Lost lock race", self.worker_id)
             return False
         except Exception as e:
-            if self._is_gcs and "PreconditionFailed" in type(e).__name__:
+            if self._is_gcs and ("PreconditionFailed" in type(e).__name__ or "NotFound" in type(e).__name__):
                 logger.info("[%s] Lost lock race", self.worker_id)
                 return False
             raise

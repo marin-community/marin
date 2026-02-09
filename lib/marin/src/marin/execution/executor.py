@@ -226,7 +226,14 @@ class StepRunner:
 
         def heartbeat_loop():
             while not self._stop_event.wait(HEARTBEAT_INTERVAL):
-                self._status_file.refresh_lock()
+                try:
+                    self._status_file.refresh_lock()
+                except ValueError:
+                    # Lock stolen by another worker - stop heartbeating
+                    logger.warning("[heartbeat] Lock lost to another worker, stopping heartbeat")
+                    return
+                except Exception:
+                    logger.warning("[heartbeat] Failed to refresh lock, will retry", exc_info=True)
 
         self._heartbeat_thread = Thread(target=heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
