@@ -1,38 +1,593 @@
-(<lambda> pid=2091, ip=10.164.0.50) 2026-02-08T16:48:24 - 27 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/hf/vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/step-39061 [repeated 63x across cluster]
-(<lambda> pid=2091, ip=10.164.0.50) 2026-02-08T16:48:24 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 4.28GB/4.28GB rate:496,191,918.2B/s remaining:00:00 elapsed:00:46 postfix:- [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.39) 2026-02-08T16:48:24 - 50 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run... [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) wandb:  [repeated 630x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) wandb: Run history: [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) wandb:                                                                        +1,511 ... [repeated 126x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) wandb: Run summary: [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) wandb:                                                                       backend tpu [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) wandb:                                                                   global_step 39061 [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) wandb:                   grad/norm/language_model.embeddings.token_embeddings.weight 0.50781 [repeated 63x across cluster]
-(<lambda> pid=2095, ip=10.164.0.90) wandb: You can sync this run to the cloud by running: [repeated 62x across cluster]
-(<lambda> pid=2095, ip=10.164.0.90) wandb: wandb sync /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_59e785725117626a/wandb/offline-run-20260208_154822-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec [repeated 62x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) wandb: Find logs at: ./wandb/run-20260208_154823-vlm-official-qwen3-1.7b-stage3_4096-correct-0-3bd5ec/logs [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7fb75c62fce0> [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) Traceback (most recent call last): [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     conn.teardown(hooks.exit_code) [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     self._asyncer.run(publish_teardown_and_close) [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     return future.result() [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)            ^^^^^^^^^^^^^^^ [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     return self.__get_result() [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)            ^^^^^^^^^^^^^^^^^^^ [repeated 62x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     raise self._exception [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     return await fn() [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)            ^^^^^^^^^^ [repeated 62x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     await self._client.close() [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     await self._writer.wait_closed() [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58)     await self._protocol._get_close_waiter(self) [repeated 63x across cluster]
-(<lambda> pid=2094, ip=10.164.0.58) BrokenPipeError: [Errno 32] Broken pipe [repeated 63x across cluster]
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 
+(<lambda> pid=2096, ip=10.164.0.210) 2026-02-08T17:52:06 - 54 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (5006 rows) in 36.63s [repeated 6x across cluster]
+(<lambda> pid=2097, ip=10.164.0.168) 2026-02-08T17:52:09 - 28 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 750.
+(<lambda> pid=2097, ip=10.164.0.168) 2026-02-08T17:52:09 - 28 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 750 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750
+(<lambda> pid=2097, ip=10.164.0.206) 2026-02-08T17:52:09 - 19 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750 for step 750
+(<lambda> pid=2097, ip=10.164.0.206) 2026-02-08T17:52:13 - 19 - levanter.data.image - image.py:2617 - INFO :: Loading shard 2: 0147_parquet [repeated 5x across cluster]
+(<lambda> pid=2097, ip=10.164.0.206) 2026-02-08T17:52:13 - 19 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 1 (5028 rows) in 33.53s [repeated 9x across cluster]
+(<lambda> pid=2095, ip=10.164.0.183) 2026-02-08T17:52:09 - 2 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 750. [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.183) 2026-02-08T17:52:09 - 2 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 750 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.215) 2026-02-08T17:52:09 - 46 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750 for step 750 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.185) 2026-02-08T17:52:14 - 34 - levanter.data.image - image.py:2617 - INFO :: Loading shard 2: 0162_parquet [repeated 2x across cluster]
+(<lambda> pid=2097, ip=10.164.0.207) 2026-02-08T17:52:19 - 23 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (4979 rows) in 27.47s [repeated 7x across cluster]
+(<lambda> pid=2097, ip=10.164.0.171) 2026-02-08T17:52:20 - 52 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 752it/39.1kit rate:4.4s/it remaining:46:52:56 elapsed:38:31 postfix:loss=0.864
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T17:52:23 - 9 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (5058 rows) in 30.07s [repeated 6x across cluster]
+(<lambda> pid=2095, ip=10.164.0.156) 2026-02-08T17:52:24 - 44 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 754it/39.1kit rate:3.2s/it remaining:34:13:37 elapsed:38:35 postfix:loss=0.911 [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T17:52:26 - 27 - levanter.data.image - image.py:2617 - INFO :: Loading shard 2: 0155_parquet
+(<lambda> pid=2096, ip=10.164.0.159) 2026-02-08T17:52:31 - 3 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 1 (4931 rows) in 35.08s [repeated 7x across cluster]
+(<lambda> pid=2096, ip=10.164.0.159) 2026-02-08T17:52:31 - 3 - levanter.data.image - image.py:2617 - INFO :: Loading shard 2: 0131_parquet [repeated 2x across cluster]
+(<lambda> pid=2096, ip=10.164.0.160) 2026-02-08T17:52:36 - 55 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (5004 rows) in 27.16s [repeated 7x across cluster]
+(<lambda> pid=2096, ip=10.164.0.184) 2026-02-08T17:52:35 - 57 - levanter.data.image - image.py:2617 - INFO :: Loading shard 2: 0185_parquet [repeated 2x across cluster]
+(<lambda> pid=2097, ip=10.164.0.166) 2026-02-08T17:52:44 - 38 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (4961 rows) in 35.52s [repeated 3x across cluster]
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T17:52:46 - 11 - levanter.data.image - image.py:2643 - INFO :: Loading shard 1: 0075_parquet
+(<lambda> pid=2096, ip=10.164.0.154) 2026-02-08T17:52:53 - 49 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (4954 rows) in 38.96s [repeated 2x across cluster]
+(<lambda> pid=2095, ip=10.164.0.163) 2026-02-08T17:53:03 - 61 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (4978 rows) in 28.97s [repeated 4x across cluster]
+(<lambda> pid=2096, ip=10.164.0.184) 2026-02-08T17:53:09 - 57 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (4973 rows) in 33.67s
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T17:53:19 - 11 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 1 (4873 rows) in 32.97s
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T17:53:19 - 11 - levanter.data.image - image.py:2617 - INFO :: Loading shard 2: 0139_parquet
+(<lambda> pid=2096, ip=10.164.0.175) 2026-02-08T17:53:21 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 787it/39.1kit rate:1.5s/it remaining:15:52:19 elapsed:39:32 postfix:loss=0.923
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T17:53:52 - 11 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 2 (4997 rows) in 32.84s
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T17:53:24 - 31 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 789it/39.1kit rate:1.6s/it remaining:17:10:08 elapsed:39:35 postfix:loss=0.89 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.171) 2026-02-08T17:54:21 - 52 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 828it/39.1kit rate:1.6s/it remaining:16:54:08 elapsed:40:32 postfix:loss=0.865
+(<lambda> pid=2096, ip=10.164.0.175) 2026-02-08T17:54:21 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 828it/39.1kit rate:1.6s/it remaining:16:54:08 elapsed:40:32 postfix:loss=0.865
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:54:35 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750 for step 750
+(<lambda> pid=2096, ip=10.164.0.155) 2026-02-08T17:54:25 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 830it/39.1kit rate:1.7s/it remaining:17:43:48 elapsed:40:36 postfix:loss=0.956 [repeated 62x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:54:35 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-361 after saving new checkpoint.
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:54:35 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-361
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:54:35 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-361
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:54:35 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-361 in 0.29 seconds
+(<lambda> pid=2096, ip=10.164.0.175) 2026-02-08T17:55:22 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 864it/39.1kit rate:1.5s/it remaining:16:03:53 elapsed:41:33 postfix:loss=0.856
+(<lambda> pid=2097, ip=10.164.0.171) 2026-02-08T17:55:22 - 52 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 864it/39.1kit rate:1.5s/it remaining:16:03:53 elapsed:41:33 postfix:loss=0.856
+(<lambda> pid=2097, ip=10.164.0.171) 2026-02-08T17:56:22 - 52 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 904it/39.1kit rate:1.7s/it remaining:18:19:50 elapsed:42:33 postfix:loss=0.872 [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.175) 2026-02-08T17:57:23 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 944it/39.1kit rate:1.4s/it remaining:14:41:35 elapsed:43:34 postfix:loss=0.919 [repeated 64x across cluster]
+(<lambda> pid=2097, ip=10.164.0.207) 2026-02-08T17:57:28 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 947it/39.1kit rate:1.6s/it remaining:17:14:03 elapsed:43:39 postfix:loss=0.846 [repeated 2x across cluster]
+(<lambda> pid=2097, ip=10.164.0.171) 2026-02-08T17:58:23 - 52 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 980it/39.1kit rate:1.7s/it remaining:18:03:57 elapsed:44:34 postfix:loss=0.858 [repeated 62x across cluster]
+(<lambda> pid=2095, ip=10.164.0.173) 2026-02-08T17:58:28 - 12 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 983it/39.1kit rate:1.8s/it remaining:18:44:41 elapsed:44:39 postfix:loss=0.756 [repeated 2x across cluster]
+(<lambda> pid=2096, ip=10.164.0.160) 2026-02-08T17:58:53 - 55 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 1000.
+(<lambda> pid=2096, ip=10.164.0.160) 2026-02-08T17:58:53 - 55 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 1000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1000
+(<lambda> pid=2098, ip=10.164.0.176) 2026-02-08T17:58:28 - 40 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 983it/39.1kit rate:1.8s/it remaining:18:44:41 elapsed:44:39 postfix:loss=0.756 [repeated 61x across cluster]
+(<lambda> pid=2095, ip=10.164.0.216) 2026-02-08T17:58:53 - 41 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1000 for step 1000
+(<lambda> pid=2095, ip=10.164.0.187) 2026-02-08T17:58:54 - 63 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2095, ip=10.164.0.187) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048
+(<lambda> pid=2095, ip=10.164.0.187) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048
+(<lambda> pid=2097, ip=10.164.0.189) 2026-02-08T17:58:54 - 62 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T17:58:55 - 31 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/8889988576 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T17:58:55 - 31 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 2 shards with max size 4.99 GB
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T17:58:55 - 31 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpas8w7m_d
+(<lambda> pid=2095, ip=10.164.0.211) 2026-02-08T17:58:55 - 21 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpvpfhcwvp
+(<lambda> pid=2096, ip=10.164.0.205) 2026-02-08T17:58:55 - 59 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpie_rwgoh
+(<lambda> pid=2096, ip=10.164.0.203) 2026-02-08T17:58:55 - 36 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpab_egyov
+(<lambda> pid=2095, ip=10.164.0.215) 2026-02-08T17:58:55 - 46 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmplodfkjre
+(<lambda> pid=2095, ip=10.164.0.170) 2026-02-08T17:58:56 - 45 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpmnslgjqs
+(<lambda> pid=2097, ip=10.164.0.204) 2026-02-08T17:58:56 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmparxyvqor
+(<lambda> pid=2095, ip=10.164.0.211) 2026-02-08T17:58:53 - 21 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 1000. [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.211) 2026-02-08T17:58:53 - 21 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 1000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1000 [repeated 63x across cluster]
+(<lambda> pid=2098, ip=10.164.0.186) 2026-02-08T17:58:53 - 60 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1000 for step 1000 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:59:07 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048 [repeated 126x across cluster]
+(<lambda> pid=2096, ip=10.164.0.154) 2026-02-08T17:58:56 - 49 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 [repeated 62x across cluster]
+(<lambda> pid=2096, ip=10.164.0.154) 2026-02-08T17:58:56 - 49 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/8889988576 rate:- remaining:? elapsed:00:00 postfix:- [repeated 62x across cluster]
+(<lambda> pid=2096, ip=10.164.0.154) 2026-02-08T17:58:56 - 49 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 2 shards with max size 4.99 GB [repeated 62x across cluster]
+(<lambda> pid=2096, ip=10.164.0.154) 2026-02-08T17:58:56 - 49 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmp0dhrqs9v [repeated 56x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:59:11 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00001-of-00002.safetensors (4.99 GB, 56.14% of model)
+(<lambda> pid=2097, ip=10.164.0.181) 2026-02-08T17:59:19 - 14 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:59:08 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:59:08 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/8889988576 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:59:08 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 2 shards with max size 4.99 GB
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:59:08 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmp49d0wrvy
+(<lambda> pid=2097, ip=10.164.0.181) 2026-02-08T17:59:11 - 14 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00001-of-00002.safetensors (4.99 GB, 56.14% of model) [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T17:59:19 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2096, ip=10.164.0.200) 2026-02-08T18:00:01 - 10 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpnzaq8x4k
+(<lambda> pid=2095, ip=10.164.0.216) 2026-02-08T17:59:19 - 41 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 [repeated 62x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:01 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2095, ip=10.164.0.161) 2026-02-08T18:00:01 - 47 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmptfduaixr
+(<lambda> pid=2096, ip=10.164.0.203) 2026-02-08T18:00:01 - 36 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpqowu_bvy
+(<lambda> pid=2098, ip=10.164.0.196) 2026-02-08T18:00:01 - 16 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmp__fwftwa
+(<lambda> pid=2098, ip=10.164.0.186) 2026-02-08T18:00:01 - 60 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpwoeepnqu
+(<lambda> pid=2096, ip=10.164.0.160) 2026-02-08T18:00:01 - 55 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpafjkpefn
+(<lambda> pid=2097, ip=10.164.0.204) 2026-02-08T18:00:05 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00002-of-00002.safetensors (3.9 GB, 43.86% of model)
+(<lambda> pid=2095, ip=10.164.0.211) 2026-02-08T18:00:12 - 21 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.89GB/8.89GB rate:106,002,493.0B/s remaining:00:00 elapsed:01:16 postfix:-
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:03 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpo53ckf5b [repeated 58x across cluster]
+(<lambda> pid=2095, ip=10.164.0.211) 2026-02-08T18:00:12 - 21 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2095, ip=10.164.0.208) 2026-02-08T18:00:05 - 56 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00002-of-00002.safetensors (3.9 GB, 43.86% of model) [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.215) 2026-02-08T18:00:12 - 46 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:12 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2094, ip=10.164.0.209) 2026-02-08T18:00:45 - 50 - levanter.compat.hf_checkpoints - hf_checkpoints.py:944 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB
+(<lambda> pid=2094, ip=10.164.0.209) 2026-02-08T18:00:45 - 50 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpyxny108d
+(<lambda> pid=2094, ip=10.164.0.209) 2026-02-08T18:00:45 - 50 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer
+(<lambda> pid=2095, ip=10.164.0.178) 2026-02-08T18:00:12 - 20 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.89GB/8.89GB rate:106,208,550.0B/s remaining:00:00 elapsed:01:16 postfix:- [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.178) 2026-02-08T18:00:12 - 20 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 [repeated 61x across cluster]
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T18:00:45 - 27 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpsetxtzjj
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:45 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2098, ip=10.164.0.176) 2026-02-08T18:00:45 - 40 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpbcimcrhr
+(<lambda> pid=2095, ip=10.164.0.158) 2026-02-08T18:00:45 - 26 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpiq_ihqjj
+(<lambda> pid=2097, ip=10.164.0.181) 2026-02-08T18:00:45 - 14 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpnnp_g_id
+(<lambda> pid=2097, ip=10.164.0.168) 2026-02-08T18:00:45 - 28 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmpna_thess
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:47 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2098, ip=10.164.0.196) 2026-02-08T18:00:47 - 16 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:47 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000
+(<lambda> pid=2095, ip=10.164.0.185) 2026-02-08T18:00:49 - 34 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00kit/39.1kit rate:35.7s/it remaining:377:52:27 elapsed:47:00 postfix:loss=0.869
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:01:42 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1000 for step 1000
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:46 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:944 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:46 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 via temp path /tmp/tmprrhn83fb [repeated 58x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:00:46 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.182) 2026-02-08T18:00:47 - 22 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.89GB/8.89GB rate:105,721,879.4B/s remaining:00:00 elapsed:01:52 postfix:- [repeated 64x across cluster]
+(<lambda> pid=2095, ip=10.164.0.215) 2026-02-08T18:00:45 - 46 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.182) 2026-02-08T18:00:47 - 22 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-1000 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.206) 2026-02-08T18:00:49 - 19 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00kit/39.1kit rate:35.7s/it remaining:377:52:27 elapsed:47:00 postfix:loss=0.869 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:01:42 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750 after saving new checkpoint.
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:01:42 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:01:42 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:01:42 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-750 in 0.23 seconds
+(<lambda> pid=2096, ip=10.164.0.154) 2026-02-08T18:01:50 - 49 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.04kit/39.1kit rate:1.4s/it remaining:15:03:21 elapsed:48:01 postfix:loss=0.927
+(<lambda> pid=2095, ip=10.164.0.173) 2026-02-08T18:01:50 - 12 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.04kit/39.1kit rate:1.4s/it remaining:15:03:21 elapsed:48:01 postfix:loss=0.927
+(<lambda> pid=2169, ip=10.164.0.218) 2026-02-08T18:02:50 - 18 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.08kit/39.1kit rate:1.7s/it remaining:17:47:45 elapsed:49:01 postfix:loss=0.86 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.170) 2026-02-08T18:03:51 - 45 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.12kit/39.1kit rate:1.7s/it remaining:17:51:34 elapsed:50:02 postfix:loss=0.796 [repeated 64x across cluster]
+(<lambda> pid=2096, ip=10.164.0.184) 2026-02-08T18:04:52 - 57 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.16kit/39.1kit rate:1.5s/it remaining:16:13:14 elapsed:51:03 postfix:loss=0.871 [repeated 64x across cluster]
+(<lambda> pid=2096, ip=10.164.0.200) 2026-02-08T18:05:52 - 10 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.20kit/39.1kit rate:1.7s/it remaining:18:12:27 elapsed:52:04 postfix:loss=0.795 [repeated 64x across cluster]
+(autoscaler +1h8m59s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h8m59s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=2096, ip=10.164.0.160) 2026-02-08T18:06:54 - 55 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.24kit/39.1kit rate:1.6s/it remaining:16:27:56 elapsed:53:05 postfix:loss=0.824 [repeated 64x across cluster]
+(autoscaler +1h9m17s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h9m17s) Resized to 15960 CPUs, 532 TPUs.
+(autoscaler +1h9m40s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h9m40s) Resized to 15960 CPUs, 532 TPUs.
+(raylet) The node with node id: a074301d505fb6582bd9fb8078f1f574a68686595b3871ab0319108f and address: 10.164.0.198 and node name: 10.164.0.198 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a        (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +1h9m58s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h9m58s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=2099, ip=10.164.0.195) 2026-02-08T18:07:55 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.27kit/39.1kit rate:1.8s/it remaining:18:29:35 elapsed:54:06 postfix:loss=0.799 [repeated 64x across cluster]
+(<lambda> pid=2096, ip=10.164.0.200) 2026-02-08T18:08:56 - 10 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.31kit/39.1kit rate:1.5s/it remaining:16:13:05 elapsed:55:07 postfix:loss=0.803 [repeated 64x across cluster]
+(<lambda> pid=2094, ip=10.164.0.209) 2026-02-08T18:09:08 - 50 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 1321.
+(<lambda> pid=2094, ip=10.164.0.209) 2026-02-08T18:09:08 - 50 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 1321 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321
+(<lambda> pid=2096, ip=10.164.0.159) 2026-02-08T18:08:56 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.31kit/39.1kit rate:1.5s/it remaining:16:13:05 elapsed:55:07 postfix:loss=0.803 [repeated 63x across cluster]
+(<lambda> pid=2169, ip=10.164.0.218) 2026-02-08T18:09:08 - 18 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321 for step 1321
+(<lambda> pid=2096, ip=10.164.0.164) 2026-02-08T18:09:08 - 1 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 1321. [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.164) 2026-02-08T18:09:08 - 1 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 1321 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.161) 2026-02-08T18:09:56 - 47 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.35kit/39.1kit rate:1.4s/it remaining:14:16:57 elapsed:56:07 postfix:loss=0.874
+(<lambda> pid=2096, ip=10.164.0.184) 2026-02-08T18:09:08 - 57 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321 for step 1321 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.197) 2026-02-08T18:09:56 - 13 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.35kit/39.1kit rate:1.4s/it remaining:14:16:57 elapsed:56:07 postfix:loss=0.874
+(<lambda> pid=2095, ip=10.164.0.153) 2026-02-08T18:10:57 - 43 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.39kit/39.1kit rate:1.4s/it remaining:14:47:36 elapsed:57:09 postfix:loss=0.766 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:11:56 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321 for step 1321
+(<lambda> pid=2096, ip=10.164.0.160) 2026-02-08T18:10:57 - 55 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.39kit/39.1kit rate:1.4s/it remaining:14:47:36 elapsed:57:08 postfix:loss=0.766 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.156) 2026-02-08T18:12:59 - 44 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.46kit/39.1kit rate:1.9s/it remaining:19:20:33 elapsed:59:10 postfix:loss=0.806 [repeated 65x across cluster]
+(<lambda> pid=2096, ip=10.164.0.160) 2026-02-08T18:13:59 - 55 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.50kit/39.1kit rate:1.7s/it remaining:17:19:05 elapsed:1:00:10 postfix:loss=0.805 [repeated 64x across cluster]
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T18:14:59 - 31 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.54kit/39.1kit rate:1.5s/it remaining:15:56:35 elapsed:1:01:10 postfix:loss=0.916 [repeated 64x across cluster]
+(autoscaler +1h17m55s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h17m55s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=2098, ip=10.164.0.196) 2026-02-08T18:15:59 - 16 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.58kit/39.1kit rate:1.4s/it remaining:14:26:14 elapsed:1:02:10 postfix:loss=0.818 [repeated 64x across cluster]
+(<lambda> pid=2094, ip=10.164.0.169) 2026-02-08T18:17:00 - 58 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.62kit/39.1kit rate:1.4s/it remaining:14:32:17 elapsed:1:03:12 postfix:loss=0.883 [repeated 64x across cluster]
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T18:18:01 - 11 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.66kit/39.1kit rate:1.7s/it remaining:17:14:15 elapsed:1:04:12 postfix:loss=0.819 [repeated 64x across cluster]
+(<lambda> pid=2095, ip=10.164.0.172) 2026-02-08T18:19:02 - 51 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.70kit/39.1kit rate:1.6s/it remaining:16:09:46 elapsed:1:05:13 postfix:loss=0.868 [repeated 64x across cluster]
+(<lambda> pid=2095, ip=10.164.0.215) 2026-02-08T18:19:13 - 46 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 1704.
+(<lambda> pid=2095, ip=10.164.0.215) 2026-02-08T18:19:13 - 46 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 1704 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704
+(<lambda> pid=2099, ip=10.164.0.195) 2026-02-08T18:19:02 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.70kit/39.1kit rate:1.6s/it remaining:16:09:46 elapsed:1:05:13 postfix:loss=0.868 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.187) 2026-02-08T18:19:13 - 63 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704 for step 1704
+(<lambda> pid=2095, ip=10.164.0.182) 2026-02-08T18:19:13 - 22 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 1704. [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.182) 2026-02-08T18:19:13 - 22 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 1704 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704 [repeated 63x across cluster]
+(<lambda> pid=2092, ip=10.164.0.188) 2026-02-08T18:20:02 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.73kit/39.1kit rate:1.7s/it remaining:17:42:23 elapsed:1:06:13 postfix:loss=0.859
+(<lambda> pid=2095, ip=10.164.0.161) 2026-02-08T18:19:13 - 47 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704 for step 1704 [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.190) 2026-02-08T18:20:02 - 37 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.73kit/39.1kit rate:1.7s/it remaining:17:42:23 elapsed:1:06:13 postfix:loss=0.859
+(<lambda> pid=2095, ip=10.164.0.153) 2026-02-08T18:21:03 - 43 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.77kit/39.1kit rate:1.8s/it remaining:18:29:56 elapsed:1:07:14 postfix:loss=0.762 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:21:35 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704 for step 1704
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T18:21:03 - 9 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.77kit/39.1kit rate:1.8s/it remaining:18:29:56 elapsed:1:07:14 postfix:loss=0.762 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:21:35 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321 after saving new checkpoint.
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:21:35 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:21:35 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:21:35 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1321 in 0.23 seconds
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T18:22:03 - 31 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.81kit/39.1kit rate:1.4s/it remaining:14:05:42 elapsed:1:08:14 postfix:loss=0.853
+(<lambda> pid=2092, ip=10.164.0.188) 2026-02-08T18:22:03 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.81kit/39.1kit rate:1.4s/it remaining:14:05:41 elapsed:1:08:14 postfix:loss=0.853
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:22:46 - 0 - levanter.data.image - image.py:2643 - INFO :: Loading shard 2: 0128_parquet
+(<lambda> pid=2096, ip=10.164.0.190) 2026-02-08T18:22:03 - 37 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.81kit/39.1kit rate:1.4s/it remaining:14:05:42 elapsed:1:08:14 postfix:loss=0.853 [repeated 62x across cluster]
+(<lambda> pid=2096, ip=10.164.0.175) 2026-02-08T18:23:03 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.85kit/39.1kit rate:1.7s/it remaining:17:18:33 elapsed:1:09:15 postfix:loss=0.852
+(<lambda> pid=2096, ip=10.164.0.214) 2026-02-08T18:23:03 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.85kit/39.1kit rate:1.7s/it remaining:17:18:33 elapsed:1:09:15 postfix:loss=0.852
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:23:16 - 0 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (4975 rows) in 29.46s
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:23:16 - 0 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0192_parquet
+(<lambda> pid=2099, ip=10.164.0.212) 2026-02-08T18:23:03 - 42 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.85kit/39.1kit rate:1.7s/it remaining:17:18:33 elapsed:1:09:15 postfix:loss=0.852 [repeated 62x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:23:45 - 0 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4937 rows) in 28.63s
+(<lambda> pid=2097, ip=10.164.0.165) 2026-02-08T18:24:04 - 48 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.89kit/39.1kit rate:1.7s/it remaining:17:23:55 elapsed:1:10:15 postfix:loss=0.861
+(raylet, ip=10.164.0.228) [2026-02-08 18:24:05,051 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(<lambda> pid=2095, ip=10.164.0.153) 2026-02-08T18:25:04 - 43 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.92kit/39.1kit rate:1.7s/it remaining:17:33:11 elapsed:1:11:15 postfix:loss=0.876 [repeated 64x across cluster]
+(raylet, ip=10.164.0.127) [2026-02-08 18:24:07,634 E 1066 1066] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(<lambda> pid=2097, ip=10.164.0.165) 2026-02-08T18:25:10 - 48 - levanter.data.image - image.py:2643 - INFO :: Loading shard 2: 0176_parquet
+(<lambda> pid=2098, ip=10.164.0.196) 2026-02-08T18:25:04 - 16 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.92kit/39.1kit rate:1.7s/it remaining:17:33:11 elapsed:1:11:15 postfix:loss=0.876 [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.155) 2026-02-08T18:25:22 - 17 - levanter.data.image - image.py:2643 - INFO :: Loading shard 2: 0145_parquet [repeated 3x across cluster]
+(<lambda> pid=2095, ip=10.164.0.153) 2026-02-08T18:25:35 - 43 - levanter.data.image - image.py:2643 - INFO :: Loading shard 2: 0171_parquet [repeated 2x across cluster]
+(<lambda> pid=2095, ip=10.164.0.187) 2026-02-08T18:25:36 - 63 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (5054 rows) in 26.16s
+(<lambda> pid=2097, ip=10.164.0.165) 2026-02-08T18:25:46 - 48 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0240_parquet [repeated 6x across cluster]
+(<lambda> pid=2097, ip=10.164.0.165) 2026-02-08T18:25:46 - 48 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (5126 rows) in 35.79s [repeated 2x across cluster]
+(<lambda> pid=2096, ip=10.164.0.155) 2026-02-08T18:25:51 - 17 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0209_parquet [repeated 8x across cluster]
+(<lambda> pid=2096, ip=10.164.0.155) 2026-02-08T18:25:51 - 17 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (5059 rows) in 28.94s
+(<lambda> pid=2097, ip=10.164.0.174) 2026-02-08T18:25:51 - 7 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (4971 rows) in 29.13s
+(<lambda> pid=2095, ip=10.164.0.182) 2026-02-08T18:25:59 - 22 - levanter.data.image - image.py:2643 - INFO :: Loading shard 2: 0150_parquet [repeated 2x across cluster]
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T18:26:04 - 11 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.96kit/39.1kit rate:1.7s/it remaining:17:12:42 elapsed:1:12:15 postfix:loss=0.761
+(<lambda> pid=2096, ip=10.164.0.214) 2026-02-08T18:25:59 - 4 - levanter.data.image - image.py:2643 - INFO :: Loading shard 2: 0132_parquet [repeated 8x across cluster]
+(<lambda> pid=2095, ip=10.164.0.158) 2026-02-08T18:26:06 - 26 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (5034 rows) in 31.52s
+(<lambda> pid=2169, ip=10.164.0.218) 2026-02-08T18:26:04 - 18 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.96kit/39.1kit rate:1.7s/it remaining:17:12:41 elapsed:1:12:15 postfix:loss=0.761 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.153) 2026-02-08T18:26:10 - 43 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0235_parquet [repeated 5x across cluster]
+(<lambda> pid=2092, ip=10.164.0.188) 2026-02-08T18:26:12 - 25 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (4989 rows) in 26.04s [repeated 7x across cluster]
+(<lambda> pid=2095, ip=10.164.0.183) 2026-02-08T18:26:16 - 2 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0194_parquet [repeated 13x across cluster]
+(<lambda> pid=2096, ip=10.164.0.175) 2026-02-08T18:26:17 - 29 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (5023 rows) in 31.03s [repeated 4x across cluster]
+(<lambda> pid=2096, ip=10.164.0.205) 2026-02-08T18:26:20 - 59 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0251_parquet [repeated 4x across cluster]
+(<lambda> pid=2097, ip=10.164.0.174) 2026-02-08T18:26:23 - 7 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (5111 rows) in 32.02s [repeated 3x across cluster]
+(<lambda> pid=2097, ip=10.164.0.213) 2026-02-08T18:26:29 - 6 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0198_parquet [repeated 15x across cluster]
+(<lambda> pid=2097, ip=10.164.0.213) 2026-02-08T18:26:29 - 6 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (5010 rows) in 29.88s [repeated 6x across cluster]
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T18:26:35 - 31 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0223_parquet [repeated 3x across cluster]
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T18:26:35 - 31 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (5034 rows) in 35.75s [repeated 3x across cluster]
+(<lambda> pid=2096, ip=10.164.0.201) 2026-02-08T18:26:39 - 32 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0224_parquet [repeated 4x across cluster]
+(<lambda> pid=2092, ip=10.164.0.188) 2026-02-08T18:26:40 - 25 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4939 rows) in 27.76s [repeated 6x across cluster]
+(<lambda> pid=2096, ip=10.164.0.203) 2026-02-08T18:26:45 - 36 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0228_parquet [repeated 15x across cluster]
+(<lambda> pid=2095, ip=10.164.0.153) 2026-02-08T18:26:46 - 43 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (5007 rows) in 35.67s [repeated 11x across cluster]
+(<lambda> pid=2096, ip=10.164.0.159) 2026-02-08T18:26:52 - 3 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0195_parquet [repeated 3x across cluster]
+(<lambda> pid=2096, ip=10.164.0.159) 2026-02-08T18:26:52 - 3 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (4995 rows) in 25.13s [repeated 6x across cluster]
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T18:26:57 - 9 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0201_parquet [repeated 4x across cluster]
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T18:26:57 - 9 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (5058 rows) in 30.27s [repeated 9x across cluster]
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T18:26:59 - 27 - levanter.data.image - image.py:2643 - INFO :: Loading shard 2: 0155_parquet [repeated 9x across cluster]
+(<lambda> pid=2095, ip=10.164.0.178) 2026-02-08T18:27:03 - 20 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4974 rows) in 32.98s [repeated 6x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:27:06 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.00kit/39.1kit rate:1.8s/it remaining:18:49:53 elapsed:1:13:17 postfix:loss=1.03
+(<lambda> pid=2094, ip=10.164.0.209) 2026-02-08T18:27:09 - 50 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0242_parquet [repeated 2x across cluster]
+(<lambda> pid=2094, ip=10.164.0.209) 2026-02-08T18:27:09 - 50 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (4965 rows) in 25.72s [repeated 7x across cluster]
+(<lambda> pid=2096, ip=10.164.0.203) 2026-02-08T18:27:06 - 36 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.00kit/39.1kit rate:1.8s/it remaining:18:49:50 elapsed:1:13:17 postfix:loss=1.03 [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.167) 2026-02-08T18:27:14 - 8 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0200_parquet [repeated 8x across cluster]
+(<lambda> pid=2096, ip=10.164.0.167) 2026-02-08T18:27:14 - 8 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (4977 rows) in 30.74s [repeated 11x across cluster]
+(<lambda> pid=2096, ip=10.164.0.180) 2026-02-08T18:27:16 - 33 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 2000.
+(<lambda> pid=2096, ip=10.164.0.180) 2026-02-08T18:27:16 - 33 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 2000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-2000
+(<lambda> pid=2096, ip=10.164.0.175) 2026-02-08T18:27:16 - 29 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-2000 for step 2000
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T18:27:16 - 9 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2096, ip=10.164.0.219) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048
+(<lambda> pid=2096, ip=10.164.0.219) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T18:27:16 - 9 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2095, ip=10.164.0.216) 2026-02-08T18:27:16 - 41 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/8889988576 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=2095, ip=10.164.0.216) 2026-02-08T18:27:16 - 41 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 2 shards with max size 4.99 GB
+(<lambda> pid=2095, ip=10.164.0.216) 2026-02-08T18:27:16 - 41 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpducmq72a
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T18:27:16 - 9 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpsgfhbvyb
+(<lambda> pid=2097, ip=10.164.0.204) 2026-02-08T18:27:17 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpgufbrnhn
+(<lambda> pid=2096, ip=10.164.0.179) 2026-02-08T18:27:17 - 39 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpaylwwseo
+(<lambda> pid=2095, ip=10.164.0.187) 2026-02-08T18:27:17 - 63 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpee_hy_no
+(<lambda> pid=2096, ip=10.164.0.164) 2026-02-08T18:27:17 - 1 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpkkgnihid
+(<lambda> pid=2095, ip=10.164.0.197) 2026-02-08T18:27:16 - 13 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0205_parquet
+(<lambda> pid=2098, ip=10.164.0.186) 2026-02-08T18:27:18 - 60 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4960 rows) in 24.25s [repeated 6x across cluster]
+(<lambda> pid=2098, ip=10.164.0.217) 2026-02-08T18:27:21 - 31 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00001-of-00002.safetensors (4.99 GB, 56.14% of model)
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T18:27:16 - 27 - levanter.checkpoint - checkpoint.py:211 - INFO :: Saving checkpoint at step 2000. [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T18:27:16 - 27 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 2000 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-2000 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.158) 2026-02-08T18:27:16 - 26 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-2000 for step 2000 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:27:19 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:817 - INFO :: Saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048 [repeated 126x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:27:19 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:839 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:27:19 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size -/8889988576 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:27:19 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:858 - INFO :: Will save 2 shards with max size 4.99 GB [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:27:19 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00001-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpv417njqh [repeated 58x across cluster]
+(<lambda> pid=2169, ip=10.164.0.218) 2026-02-08T18:27:24 - 18 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0210_parquet
+(<lambda> pid=2097, ip=10.164.0.206) 2026-02-08T18:27:26 - 19 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (4953 rows) in 26.42s [repeated 6x across cluster]
+(<lambda> pid=2096, ip=10.164.0.160) 2026-02-08T18:27:22 - 55 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00001-of-00002.safetensors (4.99 GB, 56.14% of model) [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.166) 2026-02-08T18:27:29 - 38 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2096, ip=10.164.0.164) 2026-02-08T18:27:26 - 1 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0193_parquet [repeated 4x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:27:29 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T18:27:31 - 9 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4935 rows) in 34.02s [repeated 7x across cluster]
+(<lambda> pid=2096, ip=10.164.0.164) 2026-02-08T18:27:29 - 1 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 [repeated 62x across cluster]
+(<lambda> pid=2095, ip=10.164.0.161) 2026-02-08T18:27:33 - 47 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0239_parquet
+(<lambda> pid=2098, ip=10.164.0.176) 2026-02-08T18:27:37 - 40 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (5051 rows) in 33.45s [repeated 3x across cluster]
+(<lambda> pid=2095, ip=10.164.0.163) 2026-02-08T18:27:40 - 61 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0253_parquet
+(<lambda> pid=2096, ip=10.164.0.191) 2026-02-08T18:27:45 - 53 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (5052 rows) in 32.32s [repeated 7x across cluster]
+(<lambda> pid=2096, ip=10.164.0.184) 2026-02-08T18:27:41 - 57 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0249_parquet
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T18:27:53 - 27 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4964 rows) in 26.29s [repeated 4x across cluster]
+(<lambda> pid=2096, ip=10.164.0.164) 2026-02-08T18:28:00 - 1 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4981 rows) in 34.02s [repeated 3x across cluster]
+(<lambda> pid=2096, ip=10.164.0.184) 2026-02-08T18:28:08 - 57 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4986 rows) in 27.10s [repeated 2x across cluster]
+(<lambda> pid=2096, ip=10.164.0.190) 2026-02-08T18:28:12 - 37 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpif67rjlt
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:12 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2094, ip=10.164.0.209) 2026-02-08T18:28:12 - 50 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpnbfspeyw
+(<lambda> pid=2097, ip=10.164.0.181) 2026-02-08T18:28:12 - 14 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmplnpn_pjk
+(<lambda> pid=2097, ip=10.164.0.206) 2026-02-08T18:28:12 - 19 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpqivqajsi
+(<lambda> pid=2095, ip=10.164.0.163) 2026-02-08T18:28:12 - 61 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpvdfpxkk_
+(<lambda> pid=2095, ip=10.164.0.163) 2026-02-08T18:28:13 - 61 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (5008 rows) in 33.30s
+(<lambda> pid=2096, ip=10.164.0.167) 2026-02-08T18:28:15 - 8 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00002-of-00002.safetensors (3.9 GB, 43.86% of model)
+(<lambda> pid=2095, ip=10.164.0.158) 2026-02-08T18:28:22 - 26 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.89GB/8.89GB rate:121,381,801.7B/s remaining:00:00 elapsed:01:04 postfix:-
+(<lambda> pid=2095, ip=10.164.0.158) 2026-02-08T18:28:22 - 26 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:14 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmp4zehwp1x [repeated 59x across cluster]
+(<lambda> pid=2096, ip=10.164.0.159) 2026-02-08T18:28:15 - 3 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00002-of-00002.safetensors (3.9 GB, 43.86% of model) [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:22 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2096, ip=10.164.0.179) 2026-02-08T18:28:56 - 39 - levanter.compat.hf_checkpoints - hf_checkpoints.py:944 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB
+(<lambda> pid=2096, ip=10.164.0.179) 2026-02-08T18:28:56 - 39 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmp_zkbe4g6
+(<lambda> pid=2096, ip=10.164.0.179) 2026-02-08T18:28:56 - 39 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T18:28:22 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.89GB/8.89GB rate:121,188,874.2B/s remaining:00:00 elapsed:01:04 postfix:- [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T18:28:22 - 27 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 [repeated 62x across cluster]
+(<lambda> pid=2096, ip=10.164.0.203) 2026-02-08T18:28:56 - 36 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpkanspgvq
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T18:28:56 - 11 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmp_qstwjtu
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:55 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2097, ip=10.164.0.165) 2026-02-08T18:28:56 - 48 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpgqlc_ska
+(<lambda> pid=2096, ip=10.164.0.199) 2026-02-08T18:28:56 - 27 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmprutghbu_
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:57 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2096, ip=10.164.0.154) 2026-02-08T18:28:57 - 49 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:57 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:59 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.00kit/39.1kit rate:32.2s/it remaining:331:40:10 elapsed:1:15:10 postfix:loss=0.821
+(<lambda> pid=2097, ip=10.164.0.162) 2026-02-08T18:29:06 - 24 - levanter.data.image - image.py:2643 - INFO :: Loading shard 2: 0152_parquet
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:56 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:944 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:56 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 via temp path /tmp/tmpf2bbgbo1 [repeated 59x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:28:56 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer [repeated 63x across cluster]
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T18:28:57 - 11 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.89GB/8.89GB rate:121,836,534.6B/s remaining:00:00 elapsed:01:39 postfix:- [repeated 64x across cluster]
+(<lambda> pid=2096, ip=10.164.0.219) 2026-02-08T18:28:56 - 9 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 [repeated 63x across cluster]
+(<lambda> pid=2098, ip=10.164.0.202) 2026-02-08T18:28:57 - 11 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/hf/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/step-2000 [repeated 63x across cluster]
+(<lambda> pid=2096, ip=10.164.0.154) 2026-02-08T18:28:59 - 49 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.00kit/39.1kit rate:32.2s/it remaining:331:40:07 elapsed:1:15:10 postfix:loss=0.821 [repeated 63x across cluster]
+(autoscaler +1h31m16s) Removing 31 nodes of type tpu_slice_v5e_128 (idle).
+(autoscaler +1h31m16s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=2097, ip=10.164.0.162) 2026-02-08T18:29:36 - 24 - levanter.data.image - image.py:2647 - INFO :: Loaded shard 2 (4983 rows) in 30.02s
+(<lambda> pid=2097, ip=10.164.0.162) 2026-02-08T18:29:36 - 24 - levanter.data.image - image.py:2617 - INFO :: Loading shard 3: 0216_parquet
+(<lambda> pid=2092, ip=10.164.0.188) 2026-02-08T18:29:59 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.04kit/39.1kit rate:1.6s/it remaining:16:20:27 elapsed:1:16:10 postfix:loss=0.814
+(<lambda> pid=2097, ip=10.164.0.162) 2026-02-08T18:30:04 - 24 - levanter.data.image - image.py:2622 - INFO :: Loaded shard 3 (4998 rows) in 27.75s
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:30:05 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-2000 for step 2000
+(<lambda> pid=2098, ip=10.164.0.176) 2026-02-08T18:29:59 - 40 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.04kit/39.1kit rate:1.6s/it remaining:16:20:27 elapsed:1:16:10 postfix:loss=0.814 [repeated 63x across cluster]
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:30:05 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704 after saving new checkpoint.
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:30:05 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:30:05 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704
+(<lambda> pid=2097, ip=10.164.0.194) 2026-02-08T18:30:06 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-1704 in 0.23 seconds
+(raylet) The node with node id: 154206631b45ca47a08b417444dd037dd77d91e4ac2248948323f3aa and address: 10.164.0.113 and node name: 10.164.0.113 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a        (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(<lambda> pid=2095, ip=10.164.0.183) 2026-02-08T18:30:59 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.08kit/39.1kit rate:1.6s/it remaining:16:49:04 elapsed:1:17:10 postfix:loss=0.855
+(<lambda> pid=2096, ip=10.164.0.164) 2026-02-08T18:30:59 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.08kit/39.1kit rate:1.6s/it remaining:16:49:04 elapsed:1:17:10 postfix:loss=0.855
+(autoscaler +1h33m33s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h33m33s) Resized to 15960 CPUs, 532 TPUs.
+(<lambda> pid=2092, ip=10.164.0.188) 2026-02-08T18:32:00 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.11kit/39.1kit rate:1.6s/it remaining:16:12:48 elapsed:1:18:11 postfix:loss=0.792 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.211) 2026-02-08T18:32:07 - 21 - levanter.data.image - image.py:2739 - ERROR :: Prefetch hit data error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nwhat texts are in the picture?<|im_end|><|im_start|>assistant \nGross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999<|im_end|>', messages=[{"content": [{"text": "<image>\nwhat texts are in the picture?", "type": "text"}], "role": "user"}, {"content": [{"text": "Gross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999", "type": "text"}], "role": "assistant"}]
+(<lambda> pid=2095, ip=10.164.0.216) 2026-02-08T18:32:00 - 41 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.11kit/39.1kit rate:1.6s/it remaining:16:12:48 elapsed:1:18:11 postfix:loss=0.792 [repeated 63x across cluster]
+(<lambda> pid=2095, ip=10.164.0.211) 2026-02-08T18:32:46 - 21 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
+(<lambda> pid=2095, ip=10.164.0.211) wandb: 
+(<lambda> pid=2095, ip=10.164.0.211) wandb: Run history:
+(<lambda> pid=2095, ip=10.164.0.211) wandb:                                                                   global_step ▁▁▁▁▁▂▂▂▂▂▂▂▂▃▃▃▃▃▃▄▄▄▄▄▄▅▅▅▅▆▆▆▆▆▆▆▇▇██
+(<lambda> pid=2095, ip=10.164.0.211) wandb:                   grad/norm/language_model.embeddings.token_embeddings.weight █▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+(<lambda> pid=2095, ip=10.164.0.211) wandb:          grad/norm/language_model.transformer.layers.0.input_layernorm.weight █▃▁▁▂▃▃▃▅▂▂▃▁▃▁▂▂▃▂▃▂▃▂▂▂▃▄▂▅▂▃▂▃▂▁▂▂▄▂▂
+(<lambda> pid=2095, ip=10.164.0.211) wandb:            grad/norm/language_model.transformer.layers.0.mlp.down_proj.weight ██▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+(<lambda> pid=2095, ip=10.164.0.211) wandb:            grad/norm/language_model.transformer.layers.0.mlp.gate_proj.weight █▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▂▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+(<lambda> pid=2095, ip=10.164.0.211) wandb:              grad/norm/language_model.transformer.layers.0.mlp.up_proj.weight ██▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▃▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+(<lambda> pid=2095, ip=10.164.0.211) wandb: grad/norm/language_model.transformer.layers.0.post_attention_layernorm.weight █▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+(<lambda> pid=2095, ip=10.164.0.211) wandb:         grad/norm/language_model.transformer.layers.0.self_attn.k_norm.weight █▅▂▂▄▃▄▃▃▂▂▃▁▂▂▂▂▃▃▁▃▂▂▁▁▆▃▅▃▄▂▄▃▁▁▂▆▂▂▁
+(<lambda> pid=2095, ip=10.164.0.211) wandb:         grad/norm/language_model.transformer.layers.0.self_attn.k_proj.weight █▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+(<lambda> pid=2095, ip=10.164.0.211) wandb:         grad/norm/language_model.transformer.layers.0.self_attn.o_proj.weight ▁▁▂▄▂▂▁▁▂▂▃▄▄█▃▄▂▃▂▂▂▁▂▁▃▃▂▂▃▃▄▂▂▂▂▂▃▁▄▁
+(<lambda> pid=2095, ip=10.164.0.211) wandb:                                                                        +1,680 ...
+(<lambda> pid=2095, ip=10.164.0.211) wandb: 
+(<lambda> pid=2095, ip=10.164.0.211) wandb: Run summary:
+(<lambda> pid=2095, ip=10.164.0.211) wandb:                                                                       backend tpu
+(<lambda> pid=2095, ip=10.164.0.211) wandb:                                                                   global_step 2143
+(<lambda> pid=2095, ip=10.164.0.211) wandb:                   grad/norm/language_model.embeddings.token_embeddings.weight 0.36133
+(<lambda> pid=2095, ip=10.164.0.211) wandb:          grad/norm/language_model.transformer.layers.0.input_layernorm.weight 0.04126
+(<lambda> pid=2095, ip=10.164.0.211) wandb:            grad/norm/language_model.transformer.layers.0.mlp.down_proj.weight 0.03735
+(<lambda> pid=2095, ip=10.164.0.211) wandb:            grad/norm/language_model.transformer.layers.0.mlp.gate_proj.weight 0.01648
+(<lambda> pid=2095, ip=10.164.0.211) wandb:              grad/norm/language_model.transformer.layers.0.mlp.up_proj.weight 0.01904
+(<lambda> pid=2095, ip=10.164.0.211) wandb: grad/norm/language_model.transformer.layers.0.post_attention_layernorm.weight 0.00386
+(<lambda> pid=2095, ip=10.164.0.211) wandb:         grad/norm/language_model.transformer.layers.0.self_attn.k_norm.weight 0.00055
+(<lambda> pid=2095, ip=10.164.0.211) wandb:         grad/norm/language_model.transformer.layers.0.self_attn.k_proj.weight 0.02014
+(<lambda> pid=2095, ip=10.164.0.211) wandb:                                                                        +1,687 ...
+(<lambda> pid=2095, ip=10.164.0.211) wandb: 
+(<lambda> pid=2095, ip=10.164.0.211) wandb: You can sync this run to the cloud by running:
+(<lambda> pid=2095, ip=10.164.0.211) wandb: wandb sync /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/wandb/offline-run-20260208_171344-vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553
+(<lambda> pid=2095, ip=10.164.0.211) wandb: Find logs at: ./wandb/offline-run-20260208_171344-vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/logs
+(run_on_pod_ray pid=6270, ip=10.164.15.237) Task error ray::<lambda>() (pid=2095, ip=10.164.0.211)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise ValueError(
+(run_on_pod_ray pid=6270, ip=10.164.15.237) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nwhat texts are in the picture?<|im_end|><|im_start|>assistant \nGross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999<|im_end|>', messages=[{"content": [{"text": "<image>\nwhat texts are in the picture?", "type": "text"}], "role": "user"}, {"content": [{"text": "Gross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999", "type": "text"}], "role": "assistant"}]
+(run_on_pod_ray pid=6270, ip=10.164.15.237) 
+(run_on_pod_ray pid=6270, ip=10.164.15.237) The above exception was the direct cause of the following exception:
+(run_on_pod_ray pid=6270, ip=10.164.15.237) 
+(run_on_pod_ray pid=6270, ip=10.164.15.237) ray::<lambda>() (pid=2095, ip=10.164.0.211)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     trainer.train(state, train_loader)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/trainer.py", line 538, in train
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     for info in self.training_steps(state, train_loader):
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/trainer.py", line 522, in training_steps
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     example = next(iter_data)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)               ^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/loader.py", line 258, in __next__
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch = next(self._batches)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)             ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 76, in __next__
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch.reraise()
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 172, in reraise
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise self.exc.with_traceback(self.tb.as_traceback())
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 133, in _produce_batches_async
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     async for batch in iterator:
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/loader.py", line 311, in _produce_batches
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 4643, in _do_retrieve_batch_of_batches
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     individual_datums = await self.run_and_report_slowness(
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/loader.py", line 503, in run_and_report_slowness
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     result = await task
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/mixture.py", line 264, in get_batch
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batches = await asyncio.gather(*batch_futures)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 2820, in get_batch
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     result = self.fn(*self.args, **self.kwargs)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 2783, in _get_from_cache_or_process
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise RuntimeError(
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237) RuntimeError: Prefetch thread died with error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nwhat texts are in the picture?<|im_end|><|im_start|>assistant \nGross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999<|im_end|>', messages=[{"content": [{"text": "<image>\nwhat texts are in the picture?", "type": "text"}], "role": "user"}, {"content": [{"text": "Gross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999", "type": "text"}], "role": "assistant"}]
+(run_on_pod_ray pid=6270, ip=10.164.15.237) Traceback (most recent call last):
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=6270, ip=10.164.15.237)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     return func(*args, **kwargs)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=6270, ip=10.164.15.237)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=6270, ip=10.164.15.237) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=2095, ip=10.164.0.211)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 1778, in __call__
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise ValueError(
+(run_on_pod_ray pid=6270, ip=10.164.15.237) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nwhat texts are in the picture?<|im_end|><|im_start|>assistant \nGross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999<|im_end|>', messages=[{"content": [{"text": "<image>\nwhat texts are in the picture?", "type": "text"}], "role": "user"}, {"content": [{"text": "Gross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999", "type": "text"}], "role": "assistant"}]
+(run_on_pod_ray pid=6270, ip=10.164.15.237) 
+(run_on_pod_ray pid=6270, ip=10.164.15.237) The above exception was the direct cause of the following exception:
+(run_on_pod_ray pid=6270, ip=10.164.15.237) 
+(run_on_pod_ray pid=6270, ip=10.164.15.237) ray::<lambda>() (pid=2095, ip=10.164.0.211)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     trainer.train(state, train_loader)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/trainer.py", line 538, in train
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     for info in self.training_steps(state, train_loader):
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/trainer.py", line 522, in training_steps
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     example = next(iter_data)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)               ^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/loader.py", line 258, in __next__
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch = next(self._batches)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)             ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 76, in __next__
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch.reraise()
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 172, in reraise
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise self.exc.with_traceback(self.tb.as_traceback())
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 133, in _produce_batches_async
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     async for batch in iterator:
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/loader.py", line 311, in _produce_batches
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 4643, in _do_retrieve_batch_of_batches
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     individual_datums = await self.run_and_report_slowness(
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/loader.py", line 503, in run_and_report_slowness
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     result = await task
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/mixture.py", line 264, in get_batch
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batches = await asyncio.gather(*batch_futures)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 2820, in get_batch
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     result = self.fn(*self.args, **self.kwargs)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 2783, in _get_from_cache_or_process
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise RuntimeError(
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237) RuntimeError: Prefetch thread died with error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nwhat texts are in the picture?<|im_end|><|im_start|>assistant \nGross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999<|im_end|>', messages=[{"content": [{"text": "<image>\nwhat texts are in the picture?", "type": "text"}], "role": "user"}, {"content": [{"text": "Gross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999", "type": "text"}], "role": "assistant"}]
+(<lambda> pid=2095, ip=10.164.0.211) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7fb42dcfd760>
+(<lambda> pid=2095, ip=10.164.0.211)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=2095, ip=10.164.0.211)     conn.teardown(hooks.exit_code)
+(<lambda> pid=2095, ip=10.164.0.211)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=2095, ip=10.164.0.211)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=2095, ip=10.164.0.211)     return future.result()
+(<lambda> pid=2095, ip=10.164.0.211)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=2095, ip=10.164.0.211)     return self.__get_result()
+(<lambda> pid=2095, ip=10.164.0.211)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=2095, ip=10.164.0.211)     raise self._exception
+(<lambda> pid=2095, ip=10.164.0.211)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=2095, ip=10.164.0.211)     return await fn()
+(<lambda> pid=2095, ip=10.164.0.211)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=2095, ip=10.164.0.211)     await self._client.close()
+(<lambda> pid=2095, ip=10.164.0.211)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=2095, ip=10.164.0.211)     await self._writer.wait_closed()
+(<lambda> pid=2095, ip=10.164.0.211)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=2095, ip=10.164.0.211)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=2095, ip=10.164.0.211) BrokenPipeError: [Errno 32] Broken pipe
+(SliceActor pid=3500, ip=10.164.0.218) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2095, ip=10.164.0.211)
+(SliceActor pid=3500, ip=10.164.0.218) 
+(SliceActor pid=3500, ip=10.164.0.218) 
+(SliceActor pid=3500, ip=10.164.0.218) ray::<lambda>() (pid=2095, ip=10.164.0.211)
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:47.810739    3697 slice_configuration.cc:637] tpu23:pe1:3:p1:x has unexpectedly gone down.
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:47.831073    3700 slice_configuration.cc:637] tpu23:pe1:1:p1:x has unexpectedly gone down.
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:47.871256    3699 slice_configuration.cc:637] tpu23:pe1:0:p1:y has unexpectedly gone down.
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:48.129513    3696 slice_configuration.cc:637] tpu23:pe1:2:p2:x has unexpectedly gone down.
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:48.153311    3700 slice_configuration.cc:637] tpu23:pe1:1:p2:y has unexpectedly gone down.
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:48.737366    3699 slice_configuration.cc:637] tpu23:pe1:0:p2:x has unexpectedly gone down.
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:48.780302    3697 slice_configuration.cc:637] tpu23:pe1:3:p2:y has unexpectedly gone down.
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:48.826262    3696 slice_configuration.cc:637] tpu23:pe1:2:p1:y has unexpectedly gone down.
+(<lambda> pid=2095, ip=10.164.0.211) E0208 18:32:48.960404    3274 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=2095, ip=10.164.0.211) F0208 18:32:48.960439    3274 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=2095, ip=10.164.0.211) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=2095, ip=10.164.0.211) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
+(run_on_pod_ray pid=6270, ip=10.164.15.237) Failed 1 times. Continuing to retry.
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     return func(*args, **kwargs)
+(run_on_pod_ray pid=6270, ip=10.164.15.237)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=6270, ip=10.164.15.237) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=2095, ip=10.164.0.211)
+(run_on_pod_ray pid=6270, ip=10.164.15.237) 
+(run_on_pod_ray pid=6270, ip=10.164.15.237) 
+(run_on_pod_ray pid=6270, ip=10.164.15.237) ray::<lambda>() (pid=2095, ip=10.164.0.211)
+(<lambda> pid=6885, ip=10.164.0.202) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(run_on_pod_ray pid=6270, ip=10.164.15.237)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 1778, in __call__ [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise ValueError( [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237) ValueError: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nwhat texts are in the picture?<|im_end|><|im_start|>assistant \nGross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999<|im_end|>', messages=[{"content": [{"text": "<image>\nwhat texts are in the picture?", "type": "text"}], "role": "user"}, {"content": [{"text": "Gross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999", "type": "text"}], "role": "assistant"}] [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237) The above exception was the direct cause of the following exception: [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     trainer.train(state, train_loader) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/trainer.py", line 538, in train [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     for info in self.training_steps(state, train_loader): [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/trainer.py", line 522, in training_steps [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     example = next(iter_data) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)               ^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 76, in __next__ [repeated 4x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch = next(self._batches) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)             ^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch.reraise() [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 172, in reraise [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise self.exc.with_traceback(self.tb.as_traceback()) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/utils/background_iterable.py", line 133, in _produce_batches_async [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     async for batch in iterator: [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     ^^^^^^^^^^^^^^^^^ [repeated 16x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/loader.py", line 311, in _produce_batches [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 4643, in _do_retrieve_batch_of_batches [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     individual_datums = await self.run_and_report_slowness( [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/loader.py", line 503, in run_and_report_slowness [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     result = await task [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 2820, in get_batch [repeated 4x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     batches = await asyncio.gather(*batch_futures) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run [repeated 3x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     result = self.fn(*self.args, **self.kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/lib/levanter/src/levanter/data/image.py", line 2783, in _get_from_cache_or_process [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)     raise RuntimeError( [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237) RuntimeError: Prefetch thread died with error: Data inconsistency: apply_chat_template produced 1 <image> placeholder(s) but images list is empty! This suggests messages have image references in a format our pre-check missed. batch_item_idx=25, template_text='<|im_start|>user \n<image>\nwhat texts are in the picture?<|im_end|><|im_start|>assistant \nGross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999<|im_end|>', messages=[{"content": [{"text": "<image>\nwhat texts are in the picture?", "type": "text"}], "role": "user"}, {"content": [{"text": "Gross domestic spending on R&D 2.2 France 2.0 1.8 1.6 1.4 1.2 Ireland 1.0 0.8 0.6 Greece 0.4 1991 1992 1993 1994 1995 1996 1997 1998 1999", "type": "text"}], "role": "assistant"}] [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237) Traceback (most recent call last): [repeated 2x across cluster]
+(run_on_pod_ray pid=6270, ip=10.164.15.237)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
+(<lambda> pid=6879, ip=10.164.0.215) 2026-02-08T18:33:11 - 46 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=6885, ip=10.164.0.160) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 63x across cluster]
+(<lambda> pid=6888, ip=10.164.0.217) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553.
+(<lambda> pid=7003, ip=10.164.0.194) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=6879, ip=10.164.0.215) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=6879, ip=10.164.0.215) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=6879, ip=10.164.0.215) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f95a82160e4ded1e/wandb/offline-run-20260208_183311-vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553
+(<lambda> pid=7003, ip=10.164.0.194) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=7003, ip=10.164.0.194) wandb: setting up run vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553
+(<lambda> pid=7003, ip=10.164.0.194) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=7003, ip=10.164.0.194) wandb: Resuming run vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553
+(<lambda> pid=7003, ip=10.164.0.194) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
+(<lambda> pid=7003, ip=10.164.0.194) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553
+(<lambda> pid=6893, ip=10.164.0.166) 2026-02-08T18:33:13 - 38 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553
+(<lambda> pid=7003, ip=10.164.0.194) 2026-02-08T18:33:13 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
+(<lambda> pid=7003, ip=10.164.0.194) 2026-02-08T18:33:13 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553 vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553
+(<lambda> pid=6863, ip=10.164.0.159) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=7003, ip=10.164.0.194) 2026-02-08T18:33:16 - 0 - levanter.tracker.wandb - wandb.py:207 - INFO :: Resuming wandb run. Attempting to mitigate issues.
+(<lambda> pid=7003, ip=10.164.0.194) 2026-02-08T18:33:16 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553 vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553
+(<lambda> pid=6996, ip=10.164.0.167) 2026-02-08T18:33:16 - 8 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=7003, ip=10.164.0.194) 2026-02-08T18:33:16 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 127x across cluster]
+(<lambda> pid=6939, ip=10.164.0.156) 2026-02-08T18:33:16 - 44 - levanter.checkpoint - checkpoint.py:602 - INFO :: Discovered latest checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints at gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553/checkpoints/step-2000
+(<lambda> pid=6901, ip=10.164.0.173) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-stage3_4b_4096-correct-0-bb5553. [repeated 62x across cluster]
