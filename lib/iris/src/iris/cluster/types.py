@@ -495,29 +495,6 @@ except Exception:
 """
 
 
-def _build_uv_sync_flags(extras: Sequence[str] | None) -> str:
-    """Build uv sync flags from extras list.
-
-    Accepts 'extra' or 'package:extra' syntax. The package prefix is stripped
-    since --all-packages syncs every workspace member and --extra applies
-    to whichever package defines that extra name.
-    """
-    sync_parts = ["--all-packages", "--no-group", "dev"]
-    for e in extras or []:
-        if ":" in e:
-            _package, extra = e.split(":", 1)
-            sync_parts.append(f"--extra {extra}")
-        else:
-            sync_parts.append(f"--extra {e}")
-    return " ".join(sync_parts)
-
-
-def _build_pip_install_args(pip_packages: Sequence[str] | None) -> str:
-    """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
-    packages = ["cloudpickle", *list(pip_packages or [])]
-    return " ".join(f'"{pkg}"' for pkg in packages)
-
-
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -545,11 +522,6 @@ class EnvironmentSpec:
         }
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
-
-        uv_sync_flags = _build_uv_sync_flags(self.extras)
-        if uv_sync_flags:
-            merged_env_vars["IRIS_UV_SYNC_FLAGS"] = uv_sync_flags
-        merged_env_vars["IRIS_PIP_INSTALL"] = _build_pip_install_args(self.pip_packages)
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
