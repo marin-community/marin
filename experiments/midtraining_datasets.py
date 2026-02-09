@@ -119,7 +119,6 @@ megamath_real_only = lm_mixture_data_config(
         "megamath/web": megamath_token_counts["megamath/web"],
         "megamath/web_pro": megamath_token_counts["megamath/web_pro"],
     },
-    permutation_type="feistel",
 )
 
 

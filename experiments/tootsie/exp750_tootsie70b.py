@@ -23,14 +23,17 @@ instead of WSD-S.
 Mix is still DCLM+Math+Code
 """
 
+# NOTE: This historical file originally used linear permutation through Marin's old mixture helpers.
+# Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
+
 import dataclasses
 
 from levanter.schedule import ScheduleStep
 
 from experiments.defaults import default_train
 from experiments.llama import llama_70b
+from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3_old
 from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
@@ -91,7 +94,7 @@ llama_70b_tootsie_bs1536 = dataclasses.replace(
 llama_real_70b_tootsie = dataclasses.replace(
     default_train(
         name="llama-real-70b-tootsie",
-        tokenized=dclm_mixture_config_llama3_old,
+        tokenized=dclm_mixture_config_llama3,
         model_config=llama_70b,
         train_config=llama_70b_train_config_mk6,
         tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],

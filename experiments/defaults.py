@@ -545,7 +545,6 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
-            permutation_type="feistel",
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
