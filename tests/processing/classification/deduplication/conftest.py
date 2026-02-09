@@ -15,21 +15,7 @@
 from pathlib import Path
 
 import pytest
-from fray.v2.local_backend import LocalClient
-from zephyr import ZephyrContext
-from zephyr.execution import default_zephyr_context
 from zephyr.readers import load_jsonl
-
-
-@pytest.fixture(scope="module")
-def sync_backend():
-    """Sets up a local ZephyrContext as the default for tests."""
-    client = LocalClient()
-    ctx = ZephyrContext(client=client, name="test-dedup")
-    with default_zephyr_context(ctx):
-        yield
-    ctx.shutdown()
-    client.shutdown()
 
 
 @pytest.fixture(scope="module")

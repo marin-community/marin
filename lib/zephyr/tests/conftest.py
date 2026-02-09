@@ -18,7 +18,6 @@ import logging
 import os
 import sys
 import threading
-import uuid
 import time
 import traceback
 import warnings
@@ -131,7 +130,7 @@ def zephyr_ctx(fray_client, tmp_path_factory):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
-        name=f"test-{uuid.uuid4().hex[:8]}",
+        name="test-ctx",
     ) as ctx:
         yield ctx
 

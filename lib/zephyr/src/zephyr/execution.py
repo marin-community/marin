@@ -888,7 +888,7 @@ class ZephyrContext:
     num_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
     chunk_storage_prefix: str | None = None
-    name: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    name: str = ""
 
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
@@ -916,6 +916,9 @@ class ZephyrContext:
                 self.chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
             else:
                 self.chunk_storage_prefix = "/tmp/zephyr"
+
+        # make sure each context is unique
+        self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
 
     def put(self, name: str, obj: Any) -> None:
         """Register shared data to broadcast to all workers.

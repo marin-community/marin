@@ -18,7 +18,7 @@ from marin.processing.classification.deduplication.connected_components import C
 from zephyr import Dataset, ZephyrContext
 
 
-def test_connected_components_happy_path(sync_backend, tmp_path):
+def test_connected_components_happy_path(tmp_path):
     input_data: list[CCInput] = [
         {"bucket": "bucket_1", "id": "doc_1"},
         {"bucket": "bucket_1", "id": "doc_2"},
