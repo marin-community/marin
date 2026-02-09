@@ -253,7 +253,7 @@ def test_beam_search_returns_candidates(params, model_cfg, tokenizer):
 
 
 def test_beam_search_sorted_by_score(params, model_cfg, tokenizer):
-    """Results should be sorted by score (highest first)."""
+    """Results should be sorted: edited candidates first, then by score."""
     results = beam_search(
         params=params,
         initial_programs=["x = 1 + 2\n", "y = 3\n"],
@@ -264,8 +264,8 @@ def test_beam_search_sorted_by_score(params, model_cfg, tokenizer):
         expansions_per_beam=2,
         max_depth=2,
     )
-    scores = [c.score for c in results]
-    assert scores == sorted(scores, reverse=True)
+    keys = [(c.depth > 0, c.score) for c in results]
+    assert keys == sorted(keys, reverse=True)
 
 
 def test_beam_search_respects_beam_size(params, model_cfg, tokenizer):
@@ -337,7 +337,7 @@ def test_best_of_n_returns_candidates(params, model_cfg, tokenizer):
 
 
 def test_best_of_n_sorted_by_score(params, model_cfg, tokenizer):
-    """Results should be sorted best-first."""
+    """Results should be sorted: edited candidates first, then by score."""
     results = best_of_n(
         params=params,
         source="x = 1 + 2\n",
@@ -347,8 +347,8 @@ def test_best_of_n_sorted_by_score(params, model_cfg, tokenizer):
         n=4,
         max_depth=2,
     )
-    scores = [c.score for c in results]
-    assert scores == sorted(scores, reverse=True)
+    keys = [(c.depth > 0, c.score) for c in results]
+    assert keys == sorted(keys, reverse=True)
 
 
 def test_best_of_n_no_duplicate_sources(params, model_cfg, tokenizer):

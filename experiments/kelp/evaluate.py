@@ -238,16 +238,25 @@ def evaluate_task(
             if c.source.strip() == clean.strip():
                 total_exact_match += 1
 
-        # Test the best candidate (by model score).
+        # Test all candidates and pick the one that passes the most tests.
+        # This is execution-guided reranking: the model generates diverse
+        # candidates and we select by functional correctness.
         if candidates:
-            best = candidates[0]
-            tests_passed = sum(1 for call, exp in tests if run_test(best.source, call, exp))
-            pass_rate = tests_passed / len(tests) if tests else 0.0
-            total_test_pass_rate += pass_rate
+            best_trial_pass_rate = 0.0
+            best_trial_candidate = candidates[0].source
+            for c in candidates:
+                c_passed = sum(1 for call, exp in tests if run_test(c.source, call, exp))
+                c_rate = c_passed / len(tests) if tests else 0.0
+                if c_rate > best_trial_pass_rate or (
+                    c_rate == best_trial_pass_rate and c.score > candidates[0].score
+                ):
+                    best_trial_pass_rate = c_rate
+                    best_trial_candidate = c.source
+            total_test_pass_rate += best_trial_pass_rate
 
-            if pass_rate > best_overall_pass_rate:
-                best_overall_pass_rate = pass_rate
-                best_overall_candidate = best.source
+            if best_trial_pass_rate > best_overall_pass_rate:
+                best_overall_pass_rate = best_trial_pass_rate
+                best_overall_candidate = best_trial_candidate
 
     return {
         "name": task["name"],

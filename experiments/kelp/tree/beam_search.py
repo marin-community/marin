@@ -344,7 +344,10 @@ def beam_search(
                 seen[c.source] = c
 
         # Sort by score (highest first) and prune to beam_size.
-        beam = sorted(seen.values(), key=lambda c: c.score, reverse=True)[:beam_size]
+        # Prefer edited candidates (depth > 0) over no-ops: the initial
+        # score=0.0 is an arbitrary baseline, not a model prediction, so
+        # comparing it to model-scored edits is misleading.
+        beam = sorted(seen.values(), key=lambda c: (c.depth > 0, c.score), reverse=True)[:beam_size]
 
         if not beam:
             break
@@ -427,4 +430,7 @@ def best_of_n(
         if c.source not in seen or c.score > seen[c.source].score:
             seen[c.source] = c
 
-    return sorted(seen.values(), key=lambda c: c.score, reverse=True)
+    # Prefer edited candidates (depth > 0) over no-ops. The initial score=0.0
+    # is an arbitrary baseline — comparing it to model-scored edits causes the
+    # no-op to always win. See DIAGNOSTIC_REPORT.md Finding 2.
+    return sorted(seen.values(), key=lambda c: (c.depth > 0, c.score), reverse=True)
