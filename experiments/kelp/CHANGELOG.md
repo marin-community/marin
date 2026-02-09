@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Add execution-guided reranking to evaluation pipeline using test case feedback (#53)
 - Add MBPP-based evaluation with held-out test programs and executable test cases (#51)
 - Add diagnostic analysis of model repair outputs for failed eval tasks (#54)
 - Add corpus preparation script to scale training data from 15 to 10K+ programs (#49)
@@ -43,6 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Remove dead code: freeze_embeddings and freeze_attention config options (#8)
 
 ### Fixed
+- Fix no-op bias: prefer edited candidates over unchanged programs in beam search (#58)
+- Fix catastrophic corruption: skip root-level AST nodes during mutation (#57)
+- Fix eval contamination in the training dataset. (#56)
+- Wire execution-guided reranking into both eval scripts (#53)
 - Fix eval-time subtree bank to use training corpus instead of tiny eval-only bank (#52)
 - Fix unused tree/ module - model operates on flat tokens, not ASTs (#3)
 - Fix fsspec filesystem detection that breaks for local paths (#7)
