@@ -548,7 +548,7 @@ class ScalingGroup:
         self._consecutive_failures = 0
         self._backoff_until = None
 
-    def slice_state_counts(self) -> dict[str, int]:
+    def slice_state_counts(self) -> dict[SliceLifecycleState, int]:
         """Count VM groups by their dominant lifecycle state.
 
         Each VM group is categorized as:
@@ -558,7 +558,7 @@ class ScalingGroup:
         - "booting": at least one VM is booting (but none failed or initializing)
         - "requesting": scale-up in progress (tracked separately from VM state)
 
-        Returns dict with keys matching SliceLifecycleState enum values (strings).
+        Returns dict with SliceLifecycleState enum keys.
         """
         counts = {state: 0 for state in SliceLifecycleState}
         with self._slices_lock:
