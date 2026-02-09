@@ -58,6 +58,7 @@
 
 - Keep MkDocs content in sync with code. Docs live in `docs/` or in the subproject's `docs/` directory; use Markdown and mkdocs-style links when referencing symbols.
 - Public-facing modules and APIs need concise Google-style docstrings; align terminology across code and docs.
+- Write docs for readers who do not have conversational context: include enough problem framing, assumptions, commands, and results that the document stands on its own.
 
 ### Deprecation
 
