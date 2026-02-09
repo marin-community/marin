@@ -21,6 +21,7 @@ import pytest
 
 from experiments.kelp.tree.mutation import (
     Mutation,
+    _find_candidates,
     _linecol_to_offset,
     _node_source_span,
     corrupt_program,
@@ -228,3 +229,42 @@ def test_corrupt_many_programs_all_valid(bank):
                 f"--- original ---\n{source}\n"
                 f"--- corrupted ---\n{corrupted}"
             )
+
+
+def test_find_candidates_skips_root_functiondef(bank):
+    """Root-level FunctionDef nodes should never be mutation candidates.
+
+    Replacing the root FunctionDef swaps the entire program for another,
+    turning repair into synthesis. See DIAGNOSTIC_REPORT.md Finding 1.
+    """
+    source = "def add(a, b):\n    return a + b\n"
+    tree = ast.parse(source)
+
+    candidates = _find_candidates(source, tree, max_edit_stmts=3, bank=bank)
+    candidate_types = [c.node_type for c in candidates]
+
+    # The root FunctionDef must not appear, but inner nodes should.
+    assert "FunctionDef" not in candidate_types
+    # Return and BinOp are inside the function body — they should be eligible.
+    assert any(t in candidate_types for t in ("Return", "BinOp"))
+
+
+def test_corruption_preserves_function_signature(bank):
+    """After corruption, the top-level function name and args should survive."""
+    source = CORPUS[0]  # fibonacci
+    rng = random.Random(42)
+
+    for seed in range(20):
+        corrupted, mutations = corrupt_program(
+            source, num_steps=3, bank=bank, rng=random.Random(seed)
+        )
+        if not mutations:
+            continue
+        # The corrupted program should still define 'fibonacci'.
+        tree = ast.parse(corrupted)
+        top_funcs = [
+            node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+        ]
+        assert "fibonacci" in top_funcs, (
+            f"Corruption replaced the root FunctionDef (seed={seed}):\n{corrupted}"
+        )
