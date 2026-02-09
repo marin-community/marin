@@ -39,8 +39,14 @@ class SliceLifecycleState(StrEnum):
     These states represent the dominant state of a slice based on its constituent VMs.
     String values are lowercase names for use as dictionary keys and proto map keys.
 
-    The enum members also store the corresponding VmState proto values for reference,
-    though StrEnum makes the string values the primary interface.
+    States:
+    - REQUESTING: Scale-up operation in progress (tracked at ScalingGroup level)
+    - BOOTING: At least one VM is booting (VM_STATE_BOOTING)
+    - INITIALIZING: At least one VM is initializing (VM_STATE_INITIALIZING)
+    - READY: All VMs are ready (VM_STATE_READY)
+    - FAILED: At least one VM has failed (VM_STATE_FAILED or VM_STATE_PREEMPTED)
+
+    Note: These are slice-level aggregate states, not direct VM states.
     """
 
     REQUESTING = "requesting"
@@ -48,21 +54,6 @@ class SliceLifecycleState(StrEnum):
     INITIALIZING = "initializing"
     READY = "ready"
     FAILED = "failed"
-
-    @property
-    def proto_value(self) -> int:
-        """Get the corresponding VmState proto enum value."""
-        return _PROTO_VALUE_MAP[self]
-
-
-# Mapping from SliceLifecycleState to VmState proto values
-_PROTO_VALUE_MAP = {
-    SliceLifecycleState.REQUESTING: vm_pb2.VM_STATE_REQUESTING,
-    SliceLifecycleState.BOOTING: vm_pb2.VM_STATE_BOOTING,
-    SliceLifecycleState.INITIALIZING: vm_pb2.VM_STATE_INITIALIZING,
-    SliceLifecycleState.READY: vm_pb2.VM_STATE_READY,
-    SliceLifecycleState.FAILED: vm_pb2.VM_STATE_FAILED,
-}
 
 
 class GroupAvailability(Enum):

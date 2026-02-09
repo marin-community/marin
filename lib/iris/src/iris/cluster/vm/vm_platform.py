@@ -168,23 +168,33 @@ def slice_is_terminal(slice_info: vm_pb2.SliceInfo) -> bool:
 def compute_slice_state_counts(slices: Iterable[vm_pb2.SliceInfo]) -> dict[str, int]:
     """Compute slice state counts from a list of SliceInfo protos.
 
-    Note: REQUESTING state is not populated here because it's tracked separately
-    via ScalingGroup._requesting_until rather than being stored in SliceInfo protos.
+    Categorizes slices by their dominant lifecycle state:
+    - "failed": any VM failed or preempted
+    - "ready": all VMs ready
+    - "initializing": at least one VM initializing (none failed)
+    - "booting": at least one VM booting (none failed/initializing)
+    - "requesting": always 0 (tracked separately by ScalingGroup._requesting_until)
 
-    Returns dict with keys matching SliceLifecycleState enum values (strings).
+    Returns:
+        Dict with string keys matching SliceLifecycleState enum values.
+        Keys: "requesting", "booting", "initializing", "ready", "failed"
     """
-    from iris.cluster.vm.scaling_group import SliceLifecycleState
-
-    counts = {state: 0 for state in SliceLifecycleState}
+    counts = {
+        "requesting": 0,
+        "booting": 0,
+        "initializing": 0,
+        "ready": 0,
+        "failed": 0,
+    }
     for s in slices:
         if slice_any_failed(s):
-            counts[SliceLifecycleState.FAILED] += 1
+            counts["failed"] += 1
         elif slice_all_ready(s):
-            counts[SliceLifecycleState.READY] += 1
+            counts["ready"] += 1
         elif any(vm.state == vm_pb2.VM_STATE_INITIALIZING for vm in s.vms):
-            counts[SliceLifecycleState.INITIALIZING] += 1
+            counts["initializing"] += 1
         else:
-            counts[SliceLifecycleState.BOOTING] += 1
+            counts["booting"] += 1
     return counts
 
 
