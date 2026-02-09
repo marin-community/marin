@@ -522,6 +522,7 @@ def _split_into_trainval_sets(
     When shuffle is False, the split is positional: the last
     num_validation_sequences go to validation and the rest to training.
     """
+    logger.info(f"Splitting dataset into train/val sets. Shuffle before split: {shuffle}")
     length = len(dataset.as_sync_dataset())
     if shuffle:
         split_key = jax.random.PRNGKey(0)
