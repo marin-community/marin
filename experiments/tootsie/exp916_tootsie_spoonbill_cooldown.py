@@ -22,6 +22,9 @@ We are also only lowering the LR to 2.75e-5 instead of 1.7e-5. After around
 that point the loss started to increase again. I still don't know why.
 """
 
+# NOTE: This historical file originally used linear permutation through Marin's old mixture helpers.
+# Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
+
 import dataclasses
 
 from levanter.callbacks.watch import WatchConfig
@@ -91,7 +94,6 @@ spoonbill_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, spoonbill_weights),
     ],
-    permutation_type="linear",
 )
 
 

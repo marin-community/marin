@@ -18,6 +18,9 @@ https://github.com/marin-community/marin/issues/1529
 Cooldown run for 32B Tootsie Model using the same data mixture as in Starling for 8B
 """
 
+# NOTE: This historical file originally used linear permutation through Marin's old mixture helpers.
+# Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
+
 import dataclasses
 
 from levanter.optim import AdamConfig
@@ -90,7 +93,6 @@ bison_cooldown_mixture = lm_varying_mixture_data_config(
         (0, NEMOTRON_PT_MIX_WEIGHTS),  # Phase 1 and 2 used the same data mixture and just changed the model arch
         (PHASE_3_START, bison_cooldown_weights),
     ],
-    permutation_type="linear",
 )
 
 DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END
