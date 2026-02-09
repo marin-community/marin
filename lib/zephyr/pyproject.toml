@@ -30,6 +30,7 @@ zephyr = "zephyr.cli:main"
 test = [
     "pytest>=8.3.2",
     "pytest-timeout",
+    "pytest-xdist",
     "psutil>=5.9.0",
 ]
 
