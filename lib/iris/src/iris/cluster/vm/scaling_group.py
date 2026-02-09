@@ -202,9 +202,20 @@ class ScalingGroup:
 
         Called once at startup to recover state from a previous controller.
         """
+        now = Timestamp.now()
         with self._slices_lock:
             for vm_group in self._vm_manager.discover_vm_groups():
-                self._slices[vm_group.group_id] = SliceState(vm_group=vm_group)
+                # Set liveness deadline based on VM group creation time + startup grace
+                # This ensures reconciled slices are subject to the same liveness guarantees
+                created_at = Timestamp.from_ms(vm_group.created_at_ms)
+                liveness_deadline = Deadline.after(created_at, self._startup_grace)
+                # If the deadline has already expired, give it one more heartbeat grace period
+                if liveness_deadline.expired(now=now):
+                    liveness_deadline = Deadline.after(now, self._heartbeat_grace)
+                self._slices[vm_group.group_id] = SliceState(
+                    vm_group=vm_group,
+                    liveness_deadline=liveness_deadline,
+                )
 
     def scale_up(self, tags: dict[str, str] | None = None, timestamp: Timestamp | None = None) -> VmGroupProtocol:
         """Create a new VM group.
@@ -529,14 +540,20 @@ class ScalingGroup:
         """Count VM groups by their dominant lifecycle state.
 
         Each VM group is categorized as:
+        - "requesting": scale-up in progress (no VM group created yet)
         - "failed": any VM in the group has failed
         - "ready": all VMs in the group are ready
         - "initializing": at least one VM is initializing (but none failed)
         - "booting": at least one VM is booting (but none failed or initializing)
 
-        Returns dict with keys: "booting", "initializing", "ready", "failed"
+        Returns dict with keys: "requesting", "booting", "initializing", "ready", "failed"
         """
-        counts = {"booting": 0, "initializing": 0, "ready": 0, "failed": 0}
+        counts = {"requesting": 0, "booting": 0, "initializing": 0, "ready": 0, "failed": 0}
+
+        # Add requesting state if we're in the middle of a scale-up
+        if self._requesting_until is not None and not self._requesting_until.expired():
+            counts["requesting"] = 1
+
         with self._slices_lock:
             snapshot = [s.vm_group for s in self._slices.values()]
         for g in snapshot:
@@ -679,8 +696,6 @@ class ScalingGroup:
             snapshot = [s.vm_group for s in self._slices.values()]
         backoff_ts = self._backoff_until.as_timestamp() if self._backoff_until else Timestamp.from_ms(0)
         counts = self.slice_state_counts()
-        if self._requesting_until is not None:
-            counts["requesting"] = counts.get("requesting", 0) + 1
         status = vm_pb2.ScaleGroupStatus(
             name=self.name,
             config=self._config,
