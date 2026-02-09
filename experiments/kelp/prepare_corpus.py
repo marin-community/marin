@@ -287,6 +287,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-github", type=int, default=5000, help="Max functions to stream from github-code")
     parser.add_argument("--no-github", action="store_true", help="Skip github-code streaming (offline mode)")
     parser.add_argument("--no-hf", action="store_true", help="Skip all HuggingFace datasets (fully offline)")
+    parser.add_argument(
+        "--holdout-mbpp",
+        action="store_true",
+        help="Exclude all MBPP programs from training corpus (use as held-out eval set)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for shuffling")
     return parser.parse_args()
 
@@ -310,9 +315,12 @@ def main():
         all_programs.extend(local_funcs)
 
     if not args.no_hf:
-        # Source 2: MBPP.
-        mbpp = load_mbpp_programs()
-        all_programs.extend(mbpp)
+        # Source 2: MBPP (skip if held out for eval).
+        if not args.holdout_mbpp:
+            mbpp = load_mbpp_programs()
+            all_programs.extend(mbpp)
+        else:
+            logger.info("  MBPP: held out for evaluation (--holdout-mbpp)")
 
         # Source 3: HumanEval.
         humaneval = load_humaneval_programs()
