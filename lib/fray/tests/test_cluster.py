@@ -115,6 +115,7 @@ def test_environment_integration(cluster, tmp_path):
         env_vars["TEST_INTEGRATION_VAR"] == "test_value_123"
     ), f"TEST_INTEGRATION_VAR should be set to 'test_value_123': found {env_vars['TEST_INTEGRATION_VAR']}"
     assert "FRAY_CLUSTER_SPEC" in env_vars, f"FRAY_CLUSTER_SPEC should be set by the cluster: found {env_vars.keys()}"
+    assert env_vars["JAX_PLATFORMS"] == "cpu"
 
 
 @pytest.mark.slow
