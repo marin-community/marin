@@ -81,25 +81,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+CORPUS_SEPARATOR = "# ---"
+
+
 def load_corpus(path: str) -> list[str]:
     """Load a corpus from a file.
 
-    Programs are separated by blank lines. Each program is a contiguous
-    block of non-empty lines.
+    Programs are separated by lines containing only '# ---'.
+    This allows programs to contain internal blank lines.
     """
     programs = []
-    current: list[str] = []
+    current_lines: list[str] = []
 
     with open(path) as f:
         for line in f:
-            if line.strip() == "" and current:
-                programs.append("\n".join(current) + "\n")
-                current = []
-            elif line.strip():
-                current.append(line.rstrip())
+            if line.rstrip() == CORPUS_SEPARATOR:
+                if current_lines:
+                    programs.append("\n".join(current_lines) + "\n")
+                    current_lines = []
+            else:
+                current_lines.append(line.rstrip())
 
-    if current:
-        programs.append("\n".join(current) + "\n")
+    if current_lines:
+        # Strip leading/trailing empty lines from last program.
+        while current_lines and not current_lines[0].strip():
+            current_lines.pop(0)
+        while current_lines and not current_lines[-1].strip():
+            current_lines.pop()
+        if current_lines:
+            programs.append("\n".join(current_lines) + "\n")
 
     return programs
 
