@@ -1181,6 +1181,13 @@ class ControllerState:
             )
             self._on_task_state_changed(txn, cascade_event)
 
+        # Prune the dead worker from state so it doesn't accumulate in the
+        # controller list and confuse the dashboard. If the worker comes back,
+        # it will re-register as a fresh entry.
+        del self._workers[event.worker_id]
+        self._pending_dispatch.pop(event.worker_id, None)
+        txn.log("worker_pruned", event.worker_id)
+
     # -------------------------------------------------------------------------
     # Job Event Handlers
     # -------------------------------------------------------------------------
