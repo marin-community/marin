@@ -55,12 +55,54 @@ async def test_mixture_dataset_block_assignments():
     assert len(block_assignment) == 10
 
 
-@pytest.mark.skip
 @pytest.mark.asyncio
 async def test_mixture_dataset_stop_strategy_first():
-    mixture_ds = MixtureDataset(datasets(), weights(), 10, key=key, stop_strategy=StopStrategy.FIRST_STOP_STRATEGY)
+    mixture_ds = MixtureDataset(
+        datasets(),
+        weights(),
+        10,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.FIRST_STOP_STRATEGY,
+    )
 
-    with pytest.raises(NotImplementedError):
+    assert mixture_ds.is_finite()
+    assert await mixture_ds.async_len() == 5
+    assert await mixture_ds.get_batch([0, 1, 2, 3, 4]) == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_stop_strategy_all():
+    mixture_ds = MixtureDataset(
+        datasets(),
+        weights(),
+        10,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.ALL_STOP_STRATEGY,
+    )
+
+    assert mixture_ds.is_finite()
+    assert await mixture_ds.async_len() == 29
+    assert await mixture_ds.getitem_async(10) == 1  # wraparound of ds1
+    assert await mixture_ds.getitem_async(28) == 500
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_all_strategy_infinite_when_tail_omits_dataset():
+    staged_weights = [(0, {"ds1": 0.5, "ds2": 0.5}), (20, {"ds1": 1.0, "ds2": 0.0})]
+    dses = {"ds1": ListAsyncDataset([1, 2, 3, 4, 5]), "ds2": ListAsyncDataset([10, 20, 30, 40, 50])}
+    mixture_ds = MixtureDataset(
+        dses,
+        staged_weights,
+        10,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.ALL_STOP_STRATEGY,
+    )
+
+    assert not mixture_ds.is_finite()
+    with pytest.raises(ValueError):
         await mixture_ds.async_len()
 
 

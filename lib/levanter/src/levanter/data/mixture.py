@@ -3,7 +3,7 @@
 
 import asyncio
 import warnings
-from typing import List, Mapping, Optional, Sequence, Tuple, TypeVar
+from typing import List, Mapping, Sequence, Tuple, TypeVar
 
 import jax
 import numpy as np
@@ -40,7 +40,7 @@ class MixtureDataset(AsyncDataset[T]):
     Args:
         datasets: A dict of datasets, where the key is the name of the dataset and the value is the dataset itself
         weights: Weights for each dataset. This can be provided in a list of stages, where each stage is a tuple of (start_seq_index, weights). Note that start_seq_index corresponds to the sequence index at which the weights should change, not the training batch index.
-        stop_strategy: strategy for stopping the iteration, by default RESTART_STRATEGY. (Currently only RESTART_STRATEGY is supported)
+        stop_strategy: strategy for stopping the iteration, by default RESTART_STRATEGY.
             - FIRST_STOP_STRATEGY: stop when one dataset has been exhausted
             - ALL_STOP_STRATEGY: stop when all datasets have been exhausted
             - RESTART_STRATEGY: restart the dataset when it has been exhausted
@@ -57,7 +57,6 @@ class MixtureDataset(AsyncDataset[T]):
         key: PRNGKeyArray | int,
         stop_strategy: str = StopStrategy.RESTART_STRATEGY,
     ):
-        super().__init__()
         if isinstance(weights, dict):
             weight_stages = [(0, weights)]
         else:
@@ -103,11 +102,6 @@ class MixtureDataset(AsyncDataset[T]):
 
         if stop_strategy not in StopStrategy:  # type: ignore
             raise ValueError(f"Stop strategy {stop_strategy} is not supported.")
-
-        # for now, just support restart strategy
-        if stop_strategy != StopStrategy.RESTART_STRATEGY:
-            raise NotImplementedError("Only restart strategy is supported for now.")
-
         self.stop_strategy = stop_strategy
 
         # Initialize stage-related counts and IDs
@@ -116,6 +110,12 @@ class MixtureDataset(AsyncDataset[T]):
             self._counts_after_stage,
             self._unpermuted_ids_per_stage,
         ) = self._initialize_stage_counts()
+        self._stage_start_blocks = np.array(
+            [start // self.block_size for start, _ in self.weight_stages], dtype=np.int64
+        )
+        self._final_stage_counts = self._counts_per_block_per_stage[-1]
+        self._dataset_lengths: list[int | None] | None = None
+        self._cached_finite_length: int | None = None
 
     def _initialize_stage_counts(self):
         counts_per_block_per_stage = []
@@ -186,13 +186,32 @@ class MixtureDataset(AsyncDataset[T]):
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             raise ValueError("Length is infinite for restart strategy")
 
-        raise NotImplementedError("Length is not implemented for other strategies")
+        if not self.is_finite():
+            raise ValueError(f"Length is infinite for stop strategy {self.stop_strategy}")
+
+        if self._cached_finite_length is None:
+            self._cached_finite_length = await self._compute_finite_length()
+
+        return self._cached_finite_length
 
     def is_finite(self) -> bool:
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             return False
 
-        return True
+        has_finite_dataset_in_tail = any(
+            dataset.is_finite() and self._final_stage_counts[i] > 0 for i, dataset in enumerate(self.datasets.values())
+        )
+
+        if self.stop_strategy == StopStrategy.FIRST_STOP_STRATEGY:
+            return has_finite_dataset_in_tail
+
+        if self.stop_strategy == StopStrategy.ALL_STOP_STRATEGY:
+            return has_finite_dataset_in_tail and all(
+                dataset.is_finite() and self._final_stage_counts[i] > 0
+                for i, dataset in enumerate(self.datasets.values())
+            )
+
+        raise ValueError(f"Unknown stop strategy: {self.stop_strategy}")
 
     def _get_stage_for_block(self, block_id: int) -> int:
         block_start = block_id * self.block_size
@@ -200,7 +219,7 @@ class MixtureDataset(AsyncDataset[T]):
         return max(0, np.searchsorted(stage_starts, block_start, side="right") - 1)
 
     @alru_cache(maxsize=32)
-    async def _get_block(self, index: int) -> Optional[np.ndarray]:
+    async def _get_block(self, index: int) -> np.ndarray:
         stage = self._get_stage_for_block(index)
         if not self.randomize_blocks:
             return self._unpermuted_ids_per_stage[stage]
@@ -278,7 +297,7 @@ class MixtureDataset(AsyncDataset[T]):
         """
         Handles wrap around for datasets that have finite length
         """
-        if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
+        if self.stop_strategy in [StopStrategy.RESTART_STRATEGY, StopStrategy.ALL_STOP_STRATEGY]:
             if ds.is_finite():
                 length_of_dataset = await ds.async_len()
                 if length_of_dataset <= 0:
@@ -290,7 +309,88 @@ class MixtureDataset(AsyncDataset[T]):
 
             return indices_into_ds
 
-        raise NotImplementedError("Length is not known for other strategies")
+        if self.stop_strategy == StopStrategy.FIRST_STOP_STRATEGY:
+            return indices_into_ds
+
+        raise ValueError(f"Unknown stop strategy: {self.stop_strategy}")
+
+    async def _compute_finite_length(self) -> int:
+        lengths = await self._get_dataset_lengths()
+        exhaustion_indices: list[int] = []
+
+        for dataset_id, dataset_length in enumerate(lengths):
+            if dataset_length is None:
+                continue
+
+            exhaustion_index = await self._first_exhaustion_index_for_dataset(dataset_id, dataset_length)
+            if exhaustion_index is not None:
+                exhaustion_indices.append(exhaustion_index)
+
+        if self.stop_strategy == StopStrategy.FIRST_STOP_STRATEGY:
+            if not exhaustion_indices:
+                raise ValueError("No finite dataset can be exhausted under first_exhausted strategy")
+            return min(exhaustion_indices) + 1
+
+        if self.stop_strategy == StopStrategy.ALL_STOP_STRATEGY:
+            if len(exhaustion_indices) != len(self.datasets):
+                raise ValueError("Not all datasets can be exhausted under all_exhausted strategy")
+            return max(exhaustion_indices) + 1
+
+        raise ValueError(f"Unknown stop strategy: {self.stop_strategy}")
+
+    async def _get_dataset_lengths(self) -> list[int | None]:
+        if self._dataset_lengths is None:
+            length_futures = []
+            for dataset in self.datasets.values():
+                if dataset.is_finite():
+                    length_futures.append(dataset.async_len())
+                else:
+                    length_futures.append(future_from_value(None))
+
+            self._dataset_lengths = list(await asyncio.gather(*length_futures))
+
+        return self._dataset_lengths
+
+    async def _first_exhaustion_index_for_dataset(self, dataset_id: int, target_count: int) -> int | None:
+        """
+        Returns the first global index where this dataset has produced `target_count` samples.
+        """
+        if target_count <= 0:
+            return -1
+
+        for stage_idx in range(len(self.weight_stages)):
+            stage_start_block = int(self._stage_start_blocks[stage_idx])
+            stage_count_per_block = int(self._counts_per_block_per_stage[stage_idx][dataset_id])
+            stage_base_count = self._count_before_stage(dataset_id, stage_idx)
+
+            if target_count <= stage_base_count or stage_count_per_block == 0:
+                continue
+
+            if stage_idx < len(self.weight_stages) - 1:
+                stage_end_block = int(self._stage_start_blocks[stage_idx + 1])
+                blocks_in_stage = stage_end_block - stage_start_block
+                stage_capacity = stage_count_per_block * blocks_in_stage
+                if target_count > stage_base_count + stage_capacity:
+                    continue
+
+            blocks_into_stage = (target_count - stage_base_count - 1) // stage_count_per_block
+            block_id = stage_start_block + blocks_into_stage
+            count_before_block = stage_base_count + blocks_into_stage * stage_count_per_block
+            occurrence_in_block = target_count - count_before_block - 1
+
+            block = await self._get_block(block_id)
+            positions_for_dataset = np.nonzero((block >> 16) == dataset_id)[0]
+            if occurrence_in_block >= len(positions_for_dataset):
+                raise RuntimeError("Internal error computing exhaustion position")
+
+            return block_id * self.block_size + int(positions_for_dataset[occurrence_in_block])
+
+        return None
+
+    def _count_before_stage(self, dataset_id: int, stage_idx: int) -> int:
+        if stage_idx == 0:
+            return 0
+        return int(self._counts_after_stage[stage_idx - 1][dataset_id])
 
     def _dataset_of_id(self, id):
         return self.datasets[self.dataset_index[id]]
