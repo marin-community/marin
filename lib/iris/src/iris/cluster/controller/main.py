@@ -16,38 +16,16 @@
 
 import logging
 import signal
-import sys
 import threading
 from pathlib import Path
 
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.logging import configure_logging
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
-
-
-def configure_logging(level: int = logging.INFO) -> None:
-    """Configure structured logging for the controller.
-
-    Sets up a consistent log format with timestamps and component names
-    that makes it easy to grep and analyze logs.
-    """
-    root = logging.getLogger()
-    root.setLevel(level)
-
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setLevel(level)
-
-    formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    handler.setFormatter(formatter)
-
-    # Clear existing handlers to avoid duplicate logs
-    root.handlers.clear()
-    root.addHandler(handler)
 
 
 @click.group()
@@ -81,7 +59,8 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.vm.autoscaler import Autoscaler
-    from iris.cluster.vm.config import create_autoscaler_from_config, load_config
+    from iris.cluster.vm.config import create_autoscaler, load_config
+    from iris.cluster.vm.platform import create_platform
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -89,6 +68,7 @@ def serve(
 
     # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
+    cluster_config = None
     if config_file:
         logger.info("Loading cluster config from %s", config_file)
         try:
@@ -99,12 +79,26 @@ def serve(
             raise click.ClickException(f"Failed to load cluster config: {e}") from e
 
         # Extract bundle_prefix from config if not provided via CLI
-        if bundle_prefix is None and cluster_config.controller_vm.bundle_prefix:
-            bundle_prefix = cluster_config.controller_vm.bundle_prefix
+        if bundle_prefix is None and cluster_config.controller.bundle_prefix:
+            bundle_prefix = cluster_config.controller.bundle_prefix
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
 
         try:
-            autoscaler = create_autoscaler_from_config(cluster_config)
+            # Create platform with explicit config sections
+            platform = create_platform(
+                platform_config=cluster_config.platform,
+                bootstrap_config=cluster_config.defaults.bootstrap,
+                timeout_config=cluster_config.defaults.timeouts,
+                ssh_config=cluster_config.defaults.ssh,
+            )
+            logger.info("Platform created")
+
+            # Create autoscaler using platform
+            autoscaler = create_autoscaler(
+                platform=platform,
+                autoscaler_config=cluster_config.defaults.autoscaler,
+                scale_groups=cluster_config.scale_groups,
+            )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
             logger.exception("Failed to create autoscaler from config")
@@ -119,15 +113,23 @@ def serve(
     else:
         logger.info("No cluster config provided, autoscaler disabled")
 
+    # Use worker_timeout from cluster config if available
+    if cluster_config and cluster_config.controller.worker_timeout.milliseconds > 0:
+        effective_timeout = Duration.from_proto(cluster_config.controller.worker_timeout)
+    else:
+        effective_timeout = Duration.from_seconds(worker_timeout)
+
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
-    logger.info("Configuration: scheduler_interval=%.2fs worker_timeout=%.2fs", scheduler_interval, worker_timeout)
+    logger.info(
+        "Configuration: scheduler_interval=%.2fs worker_timeout=%.0fms", scheduler_interval, effective_timeout.to_ms()
+    )
 
     config = ControllerConfig(
         host=host,
         port=port,
         bundle_prefix=bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
-        worker_timeout_seconds=worker_timeout,
+        worker_timeout=effective_timeout,
     )
 
     try:

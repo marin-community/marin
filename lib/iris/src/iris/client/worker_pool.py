@@ -43,8 +43,8 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
-from contextvars import Context, copy_context
-from dataclasses import dataclass, replace
+from contextvars import copy_context
+from dataclasses import dataclass
 from enum import Enum, auto
 from queue import Empty, Queue
 from typing import Any, Generic, TypeVar
@@ -57,8 +57,9 @@ from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
-from iris.time_utils import ExponentialBackoff
+from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
+from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +150,8 @@ def worker_job_entrypoint(pool_id: str) -> None:
     """Job entrypoint that starts a TaskExecutor actor.
 
     This function runs inside each task of the co-scheduled worker pool job.
-    It uses IRIS_TASK_INDEX from the environment to determine which worker
-    index this task represents.
+    It uses IRIS_JOB_ID (task name) from the environment to determine which
+    worker index this task represents.
 
     Args:
         pool_id: Unique identifier for the worker pool
@@ -164,7 +165,6 @@ def worker_job_entrypoint(pool_id: str) -> None:
     worker_name = f"_workerpool_{pool_id}:worker-{task_index}"
 
     logger.info("Worker starting: pool_id=%s, task_index=%d of %d", pool_id, task_index, job_info.num_tasks)
-    logger.info("Worker name: %s, job_id=%s", worker_name, ctx.job_id)
 
     # Get the allocated port - this port is published by Docker for container access
     port = ctx.get_port("actor")
@@ -175,16 +175,12 @@ def worker_job_entrypoint(pool_id: str) -> None:
     actual_port = server.serve_background()
 
     # Register endpoint with registry
-    if ctx.registry is None:
-        raise RuntimeError("No registry available - are you running in a cluster context?")
-    address = f"{job_info.advertise_host}:{actual_port}"
-    ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
-    logger.info("ActorServer started and registered on port %d", actual_port)
+    address = f"http://{job_info.advertise_host}:{actual_port}"
+    ctx.registry.register(worker_name, address, {"job_id": ctx.job_id.to_wire()})
+    logger.info("Worker registered: %s at %s", worker_name, address)
 
-    # Serve forever
-    logger.info("Worker ready, waiting for tasks...")
-    while True:
-        time.sleep(1)
+    # Block until the server is shut down (container kill → registry shutdown → server exit)
+    server.wait()
 
 
 class WorkerDispatcher:
@@ -203,43 +199,31 @@ class WorkerDispatcher:
         task_queue: "Queue[PendingTask]",
         resolver: Resolver,
         timeout: float,
-        context: Context | None = None,
     ):
         self.state = state
         self._task_queue = task_queue
         self._resolver = resolver
         self._timeout = timeout
-        self._context = context
-        self._shutdown = threading.Event()
-        self._thread: threading.Thread | None = None
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         self._actor_client: ActorClient | None = None
+        self._stop_event: threading.Event | None = None
 
-    def start(self) -> None:
-        if self._context is not None:
-            self._thread = threading.Thread(
-                target=self._context.run,
-                args=(self._run,),
-                daemon=True,
-                name=f"dispatch-{self.state.worker_id}",
-            )
-        else:
-            self._thread = threading.Thread(
-                target=self._run,
-                daemon=True,
-                name=f"dispatch-{self.state.worker_id}",
-            )
-        self._thread.start()
+    def make_target(self) -> Callable[..., None]:
+        """Create a thread target that carries the current context.
 
-    def stop(self) -> None:
-        self._shutdown.set()
+        Must be called from the main thread so copy_context() captures
+        the right contextvars (iris_ctx, etc.).
+        """
+        ctx = copy_context()
 
-    def join(self, timeout: float | None = None) -> None:
-        if self._thread:
-            self._thread.join(timeout=timeout)
+        def target(stop_event: threading.Event) -> None:
+            ctx.run(self._run, stop_event)
 
-    def _run(self) -> None:
-        while not self._shutdown.is_set():
+        return target
+
+    def _run(self, stop_event: threading.Event) -> None:
+        self._stop_event = stop_event
+        while not stop_event.is_set():
             if self.state.status == WorkerStatus.PENDING:
                 self._discover_endpoint()
                 continue
@@ -247,12 +231,11 @@ class WorkerDispatcher:
             if self.state.status == WorkerStatus.FAILED:
                 break
 
-            # Initialize actor client if needed (handles test cases where worker starts IDLE)
             if self._actor_client is None:
                 self._actor_client = ActorClient(
                     resolver=self._resolver,
                     name=self.state.worker_name,
-                    timeout=self._timeout,
+                    resolve_timeout=self._timeout,
                 )
 
             task = self._get_task()
@@ -260,7 +243,13 @@ class WorkerDispatcher:
                 self._execute_task(task)
 
     def _discover_endpoint(self) -> None:
+        logger.debug(
+            "Discovering endpoint for worker %s (name=%s)",
+            self.state.worker_id,
+            self.state.worker_name,
+        )
         result = self._resolver.resolve(self.state.worker_name)
+        logger.debug("Resolve result for %s: %s", self.state.worker_name, result)
         if not result.is_empty:
             endpoint = result.first()
             self.state.endpoint_url = endpoint.url
@@ -269,11 +258,15 @@ class WorkerDispatcher:
             self._actor_client = ActorClient(
                 resolver=self._resolver,
                 name=self.state.worker_name,
-                timeout=self._timeout,
+                resolve_timeout=self._timeout,
             )
             logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:
-            time.sleep(self._discover_backoff.next_interval())
+            logger.debug("Worker %s not found, waiting...", self.state.worker_id)
+            if self._stop_event:
+                self._stop_event.wait(self._discover_backoff.next_interval())
+            else:
+                time.sleep(self._discover_backoff.next_interval())
 
     def _get_task(self) -> PendingTask | None:
         """Try to get a task from the queue."""
@@ -399,6 +392,7 @@ class WorkerPool:
         config: WorkerPoolConfig,
         timeout: float = 30.0,
         resolver: Resolver | None = None,
+        threads: ThreadContainer | None = None,
     ):
         """Create a worker pool.
 
@@ -407,6 +401,7 @@ class WorkerPool:
             config: Pool configuration (workers, resources, etc.)
             timeout: RPC timeout in seconds for worker calls
             resolver: Optional resolver override (for testing)
+            threads: ThreadContainer for managing pool threads. If None, uses the default registry.
         """
         self._client = client
         self._config = config
@@ -419,7 +414,7 @@ class WorkerPool:
 
         # Task queue and dispatch
         self._task_queue: Queue[PendingTask] = Queue()
-        self._dispatchers: list[WorkerDispatcher] = []
+        self._threads = threads if threads is not None else get_thread_container()
         self._shutdown = False
 
         # Resolver for endpoint discovery (injectable for testing)
@@ -446,7 +441,7 @@ class WorkerPool:
         return sum(1 for w in self._workers.values() if w.status == WorkerStatus.IDLE)
 
     @property
-    def job_id(self) -> JobId | None:
+    def job_id(self) -> JobName | None:
         return self._job.job_id if self._job else None
 
     def _launch_workers(self) -> None:
@@ -462,18 +457,15 @@ class WorkerPool:
 
         # Submit ONE job with replicas=num_workers (co-scheduling)
         # Each replica becomes a task that reads its task_index from the environment
-        entrypoint = Entrypoint(
-            callable=worker_job_entrypoint,
-            args=(self._pool_id,),
-        )
-        resources_with_replicas = replace(self._config.resources, replicas=self._config.num_workers)
+        entrypoint = Entrypoint.from_callable(worker_job_entrypoint, self._pool_id)
 
         job = self._client.submit(
             entrypoint=entrypoint,
             name=f"{self._config.name_prefix}-{self._pool_id}",
-            resources=resources_with_replicas,
+            resources=self._config.resources,
             environment=self._config.environment,
             ports=["actor"],
+            replicas=self._config.num_workers,
         )
         self._job = job
 
@@ -482,30 +474,28 @@ class WorkerPool:
         if self._resolver is None:
             self._resolver = self._client.resolver_for_job(self._job.job_id)
 
-        # Start dispatchers (one per worker). Each thread needs its own context copy
-        # because a Context can only be entered by one thread at a time.
         for worker_state in self._workers.values():
-            ctx = copy_context()
             dispatcher = WorkerDispatcher(
                 state=worker_state,
                 task_queue=self._task_queue,
                 resolver=self._resolver,
                 timeout=self._timeout,
-                context=ctx,
             )
-            dispatcher.start()
-            self._dispatchers.append(dispatcher)
+            self._threads.spawn(
+                target=dispatcher.make_target(),
+                name=f"dispatch-{worker_state.worker_id}",
+            )
 
     def wait_for_workers(
         self,
         min_workers: int | None = None,
-        timeout: float = 600.0,
+        timeout: Duration = Duration.from_seconds(600.0),
     ) -> None:
         """Wait for workers to become available.
 
         Args:
             min_workers: Minimum workers required (default: all workers)
-            timeout: Maximum time to wait in seconds
+            timeout: Maximum duration to wait
 
         Raises:
             TimeoutError: If min_workers not available within timeout
@@ -615,14 +605,10 @@ class WorkerPool:
         """
         self._shutdown = True
 
-        # Stop all dispatchers
-        for dispatcher in self._dispatchers:
-            dispatcher.stop()
-
         if wait:
             self._task_queue.join()
-            for dispatcher in self._dispatchers:
-                dispatcher.join(timeout=5.0)
+
+        self._threads.stop()
 
         # Terminate worker job
         if self._job:

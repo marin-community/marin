@@ -6,7 +6,7 @@
 # Or via CLI:
 #   uv run python -m iris.cluster.vm.cli build-image
 #
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 # Install system dependencies (docker.io on Debian doesn't include CLI, need docker-ce-cli)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,18 +25,18 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin && \
     rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast package management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+# Install uv from official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Copy iris package
+# Copy pyproject.toml first and sync dependencies (cached layer)
 COPY pyproject.toml ./
-COPY src/ ./src/
+RUN uv sync --no-install-project
 
-# Install iris
-RUN uv pip install --system .
+# Copy source and install the project
+COPY src/ ./src/
+RUN uv sync
 
 # Default cache directory
 RUN mkdir -p /var/cache/iris
@@ -46,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:10001/health || exit 1
 
 # No entrypoint - bootstrap script controls the command
-CMD ["python", "-m", "iris.cluster.worker.main", "serve", "--host", "0.0.0.0", "--port", "10001"]
+CMD [".venv/bin/python", "-m", "iris.cluster.worker.main", "serve", "--host", "0.0.0.0", "--port", "10001"]

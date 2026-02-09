@@ -74,7 +74,6 @@ def _build_olmoe_1b7b_config(seq_len: int) -> MixtralConfig:
         gradient_checkpointing=True,
         scan_layers=True,
         use_gmm=True,
-        cross_entropy_block_size=32000,
         reference_checkpoint=OLMOE_1B7B_REFERENCE_CHECKPOINT,
         tokenizer=OLMOE_1B7B_REFERENCE_CHECKPOINT,
     )
@@ -97,7 +96,6 @@ def _build_mixtral_8x7b_config(seq_len: int) -> MixtralConfig:
         # MaxText's high-MFU recipe uses Megablox (dropless) MoE kernels; for us this maps most closely to
         # `use_gmm=True`.
         use_gmm=True,
-        cross_entropy_block_size=32000,
         lbl_coef=None,
         rzl_coef=None,
     )

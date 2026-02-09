@@ -14,89 +14,122 @@
 
 """Debug utilities for log collection and VM cleanup."""
 
-from __future__ import annotations
-
 import logging
+import re
 import socket
 import subprocess
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def collect_docker_logs(
+def _docker_log_ssh_command(
     vm_name: str,
     container_name: str,
     zone: str,
     project: str,
-    output_dir: Path,
+    is_tpu: bool,
+    follow: bool = False,
+) -> list[str]:
+    """Build gcloud SSH command for docker log collection."""
+    docker_cmd = "sudo docker logs"
+    if follow:
+        docker_cmd += " -f"
+    docker_cmd += f" {container_name} 2>&1"
+
+    base = ["gcloud", "compute"]
+    if is_tpu:
+        base += ["tpus", "tpu-vm"]
+    return [*base, "ssh", vm_name, f"--zone={zone}", f"--project={project}", "--command", docker_cmd]
+
+
+def stream_docker_logs(
+    vm_name: str,
+    container_name: str,
+    zone: str,
+    project: str,
+    output_file: Path,
     is_tpu: bool = False,
-) -> Path | None:
-    """SSH to VM and collect docker logs.
+    stop_event: threading.Event | None = None,
+) -> None:
+    """Stream docker logs from a VM to a file until stop_event is set.
+
+    Blocking call. Uses `docker logs -f` via gcloud SSH.
+    """
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    cmd = _docker_log_ssh_command(vm_name, container_name, zone, project, is_tpu, follow=True)
+
+    with open(output_file, "w") as f:
+        proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+        try:
+            if stop_event:
+                while not stop_event.is_set():
+                    if proc.poll() is not None:
+                        break
+                    stop_event.wait(1.0)
+            else:
+                proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+
+
+def list_docker_containers(
+    vm_name: str,
+    zone: str,
+    project: str,
+    label_filter: str,
+    is_tpu: bool = False,
+) -> list[str]:
+    """List docker container names on a VM matching a label filter.
 
     Args:
-        vm_name: GCE VM or TPU name
-        container_name: Docker container name (e.g., "iris-worker", "iris-controller")
+        vm_name: VM or TPU name to SSH into
         zone: GCP zone
         project: GCP project
-        output_dir: Directory to write logs
-        is_tpu: If True, use `gcloud compute tpus tpu-vm ssh`
+        label_filter: Docker label filter (e.g., "iris.managed=true")
+        is_tpu: Whether the target is a TPU VM
 
     Returns:
-        Path to log file, or None if collection failed
+        List of container names matching the filter
     """
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_file = output_dir / f"{vm_name}-{container_name}-{timestamp}.log"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    docker_cmd = f"sudo docker ps -a --filter label={label_filter} --format '{{{{.Names}}}}'"
 
+    base = ["gcloud", "compute"]
     if is_tpu:
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "ssh",
-            vm_name,
-            f"--zone={zone}",
-            f"--project={project}",
-            "--command",
-            f"sudo docker logs {container_name} 2>&1",
-        ]
-    else:
-        cmd = [
-            "gcloud",
-            "compute",
-            "ssh",
-            vm_name,
-            f"--zone={zone}",
-            f"--project={project}",
-            "--command",
-            f"sudo docker logs {container_name} 2>&1",
-        ]
+        base += ["tpus", "tpu-vm"]
+    cmd = [*base, "ssh", vm_name, f"--zone={zone}", f"--project={project}", "--command", docker_cmd]
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        output_file.write_text(result.stdout + result.stderr)
-        logger.info("Collected logs from %s:%s to %s", vm_name, container_name, output_file)
-        return output_file
-    except subprocess.TimeoutExpired:
-        logger.warning("Timeout collecting logs from %s:%s", vm_name, container_name)
-        return None
-    except Exception as e:
-        logger.warning("Failed to collect logs from %s: %s", vm_name, e)
-        return None
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        logger.debug("Failed to list containers on %s: %s", vm_name, result.stderr.strip()[:200])
+        return []
+    return [name.strip() for name in result.stdout.strip().split("\n") if name.strip()]
 
 
-def cleanup_iris_resources(zone: str, project: str, dry_run: bool = True) -> list[str]:
-    """Delete all iris-* VMs and TPU slices in a zone.
+def cleanup_iris_resources(
+    zone: str,
+    project: str,
+    label_prefix: str = "iris",
+    dry_run: bool = True,
+) -> list[str]:
+    """Delete VMs and TPU slices matching the label prefix in a zone.
 
     Args:
         zone: GCP zone
         project: GCP project
+        label_prefix: Prefix used for resource naming (default: "iris").
+                     Controller VMs are named "iris-controller-{prefix}",
+                     TPU slices are named "{prefix}-{scale_group}-{timestamp}".
         dry_run: If True, only list resources without deleting
 
     Returns:
@@ -104,93 +137,100 @@ def cleanup_iris_resources(zone: str, project: str, dry_run: bool = True) -> lis
     """
     deleted = []
 
-    result = subprocess.run(
-        [
-            "gcloud",
-            "compute",
-            "instances",
-            "list",
-            "--filter=name~^iris-",
-            f"--zones={zone}",
-            f"--project={project}",
-            "--format=value(name)",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    vms = [v.strip() for v in result.stdout.strip().split("\n") if v.strip()]
+    # Controller VMs are named "iris-controller-{label_prefix}"
+    controller_vm = discover_controller_vm(zone, project, label_prefix)
+    vms = [controller_vm] if controller_vm else []
 
-    result = subprocess.run(
-        [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "list",
-            "--filter=name~^iris-",
-            f"--zone={zone}",
-            f"--project={project}",
-            "--format=value(name)",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    tpus = [t.strip() for t in result.stdout.strip().split("\n") if t.strip()]
+    # TPU slices are named "{label_prefix}-{scale_group}-{timestamp}"
+    # and are labeled with "{label_prefix}-managed=true"
+    tpu_label_filter = f"labels.{label_prefix}-managed=true"
+    try:
+        result = subprocess.run(
+            [
+                "gcloud",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "list",
+                f"--filter={tpu_label_filter}",
+                f"--zone={zone}",
+                f"--project={project}",
+                "--format=value(name)",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        tpus = [t.strip() for t in result.stdout.strip().split("\n") if t.strip()]
+    except subprocess.TimeoutExpired:
+        logger.warning("TPU list command timed out after 30s, skipping TPU cleanup")
+        tpus = []
 
     for vm in vms:
         if dry_run:
             logger.info("[DRY RUN] Would delete VM: %s", vm)
         else:
-            subprocess.run(
-                [
-                    "gcloud",
-                    "compute",
-                    "instances",
-                    "delete",
-                    vm,
-                    f"--zone={zone}",
-                    f"--project={project}",
-                    "-q",
-                ],
-                capture_output=True,
-            )
-            logger.info("Deleted VM: %s", vm)
+            try:
+                subprocess.run(
+                    [
+                        "gcloud",
+                        "compute",
+                        "instances",
+                        "delete",
+                        vm,
+                        f"--zone={zone}",
+                        f"--project={project}",
+                        "-q",
+                    ],
+                    capture_output=True,
+                    timeout=60,
+                )
+                logger.info("Deleted VM: %s", vm)
+            except subprocess.TimeoutExpired:
+                logger.warning("VM delete timed out after 60s: %s", vm)
         deleted.append(vm)
 
     for tpu in tpus:
         if dry_run:
             logger.info("[DRY RUN] Would delete TPU: %s", tpu)
         else:
-            subprocess.run(
-                [
-                    "gcloud",
-                    "compute",
-                    "tpus",
-                    "tpu-vm",
-                    "delete",
-                    tpu,
-                    f"--zone={zone}",
-                    f"--project={project}",
-                    "-q",
-                ],
-                capture_output=True,
-            )
-            logger.info("Deleted TPU: %s", tpu)
+            try:
+                subprocess.run(
+                    [
+                        "gcloud",
+                        "compute",
+                        "tpus",
+                        "tpu-vm",
+                        "delete",
+                        tpu,
+                        f"--zone={zone}",
+                        f"--project={project}",
+                        "-q",
+                    ],
+                    capture_output=True,
+                    timeout=60,
+                )
+                logger.info("Deleted TPU: %s", tpu)
+            except subprocess.TimeoutExpired:
+                logger.warning("TPU delete timed out after 60s: %s", tpu)
         deleted.append(tpu)
 
     return deleted
 
 
-def list_iris_tpus(zone: str, project: str) -> list[str]:
-    """List all iris TPU VMs in the zone.
+def list_iris_tpus(zone: str, project: str, label_prefix: str = "iris") -> list[str]:
+    """List all TPU VMs matching the label prefix in the zone.
 
     Args:
         zone: GCP zone
         project: GCP project
+        label_prefix: Prefix used for resource naming (default: "iris").
+                     TPUs are filtered by the label "{label_prefix}-managed=true".
 
     Returns:
-        List of TPU names matching iris-* pattern
+        List of TPU names matching the label filter
     """
+    label_filter = f"labels.{label_prefix}-managed=true"
     result = subprocess.run(
         [
             "gcloud",
@@ -200,7 +240,7 @@ def list_iris_tpus(zone: str, project: str) -> list[str]:
             "list",
             f"--project={project}",
             f"--zone={zone}",
-            "--filter=name~^iris-",
+            f"--filter={label_filter}",
             "--format=value(name)",
         ],
         capture_output=True,
@@ -208,19 +248,24 @@ def list_iris_tpus(zone: str, project: str) -> list[str]:
     )
     if result.returncode != 0:
         return []
-    return [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
+    # Filter client-side: gcloud TPU --filter with regex is unreliable
+    return [n.strip() for n in result.stdout.strip().split("\n") if n.strip() and n.strip().startswith("iris-")]
 
 
-def discover_controller_vm(zone: str, project: str) -> str | None:
-    """Find iris controller VM by name pattern.
+def discover_controller_vm(zone: str, project: str, label_prefix: str = "iris") -> str | None:
+    """Find controller VM by name pattern for the given prefix.
 
     Args:
         zone: GCP zone
         project: GCP project
+        label_prefix: Prefix used for resource naming (default: "iris").
+                     Controller VMs are named "iris-controller-{label_prefix}".
 
     Returns:
         Controller VM name, or None if not found
     """
+    # Controller VMs are named "iris-controller-{label_prefix}"
+    name_filter = f"name~^iris-controller-{re.escape(label_prefix)}$"
     result = subprocess.run(
         [
             "gcloud",
@@ -229,7 +274,7 @@ def discover_controller_vm(zone: str, project: str) -> str | None:
             "list",
             f"--project={project}",
             f"--zones={zone}",
-            "--filter=name~^iris-controller",
+            f"--filter={name_filter}",
             "--format=value(name)",
         ],
         capture_output=True,
@@ -239,10 +284,9 @@ def discover_controller_vm(zone: str, project: str) -> str | None:
         return None
     names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
     if len(names) > 1:
-        logger.warning(
-            "Multiple controller VMs found: %s. Using first: %s",
-            ", ".join(names),
-            names[0],
+        raise RuntimeError(
+            f"Multiple controller VMs found for prefix '{label_prefix}': {', '.join(names)}. "
+            "This indicates a resource leak or configuration error."
         )
     return names[0] if names else None
 
@@ -275,6 +319,7 @@ def controller_tunnel(
     local_port: int = 10000,
     tunnel_logger: logging.Logger | None = None,
     timeout: float = 60.0,
+    label_prefix: str = "iris",
 ) -> Iterator[str]:
     """Establish SSH tunnel to controller and yield the local URL.
 
@@ -284,6 +329,7 @@ def controller_tunnel(
         local_port: Local port to forward to (default: 10000)
         tunnel_logger: Optional logger for progress messages
         timeout: Timeout in seconds for tunnel establishment (default: 60.0)
+        label_prefix: Prefix used for resource naming (default: "iris").
 
     Yields:
         Local controller URL (e.g., "http://localhost:10000")
@@ -296,7 +342,7 @@ def controller_tunnel(
             client = IrisClient.remote(url)
             job = client.submit(...)
     """
-    vm_name = discover_controller_vm(zone, project)
+    vm_name = discover_controller_vm(zone, project, label_prefix)
     if not vm_name:
         raise RuntimeError(f"No controller VM found in zone {zone}")
 
@@ -321,9 +367,14 @@ def controller_tunnel(
             "UserKnownHostsFile=/dev/null",
             "-o",
             "LogLevel=ERROR",
+            "-o",
+            "ServerAliveInterval=60",
+            "-o",
+            "ServerAliveCountMax=3",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
 
     try:

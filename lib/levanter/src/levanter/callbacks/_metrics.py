@@ -20,30 +20,6 @@ from levanter.utils.jax_utils import jnp_to_python
 logger = pylogging.getLogger(__name__)
 
 
-def log_epoch_progress(total_tokens_future, tokens_per_example, batch_size, max_epochs: Optional[int] = None):
-    total_tokens = None
-
-    def log_epoch(step_info: StepInfo):
-        nonlocal total_tokens
-        if total_tokens is None:
-            if not total_tokens_future.done():
-                if step_info.step % 1000 == 0:
-                    logger.info("Dataset not finished. Can't compute epochs.")
-                return  # We don't have the total tokens yet, so we can't calculate epoch
-            total_tokens = total_tokens_future.result()
-
-        # Get the total processed tokens from the metrics logged by log_performance_stats
-        processed_tokens = tokens_per_example * batch_size * step_info.step
-
-        # If we're doing multiple epochs, adjust the denominator
-        total_tokens_for_epochs = total_tokens * max_epochs if max_epochs else total_tokens
-        current_epoch = processed_tokens / total_tokens_for_epochs
-
-        levanter.tracker.log({"train/current_epoch": current_epoch}, step=step_info.step)
-
-    return log_epoch
-
-
 def log_step_info(total_steps: Optional[int]):
     def log_step_info_inner(step: StepInfo):
         metrics = {"train/loss": step.loss, "global_step": step.step}

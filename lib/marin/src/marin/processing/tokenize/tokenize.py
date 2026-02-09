@@ -39,7 +39,7 @@ from fray.job import create_job_ctx
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
-    LMDatasetSourceConfig,
+    LmDatasetSourceConfigBase,
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
     preprocessor_for_format,
@@ -68,7 +68,7 @@ class TokenizeConfigBase(abc.ABC):
     @abc.abstractmethod
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         """
         Create a Levanter dataset source config from this config and the actual output path.
         """
@@ -103,7 +103,7 @@ class TokenizeConfig(TokenizeConfigBase):
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         """
         For use in Levanter training runs with mixtures of datasets.
 
@@ -163,7 +163,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         return HfDatasetSourceConfig(
             id=self.id,
             name=self.name,
@@ -377,8 +377,8 @@ def tokenize(config: TokenizeConfigBase):
             stats_path = f"{shard_path}/.stats.json"
             with fsspec.open(stats_path) as f:
                 stats = json.load(f)
-                total_tokens += stats.get("token_count", 0)
-                total_elements += stats.get("num_rows", 0)
+                total_tokens += stats["token_count"]
+                total_elements += stats["count"]
 
         stats_path = os.path.join(prefix, ".stats.json")
         logger.info(

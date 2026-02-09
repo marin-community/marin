@@ -28,6 +28,7 @@ state and return results indicating what the caller should do.
 
 import logging
 from collections import Counter, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
@@ -41,11 +42,20 @@ from iris.cluster.controller.events import (
     TransactionLog,
     WorkerFailedEvent,
     WorkerHeartbeatEvent,
+    WorkerHeartbeatFailedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.types import AttributeValue, DeviceType, JobId, TaskId, WorkerId
+from iris.cluster.types import (
+    AttributeValue,
+    JobName,
+    WorkerId,
+    get_device_variant,
+    get_device_type,
+    get_gpu_count,
+    get_tpu_count,
+)
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -55,60 +65,13 @@ MAX_REPLICAS_PER_JOB = 10000
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
 
-
-def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
-    """Extract device type as enum from DeviceConfig.
-
-    Args:
-        device: DeviceConfig proto from job request
-
-    Returns:
-        DeviceType enum value
-    """
-    if device.HasField("gpu"):
-        return DeviceType.GPU
-    elif device.HasField("tpu"):
-        return DeviceType.TPU
-    return DeviceType.CPU
+HEARTBEAT_FAILURE_THRESHOLD = 10
+"""Consecutive heartbeat failures before marking worker as failed."""
 
 
 # =============================================================================
 # Device Helper Functions
 # =============================================================================
-
-
-def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
-    """Extract device type from config."""
-    if device.HasField("cpu"):
-        return "cpu"
-    elif device.HasField("gpu"):
-        return "gpu"
-    elif device.HasField("tpu"):
-        return "tpu"
-    return "cpu"
-
-
-def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
-    """Extract device variant (e.g., GPU model) from config."""
-    if device.HasField("gpu"):
-        return device.gpu.variant if device.gpu.variant else None
-    elif device.HasField("tpu"):
-        return device.tpu.variant if device.tpu.variant else None
-    return None
-
-
-def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
-    """Extract GPU count from config."""
-    if device.HasField("gpu"):
-        return device.gpu.count or 1
-    return 0
-
-
-def get_tpu_chip_count(device: cluster_pb2.DeviceConfig) -> int:
-    """Extract TPU chip count from config."""
-    if device.HasField("tpu"):
-        return device.tpu.count or 0
-    return 0
 
 
 # =============================================================================
@@ -121,6 +84,17 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
         cluster_pb2.TASK_STATE_FAILED,
         cluster_pb2.TASK_STATE_KILLED,
         cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+    }
+)
+
+# Terminal states that originate from worker reports via heartbeat (as opposed to
+# controller decisions like KILLED or UNSCHEDULABLE). Used to detect duplicate
+# completions across multiple heartbeats.
+WORKER_REPORTED_TERMINAL_STATES: frozenset[int] = frozenset(
+    {
+        cluster_pb2.TASK_STATE_SUCCEEDED,
+        cluster_pb2.TASK_STATE_FAILED,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
     }
 )
@@ -160,12 +134,12 @@ class ControllerTaskAttempt:
 
     attempt_id: int
     worker_id: WorkerId | None = None
-    state: int = cluster_pb2.TASK_STATE_PENDING
+    state: int = cluster_pb2.TASK_STATE_ASSIGNED
 
     # Timing
-    created_at_ms: int = 0
-    started_at_ms: int | None = None
-    finished_at_ms: int | None = None
+    created_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
 
     # Result
     exit_code: int | None = None
@@ -180,13 +154,13 @@ class ControllerTaskAttempt:
     ) -> None:
         """Transition this attempt to a new state."""
         self.state = new_state
-        ts = now_ms()
+        now = Timestamp.now()
 
         if new_state == cluster_pb2.TASK_STATE_RUNNING:
-            self.started_at_ms = ts
+            self.started_at = now
 
         if new_state in TERMINAL_TASK_STATES:
-            self.finished_at_ms = ts
+            self.finished_at = now
             self.exit_code = exit_code
             self.error = error
 
@@ -214,6 +188,13 @@ class ControllerTask:
                             +-----+-----+                  |
                                   |                        |
                             dispatch to worker             |
+                                  |                        |
+                                  v                        |
+                            +-----------+                  |
+                            | ASSIGNED  |                  |
+                            +-----+-----+                  |
+                                  |                        |
+                          worker starts task               |
                                   |                        |
                                   v                        |
                             +-----------+                  |
@@ -253,16 +234,15 @@ class ControllerTask:
     what the caller should do.
     """
 
-    task_id: TaskId
-    job_id: JobId
-    task_index: int
+    task_id: JobName
+    job_id: JobName
 
     # Task owns its state directly
     state: int = cluster_pb2.TASK_STATE_PENDING
     error: str | None = None
     exit_code: int | None = None
-    started_at_ms: int | None = None
-    finished_at_ms: int | None = None
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
 
     # Retry policy (immutable after creation)
     max_retries_failure: int = 0
@@ -276,7 +256,7 @@ class ControllerTask:
     attempts: list[ControllerTaskAttempt] = field(default_factory=list)
 
     # Submission timestamp (distinct from attempt start times)
-    submitted_at_ms: int = 0
+    submitted_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
     # --- Read-only properties that derive from attempts ---
 
@@ -289,6 +269,11 @@ class ControllerTask:
     def current_attempt_id(self) -> int:
         """ID of current attempt (0-indexed), or -1 if no attempts."""
         return len(self.attempts) - 1 if self.attempts else -1
+
+    @property
+    def task_index(self) -> int:
+        """0-indexed task number within the job."""
+        return self.task_id.require_task()[1]
 
     @property
     def worker_id(self) -> WorkerId | None:
@@ -308,27 +293,26 @@ class ControllerTask:
         self,
         worker_id: WorkerId,
         *,
-        initial_state: int = cluster_pb2.TASK_STATE_PENDING,
+        initial_state: int = cluster_pb2.TASK_STATE_ASSIGNED,
     ) -> ControllerTaskAttempt:
         """Create a new attempt for this task.
 
         Called when the scheduler assigns this task to a worker. The attempt
-        starts in PENDING state by default - the worker will report RUNNING
+        starts in ASSIGNED state by default - the worker will report RUNNING
         when execution actually begins.
 
         Args:
             worker_id: The worker this attempt is assigned to
-            initial_state: Starting state for the attempt (default: PENDING)
+            initial_state: Starting state for the attempt (default: ASSIGNED)
 
         Returns:
             The new attempt so caller can track it.
         """
-        ts = now_ms()
         attempt = ControllerTaskAttempt(
             attempt_id=len(self.attempts),
             worker_id=worker_id,
             state=initial_state,
-            created_at_ms=ts,
+            created_at=Timestamp.now(),
         )
         self.attempts.append(attempt)
 
@@ -336,17 +320,6 @@ class ControllerTask:
         self.state = initial_state
 
         return attempt
-
-    def revert_attempt(self) -> None:
-        """Remove the current attempt if dispatch RPC fails.
-
-        Called when we created an attempt but the RPC to dispatch
-        to the worker failed, so we need to undo. Resets state to PENDING
-        since create_attempt() set it to RUNNING.
-        """
-        if self.attempts:
-            self.attempts.pop()
-            self.state = cluster_pb2.TASK_STATE_PENDING
 
     def handle_attempt_result(
         self,
@@ -379,7 +352,7 @@ class ControllerTask:
         if not self.attempts:
             self.state = new_state
             if new_state in TERMINAL_TASK_STATES:
-                self.finished_at_ms = now_ms()
+                self.finished_at = Timestamp.now()
                 self.error = error
                 self.exit_code = exit_code
             return TaskTransitionResult.COMPLETE
@@ -404,7 +377,7 @@ class ControllerTask:
                 # Terminal: record final outcome
                 self.error = error
                 self.exit_code = exit_code
-                self.finished_at_ms = now_ms()
+                self.finished_at = Timestamp.now()
             return result
 
         # For success, set exit_code to 0 if not provided
@@ -419,7 +392,7 @@ class ControllerTask:
             self.state = new_state
             self.exit_code = final_exit_code
             self.error = error
-            self.finished_at_ms = now_ms()
+            self.finished_at = Timestamp.now()
             return TaskTransitionResult.COMPLETE
 
         # For other terminal states (KILLED, UNSCHEDULABLE)
@@ -436,7 +409,7 @@ class ControllerTask:
             self.state = new_state
             self.error = actual_error
             self.exit_code = exit_code
-            self.finished_at_ms = now_ms()
+            self.finished_at = Timestamp.now()
             return TaskTransitionResult.COMPLETE
 
         # Non-terminal states (BUILDING, RUNNING)
@@ -530,7 +503,7 @@ class ControllerJob:
             queue.add(job)  # Caller handles re-queueing
     """
 
-    job_id: JobId
+    job_id: JobName
     request: cluster_pb2.Controller.LaunchJobRequest
     state: int = cluster_pb2.JOB_STATE_PENDING
 
@@ -540,13 +513,13 @@ class ControllerJob:
     max_retries_failure: int = 0
     max_retries_preemption: int = DEFAULT_MAX_RETRIES_PREEMPTION
 
-    # Hierarchical job tracking
-    parent_job_id: JobId | None = None
-
     # Timestamps
-    submitted_at_ms: int = 0
-    started_at_ms: int | None = None
-    finished_at_ms: int | None = None
+    submitted_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
+
+    # Scheduling deadline (set when job has a scheduling_timeout)
+    scheduling_deadline: Deadline | None = None
 
     error: str | None = None
     exit_code: int | None = None
@@ -560,12 +533,12 @@ class ControllerJob:
     def mark_dispatched(self) -> None:
         """Mark job as running. Called when first task starts."""
         self.state = cluster_pb2.JOB_STATE_RUNNING
-        self.started_at_ms = now_ms()
+        self.started_at = Timestamp.now()
 
     def revert_dispatch(self) -> None:
         """Revert dispatch if no tasks actually started."""
         self.state = cluster_pb2.JOB_STATE_PENDING
-        self.started_at_ms = None
+        self.started_at = None
 
     def transition(
         self,
@@ -595,25 +568,29 @@ class ControllerJob:
         if new_state == cluster_pb2.JOB_STATE_FAILED:
             return self._handle_failure(is_worker_failure, error, exit_code)
 
-        ts = now_ms()
+        now = Timestamp.now()
 
         # Non-failure terminal states
         if new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
             self.state = new_state
-            self.finished_at_ms = ts
+            self.finished_at = now
             self.exit_code = exit_code or 0
             return JobTransitionResult.COMPLETE
 
         if new_state == cluster_pb2.JOB_STATE_KILLED:
             self.state = new_state
-            self.finished_at_ms = ts
+            self.finished_at = now
             self.error = error
             return JobTransitionResult.COMPLETE
 
         if new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
             self.state = new_state
-            self.finished_at_ms = ts
-            self.error = error or f"Scheduling timeout exceeded ({self.request.scheduling_timeout_seconds}s)"
+            self.finished_at = now
+            if self.request.HasField("scheduling_timeout"):
+                timeout = Duration.from_proto(self.request.scheduling_timeout)
+            else:
+                timeout = None
+            self.error = error or f"Scheduling timeout exceeded ({timeout})"
             return JobTransitionResult.COMPLETE
 
         # Non-terminal states (BUILDING, RUNNING)
@@ -637,15 +614,15 @@ class ControllerJob:
         if can_retry:
             # Reset state for retry
             self.state = cluster_pb2.JOB_STATE_PENDING
-            self.started_at_ms = None
-            self.finished_at_ms = None
+            self.started_at = None
+            self.finished_at = None
             self.error = None
             self.exit_code = None
             return JobTransitionResult.SHOULD_RETRY
         else:
             # Terminal failure
             self.state = cluster_pb2.JOB_STATE_FAILED
-            self.finished_at_ms = now_ms()
+            self.finished_at = Timestamp.now()
             self.error = error
             self.exit_code = exit_code
             return JobTransitionResult.EXCEEDED_RETRY_LIMIT
@@ -692,10 +669,14 @@ class ControllerJob:
         if counts[cluster_pb2.TASK_STATE_KILLED] > 0 and not self.is_finished():
             return cluster_pb2.JOB_STATE_KILLED
 
-        # Job is RUNNING if any task is running
-        if counts[cluster_pb2.TASK_STATE_RUNNING] > 0 and self.state != cluster_pb2.JOB_STATE_RUNNING:
-            if self.started_at_ms is None:
-                self.started_at_ms = now_ms()
+        # Job is RUNNING if any task is assigned, building, or running
+        if (
+            counts[cluster_pb2.TASK_STATE_RUNNING] > 0
+            or counts[cluster_pb2.TASK_STATE_BUILDING] > 0
+            or counts[cluster_pb2.TASK_STATE_ASSIGNED] > 0
+        ) and self.state != cluster_pb2.JOB_STATE_RUNNING:
+            if self.started_at is None:
+                self.started_at = Timestamp.now()
             return cluster_pb2.JOB_STATE_RUNNING
 
         # No state change detected
@@ -747,7 +728,7 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
     """Expand a job into its constituent tasks based on replicas.
 
     Jobs with replicas=N expand into N tasks. Each task has a unique ID
-    of the form "{job_id}/task-{index}" where index is 0-based.
+    of the form "/job/.../index" where index is 0-based.
 
     Args:
         job: The job to expand
@@ -758,7 +739,7 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
     Raises:
         ValueError: If replicas is < 1 or exceeds MAX_REPLICAS_PER_JOB
     """
-    num_replicas = job.request.resources.replicas or 1
+    num_replicas = job.request.replicas
 
     if num_replicas < 1:
         raise ValueError(f"Job {job.job_id} has invalid replicas={num_replicas}; must be >= 1")
@@ -768,14 +749,13 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
     tasks = []
 
     for i in range(num_replicas):
-        task_id = TaskId(f"{job.job_id}/task-{i}")
+        task_id = job.job_id.task(i)
         task = ControllerTask(
             task_id=task_id,
             job_id=job.job_id,
-            task_index=i,
             max_retries_failure=job.max_retries_failure,
             max_retries_preemption=job.max_retries_preemption,
-            submitted_at_ms=job.submitted_at_ms,
+            submitted_at=job.submitted_at,
         )
         tasks.append(task)
 
@@ -812,7 +792,7 @@ class ControllerWorker:
         metadata: Worker environment metadata (includes cpu, memory, device, disk)
         healthy: Whether worker is currently healthy
         consecutive_failures: Number of consecutive heartbeat failures
-        last_heartbeat_ms: Timestamp of last successful heartbeat
+        last_heartbeat: Timestamp of last successful heartbeat
         running_tasks: Set of task IDs currently running on this worker
         committed_cpu: Total CPU cores committed to running tasks
         committed_mem: Total memory bytes committed to running tasks
@@ -827,10 +807,10 @@ class ControllerWorker:
     # Health tracking
     healthy: bool = True
     consecutive_failures: int = 0
-    last_heartbeat_ms: int = 0
+    last_heartbeat: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
     # Currently running tasks
-    running_tasks: set[TaskId] = field(default_factory=set)
+    running_tasks: set[JobName] = field(default_factory=set)
 
     # Committed resources (tracked incrementally)
     committed_cpu: int = 0
@@ -845,21 +825,43 @@ class ControllerWorker:
         """Return committed (cpu, memory_bytes, gpu_count) for this worker."""
         return (self.committed_cpu, self.committed_mem, self.committed_gpu)
 
-    def assign_task(self, task_id: TaskId, resources: cluster_pb2.ResourceSpecProto) -> None:
+    def heartbeat_deadline(self, timeout: Duration) -> Timestamp:
+        """Compute the deadline when this worker's heartbeat will expire.
+
+        Args:
+            timeout: Heartbeat timeout duration
+
+        Returns:
+            Timestamp when the heartbeat will be considered expired
+        """
+        return self.last_heartbeat.add(timeout)
+
+    def is_heartbeat_expired(self, timeout: Duration) -> bool:
+        """Check if this worker's heartbeat has expired.
+
+        Args:
+            timeout: Heartbeat timeout duration
+
+        Returns:
+            True if the worker has not sent a heartbeat within the timeout period
+        """
+        return self.last_heartbeat.age_ms() > timeout.to_ms()
+
+    def assign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Assign a task to this worker, updating committed resources."""
         self.running_tasks.add(task_id)
         self.committed_cpu += resources.cpu
         self.committed_mem += resources.memory_bytes
         self.committed_gpu += get_gpu_count(resources.device)
-        self.committed_tpu += get_tpu_chip_count(resources.device)
+        self.committed_tpu += get_tpu_count(resources.device)
 
-    def unassign_task(self, task_id: TaskId, resources: cluster_pb2.ResourceSpecProto) -> None:
+    def unassign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Unassign a task from this worker, updating committed resources."""
         self.running_tasks.discard(task_id)
         self.committed_cpu -= resources.cpu
         self.committed_mem -= resources.memory_bytes
         self.committed_gpu -= get_gpu_count(resources.device)
-        self.committed_tpu -= get_tpu_chip_count(resources.device)
+        self.committed_tpu -= get_tpu_count(resources.device)
 
     @property
     def available_cpu(self) -> int:
@@ -879,7 +881,7 @@ class ControllerWorker:
     @property
     def available_tpus(self) -> int:
         """Available TPU chip count after subtracting committed resources."""
-        return get_tpu_chip_count(self.metadata.device) - self.committed_tpu
+        return get_tpu_count(self.metadata.device) - self.committed_tpu
 
     @property
     def device_type(self) -> str:
@@ -904,15 +906,59 @@ class ControllerEndpoint:
         address: Network address (host:port)
         job_id: Job that registered this endpoint
         metadata: Additional key-value metadata
-        registered_at_ms: Timestamp when endpoint was registered
+        registered_at: Timestamp when endpoint was registered
     """
 
     endpoint_id: str
     name: str  # Full prefixed name: "{root_job_id}/{actor_name}"
     address: str
-    job_id: JobId
+    job_id: JobName
     metadata: dict[str, str] = field(default_factory=dict)
-    registered_at_ms: int = 0
+    registered_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+
+
+# =============================================================================
+# Heartbeat Dispatch Types
+# =============================================================================
+
+
+@dataclass
+class WorkerTimeoutResult:
+    """Result of checking worker heartbeat timeouts."""
+
+    tasks_to_kill: set[JobName]
+    failed_vm_addresses: list[str]
+
+
+@dataclass
+class PendingDispatch:
+    """Buffered dispatches waiting for next heartbeat.
+
+    These are accumulated by the scheduling thread and drained atomically
+    when preparing a heartbeat snapshot.
+    """
+
+    tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest] = field(default_factory=list)
+    tasks_to_kill: list[str] = field(default_factory=list)
+
+
+@dataclass
+class HeartbeatSnapshot:
+    """Immutable snapshot of worker state for heartbeat dispatch.
+
+    Captures all data needed to send a heartbeat RPC without holding locks:
+    - Worker identity and address for RPC routing
+    - Running tasks for reconciliation
+    - Buffered dispatches/kills to deliver
+
+    Taken atomically under state lock to prevent iteration races.
+    """
+
+    worker_id: WorkerId
+    worker_address: str
+    running_tasks: list[JobName]
+    tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest]
+    tasks_to_kill: list[str]
 
 
 # =============================================================================
@@ -946,14 +992,15 @@ class ControllerState:
 
     def __init__(self):
         self._lock = RLock()
-        self._jobs: dict[JobId, ControllerJob] = {}
-        self._tasks: dict[TaskId, ControllerTask] = {}
-        self._tasks_by_job: dict[JobId, list[TaskId]] = {}
+        self._jobs: dict[JobName, ControllerJob] = {}
+        self._tasks: dict[JobName, ControllerTask] = {}
+        self._tasks_by_job: dict[JobName, list[JobName]] = {}
         self._workers: dict[WorkerId, ControllerWorker] = {}
-        self._task_queue: deque[TaskId] = deque()  # FIFO queue of task IDs
+        self._task_queue: deque[JobName] = deque()  # FIFO queue of task IDs
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
-        self._endpoints_by_task: dict[TaskId, set[str]] = {}  # task_id -> endpoint_ids
+        self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
+        self._pending_dispatch: dict[WorkerId, PendingDispatch] = {}  # Buffered heartbeat dispatches
 
     # =========================================================================
     # Event-Driven State Transitions
@@ -979,6 +1026,8 @@ class ControllerState:
                     self._on_worker_registered(txn, event)
                 case WorkerHeartbeatEvent():
                     self._on_worker_heartbeat(txn, event)
+                case WorkerHeartbeatFailedEvent():
+                    self._on_worker_heartbeat_failed(txn, event)
                 case WorkerFailedEvent():
                     self._on_worker_failed(txn, event)
                 case JobSubmittedEvent():
@@ -994,37 +1043,38 @@ class ControllerState:
 
             self._transactions.append(txn)
 
-            # Log transaction for debugging
+            # Log transaction for debugging; demote all heartbeat events to DEBUG
             if txn.actions:
-                logger.info(f"Event {type(event).__name__}: {len(txn.actions)} actions")
+                log = logger.debug if isinstance(event, WorkerHeartbeatEvent) else logger.info
+                log(f"Event {type(event).__name__}: {len(txn.actions)} actions")
                 for action in txn.actions:
-                    logger.info(f"  - {action.action} {action.entity_id} {action.details}")
+                    log(f"  - {action.action} {action.entity_id} {action.details}")
 
             return txn
 
-    def check_worker_timeouts(self, timeout_ms: int) -> set[TaskId]:
+    def check_worker_timeouts(self, timeout: Duration) -> WorkerTimeoutResult:
         """Check for timed-out workers and mark them as failed.
 
         Atomically identifies all workers that have exceeded the heartbeat timeout,
-        marks them as failed, and cascades to their running tasks. Returns the set
-        of task IDs that need kill RPCs sent.
+        marks them as failed, and cascades to their running tasks. Returns tasks
+        that need kill RPCs and VM addresses for autoscaler notification.
 
         This method acquires the state lock for the entire operation to prevent races
         with incoming heartbeats.
 
         Args:
-            timeout_ms: Maximum time since last heartbeat before declaring timeout
+            timeout: Maximum time since last heartbeat before declaring timeout
 
         Returns:
-            Set of task IDs that need kill RPCs sent to workers
+            WorkerTimeoutResult with tasks to kill and failed VM addresses
         """
         with self._lock:
-            current_time_ms = now_ms()
-            tasks_to_kill: set[TaskId] = set()
+            tasks_to_kill: set[JobName] = set()
+            failed_vm_addresses: list[str] = []
 
             for worker in self._workers.values():
-                if worker.healthy and (current_time_ms - worker.last_heartbeat_ms) > timeout_ms:
-                    logger.warning(f"Worker {worker.worker_id} timed out (no heartbeat for {timeout_ms}ms)")
+                if worker.healthy and worker.is_heartbeat_expired(timeout):
+                    logger.warning(f"Worker {worker.worker_id} timed out (no heartbeat for {timeout.to_ms()}ms)")
                     txn = TransactionLog(
                         event=WorkerFailedEvent(
                             worker_id=worker.worker_id,
@@ -1034,8 +1084,13 @@ class ControllerState:
                     self._on_worker_failed(txn, txn.event)  # type: ignore[arg-type]
                     self._transactions.append(txn)
                     tasks_to_kill.update(txn.tasks_to_kill)
+                    if worker.metadata.vm_address:
+                        failed_vm_addresses.append(worker.metadata.vm_address)
 
-            return tasks_to_kill
+            return WorkerTimeoutResult(
+                tasks_to_kill=tasks_to_kill,
+                failed_vm_addresses=failed_vm_addresses,
+            )
 
     # -------------------------------------------------------------------------
     # Worker Event Handlers
@@ -1049,7 +1104,7 @@ class ControllerState:
 
         if worker:
             # Existing worker - heartbeat update
-            worker.last_heartbeat_ms = event.timestamp_ms
+            worker.last_heartbeat = event.timestamp
             worker.healthy = True
             worker.consecutive_failures = 0
             worker.metadata = event.metadata
@@ -1061,7 +1116,7 @@ class ControllerState:
                 worker_id=event.worker_id,
                 address=event.address,
                 metadata=event.metadata,
-                last_heartbeat_ms=event.timestamp_ms,
+                last_heartbeat=event.timestamp,
                 attributes=attributes,
             )
             self._workers[event.worker_id] = worker
@@ -1069,18 +1124,49 @@ class ControllerState:
 
     def _on_worker_heartbeat(self, txn: TransactionLog, event: WorkerHeartbeatEvent) -> None:
         worker = self._workers[event.worker_id]
-        worker.last_heartbeat_ms = event.timestamp_ms
+        worker.last_heartbeat = event.timestamp
         worker.healthy = True
         worker.consecutive_failures = 0
         txn.log("heartbeat", event.worker_id)
 
+    def _on_worker_heartbeat_failed(self, txn: TransactionLog, event: WorkerHeartbeatFailedEvent) -> None:
+        worker = self._workers.get(event.worker_id)
+        if not worker:
+            return
+        worker.consecutive_failures += 1
+        txn.log("heartbeat_failed", event.worker_id, consecutive=worker.consecutive_failures)
+        if worker.consecutive_failures >= HEARTBEAT_FAILURE_THRESHOLD:
+            logger.warning(
+                "Worker %s exceeded heartbeat failure threshold: consecutive_failures=%d threshold=%d error=%s",
+                event.worker_id,
+                worker.consecutive_failures,
+                HEARTBEAT_FAILURE_THRESHOLD,
+                event.error,
+            )
+            self._on_worker_failed(txn, WorkerFailedEvent(worker_id=event.worker_id, error=event.error))
+
     def _on_worker_failed(self, txn: TransactionLog, event: WorkerFailedEvent) -> None:
         worker = self._workers[event.worker_id]
         worker.healthy = False
-        txn.log("worker_failed", event.worker_id, error=event.error)
 
-        # Cascade to all tasks on this worker (RUNNING or PENDING) - call handler directly, same transaction
-        for task_id in list(worker.running_tasks):
+        affected_task_ids = list(worker.running_tasks)
+        logger.warning(
+            "Worker %s failed: error=%s affected_tasks=%d task_ids=%s",
+            event.worker_id,
+            event.error,
+            len(affected_task_ids),
+            [str(tid) for tid in affected_task_ids],
+        )
+        txn.log(
+            "worker_failed",
+            event.worker_id,
+            error=event.error,
+            affected_task_count=len(affected_task_ids),
+            affected_task_ids=[str(tid) for tid in affected_task_ids],
+        )
+
+        # Cascade to all tasks on this worker (RUNNING, ASSIGNED, or BUILDING) - call handler directly, same transaction
+        for task_id in affected_task_ids:
             task = self._tasks[task_id]
             assert task.worker_id == event.worker_id
             # Skip terminal states
@@ -1090,6 +1176,7 @@ class ControllerState:
             cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                attempt_id=task.current_attempt_id,
                 error=f"Worker {event.worker_id} failed: {event.error or 'unknown'}",
             )
             self._on_task_state_changed(txn, cascade_event)
@@ -1099,20 +1186,20 @@ class ControllerState:
     # -------------------------------------------------------------------------
 
     def _on_job_submitted(self, txn: TransactionLog, event: JobSubmittedEvent) -> None:
-        parent_job_id = JobId(event.request.parent_job_id) if event.request.parent_job_id else None
-
         # Read retry limits from request, using defaults if not set
         max_retries_failure = event.request.max_retries_failure  # proto default: 0
-        max_retries_preemption = event.request.max_retries_preemption or DEFAULT_MAX_RETRIES_PREEMPTION
+        max_retries_preemption = event.request.max_retries_preemption
 
         job = ControllerJob(
             job_id=event.job_id,
             request=event.request,
-            submitted_at_ms=event.timestamp_ms,
-            parent_job_id=parent_job_id,
+            submitted_at=event.timestamp,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
         )
+        if job.request.HasField("scheduling_timeout") and job.request.scheduling_timeout.milliseconds > 0:
+            job.scheduling_deadline = Deadline.from_now(Duration.from_proto(job.request.scheduling_timeout))
+
         self._jobs[event.job_id] = job
         self._tasks_by_job[event.job_id] = []
 
@@ -1121,7 +1208,7 @@ class ControllerState:
         except ValueError as e:
             job.state = cluster_pb2.JOB_STATE_FAILED
             job.error = str(e)
-            job.finished_at_ms = now_ms()
+            job.finished_at = Timestamp.now()
             txn.log("job_validation_failed", event.job_id, error=str(e))
             return
 
@@ -1153,13 +1240,14 @@ class ControllerState:
             cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=cluster_pb2.TASK_STATE_KILLED,
+                attempt_id=task.current_attempt_id,
                 error=event.reason,
             )
             self._on_task_state_changed(txn, cascade_event)
 
         job.state = cluster_pb2.JOB_STATE_KILLED
         job.error = event.reason
-        job.finished_at_ms = now_ms()
+        job.finished_at = Timestamp.now()
         txn.log("job_cancelled", event.job_id, reason=event.reason)
 
     # -------------------------------------------------------------------------
@@ -1171,7 +1259,7 @@ class ControllerState:
 
         Called AFTER successful dispatch RPC. Commits resources and creates attempt.
 
-        Creates an attempt in PENDING state. The task transitions to RUNNING
+        Creates an attempt in ASSIGNED state. The task transitions to RUNNING
         when the worker reports TASK_STATE_CHANGED with RUNNING.
         """
         task = self._tasks[event.task_id]
@@ -1179,7 +1267,7 @@ class ControllerState:
         worker = self._workers[event.worker_id]
 
         old_state = task.state
-        task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_PENDING)
+        task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_ASSIGNED)
 
         # Commit resources and add to running_tasks
         worker.assign_task(event.task_id, job.request.resources)
@@ -1198,6 +1286,61 @@ class ControllerState:
         state transition logic including retry budget management.
         """
         task = self._tasks[event.task_id]
+
+        # Validate attempt_id matches the current attempt
+        if event.attempt_id != task.current_attempt_id:
+            stale_attempt = task.attempts[event.attempt_id] if 0 <= event.attempt_id < len(task.attempts) else None
+            if stale_attempt and not stale_attempt.is_terminal():
+                logger.error(
+                    "Stale attempt precondition violation: task=%s received attempt=%d "
+                    "but current is %d and stale attempt state is %s (not terminal)",
+                    event.task_id,
+                    event.attempt_id,
+                    task.current_attempt_id,
+                    stale_attempt.state,
+                )
+            else:
+                logger.warning(
+                    "Ignoring stale task state report: task=%s attempt=%d current=%d",
+                    event.task_id,
+                    event.attempt_id,
+                    task.current_attempt_id,
+                )
+            txn.log(
+                "stale_attempt_ignored",
+                event.task_id,
+                reported_attempt=event.attempt_id,
+                current_attempt=task.current_attempt_id,
+            )
+            return
+
+        # Ignore duplicate worker-reported completions for an attempt already processed.
+        # This can happen when a heartbeat response is retried (e.g., the previous
+        # heartbeat succeeded on the controller but the worker didn't get the ack).
+        # Only guard worker-reported states (FAILED, WORKER_FAILED, SUCCEEDED);
+        # controller-originated states (UNSCHEDULABLE, KILLED) are always allowed.
+        current_attempt = task.current_attempt
+        if (
+            current_attempt
+            and current_attempt.is_terminal()
+            and task.state == cluster_pb2.TASK_STATE_PENDING
+            and event.new_state in WORKER_REPORTED_TERMINAL_STATES
+        ):
+            logger.debug(
+                "Ignoring duplicate terminal report for requeued task: task=%s attempt=%d "
+                "attempt_state=%s, task already requeued to PENDING",
+                event.task_id,
+                event.attempt_id,
+                current_attempt.state,
+            )
+            txn.log(
+                "duplicate_terminal_ignored",
+                event.task_id,
+                attempt=event.attempt_id,
+                existing_state=current_attempt.state,
+            )
+            return
+
         job = self._jobs[task.job_id]
         old_state = task.state
 
@@ -1209,11 +1352,62 @@ class ControllerState:
         )
 
         # Handle side effects based on result
+        is_finished = task.is_finished()
         if result == TaskTransitionResult.SHOULD_RETRY:
             self._requeue_task(task, txn)
             self._cleanup_task_resources(task, job, txn)
-        elif task.is_finished():
+        elif is_finished:
             self._cleanup_task_resources(task, job, txn)
+
+        # Log task state change with retry context for debugging preemption issues
+        old_state_name = cluster_pb2.TaskState.Name(old_state)
+        new_state_name = cluster_pb2.TaskState.Name(task.state)
+
+        if result == TaskTransitionResult.EXCEEDED_RETRY_LIMIT:
+            logger.warning(
+                "Task %s exhausted retries: %s -> %s attempt=%d "
+                "failure_count=%d/%d preemption_count=%d/%d result=%s is_finished=%s",
+                event.task_id,
+                old_state_name,
+                new_state_name,
+                event.attempt_id,
+                task.failure_count,
+                task.max_retries_failure,
+                task.preemption_count,
+                task.max_retries_preemption,
+                result.name,
+                is_finished,
+            )
+        elif event.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+            logger.warning(
+                "Task %s worker failed: %s -> %s attempt=%d "
+                "failure_count=%d/%d preemption_count=%d/%d result=%s is_finished=%s",
+                event.task_id,
+                old_state_name,
+                new_state_name,
+                event.attempt_id,
+                task.failure_count,
+                task.max_retries_failure,
+                task.preemption_count,
+                task.max_retries_preemption,
+                result.name,
+                is_finished,
+            )
+        else:
+            logger.info(
+                "Task %s state changed: %s -> %s attempt=%d "
+                "failure_count=%d/%d preemption_count=%d/%d result=%s is_finished=%s",
+                event.task_id,
+                old_state_name,
+                new_state_name,
+                event.attempt_id,
+                task.failure_count,
+                task.max_retries_failure,
+                task.preemption_count,
+                task.max_retries_preemption,
+                result.name,
+                is_finished,
+            )
 
         # Coscheduled group failure: if one task fails terminally, kill all running siblings.
         # For multi-host TPU jobs, if one host fails the other hosts cannot continue
@@ -1238,9 +1432,15 @@ class ControllerState:
         txn.log(
             "task_state_changed",
             event.task_id,
-            old_state=old_state,
-            new_state=task.state,
+            old_state=old_state_name,
+            new_state=new_state_name,
+            attempt_id=event.attempt_id,
+            failure_count=task.failure_count,
+            max_retries_failure=task.max_retries_failure,
+            preemption_count=task.preemption_count,
+            max_retries_preemption=task.max_retries_preemption,
             result=result.name,
+            is_finished=is_finished,
         )
 
     # -------------------------------------------------------------------------
@@ -1259,6 +1459,7 @@ class ControllerState:
 
     def _requeue_task(self, task: ControllerTask, txn: TransactionLog) -> None:
         """Put task back on scheduling queue for retry."""
+        task.state = cluster_pb2.TASK_STATE_PENDING
         if task.task_id not in self._task_queue:
             self._task_queue.append(task.task_id)
         txn.log("task_requeued", task.task_id)
@@ -1280,7 +1481,7 @@ class ControllerState:
                 continue
 
             sibling = self._tasks[sibling_id]
-            if sibling.state != cluster_pb2.TASK_STATE_RUNNING:
+            if sibling.state not in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_ASSIGNED):
                 continue
 
             sibling_old = sibling.state
@@ -1315,8 +1516,8 @@ class ControllerState:
         This method bypasses event logging and is intended for test setup only.
 
         If tasks are not provided, they are automatically created based on
-        the job's resources.replicas field (defaulting to 1). Each task gets
-        a unique ID of the form "{job_id}/task-{index}".
+        the job's replicas field (defaulting to 1). Each task gets
+        a unique ID of the form "/job/.../index".
 
         Args:
             job: The job to add
@@ -1342,7 +1543,7 @@ class ControllerState:
 
             return tasks
 
-    def get_job(self, job_id: JobId) -> ControllerJob | None:
+    def get_job(self, job_id: JobName) -> ControllerJob | None:
         with self._lock:
             return self._jobs.get(job_id)
 
@@ -1350,17 +1551,56 @@ class ControllerState:
         with self._lock:
             return list(self._jobs.values())
 
-    def get_children(self, job_id: JobId) -> list[ControllerJob]:
+    def get_children(self, job_id: JobName) -> list[ControllerJob]:
         with self._lock:
-            return [job for job in self._jobs.values() if job.parent_job_id == job_id]
+            return [job for job in self._jobs.values() if job.job_id.parent == job_id]
+
+    def remove_finished_job(self, job_id: JobName) -> bool:
+        """Remove a finished job and its tasks from state.
+
+        Only removes jobs that are in a terminal state (SUCCEEDED, FAILED, KILLED,
+        UNSCHEDULABLE). This allows job names to be reused after completion.
+
+        Args:
+            job_id: The job ID to remove
+
+        Returns:
+            True if the job was removed, False if it doesn't exist or is not finished
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return False
+
+            if not job.is_finished():
+                return False
+
+            # Remove all tasks for this job
+            task_ids = self._tasks_by_job.pop(job_id, [])
+            for task_id in task_ids:
+                self._tasks.pop(task_id, None)
+                # Remove from task queue if present
+                try:
+                    self._task_queue.remove(task_id)
+                except ValueError:
+                    pass
+
+            # Remove endpoints for the job
+            self.remove_endpoints_for_job(job_id)
+
+            # Remove the job itself
+            self._jobs.pop(job_id, None)
+
+            logger.info("Removed finished job %s (state=%s)", job_id, cluster_pb2.JobState.Name(job.state))
+            return True
 
     # --- Task Management ---
 
-    def get_task(self, task_id: TaskId) -> ControllerTask | None:
+    def get_task(self, task_id: JobName) -> ControllerTask | None:
         with self._lock:
             return self._tasks.get(task_id)
 
-    def get_job_tasks(self, job_id: JobId) -> list[ControllerTask]:
+    def get_job_tasks(self, job_id: JobName) -> list[ControllerTask]:
         """Get all tasks for a job."""
         with self._lock:
             task_ids = self._tasks_by_job.get(job_id, [])
@@ -1385,18 +1625,18 @@ class ControllerState:
         job: ControllerJob,
         new_state: int,
         txn: TransactionLog,
-    ) -> set[TaskId]:
+    ) -> set[JobName]:
         """Apply a job state change and handle associated actions.
 
         Returns:
-            Set of TaskIds that were killed and had workers assigned. These need
+            Set of JobNames that were killed and had workers assigned. These need
             KILL RPCs sent to workers. Empty for SUCCEEDED state; populated for
             FAILED, KILLED, and UNSCHEDULABLE states.
         """
         job.state = new_state
-        job.finished_at_ms = now_ms()
+        job.finished_at = Timestamp.now()
 
-        killed_tasks: set[TaskId] = set()
+        killed_tasks: set[JobName] = set()
         if new_state == cluster_pb2.JOB_STATE_FAILED:
             job.error = self._get_first_task_error(job.job_id)
             killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job exceeded max_task_failures", txn)
@@ -1409,9 +1649,53 @@ class ControllerState:
             job.error = self._get_first_task_error(job.job_id)
             killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job could not be scheduled.", txn)
 
+        # Cascade termination to child jobs when parent reaches terminal state
+        if new_state != cluster_pb2.JOB_STATE_SUCCEEDED:
+            child_killed_tasks = self._cancel_child_jobs(job.job_id, txn)
+            killed_tasks.update(child_killed_tasks)
+
         return killed_tasks
 
-    def _get_first_task_error(self, job_id: JobId) -> str | None:
+    def _cancel_child_jobs(self, parent_job_id: JobName, txn: TransactionLog) -> set[JobName]:
+        """Recursively cancel all child jobs when a parent job terminates.
+
+        Must be called with _lock held. Traverses the job hierarchy and cancels
+        all non-finished descendant jobs.
+
+        Returns:
+            Set of task IDs that need KILL RPCs sent to workers.
+        """
+        killed_tasks: set[JobName] = set()
+
+        # Find all direct children (lock already held by caller)
+        children = [j for j in self._jobs.values() if j.job_id.parent == parent_job_id]
+
+        for child in children:
+            if child.is_finished():
+                continue
+
+            logger.info(
+                "Cancelling child job %s due to parent %s termination",
+                child.job_id,
+                parent_job_id,
+            )
+
+            # Cancel this child job
+            cancel_event = JobCancelledEvent(
+                job_id=child.job_id,
+                reason=f"Parent job {parent_job_id} terminated",
+            )
+            self._on_job_cancelled(txn, cancel_event)
+
+            # Collect tasks that need kill RPCs
+            for task_id in self._tasks_by_job.get(child.job_id, []):
+                task = self._tasks.get(task_id)
+                if task and task.worker_id:
+                    killed_tasks.add(task_id)
+
+        return killed_tasks
+
+    def _get_first_task_error(self, job_id: JobName) -> str | None:
         """Get the first error message from failed/killed tasks in a job."""
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
@@ -1421,23 +1705,23 @@ class ControllerState:
 
     def _mark_remaining_tasks_killed(
         self,
-        job_id: JobId,
+        job_id: JobName,
         error: str,
         txn: TransactionLog,
-    ) -> set[TaskId]:
+    ) -> set[JobName]:
         """Mark all non-finished tasks in a job as killed (state-only).
 
         Updates job.task_state_counts incrementally for each killed task.
         The actual KILL RPCs to workers happen elsewhere; this method only
         updates internal state.
 
-        Returns the set of killed TaskIds that had workers assigned
+        Returns the set of killed JobNames that had workers assigned
         (these are the tasks that need KILL RPCs).
         """
         job = self._jobs.get(job_id)
-        ts = now_ms()
-        tasks_needing_kill_rpc: set[TaskId] = set()
-        tasks_to_remove_from_queue: set[TaskId] = set()
+        now = Timestamp.now()
+        tasks_needing_kill_rpc: set[JobName] = set()
+        tasks_to_remove_from_queue: set[JobName] = set()
 
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
@@ -1448,7 +1732,7 @@ class ControllerState:
             had_worker = task.worker_id is not None
 
             task.state = cluster_pb2.TASK_STATE_KILLED
-            task.finished_at_ms = ts
+            task.finished_at = now
             task.error = error
 
             # Update job's task state counts
@@ -1503,21 +1787,159 @@ class ControllerState:
         with self._lock:
             return list(self._workers.values())
 
+    # =========================================================================
+    # Heartbeat Dispatch API
+    # =========================================================================
+
+    def buffer_dispatch(self, worker_id: WorkerId, task_request: cluster_pb2.Worker.RunTaskRequest) -> None:
+        """Buffer a task dispatch for the next heartbeat.
+
+        Called by the scheduling thread after committing resources via TaskAssignedEvent.
+        The dispatch will be delivered when begin_heartbeat() drains the buffer.
+        """
+        with self._lock:
+            pd = self._pending_dispatch.setdefault(worker_id, PendingDispatch())
+            pd.tasks_to_run.append(task_request)
+
+    def buffer_kill(self, worker_id: WorkerId, task_id: str) -> None:
+        """Buffer a task kill for the next heartbeat.
+
+        Called when a task needs to be terminated on a worker. The kill will be
+        delivered when begin_heartbeat() drains the buffer.
+        """
+        with self._lock:
+            pd = self._pending_dispatch.setdefault(worker_id, PendingDispatch())
+            pd.tasks_to_kill.append(task_id)
+
+    def begin_heartbeat(self, worker_id: WorkerId) -> HeartbeatSnapshot | None:
+        """Atomically snapshot worker state and drain dispatch buffers.
+
+        Returns None if worker is no longer registered (removed while heartbeat pending).
+        The snapshot is immutable and can be used for RPC without holding locks.
+        """
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if not worker:
+                return None
+            dispatch = self._pending_dispatch.pop(worker_id, PendingDispatch())
+            return HeartbeatSnapshot(
+                worker_id=worker.worker_id,
+                worker_address=worker.address,
+                running_tasks=list(worker.running_tasks),
+                tasks_to_run=dispatch.tasks_to_run,
+                tasks_to_kill=dispatch.tasks_to_kill,
+            )
+
+    def complete_heartbeat(
+        self,
+        snapshot: HeartbeatSnapshot,
+        response: cluster_pb2.HeartbeatResponse,
+    ) -> None:
+        """Process successful heartbeat response.
+
+        Updates worker health state and processes task state changes from the response.
+        """
+        with self._lock:
+            worker = self._workers.get(snapshot.worker_id)
+            if not worker:
+                return  # Worker removed while heartbeat in flight
+
+            worker.last_heartbeat = Timestamp.now()
+            worker.healthy = True
+            worker.consecutive_failures = 0
+
+            # Process running task state updates (e.g. ASSIGNED -> BUILDING -> RUNNING)
+            for entry in response.running_tasks:
+                if entry.state == cluster_pb2.TASK_STATE_UNSPECIFIED:
+                    continue
+                task_id = JobName.from_wire(entry.task_id)
+                task = self._tasks.get(task_id)
+                if task and task.state != entry.state and not task.is_finished():
+                    self._process_task_state_change(task_id, entry.state, entry.attempt_id)
+
+            # Process completed tasks
+            for entry in response.completed_tasks:
+                task_id = JobName.from_wire(entry.task_id)
+                task = self._tasks.get(task_id)
+                if task and not task.is_finished():
+                    self._process_task_state_change(
+                        task_id,
+                        entry.state,
+                        entry.attempt_id,
+                        error=entry.error or None,
+                        exit_code=entry.exit_code,
+                    )
+
+    def _process_task_state_change(
+        self,
+        task_id: JobName,
+        new_state: int,
+        attempt_id: int,
+        error: str | None = None,
+        exit_code: int | None = None,
+    ) -> None:
+        """Internal helper to process a task state change within complete_heartbeat.
+
+        Must be called with _lock held.
+        """
+        from iris.cluster.controller.events import TaskStateChangedEvent
+
+        event = TaskStateChangedEvent(
+            task_id=task_id,
+            new_state=new_state,
+            attempt_id=attempt_id,
+            error=error,
+            exit_code=exit_code,
+        )
+        txn = TransactionLog(event=event)
+        self._on_task_state_changed(txn, event)
+        self._transactions.append(txn)
+
+    def fail_heartbeat(self, snapshot: HeartbeatSnapshot, error: str) -> None:
+        """Handle heartbeat failure - requeue dispatches, track failures.
+
+        Requeues any buffered dispatches so they can be retried on the next heartbeat.
+        Increments the worker's consecutive failure count. If the threshold is exceeded,
+        the worker will be marked as failed and pending dispatches are cleared (tasks
+        will be requeued via WORKER_FAILED state transition).
+        """
+        with self._lock:
+            worker = self._workers.get(snapshot.worker_id)
+            if not worker:
+                return  # Worker removed while heartbeat in flight
+
+            # Record failure via event first - this may mark worker as failed
+            event = WorkerHeartbeatFailedEvent(worker_id=snapshot.worker_id, error=error)
+            txn = TransactionLog(event=event)
+            self._on_worker_heartbeat_failed(txn, event)
+            self._transactions.append(txn)
+
+            # Only requeue dispatches if worker is still healthy.
+            # If worker failed, tasks are already being requeued via WORKER_FAILED
+            # state transition, and we don't want stale dispatches lingering.
+            if worker.healthy:
+                pd = self._pending_dispatch.setdefault(snapshot.worker_id, PendingDispatch())
+                pd.tasks_to_run.extend(snapshot.tasks_to_run)
+                pd.tasks_to_kill.extend(snapshot.tasks_to_kill)
+            else:
+                # Worker failed - clear any pending dispatches
+                self._pending_dispatch.pop(snapshot.worker_id, None)
+
     def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
         """Load workers from static configuration."""
-        ts = now_ms()
+        now = Timestamp.now()
         for cfg in configs:
             worker = ControllerWorker(
                 worker_id=WorkerId(cfg.worker_id),
                 address=cfg.address,
                 metadata=cfg.metadata,
-                last_heartbeat_ms=ts,
+                last_heartbeat=now,
             )
             self.add_worker(worker)
 
     # --- Endpoint Management ---
 
-    def add_endpoint(self, endpoint: ControllerEndpoint, task_id: TaskId | None = None) -> None:
+    def add_endpoint(self, endpoint: ControllerEndpoint, task_id: JobName | None = None) -> None:
         """Add an endpoint, optionally associating it with a task."""
         with self._lock:
             self._endpoints[endpoint.endpoint_id] = endpoint
@@ -1533,37 +1955,33 @@ class ControllerState:
                     task_endpoints.discard(endpoint_id)
             return endpoint
 
+    def _visible_endpoints(self, predicate: Callable[[ControllerEndpoint], bool]) -> list[ControllerEndpoint]:
+        """Return endpoints matching predicate whose jobs are in non-terminal states."""
+        results = []
+        for ep in self._endpoints.values():
+            if not predicate(ep):
+                continue
+            job = self._jobs.get(ep.job_id)
+            if job and not job.is_finished():
+                results.append(ep)
+        return results
+
     def lookup_endpoints(self, name: str) -> list[ControllerEndpoint]:
-        """Find endpoints by exact name match. Only returns endpoints for jobs in RUNNING state."""
+        """Find endpoints by exact name match for non-terminal jobs."""
         with self._lock:
-            results = []
-            for ep in self._endpoints.values():
-                if ep.name != name:
-                    continue
-                # Only return endpoints for running jobs
-                job = self._jobs.get(ep.job_id)
-                if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
-                    results.append(ep)
-            return results
+            return self._visible_endpoints(lambda ep: ep.name == name)
 
     def list_endpoints_by_prefix(self, prefix: str) -> list[ControllerEndpoint]:
-        """List endpoints matching a name prefix. Only returns endpoints for jobs in RUNNING state."""
+        """List endpoints matching a name prefix for non-terminal jobs."""
         with self._lock:
-            results = []
-            for ep in self._endpoints.values():
-                if not ep.name.startswith(prefix):
-                    continue
-                job = self._jobs.get(ep.job_id)
-                if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
-                    results.append(ep)
-            return results
+            return self._visible_endpoints(lambda ep: ep.name.startswith(prefix))
 
     def list_all_endpoints(self) -> list[ControllerEndpoint]:
         """Return all registered endpoints."""
         with self._lock:
             return list(self._endpoints.values())
 
-    def _remove_endpoints_for_task(self, task_id: TaskId) -> list[ControllerEndpoint]:
+    def _remove_endpoints_for_task(self, task_id: JobName) -> list[ControllerEndpoint]:
         """Remove all endpoints associated with a task."""
         endpoint_ids = list(self._endpoints_by_task.get(task_id, []))
         removed = []
@@ -1574,7 +1992,7 @@ class ControllerState:
         self._endpoints_by_task.pop(task_id, None)
         return removed
 
-    def remove_endpoints_for_job(self, job_id: JobId) -> list[ControllerEndpoint]:
+    def remove_endpoints_for_job(self, job_id: JobName) -> list[ControllerEndpoint]:
         """Remove all endpoints for a job by removing endpoints for all its tasks."""
         with self._lock:
             all_removed = []

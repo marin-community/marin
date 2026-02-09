@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pure task-to-worker matching without threading, dispatch, or state mutation."""
+"""Pure task-to-worker matching without threading, dispatch, or state mutation.
+
+Implements scheduler back-pressure to limit concurrent setup operations per worker.
+When many tasks are assigned simultaneously, their uv sync commands can overwhelm
+the worker. The max_building_tasks_per_worker setting limits how many tasks can
+be in BUILDING state on each worker, preventing resource exhaustion.
+"""
 
 import logging
 from collections import defaultdict
@@ -24,16 +30,27 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
     ControllerWorker,
+)
+from iris.cluster.types import (
+    AttributeValue,
+    JobName,
+    WorkerId,
     get_device_type,
     get_device_variant,
     get_gpu_count,
-    get_tpu_chip_count,
+    get_tpu_count,
 )
-from iris.cluster.types import AttributeValue, JobId, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_BUILDING_TASKS_PER_WORKER = 4
+"""Default limit for concurrent BUILDING tasks per worker.
+
+When many tasks start simultaneously, their setup commands (uv sync, pip install)
+can overwhelm the worker. This limit provides back-pressure by deferring new
+task assignments until existing tasks complete their build phase.
+"""
 
 
 def device_compatible(job_device_type: str, worker_device_type: str) -> bool:
@@ -130,6 +147,9 @@ class WorkerCapacity:
 
     Initialized from worker's current available resources. The deduct() method
     reduces capacity as tasks are tentatively assigned during a scheduling cycle.
+
+    Tracks building task count for back-pressure: workers with too many tasks
+    in BUILDING state won't receive new assignments until builds complete.
     """
 
     worker: ControllerWorker
@@ -140,10 +160,22 @@ class WorkerCapacity:
     device_type: str
     device_variant: str | None
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
+    building_task_count: int = 0
+    max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER
 
     @staticmethod
-    def from_worker(worker: ControllerWorker) -> "WorkerCapacity":
-        """Create capacity snapshot from a worker's current state."""
+    def from_worker(
+        worker: ControllerWorker,
+        building_count: int = 0,
+        max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    ) -> "WorkerCapacity":
+        """Create capacity snapshot from a worker's current state.
+
+        Args:
+            worker: The worker to snapshot
+            building_count: Number of tasks currently in BUILDING state on this worker
+            max_building_tasks: Maximum allowed building tasks per worker
+        """
         return WorkerCapacity(
             worker=worker,
             available_cpu=worker.available_cpu,
@@ -153,10 +185,28 @@ class WorkerCapacity:
             device_type=worker.device_type,
             device_variant=worker.device_variant,
             attributes=dict(worker.attributes),
+            building_task_count=building_count,
+            max_building_tasks=max_building_tasks,
         )
 
-    def can_fit_job(self, job: ControllerJob) -> bool:
-        """Check if this capacity can fit the job's resource requirements."""
+    def can_accept_building_task(self) -> bool:
+        """Check if this worker can accept another BUILDING task.
+
+        Back-pressure mechanism: limits concurrent uv sync operations.
+        """
+        return self.building_task_count < self.max_building_tasks
+
+    def can_fit_job(self, job: ControllerJob, *, check_building_limit: bool = True) -> bool:
+        """Check if this capacity can fit the job's resource requirements.
+
+        Args:
+            job: The job to check
+            check_building_limit: If True, also check building task limit
+        """
+        # Check building task back-pressure
+        if check_building_limit and not self.can_accept_building_task():
+            return False
+
         res = job.request.resources
 
         if res.cpu > self.available_cpu:
@@ -176,7 +226,7 @@ class WorkerCapacity:
         if job_device_type == "gpu" and get_gpu_count(res.device) > self.available_gpus:
             return False
 
-        if job_device_type == "tpu" and get_tpu_chip_count(res.device) > self.available_tpus:
+        if job_device_type == "tpu" and get_tpu_count(res.device) > self.available_tpus:
             return False
 
         return True
@@ -187,7 +237,9 @@ class WorkerCapacity:
         self.available_cpu -= res.cpu
         self.available_memory -= res.memory_bytes
         self.available_gpus -= get_gpu_count(res.device)
-        self.available_tpus -= get_tpu_chip_count(res.device)
+        self.available_tpus -= get_tpu_count(res.device)
+        # Increment building count since new tasks start in BUILDING state
+        self.building_task_count += 1
 
     def matches_constraints(self, constraints: Sequence[cluster_pb2.Constraint]) -> bool:
         """Check if this worker matches all given constraints."""
@@ -224,19 +276,39 @@ class SchedulingContext:
     # Worker capacities indexed by worker ID
     capacities: dict[WorkerId, WorkerCapacity]
 
-    # Workers already assigned a task this cycle (for round-robin)
+    # Workers that have already been assigned a task this cycle
     scheduled_workers: set[WorkerId] = field(default_factory=set)
 
     @classmethod
-    def from_workers(cls, workers: list[ControllerWorker]) -> "SchedulingContext":
+    def from_workers(
+        cls,
+        workers: list[ControllerWorker],
+        building_counts: dict[WorkerId, int] | None = None,
+        max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    ) -> "SchedulingContext":
         """Build scheduling context from worker list.
 
         Creates capacity snapshots for healthy workers and constructs posting
         lists for all worker attributes. String, int, and float values are
         indexed for fast EQ lookups.
+
+        Args:
+            workers: List of workers to include in scheduling context
+            building_counts: Map of worker_id -> count of tasks in BUILDING state
+            max_building_tasks: Maximum building tasks allowed per worker
         """
+        building_counts = building_counts or {}
+
         # Build capacity map for healthy workers
-        capacities = {w.worker_id: WorkerCapacity.from_worker(w) for w in workers if w.healthy}
+        capacities = {
+            w.worker_id: WorkerCapacity.from_worker(
+                w,
+                building_count=building_counts.get(w.worker_id, 0),
+                max_building_tasks=max_building_tasks,
+            )
+            for w in workers
+            if w.healthy
+        }
         discrete_lists: dict[str, dict[str | int | float, set[WorkerId]]] = {}
 
         for worker_id, cap in capacities.items():
@@ -380,10 +452,37 @@ class Scheduler:
 
     Pure functional scheduler that does not dispatch tasks, modify state, or run threads.
     Each call to find_assignments() returns assignments for a single scheduling cycle.
+
+    Implements back-pressure by limiting concurrent BUILDING tasks per worker. This
+    prevents resource exhaustion when many tasks start simultaneously and run uv sync.
     """
 
-    def __init__(self, state: ControllerState):
+    def __init__(
+        self,
+        state: ControllerState,
+        max_building_tasks_per_worker: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    ):
         self._state = state
+        self._max_building_tasks_per_worker = max_building_tasks_per_worker
+
+    def _count_building_tasks_per_worker(self) -> dict[WorkerId, int]:
+        """Count tasks in BUILDING state per worker.
+
+        Scans all running tasks to find those in BUILDING or ASSIGNED state.
+        These represent tasks that are likely running setup commands.
+        """
+        counts: dict[WorkerId, int] = defaultdict(int)
+
+        for worker in self._state.list_all_workers():
+            for task_id in worker.running_tasks:
+                task = self._state.get_task(task_id)
+                if task and task.state in (
+                    cluster_pb2.TASK_STATE_BUILDING,
+                    cluster_pb2.TASK_STATE_ASSIGNED,
+                ):
+                    counts[worker.worker_id] += 1
+
+        return counts
 
     def try_schedule_task(
         self,
@@ -424,17 +523,39 @@ class Scheduler:
         matching_worker_ids = context.matching_workers(constraints)
 
         # Try to find a worker that can fit this task among matching workers
+        workers_at_building_limit = 0
         for worker_id in matching_worker_ids:
             if worker_id in context.scheduled_workers:
                 continue
             capacity = context.capacities[worker_id]
-            if capacity.can_fit_job(job):
+            if not capacity.can_accept_building_task():
+                workers_at_building_limit += 1
+                continue
+            if capacity.can_fit_job(job, check_building_limit=False):
                 capacity.deduct(job)
                 context.scheduled_workers.add(worker_id)
                 return TaskScheduleResult(task=task, worker=capacity.worker)
 
         # No worker could fit the task - build detailed reason
         res = job.request.resources
+
+        # Check if the issue is building limit vs resource capacity
+        if workers_at_building_limit > 0:
+            workers_with_resources = sum(
+                1
+                for wid in matching_worker_ids
+                if wid not in context.scheduled_workers
+                and context.capacities[wid].can_fit_job(job, check_building_limit=False)
+            )
+            if workers_with_resources > 0:
+                return TaskScheduleResult(
+                    task=task,
+                    failure_reason=(
+                        f"Waiting for build slots: {workers_at_building_limit} worker(s) at building limit "
+                        f"(max {self._max_building_tasks_per_worker} concurrent builds per worker)"
+                    ),
+                )
+
         if constraints:
             return TaskScheduleResult(
                 task=task,
@@ -468,6 +589,9 @@ class Scheduler:
         task at the front of the queue doesn't fit, smaller tasks behind it can
         still be scheduled.
 
+        Implements back-pressure by limiting concurrent BUILDING tasks per worker.
+        Workers with too many tasks in BUILDING state won't receive new assignments.
+
         Args:
             pending_tasks: Tasks waiting to be scheduled (in FIFO order)
             workers: Available workers (only healthy ones should be passed)
@@ -476,11 +600,18 @@ class Scheduler:
             SchedulingResult with successful assignments and timed-out tasks only
         """
         result = SchedulingResult()
-        context = SchedulingContext.from_workers(workers)
+
+        # Count building tasks per worker for back-pressure
+        building_counts = self._count_building_tasks_per_worker()
+        context = SchedulingContext.from_workers(
+            workers,
+            building_counts=building_counts,
+            max_building_tasks=self._max_building_tasks_per_worker,
+        )
         scheduled_task_ids: set[str] = set()
 
         # Group tasks by job for coscheduled handling
-        tasks_by_job: dict[JobId, list[ControllerTask]] = defaultdict(list)
+        tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
         for task in pending_tasks:
             tasks_by_job[task.job_id].append(task)
 
@@ -577,6 +708,7 @@ class Scheduler:
             assignments: list[tuple[ControllerTask, ControllerWorker]] = []
             for task, worker_id in zip(sorted_tasks, available[:num_tasks], strict=False):
                 context.capacities[worker_id].deduct(job)
+                context.scheduled_workers.add(worker_id)
                 assignments.append((task, context.capacities[worker_id].worker))
 
             logger.debug(
@@ -598,20 +730,73 @@ class Scheduler:
 
     def _is_task_timed_out(self, task: ControllerTask, job: ControllerJob) -> bool:
         """Check if a task has exceeded its scheduling timeout."""
-        timeout_seconds = job.request.scheduling_timeout_seconds
-        if timeout_seconds <= 0:
-            return False
+        return job.scheduling_deadline is not None and job.scheduling_deadline.expired()
 
-        pending_duration_ms = now_ms() - task.submitted_at_ms
-        timeout_ms = timeout_seconds * 1000
-        return pending_duration_ms > timeout_ms
+    def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext:
+        """Create a scheduling context for the given workers.
 
-    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+        Exposed for dashboard use to query task schedule status.
+        """
+        building_counts = self._count_building_tasks_per_worker()
+        return SchedulingContext.from_workers(
+            workers,
+            building_counts=building_counts,
+            max_building_tasks=self._max_building_tasks_per_worker,
+        )
+
+    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
         """Get the current scheduling status of a task.
 
         Used by the dashboard to show why a task is pending.
-        Builds fresh scheduling context to reflect current state.
+        Caller provides the SchedulingContext so it can be reused across
+        multiple calls (e.g. when listing all tasks for a job).
         """
-        workers = self._state.get_available_workers()
-        context = SchedulingContext.from_workers(workers)
+        job = self._state.get_job(task.job_id)
+        if job and job.is_coscheduled:
+            return self._coscheduled_schedule_status(task, job, context)
+
+        return self.try_schedule_task(task, context)
+
+    def _coscheduled_schedule_status(
+        self,
+        task: ControllerTask,
+        job: ControllerJob,
+        context: SchedulingContext,
+    ) -> TaskScheduleResult:
+        """Detailed scheduling status for a coscheduled task."""
+        constraints = list(job.request.constraints)
+        matching_ids = context.matching_workers(constraints)
+        group_by = job.coscheduling_group_by
+        num_tasks = len(self._state.get_job_tasks(task.job_id))
+
+        if not matching_ids:
+            constraint_keys = [c.key for c in constraints]
+            return TaskScheduleResult(
+                task=task,
+                failure_reason=f"No workers match constraints: {constraint_keys}",
+            )
+
+        if not group_by:
+            return self.try_schedule_task(task, context)
+
+        groups = context.workers_by_group(group_by, matching_ids)
+
+        if not groups:
+            return TaskScheduleResult(
+                task=task,
+                failure_reason=(
+                    f"Coscheduling: {len(matching_ids)} workers match constraints but none have '{group_by}' attribute"
+                ),
+            )
+
+        best = max(len(wids) for wids in groups.values())
+        if best < num_tasks:
+            return TaskScheduleResult(
+                task=task,
+                failure_reason=(
+                    f"Coscheduling: need {num_tasks} workers in same '{group_by}' group, largest group has {best}"
+                ),
+            )
+
+        # Workers exist in theory, check capacity
         return self.try_schedule_task(task, context)

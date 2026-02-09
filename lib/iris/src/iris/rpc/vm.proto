@@ -16,6 +16,7 @@ edition = "2023";
 
 package iris.vm;
 
+import "time.proto";
 import "config.proto";
 
 // VM lifecycle states
@@ -29,6 +30,7 @@ enum VmState {
   VM_STATE_TERMINATED = 6;   // VM deleted
   VM_STATE_FAILED = 7;       // Boot or init failed
   VM_STATE_PREEMPTED = 8;    // Spot/preemptible VM reclaimed
+  VM_STATE_REQUESTING = 9;   // GCP API call in progress
 }
 
 // Scaling action types
@@ -39,6 +41,14 @@ enum ScalingAction {
   SCALING_ACTION_NONE = 3;
 }
 
+message ResourceSpec {
+  int32 cpu = 1;
+  int64 memory_bytes = 2;
+  int64 disk_bytes = 3;
+  int32 gpu_count = 4;
+  int32 tpu_count = 5;
+}
+
 // Information about a managed VM
 message VmInfo {
   string vm_id = 1;
@@ -47,8 +57,8 @@ message VmInfo {
   VmState state = 4;
   string address = 5;
   string zone = 6;
-  int64 created_at_ms = 7;
-  int64 state_changed_at_ms = 8;
+  iris.time.Timestamp created_at = 7;
+  iris.time.Timestamp state_changed_at = 8;
 
   // Worker info (populated after registration)
   string worker_id = 10;
@@ -67,7 +77,7 @@ message VmInfo {
 message SliceInfo {
   string slice_id = 1;
   string scale_group = 2;
-  int64 created_at_ms = 3;
+  iris.time.Timestamp created_at = 3;
   repeated VmInfo vms = 4;
 }
 
@@ -89,20 +99,23 @@ message ScaleGroupStatus {
   int32 peak_demand = 21;
 
   // Backoff state
-  int64 backoff_until_ms = 30;
+  iris.time.Timestamp backoff_until = 30;
   int32 consecutive_failures = 31;
 
   // Rate limiting
-  int64 last_scale_up_ms = 40;
-  int64 last_scale_down_ms = 41;
+  iris.time.Timestamp last_scale_up = 40;
+  iris.time.Timestamp last_scale_down = 41;
 
   // Slices in this group
   repeated SliceInfo slices = 50;
+
+  // Slice lifecycle state counts (booting, initializing, ready, failed, requesting)
+  map<string, int32> slice_state_counts = 60;
 }
 
 // Autoscaler action/event log entry
 message AutoscalerAction {
-  int64 timestamp_ms = 1;
+  iris.time.Timestamp timestamp = 1;
   string action_type = 2;     // "scale_up", "scale_down", "quota_exceeded", "backoff_triggered", "worker_failed"
   string scale_group = 3;
   string slice_id = 4;        // Empty for group-level actions
@@ -110,10 +123,36 @@ message AutoscalerAction {
   string status = 6;          // "pending", "completed", "failed"
 }
 
+message DemandEntryStatus {
+  repeated string task_ids = 1;
+  string coschedule_group_id = 2;
+  iris.config.AcceleratorType accelerator_type = 3;
+  string accelerator_variant = 4;
+  bool preemptible = 5;
+  ResourceSpec resources = 6;
+}
+
+message UnmetDemand {
+  DemandEntryStatus entry = 1;
+  string reason = 2;
+}
+
+message RoutingDecision {
+  map<string, int32> group_to_launch = 1;
+  map<string, string> group_reasons = 2;
+  map<string, DemandEntryStatusList> routed_entries = 3;
+  repeated UnmetDemand unmet_entries = 4;
+}
+
+message DemandEntryStatusList {
+  repeated DemandEntryStatus entries = 1;
+}
+
 // Full autoscaler status (for RPC response)
 message AutoscalerStatus {
   repeated ScaleGroupStatus groups = 1;
   map<string, int32> current_demand = 2;
-  int64 last_evaluation_ms = 3;
+  iris.time.Timestamp last_evaluation = 3;
   repeated AutoscalerAction recent_actions = 4;  // Last N actions (max 100)
+  RoutingDecision last_routing_decision = 5;
 }

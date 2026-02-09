@@ -51,7 +51,6 @@ dependencies = [
     "pytimeparse>=1.1.8",
     "humanfriendly==10.0",
     "safetensors[numpy]>=0.4.2,<0.7.0",
-    "matplotlib>=3.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
     "ray[default]==2.53.0",
@@ -63,8 +62,7 @@ dependencies = [
     "lenses",
     "jinja2",  # needed for apply_chat_template
     "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
-  # "lm-eval==0.4.2",
-  # "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
+    "immutabledict",
 ]
 
 [project.urls]
@@ -93,6 +91,10 @@ serve = [
 
 lm_eval = [
   "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+]
+
+kernels = [
+    "tokamax",
 ]
 
 gcp = [
@@ -134,13 +136,13 @@ dev = [
   "pygments",
   "click>=8.0.0",
   "prompt_toolkit>=3.0.0",
+  "matplotlib>=3.7.0",
 ]
 
 
 
 
 [tool.uv]
-default-groups = ["test", "docs", "dev"]
 conflicts = [
   [
     { extra = "gpu" },

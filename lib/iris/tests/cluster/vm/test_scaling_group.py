@@ -18,6 +18,7 @@ These tests focus on observable behavior - scaling policy decisions,
 VM group management, and state tracking - not on implementation details.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -25,13 +26,30 @@ import pytest
 from iris.cluster.types import VmWorkerStatus
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import time_pb2, config_pb2, vm_pb2
+from iris.time_utils import Duration, Timestamp
+
+DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
+    cpu=64,
+    memory_bytes=64 * 1024**3,
+    disk_bytes=100 * 1024**3,
+    gpu_count=0,
+    tpu_count=8,
+)
+
+
+def _with_resources(config: config_pb2.ScaleGroupConfig, *, slice_size: int = 1) -> config_pb2.ScaleGroupConfig:
+    if not config.HasField("resources"):
+        config.resources.CopyFrom(DEFAULT_RESOURCES)
+    if not config.HasField("slice_size"):
+        config.slice_size = slice_size
+    return config
 
 
 @pytest.fixture
 def scale_group_config() -> config_pb2.ScaleGroupConfig:
     """A standard scale group configuration for tests."""
-    return config_pb2.ScaleGroupConfig(
+    config = config_pb2.ScaleGroupConfig(
         name="test-group",
         min_slices=1,
         max_slices=5,
@@ -40,12 +58,13 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
+    return _with_resources(config)
 
 
 @pytest.fixture
 def unbounded_config() -> config_pb2.ScaleGroupConfig:
     """A scale group with no min/max constraints."""
-    return config_pb2.ScaleGroupConfig(
+    config = config_pb2.ScaleGroupConfig(
         name="unbounded-group",
         min_slices=0,
         max_slices=100,
@@ -54,6 +73,7 @@ def unbounded_config() -> config_pb2.ScaleGroupConfig:
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
+    return _with_resources(config)
 
 
 def make_mock_vm_group(
@@ -94,10 +114,23 @@ def make_mock_vm_group(
     ]
     status = VmGroupStatus(vms=snapshots)
     mock.status.return_value = status
+
+    # Mock vms() to return objects with info.address for _verify_slice_idle / liveness
+    mock_vms = []
+    for i, state in enumerate(vm_states):
+        vm_mock = MagicMock()
+        vm_mock.info = vm_pb2.VmInfo(
+            vm_id=f"{slice_id}-vm-{i}",
+            state=state,
+            address=f"10.0.{slice_hash}.{i}",
+        )
+        mock_vms.append(vm_mock)
+    mock.vms.return_value = mock_vms
+
     mock.to_proto.return_value = vm_pb2.SliceInfo(
         slice_id=slice_id,
         scale_group=scale_group,
-        created_at_ms=created_at_ms,
+        created_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
         vms=[
             vm_pb2.VmInfo(
                 vm_id=s.vm_id,
@@ -105,6 +138,8 @@ def make_mock_vm_group(
                 address=s.address,
                 init_phase=s.init_phase,
                 init_error=s.init_error,
+                created_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
+                state_changed_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
             )
             for s in snapshots
         ],
@@ -231,13 +266,13 @@ class TestScalingGroupScalingPolicy:
         manager = make_mock_vm_manager()
         group = ScalingGroup(unbounded_config, manager)
 
-        ts = 1000000
-        group.record_failure(ts=ts)
+        ts = Timestamp.from_ms(1000000)
+        group.record_failure(timestamp=ts)
 
         # During backoff period
-        assert not group.can_scale_up(ts=ts + 1000)
+        assert not group.can_scale_up(timestamp=Timestamp.from_ms(1001000))
         # After backoff expires (default 5s = 5000ms)
-        assert group.can_scale_up(ts=ts + 6000)
+        assert group.can_scale_up(timestamp=Timestamp.from_ms(1006000))
 
     def test_cannot_scale_up_during_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """can_scale_up() returns False during cooldown period after scale-up."""
@@ -245,16 +280,16 @@ class TestScalingGroupScalingPolicy:
         group = ScalingGroup(
             unbounded_config,
             manager,
-            scale_up_cooldown_ms=10000,
+            scale_up_cooldown=Duration.from_ms(10000),
         )
 
-        ts = 1000000
-        group.scale_up(ts=ts)
+        ts = Timestamp.from_ms(1000000)
+        group.scale_up(timestamp=ts)
 
         # During cooldown
-        assert not group.can_scale_up(ts=ts + 5000)
+        assert not group.can_scale_up(timestamp=Timestamp.from_ms(1005000))
         # After cooldown expires
-        assert group.can_scale_up(ts=ts + 15000)
+        assert group.can_scale_up(timestamp=Timestamp.from_ms(1015000))
 
     def test_can_scale_down_when_above_min(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """can_scale_down() returns True when above min_slices."""
@@ -284,17 +319,17 @@ class TestScalingGroupScalingPolicy:
         group = ScalingGroup(
             unbounded_config,
             manager,
-            scale_down_cooldown_ms=10000,
+            scale_down_cooldown=Duration.from_ms(10000),
         )
         group.reconcile()
 
-        ts = 1000000
-        group.scale_down("slice-001", timestamp_ms=ts)
+        ts = Timestamp.from_ms(1000000)
+        group.scale_down("slice-001", timestamp=ts)
 
         # During cooldown
-        assert not group.can_scale_down(ts=ts + 5000)
+        assert not group.can_scale_down(timestamp=Timestamp.from_ms(1005000))
         # After cooldown expires
-        assert group.can_scale_down(ts=ts + 15000)
+        assert group.can_scale_down(timestamp=Timestamp.from_ms(1015000))
 
 
 class TestScalingGroupBackoff:
@@ -306,14 +341,15 @@ class TestScalingGroupBackoff:
         group = ScalingGroup(
             unbounded_config,
             manager,
-            backoff_initial_ms=5000,
+            backoff_initial=Duration.from_seconds(5.0),
         )
 
-        ts = 1000000
-        group.record_failure(ts=ts)
+        ts = Timestamp.from_ms(1000000)
+        group.record_failure(timestamp=ts)
 
         assert group.consecutive_failures == 1
-        assert group.backoff_until_ms == ts + 5000
+        assert group._backoff_until is not None
+        assert group._backoff_until.as_timestamp().epoch_ms() == 1005000
 
     def test_record_failure_applies_exponential_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Consecutive failures double the backoff time."""
@@ -321,17 +357,18 @@ class TestScalingGroupBackoff:
         group = ScalingGroup(
             unbounded_config,
             manager,
-            backoff_initial_ms=5000,
+            backoff_initial=Duration.from_seconds(5.0),
             backoff_factor=2.0,
         )
 
-        ts = 1000000
-        group.record_failure(ts=ts)  # 5000ms
-        group.record_failure(ts=ts)  # 10000ms
-        group.record_failure(ts=ts)  # 20000ms
+        ts = Timestamp.from_ms(1000000)
+        group.record_failure(timestamp=ts)  # 5000ms
+        group.record_failure(timestamp=ts)  # 10000ms
+        group.record_failure(timestamp=ts)  # 20000ms
 
         assert group.consecutive_failures == 3
-        assert group.backoff_until_ms == ts + 20000
+        assert group._backoff_until is not None
+        assert group._backoff_until.as_timestamp().epoch_ms() == 1020000
 
     def test_backoff_capped_at_maximum(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Backoff duration is capped at max value."""
@@ -339,32 +376,33 @@ class TestScalingGroupBackoff:
         group = ScalingGroup(
             unbounded_config,
             manager,
-            backoff_initial_ms=5000,
-            backoff_max_ms=15000,
+            backoff_initial=Duration.from_seconds(5.0),
+            backoff_max=Duration.from_seconds(15.0),
             backoff_factor=2.0,
         )
 
-        ts = 1000000
+        ts = Timestamp.from_ms(1000000)
         for _ in range(10):  # Many failures
-            group.record_failure(ts=ts)
+            group.record_failure(timestamp=ts)
 
         # Should be capped at max
-        assert group.backoff_until_ms == ts + 15000
+        assert group._backoff_until is not None
+        assert group._backoff_until.as_timestamp().epoch_ms() == 1015000
 
     def test_scale_up_resets_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Successful scale-up resets backoff state."""
         manager = make_mock_vm_manager()
         group = ScalingGroup(unbounded_config, manager)
 
-        ts = 1000000
-        group.record_failure(ts=ts)
-        group.record_failure(ts=ts)
+        ts = Timestamp.from_ms(1000000)
+        group.record_failure(timestamp=ts)
+        group.record_failure(timestamp=ts)
         assert group.consecutive_failures == 2
 
-        group.scale_up(ts=ts + 100000)
+        group.scale_up(timestamp=Timestamp.from_ms(1100000))
 
         assert group.consecutive_failures == 0
-        assert group.backoff_until_ms == 0
+        assert group._backoff_until is None
 
 
 class TestScalingGroupDemandTracking:
@@ -389,18 +427,18 @@ class TestScalingGroupIdleTracking:
     def test_slice_eligible_when_never_active(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Fresh slice (no activity tracked) is eligible for scaledown."""
         manager = make_mock_vm_manager()
-        group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=60_000)
+        group = ScalingGroup(unbounded_config, manager, idle_threshold=Duration.from_ms(60_000))
         group.scale_up()  # Creates a slice
         slice_id = next(iter(group.vm_groups())).slice_id
 
         # Never had activity tracked -> eligible
-        assert group.is_slice_eligible_for_scaledown(slice_id, timestamp_ms=1000)
+        assert group.is_slice_eligible_for_scaledown(slice_id, Timestamp.from_ms(1000))
 
     def test_slice_not_eligible_when_recently_active(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Recently active slice is not eligible for scaledown."""
         discovered = [make_mock_vm_group("slice-001", all_ready=True)]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=60_000)
+        group = ScalingGroup(unbounded_config, manager, idle_threshold=Duration.from_ms(60_000))
         group.reconcile()
 
         # Set up vms() mock to return VM with address
@@ -414,16 +452,16 @@ class TestScalingGroupIdleTracking:
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
         }
-        group.update_slice_activity(vm_status_map, timestamp_ms=1000)
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
 
         # Not enough time passed (30s < 60s threshold)
-        assert not group.is_slice_eligible_for_scaledown("slice-001", timestamp_ms=30_000)
+        assert not group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(30_000))
 
     def test_slice_eligible_after_idle_threshold(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Slice is eligible after idle_threshold_ms of inactivity."""
+        """Slice is eligible after idle_threshold of inactivity."""
         discovered = [make_mock_vm_group("slice-001", all_ready=True)]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=60_000)
+        group = ScalingGroup(unbounded_config, manager, idle_threshold=Duration.from_ms(60_000))
         group.reconcile()
 
         # Set up vms() mock to return VM with address
@@ -437,10 +475,10 @@ class TestScalingGroupIdleTracking:
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
         }
-        group.update_slice_activity(vm_status_map, timestamp_ms=1000)
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
 
         # After threshold (61s > 60s) -> eligible
-        assert group.is_slice_eligible_for_scaledown("slice-001", timestamp_ms=61_001)
+        assert group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(61_001))
 
     def test_get_idle_slices_returns_longest_idle_first(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """get_idle_slices returns slices sorted by idle time (longest first)."""
@@ -449,7 +487,7 @@ class TestScalingGroupIdleTracking:
             make_mock_vm_group("slice-002", all_ready=True),
         ]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=1000)
+        group = ScalingGroup(unbounded_config, manager, idle_threshold=Duration.from_ms(1000))
         group.reconcile()
 
         # Set up vms() mocks to return VMs with addresses
@@ -465,16 +503,16 @@ class TestScalingGroupIdleTracking:
         vm_status_map_001 = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
         }
-        group.update_slice_activity(vm_status_map_001, timestamp_ms=1000)
+        group.update_slice_activity(vm_status_map_001, Timestamp.from_ms(1000))
 
         # Mark slice-002 as active at t=5000 (more recently active)
         vm_status_map_002 = {
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset({"task-2"})),
         }
-        group.update_slice_activity(vm_status_map_002, timestamp_ms=5000)
+        group.update_slice_activity(vm_status_map_002, Timestamp.from_ms(5000))
 
         # At timestamp 10000, slice-001 has been idle longer (9s vs 5s)
-        idle_slices = group.get_idle_slices(timestamp_ms=10_000)
+        idle_slices = group.get_idle_slices(Timestamp.from_ms(10_000))
         assert len(idle_slices) == 2
         assert idle_slices[0].slice_id == "slice-001"  # Longest idle first
 
@@ -495,8 +533,7 @@ class TestScalingGroupIdleTracking:
         for slice_id, vm_addr in [("slice-001", slice_001_addr), ("slice-002", slice_002_addr)]:
             slice_obj = group.get_slice(slice_id)
             mock_vm = MagicMock()
-            mock_vm.info.worker_id = f"worker-{slice_id}"
-            mock_vm.info.address = vm_addr
+            mock_vm.info = SimpleNamespace(worker_id=f"worker-{slice_id}", address=vm_addr)
             slice_obj.vms.return_value = [mock_vm]
 
         # slice-001 has running tasks, slice-002 is idle
@@ -505,12 +542,12 @@ class TestScalingGroupIdleTracking:
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),  # Idle
         }
 
-        group.update_slice_activity(vm_status_map, timestamp_ms=5000)
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(5000))
 
         # Observable behavior: slice-001 should not be eligible for scaledown (recently active)
         # slice-002 should remain eligible (no activity tracked)
-        assert not group.is_slice_eligible_for_scaledown("slice-001", timestamp_ms=5000)
-        assert group.is_slice_eligible_for_scaledown("slice-002", timestamp_ms=5000)
+        assert not group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(5000))
+        assert group.is_slice_eligible_for_scaledown("slice-002", Timestamp.from_ms(5000))
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
@@ -519,7 +556,9 @@ class TestScalingGroupIdleTracking:
             make_mock_vm_group("slice-002", all_ready=True),
         ]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=1000, scale_down_cooldown_ms=0)
+        group = ScalingGroup(
+            unbounded_config, manager, idle_threshold=Duration.from_ms(1000), scale_down_cooldown=Duration.from_ms(0)
+        )
         group.reconcile()
 
         # Mock vms() for idle verification
@@ -528,8 +567,7 @@ class TestScalingGroupIdleTracking:
         for slice_id, vm_addr in [("slice-001", slice_001_addr), ("slice-002", slice_002_addr)]:
             slice_obj = group.get_slice(slice_id)
             mock_vm = MagicMock()
-            mock_vm.info.worker_id = f"worker-{slice_id}"
-            mock_vm.info.address = vm_addr
+            mock_vm.info = SimpleNamespace(worker_id=f"worker-{slice_id}", address=vm_addr)
             slice_obj.vms.return_value = [mock_vm]
 
         # Mark both slices as active at t=0 (they'll be idle for 10s, exceeding 1s threshold)
@@ -537,7 +575,7 @@ class TestScalingGroupIdleTracking:
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset({"task-2"})),
         }
-        group.update_slice_activity(vm_status_map_active, timestamp_ms=0)
+        group.update_slice_activity(vm_status_map_active, Timestamp.from_ms(0))
 
         # At t=10_000, workers are now idle
         vm_status_map_idle = {
@@ -546,7 +584,9 @@ class TestScalingGroupIdleTracking:
         }
 
         # Target capacity = 1, but we have 2 ready slices
-        scaled_down = group.scale_down_if_idle(vm_status_map_idle, target_capacity=1, timestamp_ms=10_000)
+        scaled_down = group.scale_down_if_idle(
+            vm_status_map_idle, target_capacity=1, timestamp=Timestamp.from_ms(10_000)
+        )
 
         assert scaled_down is not None
         assert group.slice_count() == 1  # One slice was terminated
@@ -555,14 +595,16 @@ class TestScalingGroupIdleTracking:
         """scale_down_if_idle does nothing when at or below target capacity."""
         discovered = [make_mock_vm_group("slice-001", all_ready=True)]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=1000, scale_down_cooldown_ms=0)
+        group = ScalingGroup(
+            unbounded_config, manager, idle_threshold=Duration.from_ms(1000), scale_down_cooldown=Duration.from_ms(0)
+        )
         group.reconcile()
 
         slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
         vm_status_map = {slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset())}
 
         # Target = 1, ready = 1, should not scale down
-        scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity=1, timestamp_ms=10_000)
+        scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity=1, timestamp=Timestamp.from_ms(10_000))
 
         assert scaled_down is None
         assert group.slice_count() == 1
@@ -584,7 +626,7 @@ class TestScalingGroupIdleTracking:
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
         }
-        group.update_slice_activity(vm_status_map, timestamp_ms=1000)
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
 
         # Scale down
         group.scale_down("slice-001")
@@ -675,12 +717,14 @@ class TestScalingGroupAvailability:
         """Group is AT_CAPACITY when at max_slices."""
         from iris.cluster.vm.scaling_group import GroupAvailability
 
-        config = config_pb2.ScaleGroupConfig(
-            name="test-group",
-            min_slices=0,
-            max_slices=2,
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5p-8",
+        config = _with_resources(
+            config_pb2.ScaleGroupConfig(
+                name="test-group",
+                min_slices=0,
+                max_slices=2,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                accelerator_variant="v5p-8",
+            ),
         )
         discovered = [make_mock_vm_group(f"slice-{i}") for i in range(2)]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
@@ -695,13 +739,13 @@ class TestScalingGroupAvailability:
         from iris.cluster.vm.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
-        group = ScalingGroup(unbounded_config, manager, backoff_initial_ms=60000)
-        ts = 1000000
-        group.record_failure(ts=ts)
+        group = ScalingGroup(unbounded_config, manager, backoff_initial=Duration.from_seconds(60.0))
+        ts = Timestamp.from_ms(1000000)
+        group.record_failure(timestamp=ts)
 
-        state = group.availability(ts + 1000)  # Still in backoff
+        state = group.availability(Timestamp.from_ms(1001000))  # Still in backoff
         assert state.status == GroupAvailability.BACKOFF
-        assert state.until_ms is not None
+        assert state.until is not None
 
     def test_can_accept_demand_true_when_available(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """can_accept_demand() returns True when AVAILABLE."""
@@ -712,12 +756,14 @@ class TestScalingGroupAvailability:
 
     def test_can_accept_demand_false_when_at_capacity(self):
         """can_accept_demand() returns False when AT_CAPACITY."""
-        config = config_pb2.ScaleGroupConfig(
-            name="test-group",
-            min_slices=0,
-            max_slices=1,
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5p-8",
+        config = _with_resources(
+            config_pb2.ScaleGroupConfig(
+                name="test-group",
+                min_slices=0,
+                max_slices=1,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                accelerator_variant="v5p-8",
+            ),
         )
         discovered = [make_mock_vm_group("slice-0")]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
@@ -734,18 +780,18 @@ class TestScalingGroupAvailability:
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("TPU quota exhausted")
 
-        group = ScalingGroup(unbounded_config, manager, quota_timeout_ms=60_000)
+        group = ScalingGroup(unbounded_config, manager, quota_timeout=Duration.from_ms(60_000))
 
         with pytest.raises(QuotaExceededError):
-            group.scale_up(ts=1000)
+            group.scale_up(timestamp=Timestamp.from_ms(1000))
 
         # Before timeout: QUOTA_EXCEEDED
-        assert not group.can_accept_demand(timestamp_ms=30_000)
-        state = group.availability(timestamp_ms=30_000)
+        assert not group.can_accept_demand(timestamp=Timestamp.from_ms(30_000))
+        state = group.availability(timestamp=Timestamp.from_ms(30_000))
         assert state.status == GroupAvailability.QUOTA_EXCEEDED
 
         # After timeout (1000 + 60_000 = 61_000)
-        assert group.can_accept_demand(timestamp_ms=70_000)
+        assert group.can_accept_demand(timestamp=Timestamp.from_ms(70_000))
 
     def test_successful_scale_up_clears_quota_state(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Successful scale-up clears any quota exceeded state."""
@@ -757,15 +803,15 @@ class TestScalingGroupAvailability:
             make_mock_vm_group("slice-1"),
         ]
 
-        group = ScalingGroup(unbounded_config, manager, quota_timeout_ms=300_000)
+        group = ScalingGroup(unbounded_config, manager, quota_timeout=Duration.from_ms(300_000))
 
         with pytest.raises(QuotaExceededError):
-            group.scale_up(ts=1000)
-        assert not group.can_accept_demand(timestamp_ms=2000)
+            group.scale_up(timestamp=Timestamp.from_ms(1000))
+        assert not group.can_accept_demand(timestamp=Timestamp.from_ms(2000))
 
         # Second scale_up succeeds and clears quota state
-        group.scale_up(ts=3000)
-        assert group.can_accept_demand(timestamp_ms=4000)
+        group.scale_up(timestamp=Timestamp.from_ms(3000))
+        assert group.can_accept_demand(timestamp=Timestamp.from_ms(4000))
 
     def test_quota_exceeded_takes_precedence_over_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded has higher precedence than backoff."""
@@ -775,17 +821,17 @@ class TestScalingGroupAvailability:
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("Quota exhausted")
 
-        group = ScalingGroup(unbounded_config, manager, quota_timeout_ms=60_000)
+        group = ScalingGroup(unbounded_config, manager, quota_timeout=Duration.from_ms(60_000))
 
         # Record a failure to trigger backoff
-        group.record_failure(ts=1000)
+        group.record_failure(timestamp=Timestamp.from_ms(1000))
 
         # Then trigger quota exceeded
         with pytest.raises(QuotaExceededError):
-            group.scale_up(ts=1000)
+            group.scale_up(timestamp=Timestamp.from_ms(1000))
 
         # Availability should report QUOTA_EXCEEDED, not BACKOFF
-        state = group.availability(timestamp_ms=2000)
+        state = group.availability(timestamp=Timestamp.from_ms(2000))
         assert state.status == GroupAvailability.QUOTA_EXCEEDED
 
     def test_matches_device_requirement_filters_by_type_and_variant(
@@ -823,7 +869,7 @@ class TestScalingGroupFailedSliceCleanup:
         group = ScalingGroup(unbounded_config, manager)
         group.reconcile()
 
-        cleaned = group.cleanup_failed_slices(timestamp_ms=1000)
+        cleaned = group.cleanup_failed_slices(timestamp=Timestamp.from_ms(1000))
 
         assert len(cleaned) == 2
         assert group.slice_count() == 1
@@ -839,14 +885,15 @@ class TestScalingGroupFailedSliceCleanup:
             make_mock_vm_group("slice-003", any_failed=True),
         ]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, manager, backoff_initial_ms=5000)
+        group = ScalingGroup(unbounded_config, manager, backoff_initial=Duration.from_seconds(5.0))
         group.reconcile()
 
-        group.cleanup_failed_slices(timestamp_ms=1000)
+        group.cleanup_failed_slices(timestamp=Timestamp.from_ms(1000))
 
         # Only one failure recorded despite cleaning up 3 slices
         assert group.consecutive_failures == 1
-        assert group.backoff_until_ms == 1000 + 5000
+        assert group._backoff_until is not None
+        assert group._backoff_until.as_timestamp().epoch_ms() == 6000
 
     def test_cleanup_failed_slices_returns_empty_when_no_failures(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """cleanup_failed_slices() returns empty list when no slices are failed."""
@@ -858,7 +905,7 @@ class TestScalingGroupFailedSliceCleanup:
         group = ScalingGroup(unbounded_config, manager)
         group.reconcile()
 
-        cleaned = group.cleanup_failed_slices(timestamp_ms=1000)
+        cleaned = group.cleanup_failed_slices(timestamp=Timestamp.from_ms(1000))
 
         assert len(cleaned) == 0
         assert group.slice_count() == 2
@@ -882,9 +929,9 @@ class TestScalingGroupFailedSliceCleanup:
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
         }
-        group.update_slice_activity(vm_status_map, timestamp_ms=1000)
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
 
-        group.cleanup_failed_slices(timestamp_ms=2000)
+        group.cleanup_failed_slices(timestamp=Timestamp.from_ms(2000))
 
         # Observable behavior: slice should be removed (already verified by cleanup return value)
         assert group.get_slice("slice-001") is None
@@ -893,14 +940,127 @@ class TestScalingGroupFailedSliceCleanup:
         """cleanup_failed_slices() does not respect scale_down_cooldown."""
         discovered = [make_mock_vm_group("slice-001", any_failed=True)]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, manager, scale_down_cooldown_ms=60_000)
+        group = ScalingGroup(unbounded_config, manager, scale_down_cooldown=Duration.from_ms(60_000))
         group.reconcile()
 
         # Set last scale-down to trigger cooldown for normal scale_down
-        group._last_scale_down_ms = 1000
+        group._last_scale_down = Timestamp.from_ms(1000)
 
         # Despite cooldown, cleanup_failed_slices() should still work
-        cleaned = group.cleanup_failed_slices(timestamp_ms=2000)
+        cleaned = group.cleanup_failed_slices(timestamp=Timestamp.from_ms(2000))
 
         assert len(cleaned) == 1
         assert group.slice_count() == 0
+
+
+class TestVerifySliceIdle:
+    """Tests for _verify_slice_idle behavior with unknown workers."""
+
+    def test_unknown_workers_do_not_count_as_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """A slice with no workers in the status map is NOT idle (we don't know yet)."""
+        manager = make_mock_vm_manager()
+        group = ScalingGroup(unbounded_config, manager)
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+
+        # Empty status map — no workers known
+        assert not group._verify_slice_idle(vm_group, {})
+
+    def test_known_idle_workers_are_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """A slice where all known workers are idle IS idle."""
+        manager = make_mock_vm_manager()
+        group = ScalingGroup(unbounded_config, manager)
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+
+        # Get VM addresses from mock
+        vm_address = vm_group.vms()[0].info.address
+        status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset())}
+        assert group._verify_slice_idle(vm_group, status_map)
+
+    def test_known_busy_worker_blocks_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """A slice with a known busy worker is NOT idle."""
+        manager = make_mock_vm_manager()
+        group = ScalingGroup(unbounded_config, manager)
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+
+        vm_address = vm_group.vms()[0].info.address
+        status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset({"task-1"}))}
+        assert not group._verify_slice_idle(vm_group, status_map)
+
+
+class TestSliceLivenessTimeout:
+    """Tests for slice liveness tracking and reaping."""
+
+    def test_new_slice_gets_startup_grace(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """scale_up sets a liveness deadline at startup_grace from creation time."""
+        manager = make_mock_vm_manager()
+        grace = Duration.from_seconds(10)
+        group = ScalingGroup(unbounded_config, manager, startup_grace_period=grace)
+
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+
+        state = group._slices.get(vm_group.group_id)
+        assert state is not None
+        assert state.liveness_deadline is not None
+        assert not state.liveness_deadline.expired(now=ts)
+        assert not state.liveness_deadline.expired(now=Timestamp.from_ms(1009000))
+        assert state.liveness_deadline.expired(now=Timestamp.from_ms(1011000))
+
+    def test_liveness_extended_by_heartbeat(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """update_slice_liveness extends deadline when workers appear in status map."""
+        manager = make_mock_vm_manager()
+        startup = Duration.from_seconds(10)
+        heartbeat = Duration.from_seconds(5)
+        group = ScalingGroup(
+            unbounded_config,
+            manager,
+            startup_grace_period=startup,
+            heartbeat_grace_period=heartbeat,
+        )
+
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+        vm_address = vm_group.vms()[0].info.address
+
+        # At t=8s, worker shows up — extends deadline by heartbeat_grace (5s from now)
+        t_heartbeat = Timestamp.from_ms(1008000)
+        group.update_slice_liveness(
+            {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset())}, t_heartbeat
+        )
+
+        deadline = group._slices[vm_group.group_id].liveness_deadline
+        # Should expire at t_heartbeat + 5s = 1013000, not original 1010000
+        assert not deadline.expired(now=Timestamp.from_ms(1012000))
+        assert deadline.expired(now=Timestamp.from_ms(1014000))
+
+    def test_dead_slice_reaped(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Slice that misses its liveness deadline is terminated."""
+        manager = make_mock_vm_manager()
+        grace = Duration.from_seconds(10)
+        group = ScalingGroup(unbounded_config, manager, startup_grace_period=grace)
+
+        ts = Timestamp.from_ms(1000000)
+        vm_group = group.scale_up(timestamp=ts)
+        assert group.slice_count() == 1
+
+        # No heartbeats arrive. After grace period, cleanup should reap it.
+        dead = group.cleanup_dead_slices(Timestamp.from_ms(1011000))
+        assert len(dead) == 1
+        assert dead[0].group_id == vm_group.group_id
+        assert group.slice_count() == 0
+
+    def test_alive_slice_not_reaped(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Slice within its grace period is not reaped."""
+        manager = make_mock_vm_manager()
+        grace = Duration.from_seconds(10)
+        group = ScalingGroup(unbounded_config, manager, startup_grace_period=grace)
+
+        ts = Timestamp.from_ms(1000000)
+        group.scale_up(timestamp=ts)
+
+        dead = group.cleanup_dead_slices(Timestamp.from_ms(1005000))
+        assert len(dead) == 0
+        assert group.slice_count() == 1

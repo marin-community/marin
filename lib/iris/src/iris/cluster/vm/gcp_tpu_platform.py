@@ -33,13 +33,19 @@ from iris.cluster.vm.managed_vm import ManagedVm, VmFactory, VmRegistry
 from iris.cluster.vm.ssh import GcloudSshConnection
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
-# Metadata keys for controller discovery (used by workers to find controller)
-CONTROLLER_METADATA_KEY = "iris-controller"
-CONTROLLER_ADDRESS_METADATA_KEY = "iris-controller-address"
+
+def controller_metadata_key(label_prefix: str) -> str:
+    """Metadata key to mark a VM as the controller for a given prefix."""
+    return f"iris-controller-{label_prefix}"
+
+
+def controller_address_metadata_key(label_prefix: str) -> str:
+    """Metadata key for the controller address for a given prefix."""
+    return f"iris-controller-address-{label_prefix}"
 
 
 class TpuVmGroup:
@@ -58,7 +64,7 @@ class TpuVmGroup:
         project_id: str,
         vms: list[ManagedVm],
         vm_registry: VmRegistry,
-        created_at_ms: int | None = None,
+        created_at: Timestamp | None = None,
     ):
         self._group_id = group_id
         self._scale_group = scale_group
@@ -66,7 +72,7 @@ class TpuVmGroup:
         self._project_id = project_id
         self._vms = vms
         self._vm_registry = vm_registry
-        self._created_at_ms = created_at_ms if created_at_ms is not None else now_ms()
+        self._created_at = created_at if created_at is not None else Timestamp.now()
 
     @property
     def group_id(self) -> str:
@@ -82,7 +88,8 @@ class TpuVmGroup:
 
     @property
     def created_at_ms(self) -> int:
-        return self._created_at_ms
+        """Timestamp when this VM group was created (milliseconds since epoch)."""
+        return self._created_at.epoch_ms()
 
     def status(self) -> VmGroupStatus:
         """Compute status from current VM states."""
@@ -131,10 +138,11 @@ class TpuVmGroup:
 
     def to_proto(self) -> vm_pb2.SliceInfo:
         """Convert to proto for RPC APIs."""
+
         return vm_pb2.SliceInfo(
             slice_id=self._group_id,
             scale_group=self._scale_group,
-            created_at_ms=self._created_at_ms,
+            created_at=self._created_at.to_proto(),
             vms=[vm.info for vm in self._vms],
         )
 
@@ -174,7 +182,7 @@ class TpuVmManager:
         Creates the TPU pod via gcloud, then creates ManagedVm instances
         for each worker in the pod.
         """
-        group_id = f"{self._label_prefix}-{self._config.name}-{now_ms()}"
+        group_id = f"{self._label_prefix}-{self._config.name}-{Timestamp.now().epoch_ms()}"
 
         labels = {
             f"{self._label_prefix}-managed": "true",
@@ -234,17 +242,21 @@ class TpuVmManager:
         """Generate GCP metadata-based discovery script for worker bootstrap.
 
         Workers query GCP instance metadata to find a running controller.
+        Uses prefix-scoped metadata keys to ensure workers connect to the correct
+        controller when multiple controllers exist with different prefixes.
         """
+        meta_key = controller_metadata_key(self._label_prefix)
+        addr_key = controller_address_metadata_key(self._label_prefix)
         return f"""
-# Discover controller from GCP instance metadata
+# Discover controller from GCP instance metadata (prefix: {self._label_prefix})
 CONTROLLER_ADDRESS=$(gcloud compute instances list \\
     --project={self._project_id} \\
-    --filter="metadata.items.{CONTROLLER_METADATA_KEY}=true AND status=RUNNING" \\
-    --format="value(metadata.items.filter(key:{CONTROLLER_ADDRESS_METADATA_KEY}).firstof(value))" \\
+    --filter="metadata.items.{meta_key}=true AND status=RUNNING" \\
+    --format="value(metadata.items.filter(key:{addr_key}).firstof(value))" \\
     --limit=1)
 
 if [ -z "$CONTROLLER_ADDRESS" ]; then
-    echo "[iris-init] ERROR: Could not discover controller via GCP metadata"
+    echo "[iris-init] ERROR: Could not discover controller via GCP metadata (prefix: {self._label_prefix})"
     exit 1
 fi
 echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"
@@ -355,3 +367,7 @@ echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"
         if "/" in resource_name:
             return resource_name.split("/")[-1]
         return resource_name
+
+    def stop(self) -> None:
+        """No-op: TpuVmManager has no background threads to stop."""
+        pass

@@ -55,7 +55,7 @@ tulu_sft_config = SimpleSFTConfig(
     learning_rate=5e-6,
     resources=ResourceConfig.with_tpu("v4-128", slice_count=1),
     tokenizer=llama3_instruct_tokenizer,
-    model_name_or_path="meta-llama/Llama-3.1-8B",
+    initialize_from_hf="meta-llama/Llama-3.1-8B",
     max_seq_len=4096,
     seed=1,
 )

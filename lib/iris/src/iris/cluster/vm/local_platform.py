@@ -1,0 +1,359 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Local platform: in-process VmManager for testing without GCP.
+
+Provides LocalVmManager (VmManagerProtocol) and LocalVmGroup (VmGroupProtocol)
+that create real Worker instances running in-process with subprocess-based execution
+instead of Docker containers.
+
+Also provides the local provider implementations used by workers:
+- LocalEnvironmentProvider: probes local system resources
+- _LocalBundleProvider: serves pre-built bundles from local filesystem
+"""
+
+from __future__ import annotations
+
+import logging
+import socket
+import uuid
+from pathlib import Path
+
+from iris.cluster.types import get_tpu_topology, tpu_device
+from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
+from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
+from iris.cluster.runtime.process import ProcessRuntime
+from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
+from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
+from iris.time_utils import Duration, Timestamp
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Local Providers (in-process implementations for testing)
+# =============================================================================
+
+
+class _LocalBundleProvider:
+    def __init__(self, bundle_path: Path):
+        self._bundle_path = bundle_path
+
+    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
+        del gcs_path, expected_hash
+        return self._bundle_path
+
+
+class LocalEnvironmentProvider:
+    def __init__(
+        self,
+        cpu: int = 1000,
+        memory_gb: int = 1000,
+        attributes: dict[str, str | int | float] | None = None,
+        device: cluster_pb2.DeviceConfig | None = None,
+    ):
+        self._cpu = cpu
+        self._memory_gb = memory_gb
+        self._attributes = attributes or {}
+        self._device = device
+
+    def probe(self) -> cluster_pb2.WorkerMetadata:
+        if self._device is not None:
+            device = self._device
+        else:
+            device = cluster_pb2.DeviceConfig()
+            device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+        proto_attrs = {}
+        for key, value in self._attributes.items():
+            if isinstance(value, str):
+                proto_attrs[key] = cluster_pb2.AttributeValue(string_value=value)
+            elif isinstance(value, int):
+                proto_attrs[key] = cluster_pb2.AttributeValue(int_value=value)
+            elif isinstance(value, float):
+                proto_attrs[key] = cluster_pb2.AttributeValue(float_value=value)
+
+        return cluster_pb2.WorkerMetadata(
+            hostname="local",
+            ip_address="127.0.0.1",
+            cpu_count=self._cpu,
+            memory_bytes=self._memory_gb * 1024**3,
+            disk_bytes=100 * 1024**3,  # Default 100GB for local
+            device=device,
+            attributes=proto_attrs,
+        )
+
+
+def find_free_port() -> int:
+    """Find an available port."""
+    with socket.socket() as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+class _StubManagedVm(ManagedVm):
+    """Minimal ManagedVm stub that holds VmInfo without lifecycle management.
+
+    Used by LocalVmGroup to satisfy the VmGroupProtocol interface without
+    running actual bootstrap threads.
+    """
+
+    def __init__(self, info: vm_pb2.VmInfo):
+        # Don't call super().__init__ - just set the minimal attributes
+        self.info = info
+        self._log_lines: list[str] = []
+
+    def start(self) -> None:
+        pass
+
+    def stop(self, timeout: Duration = Duration.from_seconds(10.0)) -> None:
+        pass
+
+    def init_log(self, tail: int | None = None) -> str:
+        return ""
+
+    def check_health(self) -> bool:
+        return True
+
+
+class LocalVmGroup(VmGroupProtocol):
+    """In-process VM group that wraps Worker instances.
+
+    For the demo, each VM group represents a "slice" that contains one or more
+    workers. Workers become ready immediately (no bootstrap delay).
+    """
+
+    def __init__(
+        self,
+        group_id: str,
+        scale_group: str,
+        workers: list[Worker],
+        worker_ids: list[str],
+        worker_ports: list[int],
+        vm_registry: VmRegistry,
+    ):
+        self._group_id = group_id
+        self._scale_group = scale_group
+        self._workers = workers
+        self._worker_ids = worker_ids
+        self._created_at = Timestamp.now()
+        self._vm_registry = vm_registry
+        self._terminated = False
+
+        # Create mock ManagedVm instances for each worker (for autoscaler compatibility)
+        self._managed_vms: list[ManagedVm] = []
+        for i, (worker_id, port) in enumerate(zip(worker_ids, worker_ports, strict=True)):
+            # Create a minimal ManagedVm that's immediately ready
+            # We don't use ManagedVm's lifecycle thread since workers are in-process
+            vm_info = vm_pb2.VmInfo(
+                vm_id=f"{group_id}-vm-{i}",
+                slice_id=group_id,
+                scale_group=scale_group,
+                state=vm_pb2.VM_STATE_READY,
+                address=f"127.0.0.1:{port}",
+                zone="local",
+                worker_id=worker_id,
+                created_at=self._created_at.to_proto(),
+                state_changed_at=self._created_at.to_proto(),
+            )
+            # Create a stub ManagedVm that just holds the info
+            managed_vm = _StubManagedVm(vm_info)
+            self._managed_vms.append(managed_vm)
+            vm_registry.register(managed_vm)
+
+    @property
+    def group_id(self) -> str:
+        return self._group_id
+
+    @property
+    def slice_id(self) -> str:
+        return self._group_id
+
+    @property
+    def scale_group(self) -> str:
+        return self._scale_group
+
+    @property
+    def created_at_ms(self) -> int:
+        """Timestamp when this VM group was created (milliseconds since epoch)."""
+        return self._created_at.epoch_ms()
+
+    def status(self) -> VmGroupStatus:
+        if self._terminated:
+            return VmGroupStatus(
+                vms=[
+                    VmSnapshot(
+                        vm_id=vm.info.vm_id,
+                        state=vm_pb2.VM_STATE_TERMINATED,
+                        address="",
+                        init_phase="",
+                        init_error="",
+                    )
+                    for vm in self._managed_vms
+                ]
+            )
+        return VmGroupStatus(
+            vms=[
+                VmSnapshot(
+                    vm_id=vm.info.vm_id,
+                    state=vm_pb2.VM_STATE_READY,
+                    address=vm.info.address,
+                    init_phase="ready",
+                    init_error="",
+                )
+                for vm in self._managed_vms
+            ]
+        )
+
+    def vms(self) -> list[ManagedVm]:
+        return self._managed_vms
+
+    def terminate(self) -> None:
+        if self._terminated:
+            return
+        self._terminated = True
+        for worker in self._workers:
+            worker.stop()
+        for vm in self._managed_vms:
+            self._vm_registry.unregister(vm.info.vm_id)
+
+    def to_proto(self) -> vm_pb2.SliceInfo:
+        return vm_pb2.SliceInfo(
+            slice_id=self._group_id,
+            scale_group=self._scale_group,
+            created_at=self._created_at.to_proto(),
+            vms=[vm.info for vm in self._managed_vms],
+        )
+
+
+class LocalVmManager:
+    """VmManager for in-process demo workers.
+
+    Creates LocalVmGroup instances containing in-process Worker instances.
+    Workers are created with appropriate attributes based on the scale group
+    configuration (TPU topology, etc.).
+    """
+
+    def __init__(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        controller_address: str,
+        cache_path: Path,
+        fake_bundle: Path,
+        vm_registry: VmRegistry,
+        port_allocator: PortAllocator,
+        threads: ThreadContainer | None = None,
+    ):
+        self._config = scale_group_config
+        self._controller_address = controller_address
+        self._cache_path = cache_path
+        self._fake_bundle = fake_bundle
+        self._vm_registry = vm_registry
+        self._port_allocator = port_allocator
+        self._slice_counter = 0
+        self._threads = threads if threads is not None else get_thread_container()
+
+    def create_vm_group(self, tags: dict[str, str] | None = None) -> VmGroupProtocol:
+        """Create a new VM group with workers."""
+        slice_id = f"{self._config.name}-slice-{self._slice_counter}"
+        self._slice_counter += 1
+
+        # Determine worker count based on accelerator type
+        if self._config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+            try:
+                topo = get_tpu_topology(self._config.accelerator_variant)
+                worker_count = topo.vm_count
+            except ValueError:
+                worker_count = 1
+        else:
+            worker_count = 1
+
+        # Create workers
+        workers: list[Worker] = []
+        worker_ids: list[str] = []
+        worker_ports: list[int] = []
+
+        for tpu_worker_id in range(worker_count):
+            # Each worker needs its own runtime to avoid container dict conflicts
+            bundle_provider = _LocalBundleProvider(self._fake_bundle)
+            container_runtime = ProcessRuntime()
+            worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
+            worker_port = find_free_port()
+
+            # Set up worker attributes
+            attributes: dict[str, str | int | float] = {}
+            if self._config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                attributes["tpu-name"] = slice_id
+                attributes["tpu-worker-id"] = tpu_worker_id
+                attributes["tpu-topology"] = self._config.accelerator_variant
+
+            # Create device config if accelerator is specified
+            device = None
+            if self._config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                topo = get_tpu_topology(self._config.accelerator_variant)
+                device = tpu_device(self._config.accelerator_variant, count=topo.chips_per_vm)
+
+            environment_provider = LocalEnvironmentProvider(
+                cpu=1000,
+                memory_gb=1000,
+                attributes=attributes,
+                device=device,
+            )
+
+            worker_config = WorkerConfig(
+                host="127.0.0.1",
+                port=worker_port,
+                cache_dir=self._cache_path,
+                controller_address=self._controller_address,
+                worker_id=worker_id,
+                poll_interval=Duration.from_seconds(0.1),
+            )
+            worker_threads = self._threads.create_child(f"worker-{worker_id}")
+            worker = Worker(
+                worker_config,
+                bundle_provider=bundle_provider,
+                container_runtime=container_runtime,
+                environment_provider=environment_provider,
+                port_allocator=self._port_allocator,
+                threads=worker_threads,
+            )
+            worker.start()
+            workers.append(worker)
+            worker_ids.append(worker_id)
+            worker_ports.append(worker_port)
+
+        logger.info(
+            "LocalVmManager created VM group %s with %d workers for scale group %s",
+            slice_id,
+            len(workers),
+            self._config.name,
+        )
+
+        return LocalVmGroup(
+            group_id=slice_id,
+            scale_group=self._config.name,
+            workers=workers,
+            worker_ids=worker_ids,
+            worker_ports=worker_ports,
+            vm_registry=self._vm_registry,
+        )
+
+    def discover_vm_groups(self) -> list[VmGroupProtocol]:
+        """Return empty list - no recovery for local demo."""
+        return []
+
+    def stop(self) -> None:
+        """Stop all container threads managed by this VM manager."""
+        self._threads.stop(timeout=Duration.from_seconds(5.0))

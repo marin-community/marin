@@ -24,8 +24,9 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 """
 
 import os
+import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import Any, NewType
 
@@ -33,7 +34,144 @@ import humanfriendly
 
 from iris.rpc import cluster_pb2
 
-JobId = NewType("JobId", str)
+
+@dataclass(frozen=True, slots=True)
+class JobName:
+    """Structured hierarchical job name.
+
+    Canonical form: /namespace/parent/child
+    Tasks are job names with numeric suffix: /namespace/parent/child/0
+
+    Job names form a tree rooted at the namespace:
+        /root-job
+        /root-job/child-1
+        /root-job/child-1/grandchild
+        /root-job/0
+    """
+
+    _parts: tuple[str, ...]
+
+    def __post_init__(self):
+        if not self._parts:
+            raise ValueError("JobName cannot be empty")
+        for part in self._parts:
+            if "/" in part:
+                raise ValueError(f"JobName component cannot contain '/': {part}")
+            if not part or not part.strip():
+                raise ValueError("JobName component cannot be empty or whitespace")
+
+    @classmethod
+    def from_string(cls, s: str) -> "JobName":
+        """Parse a job name string like '/root/child/grandchild'.
+
+        Examples:
+            JobName.from_string("/my-job") -> JobName(("my-job",))
+            JobName.from_string("/parent/child") -> JobName(("parent", "child"))
+            JobName.from_string("/job/0") -> JobName(("job", "0"))
+        """
+        if not s:
+            raise ValueError("Job name cannot be empty")
+        if not s.startswith("/"):
+            raise ValueError(f"Job name must start with '/': {s}")
+        parts = tuple(s[1:].split("/"))
+        if any(not part or not part.strip() for part in parts):
+            raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
+        return cls(parts)
+
+    @classmethod
+    def root(cls, name: str) -> "JobName":
+        """Create a root job name (no parent)."""
+        return cls((name,))
+
+    def child(self, name: str) -> "JobName":
+        """Create a child job name."""
+        return JobName((*self._parts, name))
+
+    def task(self, index: int) -> "JobName":
+        """Create a task name for this job.
+
+        Tasks are job names with a numeric suffix.
+
+        Example:
+            JobName.from_string("/my-job").task(0) -> JobName(("my-job", "0"))
+        """
+        return JobName((*self._parts, str(index)))
+
+    @property
+    def parent(self) -> "JobName | None":
+        """Get parent job name, or None if this is a root job."""
+        if len(self._parts) == 1:
+            return None
+        return JobName(self._parts[:-1])
+
+    @property
+    def namespace(self) -> str:
+        """Get the namespace (root component) for actor isolation."""
+        return self._parts[0]
+
+    @property
+    def name(self) -> str:
+        """Get the local name (last component)."""
+        return self._parts[-1]
+
+    @property
+    def is_root(self) -> bool:
+        """True if this is a root job (no parent)."""
+        return len(self._parts) == 1
+
+    @property
+    def task_index(self) -> int | None:
+        """If this is a task (last component is numeric), return the index."""
+        try:
+            return int(self._parts[-1])
+        except ValueError:
+            return None
+
+    @property
+    def is_task(self) -> bool:
+        """True if this is a task (last component is numeric)."""
+        return self.task_index is not None
+
+    def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
+        """True if this job name is an ancestor of another job name."""
+        if include_self and self == other:
+            return True
+        if len(self._parts) >= len(other._parts):
+            return False
+        return other._parts[: len(self._parts)] == self._parts
+
+    def to_safe_token(self) -> str:
+        """Return a filesystem/tag-safe token derived from this name."""
+        return "job__" + "__".join(self._parts)
+
+    def require_task(self) -> tuple["JobName", int]:
+        """Return (parent_job, task_index) for task names.
+
+        Raises:
+            ValueError: If this name is not a task or has no parent.
+        """
+        task_index = self.task_index
+        if task_index is None:
+            raise ValueError(f"JobName is not a task: {self}")
+        if self.parent is None:
+            raise ValueError(f"Task has no parent job: {self}")
+        return (self.parent, task_index)
+
+    def __str__(self) -> str:
+        """Canonical wire format: '/root/child/grandchild'."""
+        return "/" + "/".join(self._parts)
+
+    def __repr__(self) -> str:
+        return f"JobName({str(self)!r})"
+
+    def to_wire(self) -> str:
+        """Serialize to wire format for RPC/env vars."""
+        return str(self)
+
+    @classmethod
+    def from_wire(cls, s: str) -> "JobName":
+        """Parse from wire format. Alias for from_string."""
+        return cls.from_string(s)
 
 
 class DeviceType(Enum):
@@ -44,7 +182,49 @@ class DeviceType(Enum):
     TPU = "tpu"
 
 
-TaskId = NewType("TaskId", str)
+def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
+    """Extract device type as enum from DeviceConfig."""
+    if device.HasField("gpu"):
+        return DeviceType.GPU
+    if device.HasField("tpu"):
+        return DeviceType.TPU
+    return DeviceType.CPU
+
+
+def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
+    """Extract device type from DeviceConfig."""
+    if device.HasField("cpu"):
+        return "cpu"
+    if device.HasField("gpu"):
+        return "gpu"
+    if device.HasField("tpu"):
+        return "tpu"
+    return "cpu"
+
+
+def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
+    """Extract device variant (e.g., GPU model) from DeviceConfig."""
+    if device.HasField("gpu"):
+        return device.gpu.variant if device.gpu.variant else None
+    if device.HasField("tpu"):
+        return device.tpu.variant if device.tpu.variant else None
+    return None
+
+
+def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
+    """Extract GPU count from DeviceConfig."""
+    if device.HasField("gpu"):
+        return device.gpu.count or 1
+    return 0
+
+
+def get_tpu_count(device: cluster_pb2.DeviceConfig) -> int:
+    """Extract TPU count from DeviceConfig."""
+    if device.HasField("tpu"):
+        return device.tpu.count or 0
+    return 0
+
+
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
 
@@ -267,8 +447,6 @@ class ResourceSpec:
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
-    replicas: int = 0
-    preemptible: bool = False
     regions: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
@@ -279,13 +457,65 @@ class ResourceSpec:
             cpu=self.cpu,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            replicas=self.replicas,
-            preemptible=self.preemptible,
             regions=list(self.regions or []),
         )
         if self.device is not None:
             spec.device.CopyFrom(self.device)
         return spec
+
+
+DEFAULT_BASE_IMAGE = "iris-task:latest"
+
+
+CALLABLE_RUNNER = """\
+import cloudpickle
+import os
+import sys
+import traceback
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
+)
+
+workdir = os.environ["IRIS_WORKDIR"]
+
+try:
+    with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
+        fn, args, kwargs = cloudpickle.loads(f.read())
+    result = fn(*args, **kwargs)
+    with open(os.path.join(workdir, "_result.pkl"), "wb") as f:
+        f.write(cloudpickle.dumps(result))
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
+"""
+
+
+def _build_uv_sync_flags(extras: Sequence[str] | None) -> str:
+    """Build uv sync flags from extras list.
+
+    Accepts 'extra' or 'package:extra' syntax. The package prefix is stripped
+    since --all-packages syncs every workspace member and --extra applies
+    to whichever package defines that extra name.
+    """
+    sync_parts = ["--all-packages", "--no-group", "dev"]
+    for e in extras or []:
+        if ":" in e:
+            _package, extra = e.split(":", 1)
+            sync_parts.append(f"--extra {extra}")
+        else:
+            sync_parts.append(f"--extra {e}")
+    return " ".join(sync_parts)
+
+
+def _build_pip_install_args(pip_packages: Sequence[str] | None) -> str:
+    """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
+    packages = ["cloudpickle", *list(pip_packages or [])]
+    return " ".join(f'"{pkg}"' for pkg in packages)
 
 
 @dataclass
@@ -316,10 +546,18 @@ class EnvironmentSpec:
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
+        uv_sync_flags = _build_uv_sync_flags(self.extras)
+        if uv_sync_flags:
+            merged_env_vars["IRIS_UV_SYNC_FLAGS"] = uv_sync_flags
+        merged_env_vars["IRIS_PIP_INSTALL"] = _build_pip_install_args(self.pip_packages)
+
+        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
         return cluster_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
+            python_version=py_version,
         )
 
 
@@ -334,23 +572,16 @@ class Namespace(str):
     explicit configuration.
     """
 
-    def __new__(cls, value: str) -> "Namespace":
-        if not value:
-            raise ValueError("Namespace cannot be empty")
-        return super().__new__(cls, value)
-
     def __repr__(self) -> str:
         return f"Namespace({super().__repr__()})"
 
     @classmethod
-    def from_job_id(cls, job_id: str) -> "Namespace":
+    def from_job_id(cls, job_id: JobName) -> "Namespace":
         """Derive namespace from hierarchical job ID.
 
         The namespace is the first component of the job ID hierarchy.
         For example:
-            "abc123" -> Namespace("abc123")
-            "abc123/worker-0" -> Namespace("abc123")
-            "abc123/worker-0/sub-task" -> Namespace("abc123")
+            JobName.from_string("/abc123/worker-0") -> Namespace("abc123")
 
         Args:
             job_id: Hierarchical job ID
@@ -361,9 +592,15 @@ class Namespace(str):
         Raises:
             ValueError: If job_id is empty
         """
-        if not job_id:
-            raise ValueError("Job ID cannot be empty")
-        return cls(job_id.split("/")[0])
+        return cls(job_id.namespace)
+
+
+PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
+
+
+def preemptible_constraint(preemptible: bool = True) -> Constraint:
+    """Constraint requiring workers to be preemptible (or not)."""
+    return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
 
 
 def is_job_finished(state: int) -> bool:
@@ -393,28 +630,6 @@ def is_task_finished(state: int) -> bool:
         }
     )
     return state in terminal_states
-
-
-def job_task_counts(job: cluster_pb2.JobStatus) -> dict[str, int]:
-    """Compute task state counts from tasks[] in JobStatus proto.
-
-    Returns a dict with keys: pending, running, succeeded, failed.
-    """
-    counts = {"pending": 0, "running": 0, "succeeded": 0, "failed": 0}
-    for task in job.tasks:
-        if task.state == cluster_pb2.TASK_STATE_PENDING:
-            counts["pending"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_RUNNING:
-            counts["running"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_SUCCEEDED:
-            counts["succeeded"] += 1
-        elif task.state in (
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-        ):
-            counts["failed"] += 1
-    return counts
 
 
 JobState = cluster_pb2.JobState
@@ -487,47 +702,61 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-@dataclass
 class Entrypoint:
     """Job entrypoint specification.
 
-    Supports two execution modes:
-    1. Callable: A Python function with args/kwargs (cloudpickled)
-    2. Command: A command-line invocation (e.g., ["python", "train.py", "--epochs", "10"])
+    Every entrypoint has a command (what to run) and optional workdir_files
+    that the worker writes to $IRIS_WORKDIR/{name} before executing the command.
 
     Examples:
-        # Callable entrypoint
         entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
-
-        # Command entrypoint
         entrypoint = Entrypoint.from_command("python", "train.py", "--epochs", "10")
     """
 
-    # Callable entrypoint (mutually exclusive with command)
-    callable: Callable[..., Any] | None = None
-    args: tuple = ()
-    kwargs: dict[str, Any] = field(default_factory=dict)
+    def __init__(
+        self,
+        *,
+        command: list[str],
+        workdir_files: dict[str, bytes] | None = None,
+    ):
+        if not command:
+            raise ValueError("Command must have at least one argument")
+        self.command = command
+        self.workdir_files: dict[str, bytes] = workdir_files or {}
 
-    # Command entrypoint (mutually exclusive with callable)
-    command: list[str] | None = None
+    def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
+        """Deserialize the callable, args, kwargs from pickle bytes.
 
-    def __post_init__(self):
-        has_callable = self.callable is not None
-        has_command = self.command is not None
-        if has_callable == has_command:
-            raise ValueError("Exactly one of 'callable' or 'command' must be set")
+        Only call this when you need to actually invoke the function locally
+        (e.g. local_client). Avoid on the worker — use workdir_files directly
+        to pass through to the task container without version-sensitive unpickling.
+        """
+        payload = self.workdir_files.get("_callable.pkl")
+        if payload is None:
+            raise ValueError("Not a callable entrypoint")
+        import cloudpickle
 
-    @property
-    def is_callable(self) -> bool:
-        return self.callable is not None
-
-    @property
-    def is_command(self) -> bool:
-        return self.command is not None
+        return cloudpickle.loads(payload)
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        return cls(callable=fn, args=args, kwargs=kwargs)
+        import sys
+        from pathlib import Path
+
+        import cloudpickle
+
+        module = sys.modules.get(fn.__module__)
+        module_path = Path(module.__file__).parts if module and getattr(module, "__file__", None) else ()
+        if module and (module.__package__ is None or module.__spec__ is None or "tests" in module_path):
+            cloudpickle.register_pickle_by_value(module)
+
+        return cls(
+            command=["bash", "-c", "exec python -u $IRIS_WORKDIR/_callable_runner.py"],
+            workdir_files={
+                "_callable.pkl": cloudpickle.dumps((fn, args, kwargs)),
+                "_callable_runner.py": CALLABLE_RUNNER.encode(),
+            },
+        )
 
     @classmethod
     def from_command(cls, *argv: str) -> "Entrypoint":
@@ -535,35 +764,26 @@ class Entrypoint:
 
         Args:
             *argv: Command and arguments (e.g., "python", "train.py", "--epochs", "10")
-
-        Returns:
-            Entrypoint configured for command execution
         """
         if not argv:
             raise ValueError("Command must have at least one argument")
-        return cls(command=list(argv))
+        return cls(command=list(argv), workdir_files={})
 
-    def to_proto(self) -> cluster_pb2.Entrypoint:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.Entrypoint()
-        if self.callable is not None:
-            import cloudpickle
+    def to_proto(self) -> cluster_pb2.RuntimeEntrypoint:
+        """Convert to protobuf representation.
 
-            proto.callable = cloudpickle.dumps((self.callable, self.args, self.kwargs))
-        elif self.command is not None:
-            proto.command.argv[:] = self.command
+        Produces a RuntimeEntrypoint with no setup_commands (those are added
+        by build_runtime_entrypoint when submitting to the cluster).
+        """
+        proto = cluster_pb2.RuntimeEntrypoint()
+        proto.run_command.argv[:] = self.command
+        for name, data in self.workdir_files.items():
+            proto.workdir_files[name] = data
         return proto
 
     @classmethod
-    def from_proto(cls, proto: cluster_pb2.Entrypoint) -> "Entrypoint":
+    def from_proto(cls, proto: cluster_pb2.RuntimeEntrypoint) -> "Entrypoint":
         """Create from protobuf representation."""
-        kind = proto.WhichOneof("kind")
-        if kind == "callable":
-            import cloudpickle
-
-            fn, args, kwargs = cloudpickle.loads(proto.callable)
-            return cls(callable=fn, args=args, kwargs=kwargs)
-        elif kind == "command":
-            return cls(command=list(proto.command.argv))
-        else:
-            raise ValueError(f"Unknown entrypoint kind: {kind}")
+        command = list(proto.run_command.argv)
+        workdir_files = dict(proto.workdir_files) if proto.workdir_files else None
+        return cls(command=command, workdir_files=workdir_files)

@@ -1,7 +1,7 @@
 # Agent Tips
 
 * Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate-protos.py to regenerate files after changing the `.proto` files.
+* Use scripts/generate_protos.py to regenerate files after changing the `.proto` files.
 * Prefer _shallow_, _functional_ code which returns control quickly to the user, vs callbacks or inheritance.
 
 ```
@@ -46,7 +46,7 @@ IF they disagree with the code, ALWAYS add a task to update them.
 
 Documentation should be kept up-to-date as code changes. When implementing new features or making significant changes, update the relevant documentation files:
 
-- [README.md](README.md) - Main overview, CLI reference, and quick start
+@README.md - Main overview, CLI reference, and quick start
 
 ## Protocols and Testing
 
@@ -111,9 +111,37 @@ When adding new modules or significant features:
 |------|------|-------------|
 | Architecture | README.md | High-level architecture, CLI reference, quick start |
 | Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
+| Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
 
 ## Key Modules
+
+### Time Utilities
+
+Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
+
+| Class | Purpose |
+|-------|---------|
+| `Timestamp` | Point in time (epoch-based). Use for created_at, timestamps in logs, etc. |
+| `Duration` | Time interval. Use for timeouts, intervals, configuration values. |
+| `Deadline` | Monotonic deadline for timeout checks. Use in polling loops. |
+| `Timer` | Elapsed time measurement. Use for performance tracking. |
+| `ExponentialBackoff` | Retry/polling with backoff. Use `wait_until()` for condition polling. |
+
+Example:
+```python
+from iris.time_utils import Timestamp, Duration, Deadline
+
+created_at = Timestamp.now()
+timeout = Duration.from_seconds(30.0)
+deadline = Deadline.from_now(timeout)
+deadline.wait_for(condition)
+
+while not deadline.expired():
+    if condition():
+        break
+    time.sleep(0.1)
+```
 
 ### Autoscaler and VM Management
 
@@ -121,7 +149,13 @@ The autoscaler runs inside the Controller process and manages cloud VMs based on
 
 ```
 src/iris/
-├── cli.py                       # Main CLI (cluster start/stop/status, slice/vm commands)
+├── cli/                         # CLI package (cluster, build, run, debug commands)
+│   ├── main.py                  # Top-level iris group
+│   ├── cluster.py               # Cluster lifecycle, controller, VM ops, dashboard
+│   ├── build.py                 # Image build commands
+│   ├── debug.py                 # Debugging & validation
+│   ├── run.py                   # Command passthrough job submission
+│   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
@@ -135,3 +169,56 @@ src/iris/
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.
+
+### Dashboard Frontend
+
+The controller and worker dashboards are client-side SPAs using Preact + HTM.
+
+**Directory structure:**
+```
+src/iris/cluster/static/
+├── controller/          # Controller dashboard
+│   ├── app.js           # Main app (tabs, state, data fetching)
+│   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
+│   ├── job-detail.js    # Job detail page with task list
+│   ├── workers-tab.js   # Workers table
+│   └── vms-tab.js       # VM management table
+├── shared/              # Shared utilities
+│   ├── rpc.js           # Connect RPC client wrapper
+│   ├── utils.js         # Formatting (dates, durations)
+│   └── styles.css       # Consolidated CSS
+├── vendor/              # Third-party ES modules
+│   ├── preact.mjs       # UI framework
+│   └── htm.mjs          # HTML template literals
+└── worker/              # Worker dashboard components
+```
+
+**Key patterns:**
+- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
+- No REST endpoints - RPC only
+- State management with Preact hooks (`useState`, `useEffect`)
+- HTML templates via `htm.bind(h)` tagged template literals
+- Jobs displayed as a hierarchical tree based on name structure
+
+**When modifying the dashboard:**
+1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
+2. Ensure any new UI features have corresponding RPC endpoints
+3. Follow existing component patterns (functional components, hooks)
+
+## Debugging Container Failures
+
+**Exit code 137** = 128 + 9 = SIGKILL, typically OOM. Check:
+- `ContainerStatus.oom_killed` field (from `docker inspect .State.OOMKilled`)
+- Job's `resources.memory_bytes` vs what was requested
+- Resource flow: `JobRequest.resources` → Iris protobuf → `ContainerConfig` → `docker --memory`
+
+**Resource propagation path:**
+```
+fray.v2.ResourceConfig → iris.cluster.types.ResourceSpec.to_proto()
+  → cluster_pb2.ResourceSpecProto → docker.py _docker_create() --memory/--cpus
+```
+
+**Key files for container debugging:**
+- `cluster/runtime/docker.py`: Docker CLI wrapper, resource limits at lines 396-403
+- `cluster/runtime/types.py`: ContainerStatus with oom_killed field
+- `cluster/worker/task_attempt.py`: _format_exit_error() interprets signals

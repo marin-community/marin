@@ -39,14 +39,15 @@ from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
-from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.rpc import vm_pb2
-from iris.time_utils import now_ms
+from iris.cluster.vm.scaling_group import GroupAvailability, ScalingGroup
+from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
 # Slices that die within this time of creation trigger backoff (preemption detection)
-SHORT_LIVED_SLICE_THRESHOLD_MS = 5 * 60 * 1000  # 5 minutes
+SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
 
 class ScalingAction(Enum):
@@ -74,90 +75,172 @@ class ScalingDecision:
 
 @dataclass
 class DemandEntry:
-    """A demand entry specifying resource requirements and count."""
+    """A demand entry specifying resource requirements and constraints."""
 
-    device_type: DeviceType = DeviceType.CPU
-    device_variant: str | None = None  # None = any variant of this type
-    count: int = 0
-    total_cpu: int = 0
-    total_memory_bytes: int = 0
-
-
-@dataclass
-class RoutingResult:
-    """Result of demand routing across groups."""
-
-    allocations: dict[str, int]  # group_name -> allocated count
-    unmet_demand: int
+    task_ids: list[str]
+    coschedule_group_id: str | None
+    device_type: DeviceType
+    device_variant: str | None  # None = any variant of this type
+    constraints: list[cluster_pb2.Constraint]
+    resources: cluster_pb2.ResourceSpecProto
+    preemptible: bool | None = None  # None = no preference
+    invalid_reason: str | None = None
 
 
 @dataclass
-class AutoscalerConfig:
-    """Configuration for the autoscaler."""
+class PendingGroup:
+    name: str
+    pending_slices: int
+    remaining_slices: int
+    assigned_entries: list[DemandEntry]
+    reason: str
 
-    evaluation_interval_seconds: float = 10.0
+
+@dataclass
+class UnmetDemand:
+    entry: DemandEntry
+    reason: str
+
+
+@dataclass
+class RoutingDecision:
+    group_to_launch: dict[str, int]
+    routed_entries: dict[str, list[DemandEntry]]
+    unmet_entries: list[UnmetDemand]
+    group_reasons: dict[str, str]
 
 
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
-    timestamp_ms: int | None = None,
-) -> RoutingResult:
-    """Route demand to groups based on requirements and priority.
+    timestamp: Timestamp | None = None,
+) -> RoutingDecision:
+    """Route demand to groups based on requirements and priority."""
+    ts = timestamp or Timestamp.now()
+    sorted_groups = sorted(groups, key=lambda g: g.config.priority or 100)
+    group_by_name = {g.name: g for g in sorted_groups}
 
-    For each demand entry:
-    1. Find groups that match the device type/variant requirement
-    2. Sort matching groups by priority (lower = higher priority)
-    3. Route demand through available groups until satisfied or all exhausted
+    pending: dict[str, PendingGroup] = {}
+    routed: dict[str, list[DemandEntry]] = {}
+    unmet: list[UnmetDemand] = []
+    group_reasons: dict[str, str] = {}
 
-    Groups are skipped if not available (backoff, quota exceeded, at capacity).
-    """
-    ts = timestamp_ms or now_ms()
-    allocations: dict[str, int] = {g.name: 0 for g in groups}
-    total_unmet = 0
+    def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
+        if not group.matches_device_requirement(entry.device_type, entry.device_variant):
+            return False
+        if entry.preemptible is not None and group.config.preemptible != entry.preemptible:
+            return False
+        if entry.invalid_reason:
+            return False
+        if entry.coschedule_group_id and group.slice_size != len(entry.task_ids):
+            return False
+        if check_accept and not group.can_accept_demand(ts):
+            return False
+        if not group.can_fit_resources(entry.resources):
+            return False
+        return True
+
+    def can_fit_pending(pg: PendingGroup, group: ScalingGroup, entry: DemandEntry) -> bool:
+        if pg.remaining_slices <= 0:
+            return False
+        return can_fit_group(group, entry, check_accept=False)
+
+    def assign(pg: PendingGroup, entry: DemandEntry) -> None:
+        pg.remaining_slices -= 1
+        pg.assigned_entries.append(entry)
+        routed.setdefault(pg.name, []).append(entry)
+
+    def make_pending(group: ScalingGroup) -> PendingGroup:
+        counts = group.slice_state_counts()
+        pending_slices = counts.get("requesting", 0) + counts.get("booting", 0) + counts.get("initializing", 0)
+        current = sum(counts.values())
+        headroom = group.max_slices - current
+        return PendingGroup(
+            name=group.name,
+            pending_slices=pending_slices,
+            remaining_slices=pending_slices + headroom,
+            assigned_entries=[],
+            reason="demand-routed",
+        )
+
+    for group in sorted_groups:
+        if group.availability(ts).status == GroupAvailability.REQUESTING:
+            pending[group.name] = make_pending(group)
 
     for entry in demand_entries:
-        matching = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
-        # Sort by priority (lower = higher priority). Default to 100 if not set (proto3 defaults to 0).
-        matching.sort(key=lambda g: g.config.priority or 100)
+        if entry.invalid_reason:
+            unmet.append(UnmetDemand(entry=entry, reason=entry.invalid_reason))
+            continue
 
-        remaining = entry.count
-        for group in matching:
-            if remaining <= 0:
-                break
-
-            # Check availability (handles backoff, quota, capacity)
-            if not group.can_accept_demand(ts):
-                continue
-
-            # Compute headroom accounting for already-allocated demand
-            counts = group.slice_state_counts()
-            current = sum(counts.values())
-            headroom = group.max_slices - current - allocations[group.name]
-
-            if headroom <= 0:
-                continue
-
-            absorbed = min(remaining, headroom)
-            allocations[group.name] += absorbed
-            remaining -= absorbed
-
-        if remaining > 0:
-            logger.warning(
-                "Demand overflow: %d/%d slices for device_type=%s, device_variant=%s unmet (tried %d groups)",
-                remaining,
-                entry.count,
-                entry.device_type.value,
-                entry.device_variant,
-                len(matching),
+        matching_groups = [
+            g
+            for g in sorted_groups
+            if g.matches_device_requirement(entry.device_type, entry.device_variant)
+            and (entry.preemptible is None or g.config.preemptible == entry.preemptible)
+        ]
+        if not matching_groups:
+            reason = (
+                f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
+                f", available groups={[g.name for g in sorted_groups]}"
             )
-            total_unmet += remaining
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
+            continue
 
-    routed_groups = [(name, count) for name, count in allocations.items() if count > 0]
-    if routed_groups:
-        logger.info("Demand routed: %s", ", ".join(f"{name}={count}" for name, count in routed_groups))
+        if entry.coschedule_group_id and not any(g.slice_size == len(entry.task_ids) for g in matching_groups):
+            group_sizes = [g.slice_size for g in matching_groups]
+            reason = (
+                f"coschedule_mismatch: job needs {len(entry.task_ids)} tasks coscheduled"
+                f" but matching groups have slice_size={group_sizes}"
+            )
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
+            continue
 
-    return RoutingResult(allocations=allocations, unmet_demand=total_unmet)
+        if not any(g.can_fit_resources(entry.resources) for g in matching_groups):
+            reason = f"insufficient_resources: task needs {entry.resources}" f" but no matching group can fit it"
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
+            continue
+
+        matched_pending = False
+        for name, pg in pending.items():
+            group = group_by_name.get(name)
+            if group is None:
+                continue
+            if can_fit_pending(pg, group, entry):
+                assign(pg, entry)
+                matched_pending = True
+                break
+        if matched_pending:
+            continue
+
+        matched_group = False
+        for group in sorted_groups:
+            if not can_fit_group(group, entry):
+                continue
+            if group.name not in pending:
+                pending[group.name] = make_pending(group)
+            if pending[group.name].remaining_slices <= 0:
+                continue
+            assign(pending[group.name], entry)
+            matched_group = True
+            group_reasons.setdefault(group.name, "demand-routed")
+            break
+
+        if not matched_group:
+            unmet.append(UnmetDemand(entry=entry, reason="no_capacity"))
+
+    group_to_launch: dict[str, int] = {}
+    for name, pg in pending.items():
+        if not pg.assigned_entries:
+            continue
+        needed = max(0, len(pg.assigned_entries) - pg.pending_slices)
+        group_to_launch[name] = needed
+
+    return RoutingDecision(
+        group_to_launch=group_to_launch,
+        routed_entries=routed,
+        unmet_entries=unmet,
+        group_reasons=group_reasons,
+    )
 
 
 class Autoscaler:
@@ -179,18 +262,102 @@ class Autoscaler:
         self,
         scale_groups: dict[str, ScalingGroup],
         vm_registry: VmRegistry,
-        config: AutoscalerConfig | None = None,
+        evaluation_interval: Duration,
+        requesting_timeout: Duration,
+        threads: ThreadContainer | None = None,
     ):
+        """Create autoscaler with explicit parameters.
+
+        Args:
+            scale_groups: Map of scale group name to ScalingGroup instance
+            vm_registry: Shared VM registry for tracking all VMs
+            evaluation_interval: How often to evaluate scaling decisions
+            requesting_timeout: How long to wait for VMs to provision before timing out
+            threads: Optional thread container for testing
+        """
         self._groups = scale_groups
         self._vm_registry = vm_registry
-        self._config = config or AutoscalerConfig()
-        self._last_evaluation_ms: int = 0
+        self._evaluation_interval = evaluation_interval
+        self._requesting_timeout = requesting_timeout
 
         # Track slice creation times for short-lived slice detection
         self._slice_created_at: dict[str, int] = {}
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
+
+        # Most recent routing decision (for status API)
+        self._last_routing_decision: RoutingDecision | None = None
+
+        # Thread management
+        self._threads = threads if threads is not None else get_thread_container()
+
+    @classmethod
+    def from_config(
+        cls,
+        scale_groups: dict[str, ScalingGroup],
+        vm_registry: VmRegistry,
+        config: config_pb2.AutoscalerConfig,
+        threads: ThreadContainer | None = None,
+    ) -> Autoscaler:
+        """Create autoscaler from proto config.
+
+        Args:
+            scale_groups: Map of scale group name to ScalingGroup instance
+            vm_registry: Shared VM registry for tracking all VMs
+            config: Autoscaler configuration proto (with defaults already applied)
+            threads: Optional thread container for testing
+
+        Returns:
+            Configured Autoscaler instance
+        """
+        return cls(
+            scale_groups=scale_groups,
+            vm_registry=vm_registry,
+            evaluation_interval=Duration.from_proto(config.evaluation_interval),
+            requesting_timeout=Duration.from_proto(config.requesting_timeout),
+            threads=threads,
+        )
+
+    def _wait_for_inflight(self) -> None:
+        """Wait for in-flight scale-ups to complete without terminating anything.
+
+        Test-only: Waits for all scale-up threads to complete.
+        """
+        # Wait for all threads in the container to finish
+        self._threads.wait()
+
+    def shutdown(self) -> None:
+        """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups.
+
+        Shutdown ordering:
+        1. Wait for in-flight scale-up threads to complete
+        2. Stop all VM bootstrap threads (call vm.stop() on each VM)
+        3. Terminate VMs and cleanup (group.terminate_all())
+        4. Stop VM managers (cleanup local platform threads if present)
+        """
+        # Step 1: Wait for in-flight scale-up threads
+        self._threads.wait()
+
+        # Step 2: Stop all VM bootstrap threads
+        for group in self._groups.values():
+            for vm_group in group.vm_groups():
+                for vm in vm_group.vms():
+                    vm.stop()
+
+        # Step 3: Terminate VMs and cleanup
+        for group in self._groups.values():
+            group.terminate_all()
+
+        # Step 4: Stop VM managers (cleanup local platform threads if present)
+        for group in self._groups.values():
+            group._vm_manager.stop()
+
+    def __enter__(self) -> Autoscaler:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.shutdown()
 
     def reconcile(self) -> None:
         """Reconcile all groups (discover existing slices from cloud).
@@ -226,8 +393,9 @@ class Autoscaler:
             status after execution (e.g., from "pending" to "completed").
             This works because the deque holds references to the proto objects.
         """
+
         action = vm_pb2.AutoscalerAction(
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now().to_proto(),
             action_type=action_type,
             scale_group=scale_group,
             slice_id=slice_id,
@@ -240,7 +408,7 @@ class Autoscaler:
     def evaluate(
         self,
         demand_entries: list[DemandEntry],
-        timestamp_ms: int | None = None,
+        timestamp: Timestamp | None = None,
     ) -> list[ScalingDecision]:
         """Compute scaling decisions based on demand.
 
@@ -250,26 +418,28 @@ class Autoscaler:
 
         Args:
             demand_entries: List of demand entries with requirements and counts.
-            timestamp_ms: Optional timestamp for testing. If None, uses now_ms().
+            timestamp: Optional timestamp for testing. If None, uses Timestamp.now().
 
         Returns:
             List of scaling decisions to execute.
         """
-        ts = timestamp_ms or now_ms()
+        ts = timestamp or Timestamp.now()
 
         result = route_demand(list(self._groups.values()), demand_entries, ts)
+        self._last_routing_decision = result
 
-        if result.unmet_demand > 0:
+        if result.unmet_entries:
             logger.error(
-                "CAPACITY INSUFFICIENT: %d slices of demand cannot be satisfied by any group",
-                result.unmet_demand,
+                "CAPACITY INSUFFICIENT: %d demand entries cannot be satisfied by any group",
+                len(result.unmet_entries),
             )
 
         decisions = []
         for name, group in self._groups.items():
-            allocated = result.allocations.get(name, 0)
-            group.update_demand(allocated)
-            decision = self._evaluate_group(group, allocated, ts)
+            allocated_entries = result.routed_entries.get(name, [])
+            demand = len(allocated_entries)
+            group.update_demand(demand)
+            decision = self._evaluate_group(group, demand, ts)
             if decision:
                 decisions.append(decision)
 
@@ -279,7 +449,7 @@ class Autoscaler:
         self,
         group: ScalingGroup,
         demand: int,
-        ts: int,
+        ts: Timestamp,
     ) -> ScalingDecision | None:
         """Evaluate scaling decision for a single group."""
         counts = group.slice_state_counts()
@@ -320,12 +490,7 @@ class Autoscaler:
         # Priority 2: Scale UP for demand exceeding capacity
         if demand > capacity and total < group.max_slices:
             if not group.can_scale_up(ts):
-                logger.debug(
-                    "Scale group %s: scale up blocked (backoff_until=%d, last_scale_up=%d)",
-                    group.name,
-                    group.backoff_until_ms,
-                    group.last_scale_up_ms,
-                )
+                logger.debug("Scale group %s: scale up blocked", group.name)
                 return None
 
             return ScalingDecision(
@@ -339,16 +504,14 @@ class Autoscaler:
     def execute(
         self,
         decisions: list[ScalingDecision],
-        timestamp_ms: int,
+        timestamp: Timestamp,
     ) -> None:
         """Execute scale-up decisions.
 
         Args:
             decisions: List of scaling decisions to execute.
-            timestamp_ms: Current timestamp.
+            timestamp: Current timestamp.
         """
-        self._last_evaluation_ms = timestamp_ms
-
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -356,10 +519,31 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
-                self._execute_scale_up(group, timestamp_ms, reason=decision.reason)
+                self._execute_scale_up(group, timestamp, reason=decision.reason)
 
-    def _execute_scale_up(self, group: ScalingGroup, ts: int, reason: str = "") -> bool:
-        """Create a new slice for a scale group.
+    def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
+        """Initiate async scale-up for a scale group.
+
+        Marks the group as REQUESTING and spawns a background thread for the
+        actual scale-up work. Returns immediately without blocking.
+        """
+        # Mark group as requesting before spawning thread
+        group.mark_requesting(ts, self._requesting_timeout)
+
+        # Spawn background thread for scale-up
+        def _scale_up_wrapper(stop_event):
+            self._do_scale_up(group, ts, reason)
+
+        self._threads.spawn(
+            target=_scale_up_wrapper,
+            name=f"scale-up-{group.name}",
+        )
+
+    def _do_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> bool:
+        """Execute the actual blocking scale-up work.
+
+        This runs in a background thread and should not be called directly.
+        Use _execute_scale_up instead.
 
         Returns:
             True if scale-up succeeded, False otherwise.
@@ -369,9 +553,9 @@ class Autoscaler:
         # Log action as pending BEFORE execution
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
-        logger.info("Scaling up %s: %s", group.name, reason)
         try:
-            slice_obj = group.scale_up(ts=ts)
+            logger.info("Scaling up %s: %s", group.name, reason)
+            slice_obj = group.scale_up(timestamp=ts)
             self._slice_created_at[slice_obj.slice_id] = slice_obj.created_at_ms
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             # Update action with result
@@ -391,28 +575,31 @@ class Autoscaler:
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
+        finally:
+            # Always clear requesting state when done
+            group.clear_requesting()
 
     def run_once(
         self,
         demand_entries: list[DemandEntry],
         vm_status_map: VmWorkerStatusMap,
-        timestamp_ms: int | None = None,
+        timestamp: Timestamp | None = None,
     ) -> list[ScalingDecision]:
         """Run one evaluation cycle: cleanup -> evaluate -> execute -> idle scale-down.
 
         Args:
             demand_entries: List of demand entries with requirements and counts.
             vm_status_map: Map of VM address to worker status (required for scale-down).
-            timestamp_ms: Optional timestamp for testing.
+            timestamp: Optional timestamp for testing.
 
         Returns the decisions that were made (for testing/logging).
         """
-        timestamp_ms = timestamp_ms or now_ms()
+        timestamp = timestamp or Timestamp.now()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
 
         # Step 1: Clean up failed slices FIRST
         for group in self._groups.values():
-            cleaned = group.cleanup_failed_slices(timestamp_ms)
+            cleaned = group.cleanup_failed_slices(timestamp)
             for slice_obj in cleaned:
                 self._slice_created_at.pop(slice_obj.slice_id, None)
                 self._log_action(
@@ -422,18 +609,30 @@ class Autoscaler:
                     reason="cleaning up failed slice",
                 )
 
+            # Update liveness from worker status, then reap dead slices
+            group.update_slice_liveness(vm_status_map, timestamp)
+            dead = group.cleanup_dead_slices(timestamp)
+            for slice_obj in dead:
+                self._slice_created_at.pop(slice_obj.slice_id, None)
+                self._log_action(
+                    "liveness_reap",
+                    group.name,
+                    slice_id=slice_obj.slice_id,
+                    reason="slice missed liveness deadline",
+                )
+
         # Step 2: Evaluate (scale-up only)
-        decisions = self.evaluate(demand_entries, timestamp_ms)
+        decisions = self.evaluate(demand_entries, timestamp)
         if decisions:
             logger.info("Autoscaler decisions: %s", [(d.scale_group, d.action.value, d.reason) for d in decisions])
 
         # Step 3: Execute scale-up
-        self.execute(decisions, timestamp_ms)
+        self.execute(decisions, timestamp)
 
         # Step 4: Idle scale-down
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
-            scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp_ms)
+            scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
             if scaled_down:
                 self._slice_created_at.pop(scaled_down.slice_id, None)
                 self._log_action(
@@ -458,11 +657,65 @@ class Autoscaler:
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
-        return vm_pb2.AutoscalerStatus(
+        from iris.rpc import time_pb2
+
+        status = vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation_ms=self._last_evaluation_ms,
+            last_evaluation=time_pb2.Timestamp(epoch_ms=0),  # Controlled by controller now
             recent_actions=list(self._action_log),
+        )
+        if self._last_routing_decision is not None:
+            status.last_routing_decision.CopyFrom(self._routing_decision_to_proto(self._last_routing_decision))
+        return status
+
+    def _routing_decision_to_proto(self, decision: RoutingDecision) -> vm_pb2.RoutingDecision:
+        def _device_type_to_proto(device_type: DeviceType) -> int:
+            if device_type == DeviceType.GPU:
+                return config_pb2.ACCELERATOR_TYPE_GPU
+            if device_type == DeviceType.TPU:
+                return config_pb2.ACCELERATOR_TYPE_TPU
+            return config_pb2.ACCELERATOR_TYPE_CPU
+
+        def _resource_spec_proto(resources: cluster_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
+            gpu_count = 0
+            tpu_count = 0
+            if resources.HasField("device"):
+                if resources.device.HasField("gpu"):
+                    gpu_count = resources.device.gpu.count or 1
+                if resources.device.HasField("tpu"):
+                    tpu_count = resources.device.tpu.count or 0
+            return vm_pb2.ResourceSpec(
+                cpu=resources.cpu,
+                memory_bytes=resources.memory_bytes,
+                disk_bytes=resources.disk_bytes,
+                gpu_count=gpu_count,
+                tpu_count=tpu_count,
+            )
+
+        def _entry_to_proto(entry: DemandEntry) -> vm_pb2.DemandEntryStatus:
+            return vm_pb2.DemandEntryStatus(
+                task_ids=entry.task_ids,
+                coschedule_group_id=entry.coschedule_group_id or "",
+                accelerator_type=_device_type_to_proto(entry.device_type),
+                accelerator_variant=entry.device_variant or "",
+                preemptible=bool(entry.preemptible),
+                resources=_resource_spec_proto(entry.resources),
+            )
+
+        routed_entries = {
+            name: vm_pb2.DemandEntryStatusList(entries=[_entry_to_proto(e) for e in entries])
+            for name, entries in decision.routed_entries.items()
+        }
+        unmet_entries = [
+            vm_pb2.UnmetDemand(entry=_entry_to_proto(u.entry), reason=u.reason) for u in decision.unmet_entries
+        ]
+
+        return vm_pb2.RoutingDecision(
+            group_to_launch=decision.group_to_launch,
+            group_reasons=decision.group_reasons,
+            routed_entries=routed_entries,
+            unmet_entries=unmet_entries,
         )
 
     def get_group(self, name: str) -> ScalingGroup | None:
@@ -478,6 +731,11 @@ class Autoscaler:
     def groups(self) -> dict[str, ScalingGroup]:
         """All scale groups."""
         return self._groups
+
+    @property
+    def evaluation_interval_seconds(self) -> float:
+        """Configured evaluation interval in seconds."""
+        return self._evaluation_interval.to_seconds()
 
     def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.
@@ -525,15 +783,16 @@ class Autoscaler:
     def _record_slice_failure(self, slice_id: str, group: ScalingGroup) -> None:
         """Record slice failure and apply backoff if it was short-lived.
 
-        Short-lived slices (died within SHORT_LIVED_SLICE_THRESHOLD_MS of creation)
+        Short-lived slices (died within SHORT_LIVED_SLICE_THRESHOLD of creation)
         indicate bad zone/quota issues or preemption. Apply backoff to prevent thrashing.
         """
         created_at = self._slice_created_at.get(slice_id)
         if created_at is None:
             return
 
-        age_ms = now_ms() - created_at
-        if age_ms < SHORT_LIVED_SLICE_THRESHOLD_MS:
+        age_ms = Timestamp.now().epoch_ms() - created_at
+        age = Duration.from_ms(age_ms)
+        if age < SHORT_LIVED_SLICE_THRESHOLD:
             logger.warning(
                 "Short-lived slice %s (age=%dms) in %s, applying backoff",
                 slice_id,

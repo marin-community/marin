@@ -1,53 +1,132 @@
 # Iris demo configuration
+# Multiple scale groups for realistic testing with diverse scenarios
 # Uses env var for controller address (external controller)
 # Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_16
 
-region: europe-west4
-zone: europe-west4-b
+platform:
+  label_prefix: iris
+  gcp:
+    project_id: hai-gcp-models
+    region: europe-west4
+    zone: europe-west4-b
+    default_zones: [europe-west4-b]
 
-bootstrap:
-  docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
-  worker_port: 10001
-  controller_address: "${IRIS_CONTROLLER_ADDRESS}"
+defaults:
+  timeouts:
+    boot_timeout:
+      milliseconds: 300000
+    init_timeout:
+      milliseconds: 600000
+    ssh_poll_interval:
+      milliseconds: 5000
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    requesting_timeout:
+      milliseconds: 120000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+  bootstrap:
+    docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+    worker_port: 10001
+    controller_address: "${IRIS_CONTROLLER_ADDRESS}"
 
-timeouts:
-  boot_timeout_seconds: 300
-  init_timeout_seconds: 600
-  ssh_poll_interval_seconds: 5
+controller:
+  image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
+  bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
+  gcp:
+    machine_type: n2-standard-4
+    port: 10000
 
 scale_groups:
-  # tpu_v5e_4:
-  #   provider:
-  #     tpu:
-  #       project_id: hai-gcp-models
-  #   accelerator_type: tpu
-  #   accelerator_variant: v5litepod-4
-  #   runtime_version: v2-alpha-tpuv5-lite
-  #   min_slices: 4
-  #   max_slices: 1024
-  #   zones: [europe-west4-b]
-  #   preemptible: true
+  # Active scale group with capacity
+  tpu_v5e_4:
+    vm_type: tpu_vm
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-4
+    runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 4
+    resources:
+      cpu: 64
+      ram: 64GB
+      disk: 500GB
+      tpu_count: 4
+      gpu_count: 0
+    min_slices: 2
+    max_slices: 10
+    zones: [europe-west4-b]
+    preemptible: true
 
-  # tpu_v5e_8:
-  #   provider:
-  #     tpu:
-  #       project_id: hai-gcp-models
-  #   accelerator_type: tpu
-  #   accelerator_variant: v5litepod-8
-  #   runtime_version: v2-alpha-tpuv5-lite
-  #   min_slices: 0
-  #   max_slices: 1024
-  #   zones: [europe-west4-b]
-  #   preemptible: true
-
+  # Scale group with some capacity but lower limits
   tpu_v5e_16:
-    provider:
-      tpu:
-        project_id: hai-gcp-models
+    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 16
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu_count: 8
+      gpu_count: 0
     min_slices: 1
-    max_slices: 2
+    max_slices: 5
     zones: [europe-west4-b]
+    preemptible: true
+
+  # Zero quota group - simulates quota exhaustion
+  tpu_v6e_256_no_quota:
+    vm_type: tpu_vm
+    accelerator_type: tpu
+    accelerator_variant: v6e-256
+    runtime_version: v2-alpha-tpuv6e
+    slice_size: 256
+    resources:
+      cpu: 256
+      ram: 256GB
+      disk: 2TB
+      tpu_count: 8
+      gpu_count: 0
+    min_slices: 0
+    max_slices: 0  # ZERO MAX - simulates no quota available
+    zones: [europe-west4-b]
+    preemptible: true
+
+  # Disabled group - min and max both zero
+  gpu_disabled:
+    vm_type: tpu_vm
+    accelerator_type: gpu
+    accelerator_variant: a100-40gb
+    runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 1
+    resources:
+      cpu: 64
+      ram: 128GB
+      disk: 1TB
+      tpu_count: 0
+      gpu_count: 1
+    min_slices: 0
+    max_slices: 0
+    zones: [europe-west4-b]
+    preemptible: false
+
+  # Group with multi-zone configuration
+  tpu_v5e_8_multizone:
+    vm_type: tpu_vm
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
+    runtime_version: v2-alpha-tpuv5-lite
+    slice_size: 8
+    resources:
+      cpu: 96
+      ram: 96GB
+      disk: 1TB
+      tpu_count: 4
+      gpu_count: 0
+    min_slices: 0
+    max_slices: 3
+    zones: [europe-west4-a, europe-west4-b, europe-west4-c]
     preemptible: true
