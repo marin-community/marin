@@ -130,6 +130,7 @@ def zephyr_ctx(fray_client, tmp_path_factory):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
+        name="test-fixture",
     ) as ctx:
         yield ctx
 

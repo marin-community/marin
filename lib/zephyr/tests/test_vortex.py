@@ -38,7 +38,7 @@ def vortex_file(tmp_path):
 def sync_ctx():
     """ZephyrContext fixture for vortex tests."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=2, resources=ResourceConfig(cpu=1, ram="512m"))
+    ctx = ZephyrContext(client=client, num_workers=2, resources=ResourceConfig(cpu=1, ram="512m"), name="test-vortex")
     yield ctx
     ctx.shutdown()
 

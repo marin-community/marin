@@ -90,7 +90,7 @@ def filter_stackexchange(config: FilterStackExchangeConfig):
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
 
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="filter-stackexchange") as ctx:
         ctx.execute(pipeline)
 
 

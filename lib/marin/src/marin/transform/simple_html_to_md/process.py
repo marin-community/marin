@@ -96,5 +96,5 @@ def html_to_md(cfg: SimpleHtmlToMdConfig):
         .map(lambda data: _html_to_md(data, cfg.extract_method, cfg.config))
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="html-to-md") as ctx:
         list(ctx.execute(pipeline))

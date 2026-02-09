@@ -56,7 +56,7 @@ def convert_eval_to_dolma(cfg: ConvertEvalToDolmaConfig):
         .map(map_row)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="eval-to-dolma") as ctx:
         ctx.execute(pipeline)
 
 

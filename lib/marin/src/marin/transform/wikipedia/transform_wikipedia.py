@@ -315,5 +315,5 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .filter(lambda record: record is not None)
         .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="transform-wikipedia") as ctx:
         list(ctx.execute(pipeline))

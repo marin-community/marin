@@ -336,7 +336,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
         .map(lambda task: _download_and_convert_single(task))
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="download-uncheatable-eval") as ctx:
         output_paths = ctx.execute(pipeline)
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):

@@ -216,7 +216,7 @@ def test_lazy_evaluation():
 
     # Now execute - should call function
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"))
+    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
     try:
         result = list(ctx.execute(ds))
         assert result == [2, 4, 6]
@@ -958,7 +958,7 @@ def sample_input_files(tmp_path):
 def test_skip_existing_clean_run(tmp_path, sample_input_files):
     """Test skip_existing with no existing files - all shards process."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"))
+    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -984,7 +984,7 @@ def test_skip_existing_clean_run(tmp_path, sample_input_files):
 def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
     """Test skip_existing with one output file existing - only that shard skips."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"))
+    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -1014,7 +1014,7 @@ def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
 def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
     """Test skip_existing with all output files existing - all shards skip."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"))
+    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 

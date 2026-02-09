@@ -323,7 +323,7 @@ def tokenize(config: TokenizeConfigBase):
             return
 
         # Use local backend for lightweight file stats - no remote workers needed
-        with ZephyrContext(client=LocalClient(), num_workers=8) as local_ctx:
+        with ZephyrContext(client=LocalClient(), num_workers=8, name="tokenize-filescan") as local_ctx:
             file_stats = list(
                 local_ctx.execute(
                     Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
@@ -380,7 +380,9 @@ def tokenize(config: TokenizeConfigBase):
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
     with ZephyrContext(
-        resources=ResourceConfig(ram="16g", disk="16g"), num_workers=min(128, len(train_paths) + len(validation_paths))
+        resources=ResourceConfig(ram="16g", disk="16g"),
+        num_workers=min(128, len(train_paths) + len(validation_paths)),
+        name="tokenize",
     ) as ctx:
         if train_paths:
             run_pipeline(ctx, train_paths, "train")

@@ -107,6 +107,6 @@ def prune_hf_dataset(cfg: DatasetConfig):
     )
 
     logger.info("Executing pipeline")
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="hf-remove-columns") as ctx:
         ctx.execute(pipeline)
     logger.info("Successfully processed all subsets")

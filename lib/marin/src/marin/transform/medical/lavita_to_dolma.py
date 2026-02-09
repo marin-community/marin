@@ -157,7 +157,7 @@ def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
         .filter(lambda record: record is not None)
         .write_parquet(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="lavita-to-dolma") as ctx:
         list(ctx.execute(pipeline))
 
 

@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 def _compute_fuzzy_dedup_stats(shards: list[str] | Sequence[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient()) as ctx:
+        with ZephyrContext(client=LocalClient(), name="fuzzy-dup-counts") as ctx:
             result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
                 Dataset.from_list(shards)
                 .load_parquet(columns=["component_id"])
@@ -73,7 +73,7 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
         shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
 
     with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient()) as ctx:
+        with ZephyrContext(client=LocalClient(), name="fuzzy-dup-map") as ctx:
             ctx.execute(
                 Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
             )

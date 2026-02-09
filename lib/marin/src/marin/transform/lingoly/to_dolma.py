@@ -93,7 +93,7 @@ def convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
         .flat_map(lambda m: process_lingoly_member(m, max_doc_length=config.max_doc_length))
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl")
     )
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="lingoly-to-dolma") as ctx:
         list(ctx.execute(pipeline))
 
 

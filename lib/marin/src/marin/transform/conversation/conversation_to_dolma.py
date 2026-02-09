@@ -57,7 +57,7 @@ def process_dataset(config: ConversationToDolmaConfig):
         .map(transform_conversation_to_dolma)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="conversation-to-dolma") as ctx:
         ctx.execute(pipeline)
 
 

@@ -274,7 +274,7 @@ class Config:
 @draccus.wrap()
 def main(cfg: Config) -> None:
     """Convert ar5iv HTML to markdown in two stages."""
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="transform-ar5iv") as ctx:
         # Stage 1: Clean HTML
         print("Stage 1: Cleaning HTML...")
         clean_pipeline = (

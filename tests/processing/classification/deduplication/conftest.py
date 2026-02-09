@@ -25,7 +25,7 @@ from zephyr.readers import load_jsonl
 def sync_backend():
     """Sets up a local ZephyrContext as the default for tests."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client)
+    ctx = ZephyrContext(client=client, name="test-dedup")
     with default_zephyr_context(ctx):
         yield
     ctx.shutdown()

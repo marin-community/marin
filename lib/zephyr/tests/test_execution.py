@@ -47,7 +47,9 @@ def test_shared_data(fray_client):
         multiplier = shard_ctx().get_shared("multiplier")
         return x * multiplier
 
-    zctx = ZephyrContext(client=fray_client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"))
+    zctx = ZephyrContext(
+        client=fray_client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-execution"
+    )
     zctx.put("multiplier", 10)
     ds = Dataset.from_list([1, 2, 3]).map(use_shared)
     results = list(zctx.execute(ds))
@@ -64,7 +66,9 @@ def test_multi_stage(zephyr_ctx):
 
 def test_context_manager(fray_client):
     """ZephyrContext works as context manager."""
-    with ZephyrContext(client=fray_client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m")) as zctx:
+    with ZephyrContext(
+        client=fray_client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-execution"
+    ) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
         results = list(zctx.execute(ds))
     assert sorted(results) == [2, 3, 4]
@@ -115,6 +119,7 @@ def test_chunk_cleanup(fray_client, tmp_path):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
+        name="test-execution",
     )
 
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
@@ -217,6 +222,7 @@ def test_workers_persist_across_executes(fray_client, tmp_path):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
+        name="test-execution",
     ) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
         results = list(zctx.execute(ds))
@@ -250,6 +256,7 @@ def test_fatal_errors_fail_fast(fray_client, tmp_path):
         num_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
+        name="test-execution",
     ) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(exploding_map)
 
@@ -270,6 +277,7 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
+        name="test-execution",
     )
 
     # Create datasets for join

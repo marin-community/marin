@@ -162,5 +162,5 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
         )
     )
 
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="transform-dclm-hq") as ctx:
         ctx.execute(pipeline)

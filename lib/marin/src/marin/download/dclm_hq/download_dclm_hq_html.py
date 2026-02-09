@@ -213,7 +213,7 @@ def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
     # Single-level parallelism over all files
     pipeline = Dataset.from_list(all_files).map(process_file)
 
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="download-dclm-html") as ctx:
         ctx.execute(pipeline)
 
     logger.info("Processing completed successfully!")

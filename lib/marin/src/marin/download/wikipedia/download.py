@@ -117,7 +117,7 @@ def download(cfg: DownloadConfig) -> None:
     logger.info("Starting transfer of Wikipedia dump...")
     output_base = os.path.join(cfg.output_path, cfg.revision)
 
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="download-wikipedia") as ctx:
         download_metrics = ctx.execute(
             Dataset.from_list(cfg.input_urls)
             .map(lambda url: download_tar(url, output_base))

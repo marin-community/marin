@@ -72,7 +72,7 @@ def transfer_files(config: TransferConfig) -> None:
 
     # Always use parallel copying via zephyr
     pipeline = Dataset.from_list(selected_files).map(copy_file)
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="fs-transfer") as ctx:
         ctx.execute(pipeline)
 
     elapsed_time_seconds: float = time.time() - start_time

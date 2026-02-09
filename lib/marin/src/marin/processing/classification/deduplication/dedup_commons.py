@@ -220,7 +220,7 @@ def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
         shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
 
     with log_time(f"Load duplicate map from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient()) as ctx:
+        with ZephyrContext(client=LocalClient(), name="dedup-commons-map") as ctx:
             ctx.execute(
                 Dataset.from_list(shards)
                 .load_parquet()
@@ -243,7 +243,7 @@ def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
 
 def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute deduplication stats from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient()) as ctx:
+        with ZephyrContext(client=LocalClient(), name="dedup-commons-counts") as ctx:
             result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
                 Dataset.from_list(shards)
                 .load_parquet()

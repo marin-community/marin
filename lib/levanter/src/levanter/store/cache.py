@@ -326,7 +326,11 @@ def build_cache(
             metadata=metadata,
         )
 
-    with ZephyrContext(resources=ResourceConfig(ram="32g", disk="16g"), num_workers=min(128, len(shard_jobs))) as ctx:
+    with ZephyrContext(
+        resources=ResourceConfig(ram="32g", disk="16g"),
+        num_workers=min(128, len(shard_jobs)),
+        name="levanter-cache-build",
+    ) as ctx:
         shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
@@ -457,7 +461,11 @@ def consolidate_shard_caches(
             )
         )
 
-    with ZephyrContext(resources=ResourceConfig(ram="32g", disk="16g"), num_workers=min(128, len(shard_info))) as ctx:
+    with ZephyrContext(
+        resources=ResourceConfig(ram="32g", disk="16g"),
+        num_workers=min(128, len(shard_info)),
+        name="levanter-cache-copy",
+    ) as ctx:
         ctx.execute(
             Dataset.from_list(shard_info).map(_copy_shard),
             verbose=True,

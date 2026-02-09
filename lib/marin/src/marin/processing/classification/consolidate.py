@@ -203,7 +203,7 @@ def _compute_percentile_threshold(
             combined.merge(sketch)
         return combined
 
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="consolidate-stats") as ctx:
         result = ctx.execute(
             Dataset.from_list(attr_paths)
             .load_file()
@@ -333,7 +333,7 @@ def consolidate(config: ConsolidateConfig):
 
     output_pattern = f"{config.output_path}/part-{{shard:04d}}.parquet"
 
-    with ZephyrContext() as ctx:
+    with ZephyrContext(name="consolidate-filter") as ctx:
         results = ctx.execute(
             Dataset.from_list(input_paths)
             .map_shard(
