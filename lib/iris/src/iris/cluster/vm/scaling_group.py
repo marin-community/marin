@@ -646,6 +646,8 @@ class ScalingGroup:
             )
 
         # Requesting (scale-up in progress)
+        # XXX: allow groups to accept demand when they are in any non-terminal state (requesting, backoff)
+        # XXX: should we allow to accept in the quota exceeded state?
         if self._requesting_until is not None and not self._requesting_until.expired(now=timestamp):
             return AvailabilityState(
                 GroupAvailability.REQUESTING,
@@ -663,7 +665,11 @@ class ScalingGroup:
 
     def can_accept_demand(self, timestamp: Timestamp | None = None) -> bool:
         """Whether this group can accept demand for waterfall routing."""
-        return self.availability(timestamp).status == GroupAvailability.AVAILABLE
+        return self.availability(timestamp).status in {
+            GroupAvailability.AVAILABLE,
+            GroupAvailability.REQUESTING,
+            GroupAvailability.BACKOFF,
+        }
 
     def terminate_all(self) -> None:
         """Terminate all VM groups in this scale group."""
