@@ -18,7 +18,7 @@ import os
 import sys
 
 import draccus
-from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
+from fray.v1.cluster import ResourceConfig, create_cluster, set_current_cluster
 import humanfriendly
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
@@ -275,7 +275,12 @@ def main(config: ExecutorMainConfig):
             raise RuntimeError("integration_test.py must not be launched via `uv run`. Please run it directly.")
         import ray
 
-        ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=os.cpu_count())
+        ray.init(
+            resources={"head_node": 1},
+            runtime_env={"working_dir": None},
+            num_cpus=os.cpu_count(),
+            _memory=1024 * 1024 * 1024 * 1024,  # 1TB
+        )
         set_current_cluster(create_cluster("ray"))
 
         # path to synthetic test data

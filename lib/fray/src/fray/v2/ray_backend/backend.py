@@ -38,6 +38,7 @@ from fray.v2.types import (
     ResourceConfig,
     TpuConfig,
     create_environment,
+    get_tpu_topology,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ class RayJobHandle:
             ray.get(self._ref)
             return JobStatus.SUCCEEDED
         except Exception:
+            logger.error("Job %s failed:", self._job_id, exc_info=True)
             return JobStatus.FAILED
 
     def _poll_submission(self) -> JobStatus:
@@ -111,6 +113,7 @@ class RayJobHandle:
         except Exception:
             if raise_on_failure:
                 raise
+            logger.error("Job %s failed:", self._job_id, exc_info=True)
         return self.status()
 
     def _wait_submission(self, timeout: float | None, raise_on_failure: bool) -> JobStatus:
@@ -330,11 +333,14 @@ class RayClient:
         else:
             remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(callable_ep.callable)
 
-        # JobRequest.replicas maps to num_slices for TPU gang scheduling
+        # Convert replicas (total VMs) back to num_slices for Ray's gang scheduler
+        topo = get_tpu_topology(device.variant)
+        replicas = request.replicas or 1
+        num_slices = max(1, replicas // topo.vm_count)
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,
-            num_slices=request.replicas,
+            num_slices=num_slices,
             max_retries_preemption=request.max_retries_preemption,
             max_retries_failure=request.max_retries_failure,
         )
@@ -407,7 +413,7 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
     return options
 
 
-@ray.remote
+@ray.remote(enable_task_events=False)
 class _RayActorHost:
     """Wrapper that sets up ActorContext before creating the real actor.
 
@@ -427,6 +433,16 @@ class _RayActorHost:
         args: tuple,
         kwargs: dict,
     ):
+        # Ensure the root logger is configured in this worker process so that
+        # library code using logging.getLogger(__name__).info() is visible.
+        # Ray forwards stdout/stderr to the driver, but Python's root logger
+        # defaults to WARNING in fresh processes.
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s:%(lineno)d %(message)s",
+            force=True,
+        )
+
         # Create handle by name - will resolve via ray.get_actor() when used
         handle = RayActorHandle(actor_name)
         ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name)

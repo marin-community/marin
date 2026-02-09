@@ -56,7 +56,7 @@ from marin.download.huggingface.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 from tqdm import tqdm
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
@@ -162,4 +162,5 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
         )
     )
 
-    Backend.execute(pipeline)
+    with ZephyrContext(name="transform-dclm-hq") as ctx:
+        ctx.execute(pipeline)

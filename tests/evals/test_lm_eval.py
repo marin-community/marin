@@ -71,6 +71,7 @@ def test_lm_eval_harness(current_date_time, model_config):
         evals=[gsm8k_config],
         max_eval_instances=1,
         launch_with_ray=True,
+        resource_config=ResourceConfig.with_cpu(cpu=1),
         engine_kwargs=model_config.engine_kwargs,
     )
     evaluate(config=config)
@@ -85,6 +86,7 @@ def test_alpaca_eval(current_date_time, model_config):
         evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{current_date_time}",
         max_eval_instances=1,
         launch_with_ray=True,
+        resource_config=ResourceConfig.with_cpu(cpu=1),
         engine_kwargs={
             "temperature": 0.7,
             "presence_penalty": 0.0,
