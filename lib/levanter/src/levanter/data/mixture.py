@@ -281,6 +281,11 @@ class MixtureDataset(AsyncDataset[T]):
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             if ds.is_finite():
                 length_of_dataset = await ds.async_len()
+                if length_of_dataset <= 0:
+                    raise ValueError(
+                        "MixtureDataset in RESTART_STRATEGY encountered an empty finite dataset "
+                        "(`async_len()` returned 0). Restart strategy does not support empty datasets."
+                    )
                 indices_into_ds = [idx % length_of_dataset for idx in indices_into_ds]
 
             return indices_into_ds
