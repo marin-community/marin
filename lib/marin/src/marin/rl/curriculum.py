@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-from fray.job import get_default_job_ctx
+from fray.v1.job import get_default_job_ctx
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 

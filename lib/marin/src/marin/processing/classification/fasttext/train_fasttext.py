@@ -30,14 +30,14 @@ from datetime import datetime
 
 import draccus
 import fsspec
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from marin.processing.classification.dataset_utils import (
     Attribute,
     DatasetConfig,
     Document,
 )
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm, rebase_file_path
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)
 
@@ -106,11 +106,12 @@ def create_dataset(config: CreateDatasetConfig) -> None:
     if config.merge_dataset_shards:
         output_path = os.path.join(config.output_dataset_path, "data", "data.jsonl.gz")
 
-    Backend.execute(
-        Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
-        .flat_map(processing_func)
-        .write_jsonl(output_path)
-    )
+    with ZephyrContext(name="fasttext-prep") as ctx:
+        ctx.execute(
+            Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
+            .flat_map(processing_func)
+            .write_jsonl(output_path)
+        )
 
 
 def create_dataset_shard(

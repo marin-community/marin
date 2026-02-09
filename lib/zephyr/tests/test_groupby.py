@@ -17,20 +17,8 @@
 import hashlib
 
 import pytest
-from fray.job import create_job_ctx
-from zephyr import Backend, Dataset
 
-
-@pytest.fixture(
-    params=[
-        pytest.param(create_job_ctx("sync"), id="sync"),
-        pytest.param(create_job_ctx("threadpool", max_workers=2), id="thread"),
-        pytest.param(create_job_ctx("ray"), id="ray"),
-    ]
-)
-def backend(request):
-    """Parametrized fixture providing all backend types."""
-    return request.param
+from zephyr import Dataset
 
 
 @pytest.fixture
@@ -49,7 +37,7 @@ def large_document_dataset():
     return docs
 
 
-def test_deduplicate_basic(backend):
+def test_deduplicate_basic(zephyr_ctx):
     """Test basic deduplication by id."""
     data = [
         {"id": 1, "val": "a"},
@@ -61,7 +49,7 @@ def test_deduplicate_basic(backend):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
 
     # Should have exactly 3 unique items (ids 1, 2, 3)
     assert len(results) == 3
@@ -71,35 +59,35 @@ def test_deduplicate_basic(backend):
     assert ids == [1, 2, 3]
 
 
-def test_deduplicate_empty(backend):
+def test_deduplicate_empty(zephyr_ctx):
     """Test deduplication on empty dataset."""
     ds = Dataset.from_list([]).deduplicate(key=lambda x: x["id"])
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
     assert results == []
 
 
-def test_deduplicate_all_unique(backend):
+def test_deduplicate_all_unique(zephyr_ctx):
     """Test deduplication when all items are unique."""
     data = [{"id": i, "val": f"item_{i}"} for i in range(10)]
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
     assert len(results) == 10
 
 
-def test_deduplicate_all_duplicates(backend):
+def test_deduplicate_all_duplicates(zephyr_ctx):
     """Test deduplication when all items have same key."""
     data = [{"id": 1, "val": f"item_{i}"} for i in range(10)]
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
     assert len(results) == 1
     assert results[0]["id"] == 1
 
 
-def test_group_by_count(backend):
+def test_group_by_count(zephyr_ctx):
     """Test groupby with count reducer."""
     data = [
         {"cat": "A", "val": 1},
@@ -114,7 +102,7 @@ def test_group_by_count(backend):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
     )
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
 
     # Should have 3 groups
     assert len(results) == 3
@@ -127,7 +115,7 @@ def test_group_by_count(backend):
     assert results[2] == {"cat": "C", "count": 1}
 
 
-def test_group_by_sum(backend):
+def test_group_by_sum(zephyr_ctx):
     """Test groupby with sum reducer."""
     data = [
         {"cat": "A", "val": 1},
@@ -141,7 +129,7 @@ def test_group_by_sum(backend):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "sum": sum(item["val"] for item in items)}
     )
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
     results = sorted(results, key=lambda x: x["cat"])
 
     assert results[0] == {"cat": "A", "sum": 4}  # 1 + 3
@@ -149,7 +137,7 @@ def test_group_by_sum(backend):
     assert results[2] == {"cat": "C", "sum": 4}
 
 
-def test_group_by_list(backend):
+def test_group_by_list(zephyr_ctx):
     """Test groupby with list aggregation."""
     data = [
         {"cat": "A", "val": 1},
@@ -161,7 +149,7 @@ def test_group_by_list(backend):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "vals": [item["val"] for item in items]}
     )
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
     results = sorted(results, key=lambda x: x["cat"])
 
     assert results[0]["cat"] == "A"
@@ -171,23 +159,23 @@ def test_group_by_list(backend):
     assert results[1]["vals"] == [2]
 
 
-def test_group_by_empty(backend):
+def test_group_by_empty(zephyr_ctx):
     """Test groupby on empty dataset."""
     ds = Dataset.from_list([]).group_by(
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
     )
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
     assert results == []
 
 
-def test_deduplicate_with_num_output_shards(backend):
+def test_deduplicate_with_num_output_shards(zephyr_ctx):
     """Test deduplication with explicit num_output_shards."""
     data = [{"id": i % 3, "val": f"item_{i}"} for i in range(20)]
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"], num_output_shards=5)
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
 
     # Should have exactly 3 unique items (ids 0, 1, 2)
     assert len(results) == 3
@@ -195,7 +183,7 @@ def test_deduplicate_with_num_output_shards(backend):
     assert ids == [0, 1, 2]
 
 
-def test_group_by_with_hash_key_large(backend, large_document_dataset):
+def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
     """Test group_by with MD5 hash on larger dataset, counting duplicates."""
 
     def compute_hash(doc):
@@ -219,7 +207,7 @@ def test_group_by_with_hash_key_large(backend, large_document_dataset):
         .group_by(key=lambda doc: doc["hash"], reducer=count_and_extract)
     )
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
 
     # Should have exactly 100 groups (one per unique content)
     assert len(results) == 100
@@ -233,7 +221,7 @@ def test_group_by_with_hash_key_large(backend, large_document_dataset):
     assert len(set(hashes)) == 100
 
 
-def test_group_by_with_none_and_filter(backend):
+def test_group_by_with_none_and_filter(zephyr_ctx):
     """Test group_by with None results followed by filter operations."""
     data = [
         {"cat": "a"},
@@ -257,7 +245,7 @@ def test_group_by_with_none_and_filter(backend):
         .filter(lambda x: x is not None)  # Filter out None values
     )
 
-    results = list(Backend.execute(ds, context=backend))
+    results = list(zephyr_ctx.execute(ds))
 
     # Should only have duplicate keys: "a" and "foo"
     assert len(results) == 2

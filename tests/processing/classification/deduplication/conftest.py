@@ -15,14 +15,7 @@
 from pathlib import Path
 
 import pytest
-from fray.job import create_job_ctx, fray_default_job_ctx
 from zephyr.readers import load_jsonl
-
-
-@pytest.fixture(scope="module")
-def sync_backend(request):
-    with fray_default_job_ctx(create_job_ctx("sync")):
-        yield
 
 
 @pytest.fixture(scope="module")

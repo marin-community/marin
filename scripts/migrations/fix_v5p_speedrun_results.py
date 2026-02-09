@@ -23,7 +23,7 @@ import json
 from collections.abc import Iterable
 from pathlib import Path
 
-from fray.cluster.ray.tpu import TPU_CONFIGS
+from fray.v1.cluster.ray.tpu import TPU_CONFIGS
 
 TPU_CONFIG_BY_NAME = {config.name: config for config in TPU_CONFIGS}
 

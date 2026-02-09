@@ -28,7 +28,7 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.cluster.base import (
+from fray.v1.cluster.base import (
     Cluster,
     CpuConfig,
     EnvironmentConfig,
@@ -39,10 +39,10 @@ from fray.cluster.base import (
     JobStatus,
     TpuConfig,
 )
-from fray.cluster.ray.config import find_config_by_region
-from fray.cluster.ray.deps import build_python_path, build_runtime_env_for_packages
-from fray.cluster.ray.tpu import run_on_pod_ray
-from fray.job.context import RayContext, fray_default_job_ctx
+from fray.v1.cluster.ray.config import find_config_by_region
+from fray.v1.cluster.ray.deps import build_python_path, build_runtime_env_for_packages
+from fray.v1.cluster.ray.tpu import run_on_pod_ray
+from fray.v1.job.context import RayContext, fray_default_job_ctx
 
 logger = logging.getLogger("ray")
 

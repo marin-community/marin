@@ -17,8 +17,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from fray.cluster.ray import get_scheduling_strategy
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster.ray import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.utils import remove_tpu_lockfile_on_exit

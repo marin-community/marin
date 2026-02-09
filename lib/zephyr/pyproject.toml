@@ -9,6 +9,7 @@ description = "Lightweight dataset library for distributed data processing"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "iris",
     "fray[ray]",
     "typing-extensions>=4.0",
     "click>=8.0",
@@ -29,6 +30,7 @@ zephyr = "zephyr.cli:main"
 test = [
     "pytest>=8.3.2",
     "pytest-timeout",
+    "pytest-xdist",
     "psutil>=5.9.0",
 ]
 

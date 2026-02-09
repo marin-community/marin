@@ -276,7 +276,7 @@ class GpuConfig:
 
     def device_flops(self, dtype: str = "bf16") -> float:
         """Peak FLOP/s for a single GPU."""
-        from fray.cluster.device_flops import device_flops
+        from fray.v1.cluster.device_flops import device_flops
 
         flops = device_flops(self.variant, dtype)
         if flops is None:
@@ -311,7 +311,7 @@ class TpuConfig:
 
     def device_flops(self, dtype: str = "bf16") -> float:
         """Peak FLOP/s for a single TPU chip."""
-        from fray.cluster.device_flops import device_flops
+        from fray.v1.cluster.device_flops import device_flops
 
         flops = device_flops(self.variant, dtype)
         if flops is None:

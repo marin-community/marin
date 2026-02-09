@@ -45,7 +45,7 @@ from transformers import PreTrainedTokenizer
 from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
-from fray.job import get_default_job_ctx
+from fray.v1.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec

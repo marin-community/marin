@@ -12,39 +12,75 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fray: Execution contexts for distributed and parallel computing."""
+"""Fray: Execution contexts for distributed and parallel computing.
 
-from fray.cluster import (
-    Cluster,
+Top-level fray exports are v2 APIs. For legacy v1 APIs, use ``fray.v1``.
+"""
+
+from fray.v2 import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    ActorMethod,
+    Client,
     CpuConfig,
+    DeviceConfig,
+    DeviceKind,
     Entrypoint,
     EnvironmentConfig,
     GpuConfig,
-    JobId,
-    JobInfo,
+    GpuType,
+    JobFailed,
+    JobHandle,
     JobRequest,
-    LocalCluster,
+    JobStatus,
+    LocalActorHandle,
+    LocalActorMethod,
+    LocalClient,
+    LocalJobHandle,
     ResourceConfig,
-    create_cluster,
-    current_cluster,
+    TpuConfig,
+    TpuTopologyInfo,
+    TpuType,
+    create_environment,
+    current_actor,
+    current_client,
+    get_tpu_topology,
+    set_current_client,
+    wait_all,
 )
-from fray.cluster.base import JobStatus
-from fray.isolated_env import JobGroup, TemporaryVenv
 
 __all__ = [
-    "Cluster",
+    "ActorContext",
+    "ActorFuture",
+    "ActorGroup",
+    "ActorHandle",
+    "ActorMethod",
+    "Client",
     "CpuConfig",
+    "DeviceConfig",
+    "DeviceKind",
     "Entrypoint",
     "EnvironmentConfig",
     "GpuConfig",
-    "JobGroup",
-    "JobId",
-    "JobInfo",
+    "GpuType",
+    "JobFailed",
+    "JobHandle",
     "JobRequest",
     "JobStatus",
-    "LocalCluster",
+    "LocalActorHandle",
+    "LocalActorMethod",
+    "LocalClient",
+    "LocalJobHandle",
     "ResourceConfig",
-    "TemporaryVenv",
-    "create_cluster",
-    "current_cluster",
+    "TpuConfig",
+    "TpuTopologyInfo",
+    "TpuType",
+    "create_environment",
+    "current_actor",
+    "current_client",
+    "get_tpu_topology",
+    "set_current_client",
+    "wait_all",
 ]

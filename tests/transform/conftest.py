@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from fray.job import create_job_ctx, fray_default_job_ctx
+from fray.v1.job import create_job_ctx, fray_default_job_ctx
 
 
 @pytest.fixture(autouse=True)

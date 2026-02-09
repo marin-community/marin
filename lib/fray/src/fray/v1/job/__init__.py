@@ -14,7 +14,7 @@
 
 """Job execution context module."""
 
-from fray.job.context import (
+from fray.v1.job.context import (
     ActorHandle,
     ActorMethod,
     ContextConfig,

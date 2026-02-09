@@ -14,13 +14,13 @@
 
 """Ray-based cluster implementation."""
 
-from fray.cluster.ray.cluster import RayCluster
-from fray.cluster.ray.dashboard import (
+from fray.v1.cluster.ray.cluster import RayCluster
+from fray.v1.cluster.ray.dashboard import (
     DashboardConfig,
     DashboardConnection,
     ray_dashboard,
 )
-from fray.cluster.ray.resources import accelerator_descriptor, as_remote_kwargs, get_scheduling_strategy
+from fray.v1.cluster.ray.resources import accelerator_descriptor, as_remote_kwargs, get_scheduling_strategy
 
 __all__ = [
     "DashboardConfig",

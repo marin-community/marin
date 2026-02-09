@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import fsspec
-from fray.queue.base import Lease, Queue
+from fray.v1.queue.base import Lease, Queue
 
 logger = logging.getLogger(__name__)
 

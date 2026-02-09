@@ -25,13 +25,13 @@ import sys
 import time
 
 import pytest
-from fray.cluster import (
+from fray.v1.cluster import (
     Entrypoint,
     EnvironmentConfig,
     JobRequest,
     ResourceConfig,
 )
-from fray.cluster.local_cluster import LocalCluster, LocalClusterConfig
+from fray.v1.cluster.local_cluster import LocalCluster, LocalClusterConfig
 
 
 def test_cluster_list_jobs(cluster):

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from queue import Empty
 
 import tblib
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig

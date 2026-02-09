@@ -20,8 +20,8 @@ import dataclasses
 import os
 from dataclasses import dataclass
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from fray.cluster.base import TpuConfig
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster.base import TpuConfig
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig

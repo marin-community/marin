@@ -33,7 +33,7 @@ import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
-from fray.job.context import get_default_job_ctx
+from fray.v1.job.context import get_default_job_ctx
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
 from jaxtyping import PyTree
