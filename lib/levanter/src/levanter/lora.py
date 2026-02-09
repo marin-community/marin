@@ -97,9 +97,27 @@ class LoraConfig:
     r: int = 8  # rank of LoRA transform
     alpha: float = 8.0  # scaling factor for LoRA transform
     dropout: float = 0.0  # dropout probability for LoRA layers
+    zero_init_b: bool = False
+    """Zero-initialize the B matrix so LoRA starts as identity (W + 0 = W).
+    This is the standard PEFT convention and is critical for DPO, where
+    non-zero initialization causes immediate policy-reference divergence.
+    Default is False for backward compatibility with existing SFT configs."""
+    exclude_modules: Optional[List[str]] = None
+    """modules to exclude from LoRA. Defaults to ["lm_head"] to avoid breaking get_lm_head().weight access."""
     # TODO: bias
+    # TODO(IMPORTANT): lm_head is excluded by default because every model's get_lm_head() does
+    # `self.lm_head.weight`, which breaks when lm_head is a LoraLinear (no .weight attribute).
+    # The proper fix is to update get_lm_head() in ALL model classes (llama, qwen, gemma, mixtral,
+    # olmo, olmo3, apertus, mistral) to handle LoraLinear, e.g.:
+    #     if isinstance(self.lm_head, LoraLinear): return self.lm_head.wrapped.weight
+    # This would allow LoRA on lm_head, which some research suggests is beneficial
+    # (Thinking Machines 2025: "apply LoRA to all weight matrices").
+    # See also: resize_vocab() has the same .weight assumption.
 
     def matches_target(self, key_path):
+        excludes = self.exclude_modules if self.exclude_modules is not None else ["lm_head"]
+        if any(key_path.endswith(exc) for exc in excludes):
+            return False
         if isinstance(self.target_modules, str):
             compiled = re.compile(self.target_modules)
             return compiled.match(key_path) is not None
@@ -140,15 +158,26 @@ class LowRankLinear(eqx.Module):
         return z * self.scale
 
     @staticmethod
-    def init(In: hax.Axis, Out: Axis, r: int, alpha: float, dropout_prob: float, *, key):
+    def init(In: hax.Axis, Out: Axis, r: int, alpha: float, dropout_prob: float, *, key, zero_init_b: bool = False):
         """
-        Initializes a LoraLinear module.
+        Initializes a LowRankLinear module.
+
+        Args:
+            zero_init_b: If True, zero-initialize the B matrix so the adapter starts as identity
+                (W + alpha/r * 0 * A = W). This is the standard PEFT convention and is critical
+                for DPO where policy must match reference at initialization.
         """
         _R = hax.Axis(LORA_R, r)
         key_A, key_B = jax.random.split(key)
         # Peft always uses out_first=True (i.e. normal Torch convention) for linear, even for gpt2-style Conv1d
         lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
-        lora_B = hnn.Linear.init(_R, Out, key=key_B, use_bias=False, out_first=True)
+        if zero_init_b:
+            # out_first=True means weight shape is (Out, In) — matching PEFT convention
+            joint_spec = hax.concat_axis_specs(Out, _R)
+            zero_weight = hax.zeros(joint_spec)
+            lora_B = hnn.Linear(weight=zero_weight, bias=None, In=_R, Out=Out)
+        else:
+            lora_B = hnn.Linear.init(_R, Out, key=key_B, use_bias=False, out_first=True)
         dropout = hnn.Dropout(dropout_prob)
 
         return LowRankLinear(lora_A, lora_B, dropout, alpha / r)
@@ -178,11 +207,11 @@ class LoraLinear(ModuleWithStateDictSerialization):
         return dataclasses.replace(self.wrapped, weight=weight)
 
     @staticmethod
-    def init(wrapped: hnn.Linear, r: int, alpha: float, dropout: float = 0.0, *, key):
+    def init(wrapped: hnn.Linear, r: int, alpha: float, dropout: float = 0.0, *, key, zero_init_b: bool = False):
         """
         Initializes a LoraLinear module.
         """
-        lora = LowRankLinear.init(wrapped.In, wrapped.Out, r, alpha, dropout, key=key)
+        lora = LowRankLinear.init(wrapped.In, wrapped.Out, r, alpha, dropout, key=key, zero_init_b=zero_init_b)
         return LoraLinear(wrapped, lora)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
@@ -282,7 +311,9 @@ def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str,
         elif config.matches_target(key_path) and _is_lora_compatible_module(module):
             my_key = next(key_iter)
             batched_key = shaped_rng_split(my_key, [axis.size for axis in batch_dims])
-            return _batchify_ctor(LoraLinear.init)(module, config.r, config.alpha, config.dropout, key=batched_key)
+            return _batchify_ctor(LoraLinear.init)(
+                module, config.r, config.alpha, config.dropout, key=batched_key, zero_init_b=config.zero_init_b
+            )
         else:
             return module
 
@@ -292,6 +323,23 @@ def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str,
         leaf_key_paths(model, is_leaf=_is_special_module, prefix=prefix),
         is_leaf=_is_special_module,
     )
+
+
+def unwrap_lora_modules(module: M) -> M:
+    """Strips LoRA adapters, returning the base model without any LoRA parameters.
+
+    Replaces every LoraLinear with its wrapped base Linear. The returned model
+    shares the same base weight arrays as the input (JAX arrays are immutable,
+    so this is safe). This is used for computing reference-model log-probs in
+    LoRA-DPO training.
+    """
+
+    def _unwrap(node):
+        if isinstance(node, LoraLinear):
+            return node.wrapped
+        return node
+
+    return jax.tree_util.tree_map(_unwrap, module, is_leaf=lambda node: isinstance(node, LoraLinear))
 
 
 @hax.named_jit  # needs to be inside (named) jit s.t. it works with sharded parameters

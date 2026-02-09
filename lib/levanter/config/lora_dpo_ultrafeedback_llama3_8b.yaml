@@ -1,0 +1,80 @@
+# LoRA-DPO config for lora_dpo.py using the Ultrafeedback preference dataset.
+# Mirrors dpo_ultrafeedback_llama3_8b.yaml but uses LoRA instead of a separate reference model.
+# The base model (without LoRA adapters) serves as the implicit reference — no second model copy needed.
+# python infra/launch.py --zone us-central1-a --tpu_name debug --tpu_type v5p-8 -- python src/levanter/main/lora_dpo.py --config_path config/lora_dpo_ultrafeedback_llama3_8b.yaml
+data:
+  tokenizer: marin-community/marin-tokenizer
+  shuffle: true
+  permutation_type: feistel
+  components:
+    ultrafeedback_train_prefs:
+      source:
+        type: url
+        train_urls:
+          # Replace with the output path from transform_preference_dataset_step (train_prefs split).
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
+    ultrafeedback_test_prefs:
+      source:
+        type: url
+        validation_urls:
+          # Replace with the output path from transform_preference_dataset_step (test_prefs split).
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_test_prefs_marin_tokenizer-29ecfb
+  train_weights:
+    ultrafeedback_train_prefs: 1.0
+    ultrafeedback_test_prefs: 0.0
+
+train_seq_len: 4096
+
+trainer:
+  seed: 0
+  per_device_parallelism: -1
+  per_device_eval_parallelism: -1
+  tracker:
+    type: wandb
+    project: "dpo"
+    tags: ["lora-dpo", "ultrafeedback", "llama3"]
+  mp: p=f32,c=bfloat16
+  train_batch_size: 128
+  num_train_steps: 2150
+  steps_per_eval: 200
+  model_averaging: null
+  checkpointer:
+    save_interval: 10m
+    base_path: gs://marin-us-central1/checkpoints/lora_dpo/ultrafeedback_llama3_8b
+
+optimizer:
+  # LoRA needs ~10x higher LR than full fine-tuning for the same task (Thinking Machines, 2025).
+  # The full-FT DPO config uses 5e-7; we use 5e-6 here. If reward margins diverge or
+  # oscillate, reduce to 1e-6 or 5e-7. If flat after 100+ steps, increase to 1e-5.
+  # Never exceed 5e-5 for DPO. See lora-dpo-best-practices.md Section 3.3.
+  learning_rate: 5e-6
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: "cosine"
+  warmup: 0.1
+  max_grad_norm: 1.0
+
+lora:
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true  # Critical for DPO: adapter starts as identity so policy = reference at step 0
+  target_modules: null  # null = all linear modules (recommended per Thinking Machines 2025)
+
+initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
+use_hf_model_config: false
+beta: 0.01
+validation_split_fraction: null
+
+hf_save_steps: 1000
+# peft_save_path disabled: haliax to_numpy_state_dict has a device mesh ordering bug on multi-host TPU.
+# Use merged_hf_save_path instead, which goes through Levanter's own serialization.
+merged_hf_save_path: gs://marin-us-central1/checkpoints/lora_dpo/ultrafeedback_llama3_8b/merged_hf
