@@ -88,7 +88,12 @@ class EraShufflingDataset(AsyncDataset[T_co]):
             if self.dataset.is_finite():
                 # edge case: final era may be shorter than era_length
                 dataset_len = await self.dataset.async_len()
-                era_length_val = min(self.era_length, dataset_len - era * self.era_length)
+                remaining = dataset_len - era * self.era_length
+                if remaining <= 0:
+                    raise IndexError(
+                        f"Era {era} is out of bounds for dataset length {dataset_len} with era length {self.era_length}"
+                    )
+                era_length_val = min(self.era_length, remaining)
             else:
                 era_length_val = self.era_length
 

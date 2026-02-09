@@ -78,3 +78,11 @@ async def test_era_shuffling_returns_full_finite_length():
     assert await shuffling_dataset.async_len() == 16
     batch = await shuffling_dataset.get_batch(list(range(16)))
     assert set(batch) == set(range(16))
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_raises_on_out_of_bounds_index():
+    dataset = ListAsyncDataset(list(range(16)))
+    shuffling_dataset = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
+    with pytest.raises(IndexError, match="out of bounds"):
+        await shuffling_dataset.getitem_async(16)

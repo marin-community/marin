@@ -56,6 +56,13 @@ def test_local_batched_data_loading_model_axis_1():
             check_sharded_consistency(batch, check_disjoint_indices_are_different=True)
 
 
+def test_loader_rejects_empty_finite_dataset():
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+        dataset = ListAsyncDataset([])
+        with pytest.raises(ValueError, match="finite but has length 0"):
+            DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
+
+
 class StructuredDataset(AsyncDataset):
     def __init__(self, seq_len):
         super().__init__()

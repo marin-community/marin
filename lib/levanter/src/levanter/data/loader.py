@@ -133,7 +133,10 @@ class DataLoader(Iterable[Ex]):
             if self.data_store.is_finite():
                 current_len = blocking_wait(self.data_store.async_len())
                 if current_len <= 0:
-                    logger.warning("Data store currently has no data.")
+                    raise ValueError(
+                        "AsyncDataset is finite but has length 0. DataLoader cannot be initialized on an empty "
+                        "finite dataset."
+                    )
 
             initial_example = blocking_wait(self.data_store.getitem_async(0))
             self._ex_leaves, self._ex_structure = jax.tree.flatten(initial_example, is_leaf=is_named_array)
