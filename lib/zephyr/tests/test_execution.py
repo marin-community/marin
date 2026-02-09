@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,10 @@ def test_shared_data(fray_client):
         return x * multiplier
 
     zctx = ZephyrContext(
-        client=fray_client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-execution"
+        client=fray_client,
+        num_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
     zctx.put("multiplier", 10)
     ds = Dataset.from_list([1, 2, 3]).map(use_shared)
@@ -67,7 +71,10 @@ def test_multi_stage(zephyr_ctx):
 def test_context_manager(fray_client):
     """ZephyrContext works as context manager."""
     with ZephyrContext(
-        client=fray_client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-execution"
+        client=fray_client,
+        num_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
     ) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
         results = list(zctx.execute(ds))
@@ -119,7 +126,7 @@ def test_chunk_cleanup(fray_client, tmp_path):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
-        name="test-execution",
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
 
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
@@ -222,7 +229,7 @@ def test_workers_persist_across_executes(fray_client, tmp_path):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
-        name="test-execution",
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
     ) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
         results = list(zctx.execute(ds))
@@ -256,7 +263,7 @@ def test_fatal_errors_fail_fast(fray_client, tmp_path):
         num_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
-        name="test-execution",
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
     ) as zctx:
         ds = Dataset.from_list([1, 2, 3]).map(exploding_map)
 
@@ -277,7 +284,7 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
         num_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
-        name="test-execution",
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
 
     # Create datasets for join
