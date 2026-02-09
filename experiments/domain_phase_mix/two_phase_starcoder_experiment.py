@@ -36,8 +36,11 @@ Usage:
     python -m experiments.domain_phase_mix.two_phase_starcoder_experiment --analyze
 """
 
+import json
 import logging
 import os
+
+import fsspec
 
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
@@ -84,13 +87,41 @@ DOMAIN_NAMES = ["nemotron_full", "starcoder"]
 # Combine CORE_TASKS + CODE_TASKS for evaluation
 EVAL_TASKS = CORE_TASKS + CODE_TASKS
 
-# Metrics to collect from W&B for analysis
+# Metrics to collect from W&B for analysis.
+# Built from actual W&B metric names (different tasks log different metric types):
+# - Multiple-choice tasks: acc, acc_norm, bpb, choice_logprob
+# - code2text tasks: smoothed_bleu_4
+# - humaneval: pass@1,create_test
+# - jsonschema_bench tasks: json_validity, schema_compliance
+# - lambada: acc, perplexity
 ANALYSIS_METRICS = [
     "eval/loss",
-    *convert_to_task_metrics(EVAL_TASKS, "acc"),
-    *convert_to_task_metrics(EVAL_TASKS, "acc_norm"),
-    *convert_to_task_metrics(EVAL_TASKS, "bpb"),
+    # CORE_TASKS: acc and acc_norm for multiple-choice tasks
+    *convert_to_task_metrics(CORE_TASKS, "acc"),
+    *convert_to_task_metrics(CORE_TASKS, "acc_norm"),
+    *convert_to_task_metrics(CORE_TASKS, "bpb"),
+    *convert_to_task_metrics(CORE_TASKS, "choice_logprob"),
+    # code2text tasks: BLEU score
+    "lm_eval/code2text_go_0shot/smoothed_bleu_4",
+    "lm_eval/code2text_java_0shot/smoothed_bleu_4",
+    "lm_eval/code2text_javascript_0shot/smoothed_bleu_4",
+    "lm_eval/code2text_php_0shot/smoothed_bleu_4",
+    "lm_eval/code2text_python_0shot/smoothed_bleu_4",
+    "lm_eval/code2text_ruby_0shot/smoothed_bleu_4",
+    # jsonschema_bench tasks: validity and compliance
+    "lm_eval/jsonschema_bench_easy_2shot/json_validity",
+    "lm_eval/jsonschema_bench_easy_2shot/schema_compliance",
+    "lm_eval/jsonschema_bench_medium_2shot/json_validity",
+    "lm_eval/jsonschema_bench_medium_2shot/schema_compliance",
+    "lm_eval/jsonschema_bench_hard_2shot/json_validity",
+    "lm_eval/jsonschema_bench_hard_2shot/schema_compliance",
+    # humaneval: pass@1
+    "lm_eval/humaneval_0shot/pass@1,create_test",
+    # Averages
     "lm_eval/averages/macro_avg_acc",
+    "lm_eval/averages/macro_avg_acc_norm",
+    "lm_eval/averages/macro_avg_bpb",
+    "lm_eval/averages/macro_avg_smoothed_bleu_4",
 ]
 
 # GCS paths for pre-cached data to avoid HuggingFace rate limiting
@@ -132,6 +163,8 @@ BASELINES: list[tuple[list[float], list[float]]] = [
     # Single-domain baselines
     ([1, 0], [1, 0]),  # Nemotron only (no code)
     ([0, 1], [0, 1]),  # StarCoder only (no web)
+    # RegMix-optimized for eval/paloma/dolma_100_programing_languages/bpb
+    ([0.9725, 0.0275], [0.6874, 0.3126]),
 ]
 
 
@@ -238,6 +271,41 @@ def create_baseline_weight_configs(
     return configs
 
 
+def _load_original_weight_configs(name_prefix: str) -> list[WeightConfig]:
+    """Load weight configs saved by the original training swarm from GCS.
+
+    This avoids re-sampling, which would produce different configs if sampling
+    parameters have changed since the training run.
+
+    Args:
+        name_prefix: Experiment name prefix (e.g. "pinlin_calvin_xu/data_mixture/two_phase_starcoder_4").
+
+    Returns:
+        List of WeightConfig objects from the original training run.
+    """
+    prefix = os.environ.get("MARIN_PREFIX", "gs://marin-us-central1")
+    pattern = f"{name_prefix}/weight_configs-*/weight_configs.json"
+
+    fs, base = fsspec.core.url_to_fs(prefix)
+    matches = fs.glob(f"{base}/{pattern}")
+
+    if not matches:
+        raise FileNotFoundError(
+            f"No weight_configs found at {prefix}/{pattern}. " "Run the training swarm first before running --analyze."
+        )
+
+    if len(matches) > 1:
+        logger.warning(f"Found multiple weight_configs: {matches}. Using the first one.")
+
+    path = f"{fs.protocol}://{matches[0]}" if isinstance(fs.protocol, str) else f"{fs.protocol[0]}://{matches[0]}"
+    logger.info(f"Loading original weight configs from {path}")
+
+    with fsspec.open(path) as f:
+        data = json.load(f)
+
+    return [WeightConfig.from_dict(c) for c in data["configs"]]
+
+
 def run_baselines(
     name_prefix: str = NAME,
     baselines: list[tuple[list[float], list[float]]] | None = None,
@@ -296,7 +364,7 @@ def run_baselines(
 
 
 def main(
-    n_runs: int = 100,
+    n_runs: int = 50,
     seed: int = 42,
     name_prefix: str = NAME,
     analyze: bool = False,
@@ -356,23 +424,34 @@ def main(
     )
 
     if analyze:
-        # Only run analysis
+        # Load original weight configs from GCS (preserves the exact configs
+        # that were used for training, even if sampling params have changed).
         logger.info("Running analysis only (collecting results from W&B)")
-        # Include baseline configs in the weight_configs step by re-creating it
-        # with baseline configs appended.
+        original_configs = _load_original_weight_configs(name_prefix)
+        existing_ids = {c.run_id for c in original_configs}
+
+        # Append any baselines not already present in the original configs.
         baseline_weight_configs = create_baseline_weight_configs(BASELINES)
-        weight_configs_step_with_baselines, _ = experiment.create_swarm_steps(
-            n_runs=n_runs,
-            seed=seed,
-            name_prefix=f"{name_prefix}_with_baselines",
-            additional_configs=baseline_weight_configs,
+        new_baselines = [c for c in baseline_weight_configs if c.run_id not in existing_ids]
+        all_configs = original_configs + new_baselines
+
+        logger.info(
+            f"Loaded {len(original_configs)} original configs, "
+            f"appending {len(new_baselines)} new baselines ({len(all_configs)} total)"
         )
-        analysis_step_with_baselines = create_analysis_step(
-            weight_configs_step=weight_configs_step_with_baselines,
+
+        weight_configs_step_for_analysis = experiment.create_weight_configs_step(
+            configs=all_configs,
+            summary={},
+            seed=seed,
+            name_prefix=f"{name_prefix}_analysis",
+        )
+        analysis_step_for_analysis = create_analysis_step(
+            weight_configs_step=weight_configs_step_for_analysis,
             name_prefix=name_prefix,  # Keep original name for W&B tag matching
             metrics=ANALYSIS_METRICS,
         )
-        all_steps = [weight_configs_step_with_baselines, analysis_step_with_baselines]
+        all_steps = [weight_configs_step_for_analysis, analysis_step_for_analysis]
         executor_main(
             steps=all_steps,
             description=f"Analysis for {name_prefix}",
@@ -417,8 +496,8 @@ def _parse_args():
     parser.add_argument(
         "--n_runs",
         type=int,
-        default=100,
-        help="Number of training runs (default: 100).",
+        default=50,
+        help="Number of training runs (default: 50).",
     )
     parser.add_argument(
         "--seed",
@@ -442,8 +521,7 @@ def _parse_args():
         action="store_true",
         help="Run predefined baseline trial runs instead of random sampling.",
     )
-    # Note: --max_concurrent and --force_run_failed are handled by executor_main
-    # via draccus CLI parsing, so they don't need to be defined here.
+
     return parser.parse_known_args()
 
 

@@ -122,8 +122,10 @@ def collect_results(config: CollectResultsConfig):
     matched = match_runs_to_configs(runs, configs, experiment_name=experiment_name)
     logger.info(f"Matched {sum(1 for m in matched if m.get('wandb_run_id'))} runs to configs")
 
-    # 4. Build DataFrame with all weights and metrics
-    df = build_results_dataframe(matched, domains, phases, list(config.metrics))
+    # 4. Build DataFrame with all weights and auto-discovered metrics
+    df = build_results_dataframe(matched, domains, phases)
+    discovered_metrics = _discover_metric_keys(matched)
+    logger.info(f"Discovered {len(discovered_metrics)} metrics from W&B runs")
 
     # 5. Write CSV to GCS
     csv_path = os.path.join(config.output_path, "results.csv")
@@ -139,7 +141,7 @@ def collect_results(config: CollectResultsConfig):
         "n_completed": sum(1 for m in matched if m.get("status") == "completed"),
         "domains": domains,
         "phases": phases,
-        "metrics": list(config.metrics),
+        "metrics": discovered_metrics,
     }
     summary_path = os.path.join(config.output_path, "summary.json")
     with fsspec.open(summary_path, "w") as f:
@@ -166,19 +168,29 @@ def load_weight_configs(path: str) -> dict:
         return json.load(f)
 
 
+METRIC_PREFIXES = ("eval/", "lm_eval/")
+
+
 def query_wandb_runs(
     entity: str,
     project: str,
     tags: list[str],
-    metrics: list[str],
+    metrics: list[str] | None = None,
+    metric_prefixes: tuple[str, ...] = METRIC_PREFIXES,
 ) -> list[dict]:
     """Query W&B API for runs with specific tags.
+
+    Collects all numeric metrics from run summaries whose keys start with
+    any of the given prefixes (default: ``eval/`` and ``lm_eval/``).
+    An explicit *metrics* list can be provided to collect additional keys
+    that don't match the prefixes.
 
     Args:
         entity: W&B entity name.
         project: W&B project name.
         tags: Tags to filter runs (runs must have at least one of these tags).
-        metrics: List of metric keys to collect.
+        metrics: Optional extra metric keys to collect on top of auto-discovered ones.
+        metric_prefixes: Key prefixes used for auto-discovery.
 
     Returns:
         List of dictionaries with run info and metrics.
@@ -191,6 +203,8 @@ def query_wandb_runs(
     filters = {"tags": {"$in": tags}}
     runs = api.runs(f"{entity}/{project}", filters=filters)
 
+    extra_keys = set(metrics) if metrics else set()
+
     results = []
     for run in runs:
         row = {
@@ -199,9 +213,12 @@ def query_wandb_runs(
             "status": run.state,
         }
 
-        # Extract metrics from run summary
-        for metric in metrics:
-            row[metric] = run.summary.get(metric)
+        # Auto-discover all eval/lm_eval metrics from the run summary
+        for key, value in run.summary.items():
+            if not isinstance(value, (int, float)):
+                continue
+            if any(key.startswith(prefix) for prefix in metric_prefixes) or key in extra_keys:
+                row[key] = value
 
         results.append(row)
 
@@ -304,24 +321,51 @@ def match_runs_to_configs(runs: list[dict], configs: list[dict], experiment_name
     return matched
 
 
+def _discover_metric_keys(
+    matched: list[dict],
+    metric_prefixes: tuple[str, ...] = METRIC_PREFIXES,
+) -> list[str]:
+    """Discover all metric keys present in matched run data.
+
+    Collects the union of all keys across matched runs that start with
+    any of the given prefixes.
+
+    Args:
+        matched: List of matched config + run dictionaries.
+        metric_prefixes: Key prefixes to include.
+
+    Returns:
+        Sorted list of discovered metric keys.
+    """
+    keys: set[str] = set()
+    for m in matched:
+        for key in m:
+            if any(key.startswith(prefix) for prefix in metric_prefixes):
+                keys.add(key)
+    return sorted(keys)
+
+
 def build_results_dataframe(
     matched: list[dict],
     domains: list[str],
     phases: list[str],
-    metrics: list[str],
 ) -> pd.DataFrame:
     """Build a pandas DataFrame from matched results.
+
+    Metrics are auto-discovered from the matched data: any key starting with
+    ``eval/`` or ``lm_eval/`` is included as a column.
 
     Args:
         matched: List of matched config + run dictionaries.
         domains: List of domain names.
         phases: List of phase names.
-        metrics: List of metric names.
 
     Returns:
         DataFrame with one row per run.
     """
     import pandas as pd
+
+    metrics = _discover_metric_keys(matched)
 
     rows = []
     for m in matched:

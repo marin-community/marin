@@ -68,7 +68,7 @@ class DirichletSamplingParams:
     strategy: SamplingStrategy = SamplingStrategy.MIXED
     vertex_prob: float = 0.3  # Probability of vertex-biased sample in mixed strategy
     min_dominant_weight: float = 0.7  # Min weight for dominant domain in vertex sampling
-    min_phase_change: float = 0.15  # Minimum change between phases (L1/2 distance)
+    min_phase_change: float = 0.0  # Minimum change between phases (L1/2 distance)
     min_config_distance: float = 0.0  # Minimum distance to previous configs (0 to disable)
 
 
