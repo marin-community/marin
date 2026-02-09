@@ -57,9 +57,15 @@ jobs:
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
           # Allow rebase and pre-commit operations
-          claude_args: '--allowed-tools "Bash(git *)" "Bash(./infra/pre-commit.py:*)" "Bash(uv *)" "Bash(pytest *)" "Bash(gh *)"'
+          claude_args: '--allowed-tools "Bash(git *)" "Bash(./infra/pre-commit.py *)" "Bash(uv *)" "Bash(pytest *)" "Bash(gh *)"'
+
+          custom_instructions: |
+            Always read and follow the guidelines in AGENTS.md before starting work.
+
+            Before submitting any changes or creating PRs, you MUST:
+            1. Run `./infra/pre-commit.py --all-files --fix` and ensure all checks pass.
+            2. Run `uv run pytest` on any tests relevant to your changes.
+
+            In any follow-up comments on issues or PRs, state how you tested your changes (which tests you ran and their results).
 
