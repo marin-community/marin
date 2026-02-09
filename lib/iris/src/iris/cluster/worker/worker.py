@@ -425,12 +425,10 @@ class Worker:
             attempt.run()
 
         def _stop_task() -> None:
-            attempt.should_stop = True
-            if attempt.container_id:
-                try:
-                    self._runtime.kill(attempt.container_id, force=True)
-                except RuntimeError:
-                    pass
+            try:
+                attempt.stop(force=True)
+            except RuntimeError:
+                pass
 
         mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id_wire}", on_stop=_stop_task)
         attempt.thread = mt._thread

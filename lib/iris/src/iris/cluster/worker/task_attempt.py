@@ -282,6 +282,12 @@ class TaskAttempt:
             return self._container_handle.container_id
         return None
 
+    def stop(self, force: bool = False) -> None:
+        """Stop the container, if running."""
+        self.should_stop = True
+        if self._container_handle:
+            self._container_handle.stop(force=force)
+
     def transition_to(
         self,
         state: TaskState,
