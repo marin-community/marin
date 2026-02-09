@@ -461,11 +461,42 @@ class ControllerServiceImpl:
 
         all_jobs.sort(key=sort_key, reverse=reverse)
 
+        # Build parent -> children map to keep families together during pagination
+        children_by_parent: dict[str, list[cluster_pb2.JobStatus]] = {}
+        job_by_name = {job.name: job for job in all_jobs}
+
+        for job in all_jobs:
+            # Extract parent name from hierarchical job name (e.g., "/a/b/c" -> "/a/b")
+            if job.name and "/" in job.name:
+                last_slash = job.name.rfind("/")
+                if last_slash > 0:
+                    parent_name = job.name[:last_slash]
+                    if parent_name in job_by_name:
+                        if parent_name not in children_by_parent:
+                            children_by_parent[parent_name] = []
+                        children_by_parent[parent_name].append(job)
+
         # Pagination (limit=0 means return all jobs)
         offset = max(request.offset, 0)
         if request.limit > 0:
             limit = min(request.limit, 500)
+
+            # Include jobs in the requested range
             paginated_jobs = all_jobs[offset : offset + limit]
+
+            # Extend pagination to include all children of any parent in this page
+            # This ensures parent-child groups stay together even when pagination would split them
+            included_names = {job.name for job in paginated_jobs}
+            additional_children = []
+
+            for job in paginated_jobs:
+                if job.name in children_by_parent:
+                    for child in children_by_parent[job.name]:
+                        if child.name not in included_names:
+                            additional_children.append(child)
+                            included_names.add(child.name)
+
+            paginated_jobs.extend(additional_children)
             has_more = offset + limit < total_count
         else:
             paginated_jobs = all_jobs[offset:]
