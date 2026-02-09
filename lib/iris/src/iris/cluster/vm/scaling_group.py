@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmManagerProtocol
@@ -33,28 +33,36 @@ from iris.time_utils import Deadline, Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
-class SliceLifecycleState(Enum):
+class SliceLifecycleState(StrEnum):
     """Lifecycle state for a slice (VM group) in the autoscaler.
 
     These states represent the dominant state of a slice based on its constituent VMs.
-    Maps to VmState proto enum values for consistency.
+    String values are lowercase names for use as dictionary keys and proto map keys.
+
+    The enum members also store the corresponding VmState proto values for reference,
+    though StrEnum makes the string values the primary interface.
     """
 
-    REQUESTING = vm_pb2.VM_STATE_REQUESTING
-    BOOTING = vm_pb2.VM_STATE_BOOTING
-    INITIALIZING = vm_pb2.VM_STATE_INITIALIZING
-    READY = vm_pb2.VM_STATE_READY
-    FAILED = vm_pb2.VM_STATE_FAILED
+    REQUESTING = "requesting"
+    BOOTING = "booting"
+    INITIALIZING = "initializing"
+    READY = "ready"
+    FAILED = "failed"
 
     @property
-    def key(self) -> str:
-        """String key for use in dictionaries and proto maps."""
-        return self.name.lower()
+    def proto_value(self) -> int:
+        """Get the corresponding VmState proto enum value."""
+        return _PROTO_VALUE_MAP[self]
 
-    @classmethod
-    def all_keys(cls) -> list[str]:
-        """All state keys in a stable order."""
-        return [state.key for state in cls]
+
+# Mapping from SliceLifecycleState to VmState proto values
+_PROTO_VALUE_MAP = {
+    SliceLifecycleState.REQUESTING: vm_pb2.VM_STATE_REQUESTING,
+    SliceLifecycleState.BOOTING: vm_pb2.VM_STATE_BOOTING,
+    SliceLifecycleState.INITIALIZING: vm_pb2.VM_STATE_INITIALIZING,
+    SliceLifecycleState.READY: vm_pb2.VM_STATE_READY,
+    SliceLifecycleState.FAILED: vm_pb2.VM_STATE_FAILED,
+}
 
 
 class GroupAvailability(Enum):
@@ -435,8 +443,8 @@ class ScalingGroup:
 
         # Use ready + pending for capacity check to prevent churn during boot
         counts = self.slice_state_counts()
-        ready = counts[SliceLifecycleState.READY.key]
-        pending = counts[SliceLifecycleState.BOOTING.key] + counts[SliceLifecycleState.INITIALIZING.key]
+        ready = counts[SliceLifecycleState.READY]
+        pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING]
 
         # Don't scale down if total capacity (ready + pending) is at or below target
         if ready + pending <= target_capacity:
@@ -559,9 +567,9 @@ class ScalingGroup:
         - "booting": at least one VM is booting (but none failed or initializing)
         - "requesting": scale-up in progress (tracked separately from VM state)
 
-        Returns dict with keys matching SliceLifecycleState enum keys.
+        Returns dict with keys matching SliceLifecycleState enum values (strings).
         """
-        counts = {state.key: 0 for state in SliceLifecycleState}
+        counts = {state: 0 for state in SliceLifecycleState}
         with self._slices_lock:
             snapshot = [s.vm_group for s in self._slices.values()]
         for g in snapshot:
@@ -573,17 +581,17 @@ class ScalingGroup:
                 continue
 
             if status.any_failed:
-                counts[SliceLifecycleState.FAILED.key] += 1
+                counts[SliceLifecycleState.FAILED] += 1
             elif status.all_ready:
-                counts[SliceLifecycleState.READY.key] += 1
+                counts[SliceLifecycleState.READY] += 1
             elif any(vm.state == vm_pb2.VM_STATE_INITIALIZING for vm in vms):
-                counts[SliceLifecycleState.INITIALIZING.key] += 1
+                counts[SliceLifecycleState.INITIALIZING] += 1
             elif any(vm.state == vm_pb2.VM_STATE_BOOTING for vm in vms):
-                counts[SliceLifecycleState.BOOTING.key] += 1
+                counts[SliceLifecycleState.BOOTING] += 1
 
         # Add requesting state if active
         if self._requesting_until is not None and not self._requesting_until.expired():
-            counts[SliceLifecycleState.REQUESTING.key] += 1
+            counts[SliceLifecycleState.REQUESTING] += 1
 
         return counts
 

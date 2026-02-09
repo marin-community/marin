@@ -168,20 +168,23 @@ def slice_is_terminal(slice_info: vm_pb2.SliceInfo) -> bool:
 def compute_slice_state_counts(slices: Iterable[vm_pb2.SliceInfo]) -> dict[str, int]:
     """Compute slice state counts from a list of SliceInfo protos.
 
-    Returns dict with keys matching SliceLifecycleState enum keys.
+    Note: REQUESTING state is not populated here because it's tracked separately
+    via ScalingGroup._requesting_until rather than being stored in SliceInfo protos.
+
+    Returns dict with keys matching SliceLifecycleState enum values (strings).
     """
     from iris.cluster.vm.scaling_group import SliceLifecycleState
 
-    counts = {state.key: 0 for state in SliceLifecycleState}
+    counts = {state: 0 for state in SliceLifecycleState}
     for s in slices:
         if slice_any_failed(s):
-            counts[SliceLifecycleState.FAILED.key] += 1
+            counts[SliceLifecycleState.FAILED] += 1
         elif slice_all_ready(s):
-            counts[SliceLifecycleState.READY.key] += 1
+            counts[SliceLifecycleState.READY] += 1
         elif any(vm.state == vm_pb2.VM_STATE_INITIALIZING for vm in s.vms):
-            counts[SliceLifecycleState.INITIALIZING.key] += 1
+            counts[SliceLifecycleState.INITIALIZING] += 1
         else:
-            counts[SliceLifecycleState.BOOTING.key] += 1
+            counts[SliceLifecycleState.BOOTING] += 1
     return counts
 
 

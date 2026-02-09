@@ -153,9 +153,9 @@ def route_demand(
     def make_pending(group: ScalingGroup) -> PendingGroup:
         counts = group.slice_state_counts()
         pending_slices = (
-            counts.get(SliceLifecycleState.REQUESTING.key, 0)
-            + counts.get(SliceLifecycleState.BOOTING.key, 0)
-            + counts.get(SliceLifecycleState.INITIALIZING.key, 0)
+            counts.get(SliceLifecycleState.REQUESTING, 0)
+            + counts.get(SliceLifecycleState.BOOTING, 0)
+            + counts.get(SliceLifecycleState.INITIALIZING, 0)
         )
         current = sum(counts.values())
         headroom = group.max_slices - current
@@ -457,8 +457,8 @@ class Autoscaler:
     ) -> ScalingDecision | None:
         """Evaluate scaling decision for a single group."""
         counts = group.slice_state_counts()
-        ready = counts[SliceLifecycleState.READY.key]
-        pending = counts[SliceLifecycleState.BOOTING.key] + counts[SliceLifecycleState.INITIALIZING.key]
+        ready = counts[SliceLifecycleState.READY]
+        pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING]
         total = sum(counts.values())
 
         capacity = ready + pending

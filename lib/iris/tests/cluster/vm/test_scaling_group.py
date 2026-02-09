@@ -661,10 +661,10 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts[expected_state.key] == 1
+        assert counts[expected_state] == 1
         for state in SliceLifecycleState:
             if state != expected_state:
-                assert counts[state.key] == 0
+                assert counts[state] == 0
 
     def test_failed_takes_precedence(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """A VM group with any failed VM is counted as failed."""
@@ -680,8 +680,8 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts[SliceLifecycleState.FAILED.key] == 1
-        assert counts[SliceLifecycleState.READY.key] == 0
+        assert counts[SliceLifecycleState.FAILED] == 1
+        assert counts[SliceLifecycleState.READY] == 0
 
     def test_skips_terminated_vm_groups(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Terminated VM groups are not counted."""
@@ -694,10 +694,10 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts[SliceLifecycleState.READY.key] == 0
-        assert counts[SliceLifecycleState.BOOTING.key] == 0
-        assert counts[SliceLifecycleState.INITIALIZING.key] == 0
-        assert counts[SliceLifecycleState.FAILED.key] == 0
+        assert counts[SliceLifecycleState.READY] == 0
+        assert counts[SliceLifecycleState.BOOTING] == 0
+        assert counts[SliceLifecycleState.INITIALIZING] == 0
+        assert counts[SliceLifecycleState.FAILED] == 0
 
 
 class TestScalingGroupAvailability:
