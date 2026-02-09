@@ -109,6 +109,7 @@ mixture_config = lm_mixture_data_config(
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # Doesn't matter for mixtures with 1 dataset
     num_validation_sequences={DATASET_NAME: NUM_VALIDATION_SEQUENCES},  # For validation set
+    shuffle_before_trainval_split=False,  # Do not shuffle before splitting data into train/val
 )
 
 qwen2_5_7b_instruct_32768_seq_len = dataclasses.replace(
