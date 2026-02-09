@@ -110,7 +110,6 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    permutation_type="feistel",
     shuffle=total_examples,  # IMPORTANT: Era shuffling (shuffle after every epoch). `shuffle=True` leads to same shuffle used in every epoch
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # Doesn't matter for mixtures with 1 dataset
