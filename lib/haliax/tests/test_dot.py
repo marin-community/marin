@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 # these test if the rearrange logic works for partial orders
 import pytest
 from jax import numpy as jnp

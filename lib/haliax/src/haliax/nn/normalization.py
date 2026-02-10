@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import dataclasses
 from abc import abstractmethod
 from typing import TypeVar

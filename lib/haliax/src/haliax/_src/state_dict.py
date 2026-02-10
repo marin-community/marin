@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 # Module to support torch-style "state dict" serialization via safetensors
 import dataclasses
 import typing

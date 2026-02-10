@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 # This whole file is copied from Equinox.
 # (c) 2023, Google LLC. and/or Patrick Kidger. Apache 2.0 licensed.
 # Patrick doesn't like that I depend on Equinox internals, so I copied this stuff

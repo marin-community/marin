@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import equinox as eqx
 import jax.numpy as jnp
 from jax.random import PRNGKey
