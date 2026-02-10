@@ -1060,7 +1060,11 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.ProfileTaskResponse:
         """Profile a running task by proxying to its worker."""
         with rpc_error_handler("profile_task"):
-            task_name = JobName.from_wire(request.task_id)
+            try:
+                task_name = JobName.from_wire(request.task_id)
+                task_name.require_task()
+            except ValueError as exc:
+                raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
             task = self._state.get_task(task_name)
             if not task:
                 raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")

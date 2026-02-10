@@ -377,6 +377,7 @@ class ProcessContainerHandle:
 
         pid = self._container._process.pid
 
+        output_path = None
         try:
             import tempfile
 
@@ -402,11 +403,16 @@ class ProcessContainerHandle:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
             if result.returncode == 0:
                 data = Path(output_path).read_bytes()
-                Path(output_path).unlink(missing_ok=True)
                 return data
-            Path(output_path).unlink(missing_ok=True)
         except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
-            pass
+            logger.warning(
+                "py-spy profiling failed for PID %s; falling back to stub profile output",
+                pid,
+                exc_info=True,
+            )
+        finally:
+            if output_path is not None:
+                Path(output_path).unlink(missing_ok=True)
 
         return _profile_stub(output_format)
 

@@ -18,6 +18,7 @@ import re
 import shlex
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -337,7 +338,8 @@ exec {quoted_cmd}
 
         ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
         ext = ext_map.get(output_format, "svg")
-        output_path = f"/tmp/profile.{ext}"
+        profile_id = uuid.uuid4().hex[:8]
+        output_path = f"/tmp/profile-{profile_id}.{ext}"
 
         # py-spy is installed in .venv during the BUILD phase;
         # the entrypoint uses exec so PID 1 is the Python process.
@@ -361,16 +363,21 @@ exec {quoted_cmd}
         ]
 
         logger.info("Profiling container %s for %ds (format=%s)", container_id, duration_seconds, output_format)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
-        if result.returncode != 0:
-            raise RuntimeError(f"py-spy failed: {result.stderr}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
+            if result.returncode != 0:
+                raise RuntimeError(f"py-spy failed: {result.stderr}")
 
-        read_cmd = ["docker", "exec", container_id, "cat", output_path]
-        read_result = subprocess.run(read_cmd, capture_output=True, timeout=30)
-        if read_result.returncode != 0:
-            raise RuntimeError(f"Failed to read profile: {read_result.stderr}")
+            read_cmd = ["docker", "exec", container_id, "cat", output_path]
+            read_result = subprocess.run(read_cmd, capture_output=True, timeout=30)
+            if read_result.returncode != 0:
+                raise RuntimeError(f"Failed to read profile: {read_result.stderr}")
 
-        return read_result.stdout
+            return read_result.stdout
+        finally:
+            # Clean up the profile file
+            cleanup_cmd = ["docker", "exec", container_id, "rm", "-f", output_path]
+            subprocess.run(cleanup_cmd, capture_output=True, timeout=10)
 
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""
