@@ -217,7 +217,6 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
-            implementation="pallas_tpu",
         )
 
     mesh = _get_mesh()
