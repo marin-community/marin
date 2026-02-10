@@ -17,6 +17,7 @@ Usage:
         --benchmarks '["MME", "GQA", "RealWorldQA"]'
 """
 
+import dataclasses
 import json
 import logging
 import os
@@ -236,6 +237,32 @@ DEFAULT_VLM_CONFIG = LlavaOnevisionConfig(
     gradient_checkpointing=False,
 )
 
+# 4B model configuration (Qwen3-4B)
+DEFAULT_4B_TEXT_CONFIG = Qwen3Config(
+    max_seq_len=4096,
+    hidden_dim=2560,
+    intermediate_dim=9728,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=36,
+    head_dim=128,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+    gradient_checkpointing=False,
+    flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+)
+
+DEFAULT_4B_VLM_CONFIG = LlavaOnevisionConfig(
+    vision_config=DEFAULT_VISION_CONFIG,
+    text_config=DEFAULT_4B_TEXT_CONFIG,
+    vision_encoder_type="siglip",
+    vision_feature_select_strategy="full",
+    vision_aspect_ratio="single",
+    disable_anyres=True,
+    image_token_index=DEFAULT_IMAGE_TOKEN_INDEX,
+    gradient_checkpointing=False,
+)
+
 DEFAULT_VISION_FEATURE_HEIGHT = DEFAULT_VISION_CONFIG.image_size // DEFAULT_VISION_CONFIG.patch_size
 
 DEFAULT_PROCESSOR_PATH = "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf"
@@ -355,12 +382,32 @@ def _load_vlm_model(
     return model
 
 
+def _detect_and_apply_4b_config(config: EvalVLMEvalKitConfig) -> EvalVLMEvalKitConfig:
+    """Auto-detect 4B model from checkpoint path and switch to 4B config if needed."""
+    checkpoint_path = config.checkpoint_path or (str(config.hf_checkpoint) if config.hf_checkpoint else None)
+    if checkpoint_path is None:
+        return config
+
+    # Check if the checkpoint path contains "4b" (case-insensitive)
+    if "4b" not in checkpoint_path.lower():
+        return config
+
+    # Only override if the user hasn't manually specified a non-default model config
+    if config.model == DEFAULT_VLM_CONFIG:
+        logger.info(f"Auto-detected 4B model from checkpoint path: {checkpoint_path}")
+        logger.info("Switching to 4B model configuration (hidden_dim=2560, num_heads=32, num_layers=36)")
+        config = dataclasses.replace(config, model=DEFAULT_4B_VLM_CONFIG)
+    return config
+
+
 def main(config: EvalVLMEvalKitConfig):
     """Main function for VLM evaluation using VLMEvalKit."""
     if not VLMEVAL_AVAILABLE:
         raise ImportError(
             f"VLMEvalKit is not available. Import error: {VLMEVAL_IMPORT_ERROR}"
         )
+
+    config = _detect_and_apply_4b_config(config)
 
     levanter.initialize(config)
 
