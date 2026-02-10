@@ -18,15 +18,12 @@ dependencies = [
     "pydantic>=2.12.5",
     "pyyaml>=6.0",
     "starlette>=0.50.0",
+    "tabulate>=0.9.0",
     "typing-extensions>=4.0",
     "uvicorn[standard]>=0.23.0",
 ]
 
 [project.optional-dependencies]
-scripts = [
-    "pillow>=10.0.0",
-    "playwright>=1.49.0",
-]
 
 [project.scripts]
 iris = "iris.cli:iris"
@@ -62,11 +59,11 @@ packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 30
-addopts = "-n auto --durations=10 -m 'not slow and not chaos'"
+addopts = "-n auto --durations=10 -m 'not slow and not chaos and not docker'"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "docker: marks tests that use real Docker (run with --use-docker)",
     "chaos: marks chaos/fault injection tests (deselect with '-m \"not chaos\"')",
+    "docker: marks tests requiring iris-task Docker image (deselect with '-m \"not docker\"')",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"

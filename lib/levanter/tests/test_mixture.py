@@ -14,9 +14,6 @@ def datasets():
     ds1 = ListAsyncDataset([1, 2, 3, 4, 5])
     ds2 = ListAsyncDataset([10, 20, 30, 40, 50])
     ds3 = ListAsyncDataset([100, 200, 300, 400, 500])
-    ds1.finalize()
-    ds2.finalize()
-    ds3.finalize()
     return {"ds1": ds1, "ds2": ds2, "ds3": ds3}
 
 
@@ -143,6 +140,22 @@ async def test_mixture_dataset_remap_indices():
     assert len(remapped_indices) == 3
 
     assert remapped_indices == [len_ds1 - 1, 0, 1]
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_restart_rejects_empty_finite_dataset():
+    dses = {"empty": ListAsyncDataset([]), "full": ListAsyncDataset([10, 20, 30])}
+    mixture_ds = MixtureDataset(
+        dses,
+        {"empty": 0.5, "full": 0.5},
+        block_size=4,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.RESTART_STRATEGY,
+    )
+
+    with pytest.raises(ValueError, match="empty finite dataset"):
+        await mixture_ds.get_batch([0])
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,6 @@
 """Tests for WorkerDashboard HTTP/RPC endpoints and WorkerService implementation."""
 
 import socket
-from pathlib import Path
 from unittest.mock import Mock
 
 import httpx
@@ -26,10 +25,10 @@ from connectrpc.request import RequestContext
 
 from iris.cluster.types import Entrypoint, JobName
 from iris.time_utils import Duration
-from iris.cluster.worker.builder import BuildResult, ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.dashboard import WorkerDashboard
-from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime
+from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.types import ContainerStats, ContainerStatus
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2
@@ -41,70 +40,59 @@ from starlette.testclient import TestClient
 
 
 @pytest.fixture
-def mock_bundle_cache():
-    """Create mock BundleCache."""
+def mock_bundle_cache(tmp_path):
+    """Create mock BundleCache with a real temp directory."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "test_file.py").write_text("print('hello')")
+
     cache = Mock(spec=BundleCache)
-    cache.get_bundle = Mock(return_value=Path("/tmp/bundle"))
+    cache.get_bundle = Mock(return_value=bundle_dir)
     return cache
 
 
-@pytest.fixture
-def mock_image_cache():
-    """Create mock ImageCache."""
-    cache = Mock(spec=ImageCache)
-    cache.build = Mock(
-        return_value=BuildResult(
-            image_tag="test-image:latest",
-            build_time_ms=1000,
-            from_cache=False,
-        )
-    )
-    return cache
+def create_mock_container_handle():
+    """Create a mock ContainerHandle that completes immediately.
+
+    Returns a handle where status() returns not-running right away,
+    so tasks complete immediately in tests.
+    """
+    handle = Mock()
+    handle.container_id = "container123"
+    handle.build = Mock(return_value=[])
+    handle.run = Mock()
+    handle.status = Mock(return_value=ContainerStatus(running=False, exit_code=0))
+    handle.stop = Mock()
+    handle.logs = Mock(return_value=[])
+    handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=1, available=True))
+    handle.cleanup = Mock()
+    return handle
 
 
 @pytest.fixture
 def mock_runtime():
-    """Create mock DockerRuntime for sync model.
-
-    The sync model uses create_container/start_container/inspect pattern
-    instead of the blocking run() method.
-    """
+    """Create mock DockerRuntime that returns ContainerHandle objects."""
     runtime = Mock(spec=DockerRuntime)
 
-    # Container lifecycle methods
-    runtime.create_container = Mock(return_value="container123")
-    runtime.start_container = Mock()
+    # create_container returns a ContainerHandle mock
+    runtime.create_container = Mock(side_effect=lambda config: create_mock_container_handle())
 
-    # Inspect returns not-running so tasks complete immediately
-    runtime.inspect = Mock(return_value=ContainerStatus(running=False, exit_code=0))
-
-    runtime.kill = Mock()
-    runtime.remove = Mock()
-    runtime.get_stats = Mock(
-        return_value=ContainerStats(
-            memory_mb=100,
-            cpu_percent=50,
-            process_count=1,
-            available=True,
-        )
-    )
-    runtime.get_logs = Mock(return_value=[])
     runtime.list_iris_containers = Mock(return_value=[])
     runtime.remove_all_iris_containers = Mock(return_value=0)
     return runtime
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
+def worker(mock_bundle_cache, mock_runtime, tmp_path):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
     )
     return Worker(
         config,
         bundle_provider=mock_bundle_cache,
-        image_provider=mock_image_cache,
         container_runtime=mock_runtime,
     )
 

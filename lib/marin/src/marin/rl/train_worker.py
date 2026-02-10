@@ -39,7 +39,7 @@ from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
-from fray.job import get_default_job_ctx
+from fray.v1.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig

@@ -17,7 +17,7 @@ import subprocess
 import time
 
 import pytest
-from fray.isolated_env import TemporaryVenv
+from fray.v1.isolated_env import TemporaryVenv
 
 
 def test_venv_creation():

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Integration tests for iris_run.py script."""
+"""Integration tests for iris job CLI helpers."""
 
 import sys
 from pathlib import Path
@@ -23,7 +23,7 @@ import yaml
 from iris.client import IrisClient
 from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.cluster.vm.config import IrisConfig, make_local_config, load_config
-from iris.cli.run import (
+from iris.cli.job import (
     build_resources,
     load_env_vars,
     run_iris_job,
@@ -114,7 +114,7 @@ def local_cluster_and_config(tmp_path):
 
 @pytest.mark.slow
 def test_iris_run_cli_simple_job(local_cluster_and_config, tmp_path):
-    """Test iris_run.py submits and runs a simple job successfully."""
+    """Test iris job submission runs a simple job successfully."""
     _test_config, url, _client = local_cluster_and_config
 
     # Create test script that prints and exits
@@ -162,7 +162,7 @@ sys.exit(0 if val == "test_value" else 1)
 
 @pytest.mark.slow
 def test_iris_run_cli_job_failure(local_cluster_and_config, tmp_path):
-    """Test iris_run.py returns non-zero on job failure."""
+    """Test job submission returns non-zero on job failure."""
     _test_config, url, _client = local_cluster_and_config
 
     test_script = tmp_path / "fail.py"

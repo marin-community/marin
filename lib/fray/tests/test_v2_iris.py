@@ -23,62 +23,10 @@ import pickle
 from fray.v2.iris_backend import (
     IrisActorHandle,
     convert_constraints,
-    convert_entrypoint,
-    convert_resources,
-    map_iris_job_state,
 )
 from fray.v2.types import (
-    CpuConfig,
-    Entrypoint,
-    GpuConfig,
-    JobStatus,
     ResourceConfig,
-    TpuConfig,
 )
-
-# ---------------------------------------------------------------------------
-# ResourceConfig → ResourceSpec conversion
-# ---------------------------------------------------------------------------
-
-
-class TestConvertResources:
-    def test_cpu_defaults(self):
-        resources = ResourceConfig()
-        spec = convert_resources(resources)
-        assert spec.cpu == 1
-        assert spec.memory == "128m"
-        assert spec.disk == "1g"
-        assert spec.device is None
-
-    def test_tpu_device(self):
-        resources = ResourceConfig(device=TpuConfig(variant="v5litepod-16"))
-        spec = convert_resources(resources)
-        assert spec.device is not None
-        assert spec.device.HasField("tpu")
-        assert spec.device.tpu.variant == "v5litepod-16"
-
-    def test_gpu_device(self):
-        resources = ResourceConfig(device=GpuConfig(variant="H100", count=8))
-        spec = convert_resources(resources)
-        assert spec.device is not None
-        assert spec.device.HasField("gpu")
-        assert spec.device.gpu.variant == "H100"
-        assert spec.device.gpu.count == 8
-
-    def test_cpu_device_produces_no_device(self):
-        resources = ResourceConfig(device=CpuConfig())
-        spec = convert_resources(resources)
-        assert spec.device is None
-
-    def test_regions_passed_through(self):
-        resources = ResourceConfig(regions=["us-central1", "us-east1"])
-        spec = convert_resources(resources)
-        assert list(spec.regions) == ["us-central1", "us-east1"]
-
-
-# ---------------------------------------------------------------------------
-# Constraints
-# ---------------------------------------------------------------------------
 
 
 class TestConvertConstraints:
@@ -94,75 +42,6 @@ class TestConvertConstraints:
         c = constraints[0]
         assert c.key == "preemptible"
         assert c.value == "false"
-
-
-# ---------------------------------------------------------------------------
-# Entrypoint conversion
-# ---------------------------------------------------------------------------
-
-
-def _dummy_fn(x: int) -> int:
-    return x + 1
-
-
-class TestConvertEntrypoint:
-    def test_callable_entrypoint(self):
-        entry = Entrypoint.from_callable(_dummy_fn, args=(42,))
-        iris_entry = convert_entrypoint(entry)
-        assert iris_entry.is_callable
-
-    def test_binary_entrypoint(self):
-        entry = Entrypoint.from_binary("python", ["-c", "print('hi')"])
-        iris_entry = convert_entrypoint(entry)
-        assert iris_entry.is_command
-        assert iris_entry.command == ["python", "-c", "print('hi')"]
-
-
-# ---------------------------------------------------------------------------
-# JobStatus mapping
-# ---------------------------------------------------------------------------
-
-
-class TestMapIrisJobState:
-    def test_succeeded(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_SUCCEEDED) == JobStatus.SUCCEEDED
-
-    def test_failed(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_FAILED) == JobStatus.FAILED
-
-    def test_killed_maps_to_stopped(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_KILLED) == JobStatus.STOPPED
-
-    def test_running(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_RUNNING) == JobStatus.RUNNING
-
-    def test_pending(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_PENDING) == JobStatus.PENDING
-
-    def test_worker_failed_maps_to_failed(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_WORKER_FAILED) == JobStatus.FAILED
-
-    def test_unschedulable_maps_to_failed(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_UNSCHEDULABLE) == JobStatus.FAILED
-
-
-# ---------------------------------------------------------------------------
-# IrisActorHandle pickle round-trip
-# ---------------------------------------------------------------------------
 
 
 class TestIrisActorHandlePickle:

@@ -384,7 +384,6 @@ def default_speedrun(
             training_set=config.tokenized_dataset,
             validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
             # TODO: when should we update this
-            permutation_type="linear",
         )
     else:
         pretraining_data = add_validation_sets_to_mixture(

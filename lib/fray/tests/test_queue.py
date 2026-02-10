@@ -18,8 +18,8 @@ import tempfile
 import time
 
 import pytest
-from fray.queue.file import FileQueue
-from fray.queue.http import HttpQueueServer
+from fray.v1.queue.file import FileQueue
+from fray.v1.queue.http import HttpQueueServer
 
 
 @pytest.fixture(params=["file", "http"])

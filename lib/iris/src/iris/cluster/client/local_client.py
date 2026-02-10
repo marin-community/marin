@@ -28,7 +28,7 @@ from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.cluster.vm.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Duration
 
 
 def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
@@ -131,6 +131,7 @@ class LocalClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        fail_if_exists: bool = False,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -145,6 +146,7 @@ class LocalClusterClient:
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
             timeout=timeout,
+            fail_if_exists=fail_if_exists,
         )
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
@@ -187,11 +189,22 @@ class LocalClusterClient:
 
     def fetch_task_logs(
         self,
-        task_id: JobName,
-        start: "Timestamp | None" = None,
-        max_lines: int = 0,
-    ) -> list[cluster_pb2.Worker.LogEntry]:
-        return self._remote_client.fetch_task_logs(task_id, start, max_lines)
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        return self._remote_client.fetch_task_logs(
+            target,
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_total_lines,
+            regex=regex,
+            attempt_id=attempt_id,
+        )
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         return self._remote_client.get_autoscaler_status()

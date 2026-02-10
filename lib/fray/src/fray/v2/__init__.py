@@ -14,7 +14,7 @@
 
 """Fray v2: minimal job and actor scheduling interface."""
 
-from fray.v2.actor import ActorFuture, ActorGroup, ActorHandle, ActorMethod
+from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, ActorMethod, current_actor
 from fray.v2.client import Client, JobFailed, JobHandle, current_client, set_current_client, wait_all
 from fray.v2.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
 from fray.v2.types import (
@@ -38,6 +38,7 @@ from fray.v2.types import (
 )
 
 __all__ = [
+    "ActorContext",
     "ActorFuture",
     "ActorGroup",
     "ActorHandle",
@@ -65,6 +66,7 @@ __all__ = [
     "TpuTopologyInfo",
     "TpuType",
     "create_environment",
+    "current_actor",
     "current_client",
     "get_tpu_topology",
     "set_current_client",

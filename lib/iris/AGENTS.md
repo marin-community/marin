@@ -169,3 +169,56 @@ src/iris/
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.
+
+### Dashboard Frontend
+
+The controller and worker dashboards are client-side SPAs using Preact + HTM.
+
+**Directory structure:**
+```
+src/iris/cluster/static/
+├── controller/          # Controller dashboard
+│   ├── app.js           # Main app (tabs, state, data fetching)
+│   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
+│   ├── job-detail.js    # Job detail page with task list
+│   ├── workers-tab.js   # Workers table
+│   └── vms-tab.js       # VM management table
+├── shared/              # Shared utilities
+│   ├── rpc.js           # Connect RPC client wrapper
+│   ├── utils.js         # Formatting (dates, durations)
+│   └── styles.css       # Consolidated CSS
+├── vendor/              # Third-party ES modules
+│   ├── preact.mjs       # UI framework
+│   └── htm.mjs          # HTML template literals
+└── worker/              # Worker dashboard components
+```
+
+**Key patterns:**
+- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
+- No REST endpoints - RPC only
+- State management with Preact hooks (`useState`, `useEffect`)
+- HTML templates via `htm.bind(h)` tagged template literals
+- Jobs displayed as a hierarchical tree based on name structure
+
+**When modifying the dashboard:**
+1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
+2. Ensure any new UI features have corresponding RPC endpoints
+3. Follow existing component patterns (functional components, hooks)
+
+## Debugging Container Failures
+
+**Exit code 137** = 128 + 9 = SIGKILL, typically OOM. Check:
+- `ContainerStatus.oom_killed` field (from `docker inspect .State.OOMKilled`)
+- Job's `resources.memory_bytes` vs what was requested
+- Resource flow: `JobRequest.resources` → Iris protobuf → `ContainerConfig` → `docker --memory`
+
+**Resource propagation path:**
+```
+fray.v2.ResourceConfig → iris.cluster.types.ResourceSpec.to_proto()
+  → cluster_pb2.ResourceSpecProto → docker.py _docker_create() --memory/--cpus
+```
+
+**Key files for container debugging:**
+- `cluster/runtime/docker.py`: Docker CLI wrapper, resource limits at lines 396-403
+- `cluster/runtime/types.py`: ContainerStatus with oom_killed field
+- `cluster/worker/task_attempt.py`: _format_exit_error() interprets signals
