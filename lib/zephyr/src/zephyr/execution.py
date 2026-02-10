@@ -26,7 +26,6 @@ import enum
 import logging
 import os
 import pickle
-import socket
 import threading
 import time
 import uuid
