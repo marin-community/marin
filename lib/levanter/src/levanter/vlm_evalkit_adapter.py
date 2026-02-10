@@ -131,14 +131,17 @@ class LevanterVLM(BaseModel):
         # Each VLM sequence can have many image placeholder tokens (1000+)
         # Set max_prefill_size to accommodate all sequences in a batch
         max_prefill_size = max_seqs * max_seq_len
+        page_size = 8
+        max_pages_per_seq = (max_seq_len + page_size - 1) // page_size
+        max_pages = max_seqs * max_pages_per_seq
         engine_config = InferenceEngineConfig(
             max_seq_len=max_seq_len,
             max_seqs=max_seqs,  # Use vlm_batch_size for batched inference
             max_seqs_in_prefill=max_seqs,
             max_prefill_size=max_prefill_size,  # Enough for all VLM sequences
-            page_size=8,  # Smaller page size
+            page_size=page_size,
             compute_dtype=jnp.bfloat16,
-            hbm_utilization=0.5,  # Only use 50% HBM for KV cache
+            max_pages=max_pages,  # Only allocate what's needed for max_seqs sequences
         )
 
         self._engine = LlavaInferenceEngine.from_model_with_config(
