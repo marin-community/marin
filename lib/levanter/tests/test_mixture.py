@@ -50,7 +50,7 @@ async def test_mixture_dataset_get_batch():
 async def test_mixture_dataset_block_assignments():
     mixture_ds = MixtureDataset(datasets(), weights(), 10, key=key())
 
-    block_assignment = await mixture_ds._get_block(0)
+    block_assignment = mixture_ds._get_block(0)
     assert block_assignment is not None
     assert len(block_assignment) == 10
 
@@ -226,12 +226,12 @@ async def test_mixture_dataset_respects_weights():
 async def test_mixture_dataset_randomizes_blocks():
     mixture_ds = MixtureDataset(datasets(), weights(), block_size=10, key=key())
 
-    block_assignment_1 = await mixture_ds._get_block(0)
-    block_assignment_2 = await mixture_ds._get_block(0)
+    block_assignment_1 = mixture_ds._get_block(0)
+    block_assignment_2 = mixture_ds._get_block(0)
 
     assert np.all(block_assignment_1 == block_assignment_2), "Block assignments should be randomized"
 
-    block_assignment_3 = await mixture_ds._get_block(1)
+    block_assignment_3 = mixture_ds._get_block(1)
     assert not np.all(block_assignment_1 == block_assignment_3), "Block assignments should be randomized"
 
 
