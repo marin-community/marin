@@ -34,14 +34,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.vm.autoscaler import Autoscaler
-
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.config import config_to_dict, create_local_autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
     ControllerConfig as _InnerControllerConfig,
     RpcWorkerStubFactory,
 )
-from iris.cluster.vm.config import config_to_dict, create_local_autoscaler
 from iris.cluster.vm.local_platform import find_free_port
 from iris.managed_thread import ThreadContainer
 from iris.cluster.vm.gcp_tpu_platform import (

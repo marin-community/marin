@@ -23,17 +23,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from iris.cluster.types import DeviceType, VmWorkerStatus
-from iris.cluster.vm.autoscaler import (
+from iris.cluster.controller.autoscaler import (
     Autoscaler,
     DemandEntry,
     ScalingAction,
     ScalingDecision,
     route_demand,
 )
+from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.types import DeviceType, VmWorkerStatus
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
-from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 

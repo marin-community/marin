@@ -58,8 +58,8 @@ def serve(
     When --config is provided, the controller runs an integrated autoscaler
     that provisions/terminates VM slices based on pending task demand.
     """
-    from iris.cluster.vm.autoscaler import Autoscaler
-    from iris.cluster.vm.config import create_autoscaler, load_config
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.controller.config import create_autoscaler, load_config
     from iris.cluster.vm.platform import create_platform
 
     configure_logging(level=getattr(logging, log_level))

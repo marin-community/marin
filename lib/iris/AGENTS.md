@@ -159,13 +159,15 @@ src/iris/
 ├── cluster/
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
-│   │   └── main.py              # Controller daemon CLI (serve command)
+│   │   ├── main.py              # Controller daemon CLI (serve command)
+│   │   ├── autoscaler.py        # Core autoscaling logic and demand routing
+│   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
+│   │   └── config.py            # Config loading + autoscaler factory functions
 │   └── vm/
-│       ├── autoscaler.py        # Core scaling logic
-│       ├── scaling_group.py     # Per-group state tracking
-│       ├── gcp.py               # GCP TPU management
-│       ├── manual.py            # Pre-existing host management
-│       └── config.py            # Config loading + factory functions
+│       ├── gcp_tpu_platform.py  # GCP TPU management
+│       ├── manual_platform.py   # Pre-existing host management
+│       ├── local_platform.py    # Local development platform
+│       └── config.py            # Re-exports config utilities for VM layer
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.
