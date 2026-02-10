@@ -1,0 +1,153 @@
+Total runs in CSV: 57
+Completed runs: 57
+
+Feature matrix shape: (57, 2)
+Features: ['phase_0_starcoder', 'phase_1_starcoder']
+Feature ranges:
+  phase_0_starcoder: [0.0000, 1.0000]
+  phase_1_starcoder: [0.0000, 1.0000]
+Using 5-fold cross-validation
+
+======================================================================
+FITTING REGRESSION MODELS WITH K-FOLD CV
+======================================================================
+
+Saving models to /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_starcoder_models.pkl
+
+======================================================================
+CROSS-VALIDATION RESULTS
+======================================================================
+
+Metric                                                  Spearman r           Pearson r           
+-----------------------------------------------------------------------------------------------
+eval/paloma/dolma_100_programing_languages/bpb          0.9437 +/- 0.0329    0.9672 +/- 0.0326   
+eval/uncheatable_eval/github_python/bpb                 0.9068 +/- 0.0470    0.9748 +/- 0.0250   
+eval/uncheatable_eval/github_cpp/bpb                    0.8903 +/- 0.0977    0.9726 +/- 0.0267   
+eval/loss                                               0.9741 +/- 0.0171    0.9117 +/- 0.1076   
+eval/paloma/c4_en/bpb                                   0.9530 +/- 0.0308    0.8757 +/- 0.0987   
+eval/paloma/dolma-v1_5/bpb                              0.9797 +/- 0.0093    0.9072 +/- 0.1092   
+lm_eval/code2text_python_0shot/smoothed_bleu_4          N/A (constant)       N/A (constant)      
+lm_eval/code2text_java_0shot/smoothed_bleu_4            N/A (constant)       N/A (constant)      
+lm_eval/code2text_go_0shot/smoothed_bleu_4              -0.0552 +/- 0.1764   -0.1613 +/- 0.1563  
+lm_eval/arc_challenge/acc_norm                          0.1535 +/- 0.2901    0.1442 +/- 0.3015   
+lm_eval/hellaswag_0shot/acc_norm                        0.8200 +/- 0.0330    0.8546 +/- 0.0697   
+lm_eval/piqa/acc                                        0.4116 +/- 0.3373    0.6277 +/- 0.3042   
+lm_eval/boolq/acc                                       0.2104 +/- 0.2740    0.1450 +/- 0.3008   
+lm_eval/averages/macro_avg_acc                          0.4931 +/- 0.0783    0.6016 +/- 0.1500   
+
+======================================================================
+OPTIMIZING MIXTURE WEIGHTS
+======================================================================
+
+Generated 10,000,000 random mixture samples
+
+======================================================================
+OPTIMAL MIXTURES BY METRIC
+======================================================================
+
+eval/paloma/dolma_100_programing_languages/bpb:
+  Predicted value: 0.9098 +/- 0.0000
+  phase_0: nemotron_full=0.935  starcoder=0.065
+  phase_1: nemotron_full=0.654  starcoder=0.346
+
+eval/uncheatable_eval/github_python/bpb:
+  Predicted value: 0.8437 +/- 0.0000
+  phase_0: nemotron_full=0.936  starcoder=0.064
+  phase_1: nemotron_full=0.656  starcoder=0.344
+
+eval/uncheatable_eval/github_cpp/bpb:
+  Predicted value: 0.8454 +/- 0.0000
+  phase_0: nemotron_full=0.935  starcoder=0.065
+  phase_1: nemotron_full=0.653  starcoder=0.347
+
+eval/loss:
+  Predicted value: 3.4562 +/- 0.0000
+  phase_0: nemotron_full=0.972  starcoder=0.028
+  phase_1: nemotron_full=0.806  starcoder=0.194
+
+eval/paloma/c4_en/bpb:
+  Predicted value: 1.1410 +/- 0.0000
+  phase_0: nemotron_full=0.973  starcoder=0.027
+  phase_1: nemotron_full=0.914  starcoder=0.086
+
+eval/paloma/dolma-v1_5/bpb:
+  Predicted value: 1.1562 +/- 0.0000
+  phase_0: nemotron_full=0.973  starcoder=0.027
+  phase_1: nemotron_full=0.805  starcoder=0.195
+
+lm_eval/code2text_python_0shot/smoothed_bleu_4:
+  Predicted value: 0.2779 +/- 0.0000
+  phase_0: nemotron_full=0.528  starcoder=0.472
+  phase_1: nemotron_full=0.550  starcoder=0.450
+
+lm_eval/code2text_java_0shot/smoothed_bleu_4:
+  Predicted value: 0.3077 +/- 0.0000
+  phase_0: nemotron_full=0.528  starcoder=0.472
+  phase_1: nemotron_full=0.550  starcoder=0.450
+
+lm_eval/code2text_go_0shot/smoothed_bleu_4:
+  Predicted value: 0.1262 +/- 0.0000
+  phase_0: nemotron_full=0.121  starcoder=0.879
+  phase_1: nemotron_full=0.053  starcoder=0.947
+
+lm_eval/arc_challenge/acc_norm:
+  Predicted value: 0.2234 +/- 0.0000
+  phase_0: nemotron_full=0.116  starcoder=0.884
+  phase_1: nemotron_full=0.049  starcoder=0.951
+
+lm_eval/hellaswag_0shot/acc_norm:
+  Predicted value: 0.2944 +/- 0.0000
+  phase_0: nemotron_full=0.972  starcoder=0.028
+  phase_1: nemotron_full=0.757  starcoder=0.243
+
+lm_eval/piqa/acc:
+  Predicted value: 0.6184 +/- 0.0000
+  phase_0: nemotron_full=0.907  starcoder=0.093
+  phase_1: nemotron_full=0.757  starcoder=0.243
+
+lm_eval/boolq/acc:
+  Predicted value: 0.5986 +/- 0.0000
+  phase_0: nemotron_full=0.807  starcoder=0.193
+  phase_1: nemotron_full=0.633  starcoder=0.367
+
+lm_eval/averages/macro_avg_acc:
+  Predicted value: 0.3750 +/- 0.0000
+  phase_0: nemotron_full=0.934  starcoder=0.066
+  phase_1: nemotron_full=0.632  starcoder=0.368
+
+======================================================================
+FINAL RECOMMENDATION: OPTIMIZED FOR eval/paloma/dolma_100_programing_languages/bpb
+======================================================================
+
+Optimal mixture (predicted bpb: 0.9098):
+
+phase_0:
+  nemotron_full       : 0.9347
+  starcoder           : 0.0653
+phase_1:
+  nemotron_full       : 0.6536
+  starcoder           : 0.3464
+
+BASELINE FORMAT (for two_phase_starcoder_experiment.py):
+  ([0.9347, 0.0653], [0.6536, 0.3464]),
+
+Best observed eval/paloma/dolma_100_programing_languages/bpb in training data: 0.9086
+Predicted optimal: 0.9098
+
+======================================================================
+CROSS-METRIC PREDICTIONS AT CODE-OPTIMAL MIXTURE
+======================================================================
+  eval/paloma/dolma_100_programing_languages/bpb: 0.9098
+  eval/uncheatable_eval/github_python/bpb: 0.8437
+  eval/uncheatable_eval/github_cpp/bpb: 0.8454
+  eval/loss: 3.4792
+  eval/paloma/c4_en/bpb: 1.1516
+  eval/paloma/dolma-v1_5/bpb: 1.1653
+  lm_eval/code2text_python_0shot/smoothed_bleu_4: 0.2779
+  lm_eval/code2text_java_0shot/smoothed_bleu_4: 0.3077
+  lm_eval/code2text_go_0shot/smoothed_bleu_4: 0.1262
+  lm_eval/arc_challenge/acc_norm: 0.2220
+  lm_eval/hellaswag_0shot/acc_norm: 0.2904
+  lm_eval/piqa/acc: 0.6120
+  lm_eval/boolq/acc: 0.5923
+  lm_eval/averages/macro_avg_acc: 0.3733

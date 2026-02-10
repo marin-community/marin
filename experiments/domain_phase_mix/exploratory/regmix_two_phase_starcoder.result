@@ -16,22 +16,22 @@ FITTING REGRESSION MODELS WITH K-FOLD CV
 CROSS-VALIDATION RESULTS
 ======================================================================
 
-Metric                                                  Spearman r           Pearson r           
+Metric                                                  Spearman r           Pearson r
 -----------------------------------------------------------------------------------------------
-eval/paloma/dolma_100_programing_languages/bpb          0.8846 +/- 0.0560    0.7870 +/- 0.1446   
-eval/uncheatable_eval/github_python/bpb                 0.8463 +/- 0.0350    0.8172 +/- 0.1366   
-eval/uncheatable_eval/github_cpp/bpb                    0.8688 +/- 0.0428    0.8156 +/- 0.1349   
-eval/loss                                               0.8658 +/- 0.1198    0.6012 +/- 0.1852   
-eval/paloma/c4_en/bpb                                   0.5871 +/- 0.3036    0.6017 +/- 0.2236   
-eval/paloma/dolma-v1_5/bpb                              0.8649 +/- 0.1328    0.5933 +/- 0.1884   
-lm_eval/code2text_python_0shot/smoothed_bleu_4          N/A (constant)       N/A (constant)      
-lm_eval/code2text_java_0shot/smoothed_bleu_4            N/A (constant)       N/A (constant)      
-lm_eval/code2text_go_0shot/smoothed_bleu_4              0.0526 +/- 0.1298    -0.0048 +/- 0.1513  
-lm_eval/arc_challenge/acc_norm                          0.1585 +/- 0.3482    0.1236 +/- 0.3165   
-lm_eval/hellaswag_0shot/acc_norm                        0.8514 +/- 0.0489    0.8515 +/- 0.0469   
-lm_eval/piqa/acc                                        0.4744 +/- 0.2722    0.5774 +/- 0.2762   
-lm_eval/boolq/acc                                       0.3052 +/- 0.3343    0.3472 +/- 0.4471   
-lm_eval/averages/macro_avg_acc                          0.5637 +/- 0.1199    0.6178 +/- 0.0801   
+eval/paloma/dolma_100_programing_languages/bpb          0.8846 +/- 0.0560    0.7870 +/- 0.1446
+eval/uncheatable_eval/github_python/bpb                 0.8463 +/- 0.0350    0.8172 +/- 0.1366
+eval/uncheatable_eval/github_cpp/bpb                    0.8688 +/- 0.0428    0.8156 +/- 0.1349
+eval/loss                                               0.8658 +/- 0.1198    0.6012 +/- 0.1852
+eval/paloma/c4_en/bpb                                   0.5871 +/- 0.3036    0.6017 +/- 0.2236
+eval/paloma/dolma-v1_5/bpb                              0.8649 +/- 0.1328    0.5933 +/- 0.1884
+lm_eval/code2text_python_0shot/smoothed_bleu_4          N/A (constant)       N/A (constant)
+lm_eval/code2text_java_0shot/smoothed_bleu_4            N/A (constant)       N/A (constant)
+lm_eval/code2text_go_0shot/smoothed_bleu_4              0.0526 +/- 0.1298    -0.0048 +/- 0.1513
+lm_eval/arc_challenge/acc_norm                          0.1585 +/- 0.3482    0.1236 +/- 0.3165
+lm_eval/hellaswag_0shot/acc_norm                        0.8514 +/- 0.0489    0.8515 +/- 0.0469
+lm_eval/piqa/acc                                        0.4744 +/- 0.2722    0.5774 +/- 0.2762
+lm_eval/boolq/acc                                       0.3052 +/- 0.3343    0.3472 +/- 0.4471
+lm_eval/averages/macro_avg_acc                          0.5637 +/- 0.1199    0.6178 +/- 0.0801
 
 ======================================================================
 OPTIMIZING MIXTURE WEIGHTS

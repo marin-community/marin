@@ -52,8 +52,6 @@ from marin.utils import (
     fsspec_glob,
     fsspec_isdir,
     fsspec_size,
-    load_tokenizer_from_gcs,
-    save_tokenizer_to_gcs,
 )
 
 logger = logging.getLogger(__name__)
@@ -327,29 +325,6 @@ def tokenize(config: TokenizeConfigBase):
     if not train_paths and not validation_paths:
         raise ValueError("No input files specified. Nothing to do.")
 
-    # Pre-cache tokenizer to GCS to avoid HuggingFace rate limiting during parallel tokenization.
-    # This downloads the tokenizer once and saves it to GCS, so all workers can load from GCS
-    # instead of hitting the HuggingFace API.
-    # Only cache to GCS when the cache_path is a GCS path (distributed scenario).
-    tokenizer_path = config.tokenizer
-    if (
-        config.cache_path.startswith("gs://")
-        and not tokenizer_path.startswith("gs://")
-        and not os.path.exists(tokenizer_path)
-    ):
-        # Compute GCS cache path for the tokenizer, sibling to the cache_path
-        # e.g., if cache_path is "gs://bucket/tokenized/dataset", tokenizer goes to
-        # "gs://bucket/tokenized/.tokenizers/meta-llama--Meta-Llama-3.1-8B"
-        cache_base = os.path.dirname(config.cache_path.rstrip("/"))
-        tokenizer_cache_base = os.path.join(cache_base, ".tokenizers")
-        safe_tokenizer_name = tokenizer_path.replace("/", "--")
-        tokenizer_gcs_path = os.path.join(tokenizer_cache_base, safe_tokenizer_name)
-
-        logger.info(f"Pre-caching tokenizer {tokenizer_path} to {tokenizer_gcs_path}")
-        tokenizer_path = save_tokenizer_to_gcs(tokenizer_path, tokenizer_gcs_path, logger=logger)
-        logger.info(f"Tokenizer cached at {tokenizer_path}")
-
-    def run_pipeline(paths: list[str], split_name: str) -> None:
     def run_pipeline(ctx: ZephyrContext, paths: list[str], split_name: str) -> None:
         prefix = os.path.join(config.cache_path, split_name)
         ledger_path = os.path.join(prefix, "shard_ledger.json")
@@ -379,26 +354,16 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        cluster_ctx = create_job_ctx(context_type="auto", num_cpus=config.zephyr_num_cpus, memory=config.zephyr_memory)
-        # NOTE: "broadcast" the tokenizer on the cluster context
-        # Use the pre-cached tokenizer path (GCS or local) to avoid HuggingFace rate limiting
-        if tokenizer_path.startswith("gs://"):
-            tokenizer = load_tokenizer_from_gcs(tokenizer_path, logger=logger)
-        else:
-            tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_path)
-        tokenizer_ref = cluster_ctx.put(tokenizer)
-
         temp_shards = (
             ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = Backend.execute(temp_shards, context=cluster_ctx, max_parallelism=config.zephyr_max_parallelism)
         # Broadcast the tokenizer to all workers via ZephyrContext
         ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
-        shard_paths = ctx.execute(temp_shards)
+        shard_paths = ctx.execute(temp_shards, max_parallelism=config.zephyr_max_parallelism)
 
         logger.info("Computing exemplar for cache consolidation")
         exemplar = ctx.execute(

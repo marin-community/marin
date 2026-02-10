@@ -163,8 +163,10 @@ BASELINES: list[tuple[list[float], list[float]]] = [
     # Single-domain baselines
     ([1, 0], [1, 0]),  # Nemotron only (no code)
     ([0, 1], [0, 1]),  # StarCoder only (no web)
-    # RegMix-optimized for eval/paloma/dolma_100_programing_languages/bpb
+    # RegMix-optimized for eval/paloma/dolma_100_programing_languages/bpb, leaves=15
     ([0.9725, 0.0275], [0.6874, 0.3126]),
+    # RegMix-optimized, leaves=63
+    ([0.9347, 0.0653], [0.6536, 0.3464]),
 ]
 
 

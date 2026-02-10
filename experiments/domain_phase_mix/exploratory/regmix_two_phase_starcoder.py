@@ -22,6 +22,7 @@
 #     "scikit-learn",
 #     "plotly",
 #     "kaleido",
+#     "joblib",
 # ]
 # ///
 """RegMix regression for the two-phase starcoder experiment (2 domains, 2 phases).
@@ -38,6 +39,7 @@ Usage:
 
 import warnings
 
+import joblib
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
@@ -146,64 +148,81 @@ def plot_scatter(
     fig = go.Figure()
 
     # All training runs as colored dots
-    fig.add_trace(go.Scatter(
-        x=p0,
-        y=p1,
-        mode="markers",
-        marker=dict(
-            size=12,
-            color=vals,
-            colorscale=colorscale,
-            colorbar=dict(title=dict(text=colorbar_title, font=dict(size=10))),
-            line=dict(width=0.5, color="#333"),
-        ),
-        text=[
-            f"run_id={int(rid)}<br>p0_sc={x:.3f}<br>p1_sc={y:.3f}<br>{target_col}={v:.4f}"
-            for rid, x, y, v in zip(run_ids, p0, p1, vals)
-        ],
-        hoverinfo="text",
-        name="Training runs",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=p0,
+            y=p1,
+            mode="markers",
+            marker=dict(
+                size=12,
+                color=vals,
+                colorscale=colorscale,
+                colorbar=dict(title=dict(text=colorbar_title, font=dict(size=10))),
+                line=dict(width=0.5, color="#333"),
+            ),
+            text=[
+                f"run_id={int(rid)}<br>p0_sc={x:.3f}<br>p1_sc={y:.3f}<br>{target_col}={v:.4f}"
+                for rid, x, y, v in zip(run_ids, p0, p1, vals)
+            ],
+            hoverinfo="text",
+            name="Training runs",
+        )
+    )
 
     # Best observed run — ring marker
-    fig.add_trace(go.Scatter(
-        x=[p0[best_idx]],
-        y=[p1[best_idx]],
-        mode="markers",
-        marker=dict(size=12, color="rgba(0,0,0,0)", line=dict(width=3, color="red")),
-        name=f"Best observed: {best_val:.4f}",
-        hoverinfo="name",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=[p0[best_idx]],
+            y=[p1[best_idx]],
+            mode="markers",
+            marker=dict(size=12, color="rgba(0,0,0,0)", line=dict(width=3, color="red")),
+            name=f"Best observed: {best_val:.4f}",
+            hoverinfo="name",
+        )
+    )
 
     # Predicted optimum — star marker
-    fig.add_trace(go.Scatter(
-        x=[opt_p0],
-        y=[opt_p1],
-        mode="markers",
-        marker=dict(size=16, symbol="star", color="red", line=dict(width=1, color="darkred")),
-        name=f"Predicted opt: ({opt_p0:.2f}, {opt_p1:.2f}) = {opt_val:.4f}",
-        hoverinfo="name",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=[opt_p0],
+            y=[opt_p1],
+            mode="markers",
+            marker=dict(size=16, symbol="star", color="red", line=dict(width=1, color="darkred")),
+            name=f"Predicted opt: ({opt_p0:.2f}, {opt_p1:.2f}) = {opt_val:.4f}",
+            hoverinfo="name",
+        )
+    )
 
     fig.update_layout(
         title=dict(text=target_col, font=dict(size=16), x=0.5, xanchor="center"),
         xaxis=dict(
             title="Phase 0 StarCoder weight",
             range=[-0.02, 1.02],
-            showgrid=True, gridwidth=0.5, gridcolor="#e0e0e0",
-            showline=True, linewidth=1, linecolor="#666",
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor="#e0e0e0",
+            showline=True,
+            linewidth=1,
+            linecolor="#666",
             constrain="domain",
         ),
         yaxis=dict(
             title="Phase 1 StarCoder weight",
             range=[-0.02, 1.02],
-            showgrid=True, gridwidth=0.5, gridcolor="#e0e0e0",
-            showline=True, linewidth=1, linecolor="#666",
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor="#e0e0e0",
+            showline=True,
+            linewidth=1,
+            linecolor="#666",
             scaleanchor="x",
             scaleratio=1,
         ),
         legend=dict(
-            yanchor="top", y=0.99, xanchor="right", x=0.99,
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
             font=dict(size=11),
             bgcolor="rgba(255,255,255,0.8)",
         ),
@@ -220,6 +239,133 @@ def plot_scatter(
     print(f"  Saved {html_path}")
 
     png_path = output_dir / f"scatter_{safe_name}.png"
+    fig.write_image(str(png_path), scale=2)
+    print(f"  Saved {png_path}")
+
+
+def plot_heatmap_with_scatter(
+    fold_models: list,
+    target_col: str,
+    df_complete: pd.DataFrame,
+    output_dir: Path,
+    optimal_mixture: np.ndarray | None = None,
+    optimal_pred: float | None = None,
+    resolution: int = 1000,
+):
+    """Heatmap of ensemble-predicted metric over the full weight space, with training runs overlaid."""
+    p0 = df_complete["phase_0_starcoder"].values
+    p1 = df_complete["phase_1_starcoder"].values
+    vals = df_complete[target_col].values
+    run_ids = df_complete["run_id"].values
+
+    lower_is_better = "loss" in target_col or "bpb" in target_col
+
+    # Predict on a fine grid
+    g0 = np.linspace(0, 1, resolution)
+    g1 = np.linspace(0, 1, resolution)
+    G0, G1 = np.meshgrid(g0, g1)
+    grid_features = np.column_stack([G0.ravel(), G1.ravel()])
+    fold_preds = [model.predict(grid_features) for model in fold_models]
+    pred = np.mean(fold_preds, axis=0).reshape(resolution, resolution)
+
+    colorscale = "Viridis_r" if lower_is_better else "Viridis"
+
+    fig = go.Figure()
+
+    # Heatmap of predicted values
+    fig.add_trace(
+        go.Heatmap(
+            z=pred,
+            x=g0,
+            y=g1,
+            colorscale=colorscale,
+            colorbar=dict(title=dict(text=target_col.replace("/", "/<br>"), font=dict(size=10))),
+            hovertemplate="p0_sc=%{x:.3f}<br>p1_sc=%{y:.3f}<br>pred=%{z:.4f}<extra></extra>",
+        )
+    )
+
+    # Training runs as scatter points, outlined in white for visibility
+    fig.add_trace(
+        go.Scatter(
+            x=p0,
+            y=p1,
+            mode="markers",
+            marker=dict(
+                size=8,
+                color=vals,
+                colorscale=colorscale,
+                cmin=float(pred.min()),
+                cmax=float(pred.max()),
+                line=dict(width=1.5, color="white"),
+                showscale=False,
+            ),
+            text=[
+                f"run_id={int(rid)}<br>p0_sc={x:.3f}<br>p1_sc={y:.3f}<br>actual={v:.4f}"
+                for rid, x, y, v in zip(run_ids, p0, p1, vals)
+            ],
+            hoverinfo="text",
+            name="Training runs",
+        )
+    )
+
+    # Predicted optimum
+    if optimal_mixture is not None and optimal_pred is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=[optimal_mixture[0]],
+                y=[optimal_mixture[1]],
+                mode="markers",
+                marker=dict(size=14, symbol="star", color="red", line=dict(width=1, color="darkred")),
+                name=f"Predicted opt: ({optimal_mixture[0]:.3f}, {optimal_mixture[1]:.3f}) = {optimal_pred:.4f}",
+                hoverinfo="name",
+            )
+        )
+
+    # Best observed
+    best_idx = int(np.argmin(vals) if lower_is_better else np.argmax(vals))
+    fig.add_trace(
+        go.Scatter(
+            x=[p0[best_idx]],
+            y=[p1[best_idx]],
+            mode="markers",
+            marker=dict(size=10, color="rgba(0,0,0,0)", line=dict(width=2.5, color="red")),
+            name=f"Best observed: {vals[best_idx]:.4f}",
+            hoverinfo="name",
+        )
+    )
+
+    fig.update_layout(
+        title=dict(text=f"{target_col} (predicted)", font=dict(size=16), x=0.5, xanchor="center"),
+        xaxis=dict(
+            title="Phase 0 StarCoder weight",
+            range=[0, 1],
+            constrain="domain",
+        ),
+        yaxis=dict(
+            title="Phase 1 StarCoder weight",
+            range=[0, 1],
+            scaleanchor="x",
+            scaleratio=1,
+        ),
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            font=dict(size=10),
+            bgcolor="rgba(255,255,255,0.8)",
+        ),
+        width=800,
+        height=700,
+        margin=dict(l=60, r=20, t=50, b=60),
+    )
+
+    safe_name = target_col.replace("/", "_").replace(" ", "_")
+    html_path = output_dir / f"heatmap_{safe_name}.html"
+    fig.write_html(str(html_path), include_plotlyjs="cdn")
+    print(f"  Saved {html_path}")
+
+    png_path = output_dir / f"heatmap_{safe_name}.png"
     fig.write_image(str(png_path), scale=2)
     print(f"  Saved {png_path}")
 
@@ -242,7 +388,7 @@ def main():
     X = df_complete[FEATURE_COLS].values
     print(f"\nFeature matrix shape: {X.shape}")
     print(f"Features: {FEATURE_COLS}")
-    print(f"Feature ranges:")
+    print("Feature ranges:")
     for i, col in enumerate(FEATURE_COLS):
         print(f"  {col}: [{X[:, i].min():.4f}, {X[:, i].max():.4f}]")
 
@@ -251,63 +397,82 @@ def main():
     kfold = KFold(n_splits=n_folds, shuffle=True, random_state=42)
     print(f"Using {n_folds}-fold cross-validation")
 
-    # With only 50 samples and 2 features, use more conservative hyperparameters:
-    # - higher learning rate since we have few samples
-    # - more patience for early stopping
-    # - fewer leaves to prevent overfitting
     hyper_params = {
         "task": "train",
         "boosting_type": "gbdt",
         "objective": "regression",
         "metric": ["l1", "l2"],
-        "num_iterations": 500,
+        "num_iterations": 1000,
         "seed": 42,
         "learning_rate": 0.05,
-        "num_leaves": 15,
-        "min_child_samples": 5,
+        "num_leaves": 63,
+        "min_child_samples": 1,
         "verbosity": -1,
     }
 
-    # ========================================================================
-    # FIT MODELS
-    # ========================================================================
-    print("\n" + "=" * 70)
-    print("FITTING REGRESSION MODELS WITH K-FOLD CV")
-    print("=" * 70)
+    model_cache_path = script_dir / "two_phase_starcoder_models.pkl"
 
-    fold_models: dict[str, list] = {col: [] for col in available_targets}
-    fold_spearman: dict[str, list] = {col: [] for col in available_targets}
-    fold_pearson: dict[str, list] = {col: [] for col in available_targets}
+    if model_cache_path.exists():
+        print(f"\nLoading cached models from {model_cache_path}")
+        cached = joblib.load(model_cache_path)
+        fold_models = cached["fold_models"]
+        fold_spearman = cached["fold_spearman"]
+        fold_pearson = cached["fold_pearson"]
+        # Filter to available targets (in case CSV columns changed)
+        fold_models = {k: v for k, v in fold_models.items() if k in available_targets}
+        fold_spearman = {k: v for k, v in fold_spearman.items() if k in available_targets}
+        fold_pearson = {k: v for k, v in fold_pearson.items() if k in available_targets}
+    else:
+        # ====================================================================
+        # FIT MODELS
+        # ====================================================================
+        print("\n" + "=" * 70)
+        print("FITTING REGRESSION MODELS WITH K-FOLD CV")
+        print("=" * 70)
 
-    for train_idx, val_idx in kfold.split(X):
-        X_train, X_val = X[train_idx], X[val_idx]
+        fold_models: dict[str, list] = {col: [] for col in available_targets}
+        fold_spearman: dict[str, list] = {col: [] for col in available_targets}
+        fold_pearson: dict[str, list] = {col: [] for col in available_targets}
 
-        for target_col in available_targets:
-            y = df_complete[target_col].values
-            y_train, y_val = y[train_idx], y[val_idx]
+        for train_idx, val_idx in kfold.split(X):
+            X_train, X_val = X[train_idx], X[val_idx]
 
-            gbm = lgb.LGBMRegressor(**hyper_params)
-            reg = gbm.fit(
-                X_train,
-                y_train,
-                eval_set=[(X_val, y_val)],
-                eval_metric="l2",
-                callbacks=[lgb.early_stopping(stopping_rounds=20, verbose=False)],
-            )
+            for target_col in available_targets:
+                y = df_complete[target_col].values
+                y_train, y_val = y[train_idx], y[val_idx]
 
-            pred_val = reg.predict(X_val)
+                gbm = lgb.LGBMRegressor(**hyper_params)
+                reg = gbm.fit(
+                    X_train,
+                    y_train,
+                    eval_set=[(X_val, y_val)],
+                    eval_metric="l2",
+                    callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
+                )
 
-            # Guard against constant predictions (model didn't learn) — skip fold for corr
-            if np.std(pred_val) < 1e-12 or np.std(y_val) < 1e-12:
-                sp_r = np.nan
-                pe_r = np.nan
-            else:
-                sp_r, _ = spearmanr(pred_val, y_val)
-                pe_r, _ = pearsonr(pred_val, y_val)
+                pred_val = reg.predict(X_val)
 
-            fold_models[target_col].append(reg)
-            fold_spearman[target_col].append(sp_r)
-            fold_pearson[target_col].append(pe_r)
+                # Guard against constant predictions (model didn't learn) — skip fold for corr
+                if np.std(pred_val) < 1e-12 or np.std(y_val) < 1e-12:
+                    sp_r = np.nan
+                    pe_r = np.nan
+                else:
+                    sp_r, _ = spearmanr(pred_val, y_val)
+                    pe_r, _ = pearsonr(pred_val, y_val)
+
+                fold_models[target_col].append(reg)
+                fold_spearman[target_col].append(sp_r)
+                fold_pearson[target_col].append(pe_r)
+
+        print(f"\nSaving models to {model_cache_path}")
+        joblib.dump(
+            {
+                "fold_models": fold_models,
+                "fold_spearman": fold_spearman,
+                "fold_pearson": fold_pearson,
+            },
+            model_cache_path,
+        )
 
     # ========================================================================
     # CROSS-VALIDATION RESULTS
@@ -444,11 +609,20 @@ def main():
     ]
 
     for target_col in heatmap_targets:
-        if target_col in fold_models and fold_models[target_col]:
-            print(f"\nPlotting: {target_col}")
+        if fold_models.get(target_col):
+            print(f"\nPlotting scatter: {target_col}")
             opt_mix = results[target_col]["optimal_mixture"] if target_col in results else None
             opt_pred = results[target_col]["pred_mean"] if target_col in results else None
             plot_scatter(fold_models[target_col], target_col, df_complete, output_dir, opt_mix, opt_pred)
+            print(f"Plotting heatmap: {target_col}")
+            plot_heatmap_with_scatter(
+                fold_models[target_col],
+                target_col,
+                df_complete,
+                output_dir,
+                opt_mix,
+                opt_pred,
+            )
 
 
 if __name__ == "__main__":
