@@ -110,14 +110,8 @@ class TreeCache(AsyncDataset[T_co]):
     def __len__(self):
         return len(self.store)
 
-    async def final_length_is_known(self) -> bool:
-        return True
-
     def is_finite(self) -> bool:
         return True
-
-    async def current_len(self) -> int:
-        return len(self.store)
 
     def __getitem__(self, item):
         return self.store[item]

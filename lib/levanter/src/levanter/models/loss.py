@@ -10,7 +10,7 @@ import haliax as hax
 from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
-from haliax.partitioning import pspec_for_axis, shard_map
+from haliax.partitioning import _get_mesh, pspec_for_axis, shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
@@ -35,7 +35,7 @@ def maybe_fused_next_token_loss(
     precision: jax.lax.PrecisionLike = None,
 ) -> NamedArray:
     """
-    Compute the next token loss with optional block-wise processing.
+    Compute the next token loss using the fused kernel path.
 
     Args:
         Pos (hax.AxisSelector): Position axis selector.
@@ -47,28 +47,16 @@ def maybe_fused_next_token_loss(
         reduction (Optional[hax.ReductionFunction]): Reduction function.
         reduction_axis (Optional[hax.AxisSelection]): Axis to apply reduction.
         logsumexp_weight (Optional[float]): Weight for logsumexp penalty.
-        block_size (Optional[int]): Size of each block for processing.
+        block_size (Optional[int]): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
         logit_soft_cap (Optional[float]): Optional soft cap for logits
-        precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision for full-logits path.
+        precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override.
     Returns:
         NamedArray: Computed loss.
     """
     # Resolve axes
     Pos = pred_embeddings.resolve_axis(Pos.name)
     Vocab = pred_lm_head.resolve_axis(Vocab)
-
-    if block_size is None:
-        # Full softmax computation
-        logits = hax.dot(pred_embeddings, pred_lm_head, axis=Embed, precision=precision)
-        if dtype is not None:
-            logits = logits.astype(dtype)
-
-        if logit_soft_cap is not None:
-            logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
-
-        # Shift target tokens to predict the next token
-        return next_token_loss(Pos, Vocab, logits, true_ids, loss_weight, reduction, reduction_axis, logsumexp_weight)
 
     # Shift target tokens to predict the next token
     target_y = hax.roll(true_ids, -1, Pos)
@@ -180,14 +168,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     reduction_axis: Optional[hax.AxisSelection] = None,
     weight: Optional[NamedArray] = None,
     logsumexp_weight: float | None = 0.0,
-    block_size: int,
+    block_size: Optional[int] = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
 ) -> NamedArray:
     """
-    Compute the cross-entropy loss and logsumexp penalty using embeddings and lm_head,
-    with optional block-wise processing.
+    Compute cross-entropy loss and logsumexp penalty using the fused Pallas kernel.
 
     Args:
         pred_embeddings (NamedArray): Predicted embeddings.
@@ -199,7 +186,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         reduction_axis (Optional[hax.AxisSelection]): Axis to apply reduction.
         weight (Optional[NamedArray]): Sample weights to apply to the loss.
         logsumexp_weight (float): Weight for logsumexp penalty.
-        block_size (int): Size of each block for processing.
+        block_size (Optional[int]): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override for the fused kernel.
 
@@ -232,17 +219,21 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             precision=precision,
         )
 
-    in_specs = (
-        pspec_for_axis(flat_embeddings.axes),
-        pspec_for_axis(flat_labels.axes),
-        pspec_for_axis(lm_head.axes),
-    )
-    loss_flat = shard_map(
-        fused_impl,
-        in_specs=in_specs,
-        out_specs=pspec_for_axis((batch_axis,)),
-        check_rep=False,
-    )(flat_embeddings, flat_labels, lm_head)
+    mesh = _get_mesh()
+    if mesh is None or getattr(mesh, "empty", False):
+        loss_flat = fused_impl(flat_embeddings, flat_labels, lm_head)
+    else:
+        in_specs = (
+            pspec_for_axis(flat_embeddings.axes),
+            pspec_for_axis(flat_labels.axes),
+            pspec_for_axis(lm_head.axes),
+        )
+        loss_flat = shard_map(
+            fused_impl,
+            in_specs=in_specs,
+            out_specs=pspec_for_axis((batch_axis,)),
+            check_rep=False,
+        )(flat_embeddings, flat_labels, lm_head)
 
     loss_named = hax.named(loss_flat, batch_axis).unflatten_axis(batch_axis, target_y.axes)
 

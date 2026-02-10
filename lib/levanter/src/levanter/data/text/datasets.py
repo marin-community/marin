@@ -69,11 +69,9 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
     """
 
     def __init__(self, doc_cache: TreeCache[dict], seq_len: int):
-        super().__init__()
         self.doc_cache = doc_cache
         self.seq_len = seq_len
         self._store: TreeStore | None = doc_cache.store
-        self._cached_len: int | None = None
 
     async def async_len(self) -> int:
         token_arrays = await self._await_token_cache()
@@ -84,21 +82,17 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
             self._store = self.doc_cache.store
         return self._store.tree["input_ids"]
 
-    async def final_length_is_known(self) -> bool:
-        return await self.doc_cache.final_length_is_known()
-
     def is_finite(self) -> bool:
         return True
 
-    async def current_len(self) -> int | None:
-        store = await self._await_token_cache()
-        return store.data_size // self.seq_len
-
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
+        if not indices:
+            return []
+
         token_arrays = await self._await_token_cache()
         # logger.info(f"Time to get token cache: {time.time() - time_in}")
-        ds_len = await self.wait_until_len_at_least(max(indices) + 1)
-        if ds_len is not None and ds_len < max(indices) + 1:
+        ds_len = await self.async_len()
+        if ds_len < max(indices) + 1:
             raise ValueError("Requested indices beyond the end of the dataset")
         offsets = np.array(indices, dtype=np.int64) * self.seq_len
         with ts.Batch():
@@ -108,16 +102,6 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
 
         out = await asyncio.gather(*out)
         return out
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        # length is brutally slow to compute, so we cache it
-        if self._cached_len is not None and self._cached_len >= length:
-            return self._cached_len
-
-        # TODO: would be better to listen for cache updates
-        length = await super().wait_until_len_at_least(length)
-        self._cached_len = length
-        return length
 
 
 class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
