@@ -556,6 +556,93 @@ class TestSshConfigMerging:
         assert ssh_config.connect_timeout == Duration.from_seconds(30)
 
 
+class TestConfigValidation:
+    """Tests for config validation (both YAML and programmatic)."""
+
+    def test_programmatic_config_validates_missing_resources(self):
+        """Programmatically built config with missing resources field fails validation."""
+        from iris.cluster.vm.config import validate_config
+
+        config = config_pb2.IrisClusterConfig()
+        cpu_sg = config.scale_groups["cpu"]
+        cpu_sg.name = "cpu"
+        cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        cpu_sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
+        # Missing: resources field
+        cpu_sg.slice_size = 1
+
+        with pytest.raises(ValueError, match="must set resources"):
+            validate_config(config)
+
+    def test_programmatic_config_validates_missing_slice_size(self):
+        """Programmatically built config with missing slice_size fails validation."""
+        from iris.cluster.vm.config import validate_config
+
+        config = config_pb2.IrisClusterConfig()
+        cpu_sg = config.scale_groups["cpu"]
+        cpu_sg.name = "cpu"
+        cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        cpu_sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
+        cpu_sg.resources.cpu = 1
+        cpu_sg.resources.memory_bytes = int(16 * 1e9)
+        cpu_sg.resources.disk_bytes = int(128 * 1e9)
+        # Missing: slice_size field
+
+        with pytest.raises(ValueError, match="must set slice_size"):
+            validate_config(config)
+
+    def test_programmatic_config_validates_missing_accelerator_type(self):
+        """Programmatically built config with unspecified accelerator_type fails validation."""
+        from iris.cluster.vm.config import validate_config
+
+        config = config_pb2.IrisClusterConfig()
+        cpu_sg = config.scale_groups["cpu"]
+        cpu_sg.name = "cpu"
+        # Missing: accelerator_type (defaults to UNSPECIFIED)
+        cpu_sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
+        cpu_sg.resources.cpu = 1
+        cpu_sg.resources.memory_bytes = int(16 * 1e9)
+        cpu_sg.resources.disk_bytes = int(128 * 1e9)
+        cpu_sg.slice_size = 1
+
+        with pytest.raises(ValueError, match="must set accelerator_type"):
+            validate_config(config)
+
+    def test_programmatic_config_validates_missing_vm_type(self):
+        """Programmatically built config with unspecified vm_type fails validation."""
+        from iris.cluster.vm.config import validate_config
+
+        config = config_pb2.IrisClusterConfig()
+        cpu_sg = config.scale_groups["cpu"]
+        cpu_sg.name = "cpu"
+        cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        # Missing: vm_type (defaults to UNSPECIFIED)
+        cpu_sg.resources.cpu = 1
+        cpu_sg.resources.memory_bytes = int(16 * 1e9)
+        cpu_sg.resources.disk_bytes = int(128 * 1e9)
+        cpu_sg.slice_size = 1
+
+        with pytest.raises(ValueError, match="must set vm_type"):
+            validate_config(config)
+
+    def test_programmatic_config_passes_when_complete(self):
+        """Programmatically built config with all required fields passes validation."""
+        from iris.cluster.vm.config import validate_config
+
+        config = config_pb2.IrisClusterConfig()
+        cpu_sg = config.scale_groups["cpu"]
+        cpu_sg.name = "cpu"
+        cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        cpu_sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
+        cpu_sg.resources.cpu = 1
+        cpu_sg.resources.memory_bytes = int(16 * 1e9)
+        cpu_sg.resources.disk_bytes = int(128 * 1e9)
+        cpu_sg.slice_size = 1
+
+        # Should not raise
+        validate_config(config)
+
+
 class TestLocalConfigTransformation:
     """Tests for make_local_config transformation."""
 

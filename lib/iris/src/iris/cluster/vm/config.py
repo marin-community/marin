@@ -164,6 +164,24 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid tpu_count={resources.tpu_count}.")
 
 
+def validate_config(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate IrisClusterConfig for required fields and constraints.
+
+    This function consolidates all validation logic and is called from:
+    - load_config() for YAML-based configs
+    - ClusterManager.__init__() as a catch-all for programmatic configs
+
+    Args:
+        config: Cluster configuration to validate
+
+    Raises:
+        ValueError: If any validation check fails
+    """
+    _validate_accelerator_types(config)
+    _validate_vm_types(config)
+    _validate_scale_group_resources(config)
+
+
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig()
     for name, sg_config in scale_groups.items():
@@ -416,9 +434,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
 
     config = ParseDict(data, config_pb2.IrisClusterConfig())
     config = apply_defaults(config)
-    _validate_accelerator_types(config)
-    _validate_vm_types(config)
-    _validate_scale_group_resources(config)
+    validate_config(config)
 
     platform_kind = config.platform.WhichOneof("platform") if config.HasField("platform") else "unspecified"
     logger.info(

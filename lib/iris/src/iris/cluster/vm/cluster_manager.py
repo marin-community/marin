@@ -57,6 +57,11 @@ class ClusterManager:
         config: config_pb2.IrisClusterConfig,
         threads: ThreadContainer | None = None,
     ):
+        # Validate config to catch programmatic configs with missing fields
+        from iris.cluster.vm.config import validate_config
+
+        validate_config(config)
+
         self._config = config
         self._threads = threads if threads is not None else get_thread_container()
         self._controller: ControllerProtocol | None = None
