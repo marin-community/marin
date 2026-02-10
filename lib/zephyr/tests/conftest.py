@@ -57,7 +57,7 @@ def iris_cluster():
         with manager.connect() as url:
             yield url
     except Exception as e:
-        pytest.skip(f"Failed to start local Iris cluster: {e}")
+        pytest.fail(f"Failed to start local Iris cluster: {e}")
 
 
 @pytest.fixture(scope="session")

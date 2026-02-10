@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from fray.v2 import ResourceConfig
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, shard_ctx
+from zephyr.execution import ZephyrContext, zephyr_worker_ctx
 
 
 def test_simple_map(zephyr_ctx):
@@ -42,10 +42,10 @@ def test_filter(zephyr_ctx):
 
 
 def test_shared_data(fray_client):
-    """Workers can access shared data via shard_ctx()."""
+    """Workers can access shared data via zephyr_worker_ctx()."""
 
     def use_shared(x):
-        multiplier = shard_ctx().get_shared("multiplier")
+        multiplier = zephyr_worker_ctx().get_shared("multiplier")
         return x * multiplier
 
     zctx = ZephyrContext(

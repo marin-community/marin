@@ -37,7 +37,7 @@ from typing import Any
 import click
 import psutil
 from tqdm import tqdm
-from zephyr import Dataset, ExecutionHint
+from zephyr import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 from zephyr.writers import write_parquet_file
@@ -147,7 +147,7 @@ def run_benchmark(
         mem_before = process.memory_info().rss
         exec_start = time.time()
         with ZephyrContext(name="benchmark") as ctx:
-            results = list(ctx.execute(pipeline, ExecutionHint()))
+            results = list(ctx.execute(pipeline))
         exec_time = time.time() - exec_start
         mem_after = process.memory_info().rss
 
