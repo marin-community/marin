@@ -87,7 +87,7 @@ from experiments.self_instill.uq_verification import (
 # =============================================================================
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
 RESOURCE_TYPE = "v5p-32"
-TENSOR_PARALLEL_SIZE = 16
+TENSOR_PARALLEL_SIZE = 8
 BATCH_SIZE = 64
 IS_INSTRUCTION_TUNED = True
 
