@@ -1445,21 +1445,19 @@ class _LlavaInferenceWrapper(eqx.Module):
     _cached_embeds: NamedArray | None = None
     _cached_pos_ids: NamedArray | None = None
 
-    # Position offset for decode phase (static since it's computed from static fields)
+    # Position offset for decode phase (dynamic jnp scalar to avoid JIT recompilation)
     # This is the difference between the padded sequence length and the actual valid length
-    _position_offset: int = eqx.field(static=True, default=0)
+    _position_offset: jnp.ndarray = eqx.field(default_factory=lambda: jnp.int32(0))
 
     # Batched inference mode fields
     # When _batched_mode is True, multiple requests are processed together
     _batched_mode: bool = eqx.field(static=True, default=False)
     # Stacked image features from all requests: (total_patches, features_per_patch, embed)
     _batched_image_features: NamedArray | None = None
-    # Number of patches per segment (request), used to build image_segment_ids
-    _batched_num_patches_per_segment: tuple[int, ...] | None = eqx.field(static=True, default=None)
-    # Mapping from slot_id to segment index
-    _slot_to_segment_map: dict[int, int] | None = eqx.field(static=True, default=None)
-    # Input IDs per segment (slot_id → input_ids), for building segment_ids from token patterns
-    _batched_input_ids_per_slot: dict[int, NamedArray] | None = None
+    # Number of segments (requests) in the batch — static but constant per max_seqs config
+    _batched_num_segments: int = eqx.field(static=True, default=0)
+    # Pre-computed slot_id → segment_index mapping as fixed-size jnp array (avoids JIT recompilation)
+    _batched_slot_to_segment: jnp.ndarray | None = None
 
     @classmethod
     def create(
@@ -1545,7 +1543,7 @@ class _LlavaInferenceWrapper(eqx.Module):
             _num_unpadded_features=num_unpadded_features,
             _precomputed_image_features=precomputed_image_features,
             _batch_size=batch_size,
-            _position_offset=position_offset,
+            _position_offset=jnp.int32(position_offset),
             _cached_embeds=None,
             _cached_pos_ids=None,
         )
@@ -1652,17 +1650,12 @@ class _LlavaInferenceWrapper(eqx.Module):
         )
         flattened_features = hax.named(flattened_features, (TotalPatches, FeaturesPerPatch, Embed))
 
-        # Build slot_id to segment mapping (segment 0, 1, 2, ... based on order in requests)
-        slot_to_segment = {slot: i for i, slot in enumerate(slot_ids)}
-
-        # Count valid patches per segment (from original grid_masks before padding)
-        # This is the number of TRUE values in each grid_mask
-        num_patches_per_segment = tuple(
-            int(jnp.sum(gm.array).item()) for gm in grid_mask_list
-        )
-
-        # Store input_ids per slot for later use in decode()
-        input_ids_per_slot = {slot: req.input_ids for slot, req in zip(slot_ids, requests)}
+        # Build slot_id to segment mapping as a fixed-size jnp array
+        # (avoids JIT recompilation from Python dict iteration)
+        max_slots = max(slot_ids) + 1  # size of the lookup array
+        slot_to_segment_array = jnp.zeros(max_slots, dtype=jnp.int32)
+        for i, slot in enumerate(slot_ids):
+            slot_to_segment_array = slot_to_segment_array.at[slot].set(i)
 
         return _LlavaInferenceWrapper(
             model=self.model,
@@ -1670,9 +1663,8 @@ class _LlavaInferenceWrapper(eqx.Module):
             _text_config=self._text_config,
             _batched_mode=True,
             _batched_image_features=flattened_features,
-            _batched_num_patches_per_segment=num_patches_per_segment,
-            _slot_to_segment_map=slot_to_segment,
-            _batched_input_ids_per_slot=input_ids_per_slot,
+            _batched_num_segments=len(requests),
+            _batched_slot_to_segment=slot_to_segment_array,
         )
 
     def _compute_embeddings(self) -> Tuple[NamedArray, NamedArray]:
@@ -1705,6 +1697,63 @@ class _LlavaInferenceWrapper(eqx.Module):
 
         return merged_embeds, position_ids
 
+    # Bucket sizes for prefill padding — limits JIT compilations to 3 traces
+    _PREFILL_BUCKETS = [1024, 2048, 4096]
+
+    def _compute_and_cache_embeddings(self, max_size: int) -> "_LlavaInferenceWrapper":
+        """Eagerly compute embeddings outside JIT and pad to a bucket size.
+
+        This eliminates JIT recompilation by ensuring the wrapper only contains
+        fixed-size arrays (from a small set of bucket sizes) when passed to
+        @jax.jit functions.
+
+        Args:
+            max_size: Maximum allowed padding size (typically max_prefill_size from engine config)
+
+        Returns:
+            A new wrapper with fixed-size cached embeddings, or self if caching not possible
+        """
+        # 1. Compute variable-sized embeddings eagerly (outside JIT)
+        merged_embeds, position_ids = self._compute_embeddings()
+
+        # 2. Find smallest bucket that fits
+        actual_len = merged_embeds.axis_size("position")
+        pad_to_size = max_size  # fallback to max
+        for bucket in self._PREFILL_BUCKETS:
+            if bucket >= actual_len:
+                pad_to_size = min(bucket, max_size)
+                break
+
+        # 3. Pad to bucket size
+        pad_amount = pad_to_size - actual_len
+        if pad_amount > 0:
+            cached_embeds = hax.pad(merged_embeds, {"position": (0, pad_amount)}, constant_values=0.0)
+            cached_pos_ids = hax.pad(position_ids, {"position": (0, pad_amount)}, constant_values=0)
+        elif pad_amount == 0:
+            cached_embeds = merged_embeds
+            cached_pos_ids = position_ids
+        else:
+            # actual_len > max_size: skip caching, fall back to JIT-computed
+            # (rare edge case — shouldn't happen with typical max_prefill_size)
+            return self
+
+        # 4. Return new wrapper with ONLY fixed-size fields
+        return _LlavaInferenceWrapper(
+            model=self.model,
+            Vocab=self.Vocab,
+            _text_config=self._text_config,
+            _cached_embeds=cached_embeds,
+            _cached_pos_ids=cached_pos_ids,
+            _position_offset=self._position_offset,
+            # All variable fields set to None (constant across requests):
+            _input_ids=None,
+            _pixel_values=None,
+            _grid_mask=None,
+            _unpad_indices=None,
+            _num_unpadded_features=None,
+            _precomputed_image_features=None,
+        )
+
     def _compute_batched_embeddings(
         self,
         tokens: NamedArray,
@@ -1723,7 +1772,7 @@ class _LlavaInferenceWrapper(eqx.Module):
         Returns:
             merged_embeds: embeddings with image features merged at placeholder positions
         """
-        if self._batched_image_features is None or self._slot_to_segment_map is None:
+        if self._batched_image_features is None or self._batched_slot_to_segment is None:
             raise ValueError("Batched mode data not set. Call set_batched_request_data() first.")
 
         lm = self.model.language_model
@@ -1757,17 +1806,11 @@ class _LlavaInferenceWrapper(eqx.Module):
         batch_seq_indices = jnp.clip(batch_seq_indices, 0, num_seqs - 1)
 
         # Get number of segments from batched data
-        num_batched_segments = len(self._batched_num_patches_per_segment)
+        num_batched_segments = self._batched_num_segments
 
-        # Map batch sequence indices to segment indices in stored image features
-        # The slot_ids in _slot_to_segment_map match the engine's allocation order
-        # (engine uses free_slots.pop() which pops from the END, so [7,6,5,...,0])
-        #
-        # Create a lookup table: slot_id -> segment_index
-        max_slots = batch_info.slot_ids.axis_size("seq")
-        slot_to_segment_array = jnp.zeros(max_slots, dtype=jnp.int32)
-        for slot_id, segment_idx in self._slot_to_segment_map.items():
-            slot_to_segment_array = slot_to_segment_array.at[slot_id].set(segment_idx)
+        # Use pre-computed slot_id -> segment_index lookup array
+        # (avoids Python for-loop that causes JIT recompilation)
+        slot_to_segment_array = self._batched_slot_to_segment
 
         # Get slot_ids for each batch sequence position
         batch_slot_ids = batch_info.slot_ids.array  # (max_seqs,)
@@ -1832,7 +1875,7 @@ class _LlavaInferenceWrapper(eqx.Module):
             ns=num_seqs, nbs=num_batched_segments,
             itc=image_token_count, tf=total_features_computed,
             mwsc=max_within_seg_image_only, fps=features_per_segment_padded,
-            stsm=len(self._slot_to_segment_map)
+            stsm=self._batched_num_segments
         )
         # Check for out-of-bounds (only considering image tokens)
         potential_max_idx = jnp.max(segment_feature_starts) + max_within_seg_image_only
@@ -1908,8 +1951,12 @@ class _LlavaInferenceWrapper(eqx.Module):
                 # Use the pos_ids passed by the engine (already correct per-sequence positions)
                 embeds = self._compute_batched_embeddings(tokens, batch_info)
                 # pos_ids stays as passed by the engine
+            elif self._cached_embeds is not None:
+                # Use pre-computed, bucket-padded cached embeddings (no JIT recompilation)
+                embeds = self._cached_embeds
+                pos_ids = self._cached_pos_ids
             else:
-                # Single request mode: use position IDs from _compute_embeddings for proper RoPE with padding
+                # Fallback: compute inside JIT (causes recompilation per unique shape)
                 embeds, computed_pos_ids = self._compute_embeddings()
                 pos_ids = computed_pos_ids
         else:
@@ -1917,9 +1964,9 @@ class _LlavaInferenceWrapper(eqx.Module):
             # Adjust position IDs for decode phase to account for skipped padding
             # During prefill, we skip _position_offset padding tokens
             # So decode positions should be adjusted by the same amount
-            # Note: In batched mode, _position_offset is 0 so no adjustment needed
-            if self._position_offset > 0:
-                pos_ids = hax.named(pos_ids.array - self._position_offset, pos_ids.axes)
+            # Always apply (subtracting 0 is a no-op; _position_offset is a jnp scalar
+            # to avoid JIT recompilation from Python-level conditionals)
+            pos_ids = hax.named(pos_ids.array - self._position_offset, pos_ids.axes)
 
         x, new_cache = lm.transformer.decode(kv_cache, embeds, batch_info, pos_ids, key=None)
         logits = lm.lm_head(x, key=None) if lm.lm_head is not None else lm.embeddings.unembed(x)
@@ -2115,12 +2162,13 @@ class LlavaInferenceEngine:
         """
         # Pre-compute image features for all requests in one batched call
         precomputed_features = self._batch_compute_image_features(requests)
+        max_prefill_size = self._base_engine.config.max_prefill_size
 
         # Process each request sequentially (LLM generation)
         all_results = []
         for i, vlm_request in enumerate(requests):
             # Set the VLM data on the wrapper for this request
-            self._base_engine.model = self._wrapper.set_request_data(
+            wrapper = self._wrapper.set_request_data(
                 input_ids=vlm_request.input_ids,
                 pixel_values=vlm_request.pixel_values,
                 grid_mask=vlm_request.grid_mask,
@@ -2128,6 +2176,9 @@ class LlavaInferenceEngine:
                 num_unpadded_features=vlm_request.num_unpadded_features,
                 precomputed_image_features=precomputed_features[i] if precomputed_features else None,
             )
+            # Pre-compute and cache embeddings with bucket-sized padding to avoid
+            # JIT recompilation from variable-length input sequences
+            self._base_engine.model = wrapper._compute_and_cache_embeddings(max_prefill_size)
 
             # Convert VLMRequest to standard Request for the base engine
             standard_request = Request(
