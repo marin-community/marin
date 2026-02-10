@@ -439,7 +439,7 @@ def main(config: EvalVLMEvalKitConfig):
 
     vocab_size = len(tokenizer)
     # Use bfloat16 for inference to reduce vmem usage and match KV cache dtype
-    mp: jmp.Policy = jmp.get_policy("compute=bfloat16,param=bfloat16,output=bfloat16")
+    mp: jmp.Policy = jmp.get_policy("compute=bfloat16,params=bfloat16,output=bfloat16")
     key = jax.random.PRNGKey(0)
 
     with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
