@@ -12,6 +12,7 @@ import numpy as np
 from jax.sharding import PartitionSpec as P
 
 from haliax.nn.linear import gmm_sharded
+from haliax.quantization import Int8DotGeneralOp
 
 
 Distribution = Literal["random", "runs"]
@@ -30,7 +31,27 @@ QueueMode = Literal["full", "prequeue", "both"]
 RoutingPackStrategy = Literal["argsort", "tuple_sort"]
 RematMode = Literal["none", "expert_mlp", "combine"]
 ParallelMode = Literal["none", "ep"]
-QuantMode = Literal["none", "int8"]
+QuantMode = Literal["none", "int8", "int8_routed", "int8_all", "int8_routed_prequant"]
+
+
+_INT8_DOT_GENERAL = Int8DotGeneralOp.init()
+_RAGGED_DOT_DIM_NUMBERS = jax.lax.RaggedDotDimensionNumbers(
+    dot_dimension_numbers=(((1,), (1,)), ((), ())),
+    lhs_ragged_dimensions=(0,),
+    rhs_group_dimensions=(0,),
+)
+
+
+def _uses_routed_int8(quant_mode: QuantMode) -> bool:
+    return quant_mode in ("int8_routed", "int8_all", "int8_routed_prequant")
+
+
+def _uses_dense_int8(quant_mode: QuantMode) -> bool:
+    return quant_mode in ("int8", "int8_all")
+
+
+def _uses_prequant_routed_weights(quant_mode: QuantMode) -> bool:
+    return quant_mode == "int8_routed_prequant"
 
 
 def _time_fn(fn: Callable, *args, warmup: int = 2, iters: int = 5) -> float:
@@ -49,21 +70,33 @@ def _ragged_dot(
     rhs: jax.Array,
     group_sizes: jax.Array,
 ) -> jax.Array:
-    dim_numbers = jax.lax.RaggedDotDimensionNumbers(
-        dot_dimension_numbers=(((1,), (1,)), ((), ())),
-        lhs_ragged_dimensions=(0,),
-        rhs_group_dimensions=(0,),
-    )
     return jax.lax.ragged_dot_general(
         lhs=lhs,
         rhs=rhs,
         group_sizes=group_sizes,
-        ragged_dot_dimension_numbers=dim_numbers,
+        ragged_dot_dimension_numbers=_RAGGED_DOT_DIM_NUMBERS,
     )
 
 
-def _int8_qdq(x: jax.Array, *, axis: int | tuple[int, ...]) -> jax.Array:
-    """Symmetric per-axis int8 fake quantization followed by dequantization."""
+def _int8_dot_general(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    dimension_numbers: jax.lax.DotDimensionNumbers,
+) -> jax.Array:
+    return _INT8_DOT_GENERAL(
+        lhs,
+        rhs,
+        dimension_numbers,
+        precision=None,
+        preferred_element_type=jnp.float32,
+    )
+
+
+def _symmetric_int8_quantize(
+    x: jax.Array,
+    *,
+    axis: int | tuple[int, ...],
+) -> tuple[jax.Array, jax.Array]:
     if not isinstance(axis, tuple):
         axis = (axis,)
     axis = tuple(a % x.ndim for a in axis)
@@ -71,7 +104,125 @@ def _int8_qdq(x: jax.Array, *, axis: int | tuple[int, ...]) -> jax.Array:
     amax = jnp.max(jnp.abs(x.astype(scale_dtype)), axis=axis, keepdims=True)
     scale = (amax / 127.0 + jnp.finfo(scale_dtype).tiny).astype(scale_dtype)
     q = jnp.clip(jnp.round(x.astype(scale_dtype) / scale), -127, 127).astype(jnp.int8)
-    return (q.astype(scale_dtype) * scale).astype(x.dtype)
+    return q, scale
+
+
+def _expert_matmul_int8_routed(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    lhs_q: jax.Array | None = None,
+    lhs_scale: jax.Array | None = None,
+    rhs_q: jax.Array | None = None,
+    rhs_scale: jax.Array | None = None,
+) -> jax.Array:
+    rows = lhs.shape[0]
+    experts = rhs.shape[0]
+    if rows == 0:
+        return jnp.zeros((0, rhs.shape[2]), dtype=lhs.dtype)
+    if experts <= 0:
+        raise ValueError(f"Expected positive number of experts, got {experts}")
+    if lhs_q is None or lhs_scale is None:
+        lhs_q, lhs_scale = _symmetric_int8_quantize(lhs, axis=1)
+    if rhs_q is None or rhs_scale is None:
+        rhs_q, rhs_scale = _symmetric_int8_quantize(rhs, axis=(1, 2))
+
+    out_i32 = jax.lax.ragged_dot_general(
+        lhs=lhs_q,
+        rhs=rhs_q,
+        group_sizes=group_sizes,
+        ragged_dot_dimension_numbers=_RAGGED_DOT_DIM_NUMBERS,
+        preferred_element_type=jnp.int32,
+    )
+
+    # rhs_scale is [experts, 1, 1]; expand to one scale per routed row.
+    rhs_scale_per_expert = rhs_scale.reshape(experts)
+    expert_ids = jnp.repeat(jnp.arange(experts, dtype=jnp.int32), group_sizes, total_repeat_length=rows)
+    rhs_scale_per_row = jnp.take(rhs_scale_per_expert, expert_ids, axis=0)
+
+    out = out_i32.astype(jnp.float32) * lhs_scale.astype(jnp.float32) * rhs_scale_per_row[:, None]
+    return out.astype(lhs.dtype)
+
+
+@jax.custom_vjp
+def _expert_matmul_int8_routed_ste(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    lhs_q: jax.Array | None,
+    lhs_scale: jax.Array | None,
+    rhs_q: jax.Array | None,
+    rhs_scale: jax.Array | None,
+) -> jax.Array:
+    return _expert_matmul_int8_routed(
+        lhs,
+        rhs,
+        group_sizes,
+        lhs_q=lhs_q,
+        lhs_scale=lhs_scale,
+        rhs_q=rhs_q,
+        rhs_scale=rhs_scale,
+    )
+
+
+def _expert_matmul_int8_routed_ste_fwd(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    lhs_q: jax.Array | None,
+    lhs_scale: jax.Array | None,
+    rhs_q: jax.Array | None,
+    rhs_scale: jax.Array | None,
+) -> tuple[
+    jax.Array,
+    tuple[jax.Array, jax.Array, jax.Array, jax.Array | None, jax.Array | None, jax.Array | None, jax.Array | None],
+]:
+    out = _expert_matmul_int8_routed(
+        lhs,
+        rhs,
+        group_sizes,
+        lhs_q=lhs_q,
+        lhs_scale=lhs_scale,
+        rhs_q=rhs_q,
+        rhs_scale=rhs_scale,
+    )
+    return out, (lhs, rhs, group_sizes, lhs_q, lhs_scale, rhs_q, rhs_scale)
+
+
+def _expert_matmul_int8_routed_ste_bwd(
+    residual: tuple[
+        jax.Array, jax.Array, jax.Array, jax.Array | None, jax.Array | None, jax.Array | None, jax.Array | None
+    ],
+    grad_out: jax.Array,
+) -> tuple[jax.Array, jax.Array, None, None, None, None, None]:
+    lhs, rhs, group_sizes, lhs_q, lhs_scale, rhs_q, rhs_scale = residual
+
+    rhs_t = jnp.swapaxes(rhs, 1, 2)
+    rhs_t_q: jax.Array | None = None
+    rhs_t_scale: jax.Array | None = None
+    if rhs_q is not None and rhs_scale is not None:
+        rhs_t_q = jnp.swapaxes(rhs_q, 1, 2)
+        rhs_t_scale = rhs_scale
+
+    grad_lhs = _expert_matmul_int8_routed(
+        grad_out.astype(lhs.dtype),
+        rhs_t,
+        group_sizes,
+        rhs_q=rhs_t_q,
+        rhs_scale=rhs_t_scale,
+    )
+
+    # STE backward for rhs: use gmm pullback (float weights) to avoid requantizing rhs.
+    def _surrogate_rhs(rhs_in: jax.Array) -> jax.Array:
+        return gmm_sharded(lhs, rhs_in, group_sizes).astype(grad_out.dtype)
+
+    _, pullback_rhs = jax.vjp(_surrogate_rhs, rhs)
+    (grad_rhs,) = pullback_rhs(grad_out)
+    return grad_lhs, grad_rhs, None, None, None, None, None
+
+
+_expert_matmul_int8_routed_ste.defvjp(_expert_matmul_int8_routed_ste_fwd, _expert_matmul_int8_routed_ste_bwd)
 
 
 def _expert_matmul(
@@ -81,25 +232,44 @@ def _expert_matmul(
     *,
     backend: Backend,
     quant_mode: QuantMode,
+    lhs_q: jax.Array | None = None,
+    lhs_scale: jax.Array | None = None,
+    rhs_q: jax.Array | None = None,
+    rhs_scale: jax.Array | None = None,
 ) -> jax.Array:
+    if quant_mode == "int8_routed_prequant":
+        return _expert_matmul_int8_routed_ste(
+            lhs,
+            rhs,
+            group_sizes,
+            lhs_q,
+            lhs_scale,
+            rhs_q,
+            rhs_scale,
+        )
+    if _uses_routed_int8(quant_mode):
+        return _expert_matmul_int8_routed(
+            lhs,
+            rhs,
+            group_sizes,
+            lhs_q=lhs_q,
+            lhs_scale=lhs_scale,
+            rhs_q=rhs_q,
+            rhs_scale=rhs_scale,
+        )
     if quant_mode == "int8":
-        lhs = _int8_qdq(lhs, axis=1)
-        rhs = _int8_qdq(rhs, axis=1)
+        if backend == "gmm":
+            return gmm_sharded(lhs, rhs, group_sizes)
+        return _ragged_dot(lhs, rhs, group_sizes)
     if backend == "gmm":
         return gmm_sharded(lhs, rhs, group_sizes)
     return _ragged_dot(lhs, rhs, group_sizes)
 
 
 def _dense_dot(lhs: jax.Array, rhs: jax.Array, *, quant_mode: QuantMode) -> jax.Array:
-    if quant_mode == "int8":
-        lhs = _int8_qdq(lhs, axis=-1)
-        rhs = _int8_qdq(rhs, axis=0)
-    return jax.lax.dot_general(
-        lhs,
-        rhs,
-        (((1,), (0,)), ((), ())),
-        preferred_element_type=jnp.float32,
-    )
+    if _uses_dense_int8(quant_mode):
+        return _int8_dot_general(lhs, rhs, (((1,), (0,)), ((), ())))
+    return jax.lax.dot_general(lhs, rhs, (((1,), (0,)), ((), ())), preferred_element_type=jnp.float32)
 
 
 def _prepare_dispatch(
@@ -193,6 +363,14 @@ def _moe_block(
     routing_pack_strategy: RoutingPackStrategy,
     remat_mode: RematMode,
     quant_mode: QuantMode,
+    w1_q: jax.Array | None = None,
+    w1_scale: jax.Array | None = None,
+    w2_q: jax.Array | None = None,
+    w2_scale: jax.Array | None = None,
+    w3_q: jax.Array | None = None,
+    w3_scale: jax.Array | None = None,
+    w13_q: jax.Array | None = None,
+    w13_scale: jax.Array | None = None,
 ) -> jax.Array:
     tokens, hidden = x.shape
     num_experts = w1.shape[0]
@@ -206,6 +384,13 @@ def _moe_block(
         capacity_policy=capacity_policy,
         routing_pack_strategy=routing_pack_strategy,
     )
+
+    x_repeat_sort_q: jax.Array | None = None
+    x_repeat_sort_scale: jax.Array | None = None
+    if _uses_routed_int8(quant_mode):
+        x_q, x_scale = _symmetric_int8_quantize(x, axis=1)
+        x_repeat_sort_q = jnp.take(x_q, token_idx_sort, axis=0)
+        x_repeat_sort_scale = jnp.take(x_scale, token_idx_sort, axis=0)
 
     return _moe_from_dispatch(
         x,
@@ -229,6 +414,16 @@ def _moe_block(
         force_scatter=(capacity_policy == "pad"),
         remat_mode=remat_mode,
         quant_mode=quant_mode,
+        x_repeat_sort_q=x_repeat_sort_q,
+        x_repeat_sort_scale=x_repeat_sort_scale,
+        w1_q=w1_q,
+        w1_scale=w1_scale,
+        w2_q=w2_q,
+        w2_scale=w2_scale,
+        w3_q=w3_q,
+        w3_scale=w3_scale,
+        w13_q=w13_q,
+        w13_scale=w13_scale,
     )
 
 
@@ -255,6 +450,16 @@ def _moe_from_dispatch(
     force_scatter: bool = False,
     remat_mode: RematMode = "none",
     quant_mode: QuantMode = "none",
+    x_repeat_sort_q: jax.Array | None = None,
+    x_repeat_sort_scale: jax.Array | None = None,
+    w1_q: jax.Array | None = None,
+    w1_scale: jax.Array | None = None,
+    w2_q: jax.Array | None = None,
+    w2_scale: jax.Array | None = None,
+    w3_q: jax.Array | None = None,
+    w3_scale: jax.Array | None = None,
+    w13_q: jax.Array | None = None,
+    w13_scale: jax.Array | None = None,
 ) -> jax.Array:
     tokens, hidden = x.shape
     topk = topk_weights.shape[1]
@@ -273,6 +478,10 @@ def _moe_from_dispatch(
         w3_in: jax.Array,
         w13_in: jax.Array,
     ) -> tuple[jax.Array, jax.Array]:
+        use_prequant_lhs = (
+            _uses_routed_int8(quant_mode) and x_repeat_sort_q is not None and x_repeat_sort_scale is not None
+        )
+        use_prequant_rhs = _uses_prequant_routed_weights(quant_mode)
         if fuse_w13:
             w13_out = _expert_matmul(
                 x_repeat_sort_in,
@@ -280,6 +489,10 @@ def _moe_from_dispatch(
                 group_sizes_in,
                 backend=backend,
                 quant_mode=quant_mode,
+                lhs_q=x_repeat_sort_q if use_prequant_lhs else None,
+                lhs_scale=x_repeat_sort_scale if use_prequant_lhs else None,
+                rhs_q=w13_q if use_prequant_rhs else None,
+                rhs_scale=w13_scale if use_prequant_rhs else None,
             )
             w1_out, w3_out = jnp.split(w13_out, [w1_in.shape[2]], axis=-1)
         else:
@@ -289,6 +502,10 @@ def _moe_from_dispatch(
                 group_sizes_in,
                 backend=backend,
                 quant_mode=quant_mode,
+                lhs_q=x_repeat_sort_q if use_prequant_lhs else None,
+                lhs_scale=x_repeat_sort_scale if use_prequant_lhs else None,
+                rhs_q=w1_q if use_prequant_rhs else None,
+                rhs_scale=w1_scale if use_prequant_rhs else None,
             )
             w3_out = _expert_matmul(
                 x_repeat_sort_in,
@@ -296,6 +513,10 @@ def _moe_from_dispatch(
                 group_sizes_in,
                 backend=backend,
                 quant_mode=quant_mode,
+                lhs_q=x_repeat_sort_q if use_prequant_lhs else None,
+                lhs_scale=x_repeat_sort_scale if use_prequant_lhs else None,
+                rhs_q=w3_q if use_prequant_rhs else None,
+                rhs_scale=w3_scale if use_prequant_rhs else None,
             )
 
         gated = jax.nn.silu(w1_out) * w3_out
@@ -309,6 +530,8 @@ def _moe_from_dispatch(
             group_sizes_in,
             backend=backend,
             quant_mode=quant_mode,
+            rhs_q=w2_q if use_prequant_rhs else None,
+            rhs_scale=w2_scale if use_prequant_rhs else None,
         )
         return out_repeat_sort_out, sorted_weights_cast
 
@@ -453,6 +676,19 @@ def _load_stats(topk_idx: jax.Array, *, num_experts: int) -> dict[str, float]:
     }
 
 
+def _prequantize_expert_weights(
+    w1: jax.Array,
+    w2: jax.Array,
+    w3: jax.Array,
+    w13: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    w1_q, w1_scale = _symmetric_int8_quantize(w1, axis=(1, 2))
+    w2_q, w2_scale = _symmetric_int8_quantize(w2, axis=(1, 2))
+    w3_q, w3_scale = _symmetric_int8_quantize(w3, axis=(1, 2))
+    w13_q, w13_scale = _symmetric_int8_quantize(w13, axis=(1, 2))
+    return w1_q, w1_scale, w2_q, w2_scale, w3_q, w3_scale, w13_q, w13_scale
+
+
 def _bench_one_distribution(
     *,
     distribution: Distribution,
@@ -519,6 +755,24 @@ def _bench_one_distribution(
     if bench_pass != "forward":
         modes = ["full"]
 
+    use_prequant_routed_weights = _uses_prequant_routed_weights(quant_mode)
+
+    w1_q: jax.Array | None = None
+    w1_scale: jax.Array | None = None
+    w2_q: jax.Array | None = None
+    w2_scale: jax.Array | None = None
+    w3_q: jax.Array | None = None
+    w3_scale: jax.Array | None = None
+    w13_q: jax.Array | None = None
+    w13_scale: jax.Array | None = None
+    if use_prequant_routed_weights or parallel_mode == "ep":
+        w1_q, w1_scale, w2_q, w2_scale, w3_q, w3_scale, w13_q, w13_scale = _prequantize_expert_weights(
+            w1,
+            w2,
+            w3,
+            w13,
+        )
+
     dispatch = _prepare_dispatch(
         x,
         topk_idx,
@@ -548,6 +802,14 @@ def _bench_one_distribution(
         sw2_in,
         sw3_in,
         sw13_in,
+        w1_q_in=None,
+        w1_scale_in=None,
+        w2_q_in=None,
+        w2_scale_in=None,
+        w3_q_in=None,
+        w3_scale_in=None,
+        w13_q_in=None,
+        w13_scale_in=None,
     ):
         return _moe_block(
             x_in,
@@ -569,6 +831,31 @@ def _bench_one_distribution(
             routing_pack_strategy=routing_pack_strategy,
             remat_mode=remat_mode,
             quant_mode=quant_mode,
+            w1_q=w1_q_in,
+            w1_scale=w1_scale_in,
+            w2_q=w2_q_in,
+            w2_scale=w2_scale_in,
+            w3_q=w3_q_in,
+            w3_scale=w3_scale_in,
+            w13_q=w13_q_in,
+            w13_scale=w13_scale_in,
+        )
+
+    prequant_forward_args: tuple[jax.Array, ...] = ()
+    if use_prequant_routed_weights or parallel_mode == "ep":
+        assert w1_q is not None and w1_scale is not None
+        assert w2_q is not None and w2_scale is not None
+        assert w3_q is not None and w3_scale is not None
+        assert w13_q is not None and w13_scale is not None
+        prequant_forward_args = (
+            w1_q,
+            w1_scale,
+            w2_q,
+            w2_scale,
+            w3_q,
+            w3_scale,
+            w13_q,
+            w13_scale,
         )
 
     if parallel_mode == "ep":
@@ -639,6 +926,14 @@ def _bench_one_distribution(
                 P("ep", None),
                 P("ep", None),
                 P("ep", None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
             ),
             out_specs=P(None, None),
             check_vma=False,
@@ -653,6 +948,14 @@ def _bench_one_distribution(
             token_local_in,
             weight_local_in,
             group_local_in,
+            w1_q_in,
+            w1_scale_in,
+            w2_q_in,
+            w2_scale_in,
+            w3_q_in,
+            w3_scale_in,
+            w13_q_in,
+            w13_scale_in,
         ):
             x_work = x_in[0] if x_in.ndim == 3 and x_in.shape[0] == 1 else x_in
             valid_local = valid_local_in.reshape(-1)
@@ -691,6 +994,14 @@ def _bench_one_distribution(
                 force_scatter=True,
                 remat_mode=remat_mode,
                 quant_mode=quant_mode,
+                w1_q=w1_q_in,
+                w1_scale=w1_scale_in,
+                w2_q=w2_q_in,
+                w2_scale=w2_scale_in,
+                w3_q=w3_q_in,
+                w3_scale=w3_scale_in,
+                w13_q=w13_q_in,
+                w13_scale=w13_scale_in,
             )
             out_local = jax.lax.psum(out_local, "ep")
             if x_in.ndim == 3 and x_in.shape[0] == 1:
@@ -707,6 +1018,14 @@ def _bench_one_distribution(
             sw2_in,
             sw3_in,
             sw13_in,
+            w1_q_in=None,
+            w1_scale_in=None,
+            w2_q_in=None,
+            w2_scale_in=None,
+            w3_q_in=None,
+            w3_scale_in=None,
+            w13_q_in=None,
+            w13_scale_in=None,
         ):
             out = ep_routed_only(
                 x_in,
@@ -718,6 +1037,14 @@ def _bench_one_distribution(
                 token_local_per_dev,
                 weight_local_per_dev,
                 group_local_per_dev,
+                w1_q_in,
+                w1_scale_in,
+                w2_q_in,
+                w2_scale_in,
+                w3_q_in,
+                w3_scale_in,
+                w13_q_in,
+                w13_scale_in,
             )
             shared_dim = sw2_in.shape[0]
             if shared_dim > 0:
@@ -765,7 +1092,7 @@ def _bench_one_distribution(
                     shared_w2,
                     shared_w3,
                     shared_w13,
-                )
+                ) + prequant_forward_args
             else:
                 if parallel_mode == "ep":
                     fn = forward_fn
@@ -779,7 +1106,7 @@ def _bench_one_distribution(
                         shared_w2,
                         shared_w3,
                         shared_w13,
-                    )
+                    ) + prequant_forward_args
                 else:
 
                     def prequeue_fn(
@@ -796,6 +1123,14 @@ def _bench_one_distribution(
                         sw2_in,
                         sw3_in,
                         sw13_in,
+                        w1_q_in=None,
+                        w1_scale_in=None,
+                        w2_q_in=None,
+                        w2_scale_in=None,
+                        w3_q_in=None,
+                        w3_scale_in=None,
+                        w13_q_in=None,
+                        w13_scale_in=None,
                     ):
                         return _moe_from_dispatch(
                             x_in,
@@ -819,6 +1154,14 @@ def _bench_one_distribution(
                             force_scatter=(capacity_policy == "pad"),
                             remat_mode=remat_mode,
                             quant_mode=quant_mode,
+                            w1_q=w1_q_in,
+                            w1_scale=w1_scale_in,
+                            w2_q=w2_q_in,
+                            w2_scale=w2_scale_in,
+                            w3_q=w3_q_in,
+                            w3_scale=w3_scale_in,
+                            w13_q=w13_q_in,
+                            w13_scale=w13_scale_in,
                         )
 
                     fn = prequeue_fn
@@ -836,13 +1179,24 @@ def _bench_one_distribution(
                         shared_w2,
                         shared_w3,
                         shared_w13,
-                    )
+                    ) + prequant_forward_args
         else:
             # Fixed-routing train-like step: includes full backward for x and expert weights.
             def loss_fn(x_in, w1_in, w2_in, w3_in, sw1_in, sw2_in, sw3_in):
                 w13_in = jnp.concatenate([w1_in, w3_in], axis=-1)
                 sw13_in = jnp.concatenate([sw1_in, sw3_in], axis=-1)
-                y = forward_fn(x_in, w1_in, w2_in, w3_in, w13_in, sw1_in, sw2_in, sw3_in, sw13_in)
+                y = forward_fn(
+                    x_in,
+                    w1_in,
+                    w2_in,
+                    w3_in,
+                    w13_in,
+                    sw1_in,
+                    sw2_in,
+                    sw3_in,
+                    sw13_in,
+                    *prequant_forward_args,
+                )
                 return jnp.mean(jnp.square(y.astype(jnp.float32)))
 
             fn = jax.value_and_grad(loss_fn, argnums=(0, 1, 2, 3, 4, 5, 6))
@@ -922,11 +1276,35 @@ def _bench_one_distribution(
 
         def up_fn(x_in, groups_in, w_in):
             if fuse_w13:
-                w13_out = _expert_matmul(x_in, w13, groups_in, backend=backend, quant_mode=quant_mode)
+                w13_out = _expert_matmul(
+                    x_in,
+                    w13,
+                    groups_in,
+                    backend=backend,
+                    quant_mode=quant_mode,
+                    rhs_q=w13_q if use_prequant_routed_weights else None,
+                    rhs_scale=w13_scale if use_prequant_routed_weights else None,
+                )
                 w1_out, w3_out = jnp.split(w13_out, [w1.shape[2]], axis=-1)
             else:
-                w1_out = _expert_matmul(x_in, w1, groups_in, backend=backend, quant_mode=quant_mode)
-                w3_out = _expert_matmul(x_in, w3, groups_in, backend=backend, quant_mode=quant_mode)
+                w1_out = _expert_matmul(
+                    x_in,
+                    w1,
+                    groups_in,
+                    backend=backend,
+                    quant_mode=quant_mode,
+                    rhs_q=w1_q if use_prequant_routed_weights else None,
+                    rhs_scale=w1_scale if use_prequant_routed_weights else None,
+                )
+                w3_out = _expert_matmul(
+                    x_in,
+                    w3,
+                    groups_in,
+                    backend=backend,
+                    quant_mode=quant_mode,
+                    rhs_q=w3_q if use_prequant_routed_weights else None,
+                    rhs_scale=w3_scale if use_prequant_routed_weights else None,
+                )
             gated = jax.nn.silu(w1_out) * w3_out
             return gated * w_in[:, None] if preweight else gated
 
@@ -934,7 +1312,15 @@ def _bench_one_distribution(
         gated_dispatch = jax.jit(up_fn)(x_dispatch, group_dispatch, w_dispatch)
 
         def down_fn(gated_in, groups_in):
-            return _expert_matmul(gated_in, w2, groups_in, backend=backend, quant_mode=quant_mode)
+            return _expert_matmul(
+                gated_in,
+                w2,
+                groups_in,
+                backend=backend,
+                quant_mode=quant_mode,
+                rhs_q=w2_q if use_prequant_routed_weights else None,
+                rhs_scale=w2_scale if use_prequant_routed_weights else None,
+            )
 
         down_dt = _time_fn(down_fn, gated_dispatch, group_dispatch, warmup=warmup, iters=iters)
         out_dispatch = jax.jit(down_fn)(gated_dispatch, group_dispatch)
@@ -984,7 +1370,11 @@ def main() -> None:
     parser.add_argument("--distribution", choices=["random", "runs", "both"], default="both")
     parser.add_argument("--bench-pass", choices=["forward", "forward_backward"], default="forward")
     parser.add_argument("--parallel-mode", choices=["none", "ep"], default="none")
-    parser.add_argument("--quant-mode", choices=["none", "int8"], default="none")
+    parser.add_argument(
+        "--quant-mode",
+        choices=["none", "int8", "int8_routed", "int8_all", "int8_routed_prequant"],
+        default="none",
+    )
     parser.add_argument("--queue-mode", choices=["full", "prequeue", "both"], default="full")
     parser.add_argument("--routing-pack-strategy", choices=["argsort", "tuple_sort"], default="argsort")
     parser.add_argument("--remat-mode", choices=["none", "expert_mlp", "combine"], default="none")
