@@ -735,6 +735,13 @@ class LlavaOnevisionModel(eqx.Module):
         VisionBatch = Axis("vision_batch", total_images)
         pixel_values_flat = hax.flatten_axes(pixel_values, (batch_ax, num_patches_ax), VisionBatch)
 
+        # Cast pixel_values to match vision tower compute dtype (e.g. bfloat16).
+        # Pixel data arrives as float32 from image preprocessing, but model params
+        # may have been cast to a different dtype via mixed precision policy.
+        target_dtype = self.vision_tower.vision_model.embeddings.patch_embedding.weight.dtype
+        if pixel_values_flat.dtype != target_dtype:
+            pixel_values_flat = pixel_values_flat.astype(target_dtype)
+
         # Run vision tower on all patches (including padding patches)
         image_outputs = self.vision_tower(pixel_values_flat, output_hidden_states=True, key=k_vision)
         if image_outputs.hidden_states is None:
