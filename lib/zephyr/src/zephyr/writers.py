@@ -261,31 +261,71 @@ def _get_existing_row_count(tmp_path: str, exemplar: dict[str, Any]) -> int:
         return 0
 
 
+def _promote_tmp_cache(fs, tmp_path: str, output_path: str) -> None:
+    """Promote a temporary cache directory to the final output path.
+
+    If a previous output exists, move it aside first and restore it on failure.
+    """
+    backup_path = None
+    if fs.exists(output_path):
+        backup_path = f"{output_path}.bak"
+        if fs.exists(backup_path):
+            fs.rm(backup_path, recursive=True)
+        fs.mv(output_path, backup_path, recursive=True)
+
+    try:
+        fs.mv(tmp_path, output_path, recursive=True)
+    except Exception:
+        if backup_path is not None and fs.exists(backup_path):
+            try:
+                fs.mv(backup_path, output_path, recursive=True)
+            except Exception as restore_exc:
+                raise RuntimeError(
+                    f"Failed to promote {tmp_path} to {output_path} and failed to restore {backup_path}"
+                ) from restore_exc
+        raise
+    else:
+        if backup_path is not None and fs.exists(backup_path):
+            fs.rm(backup_path, recursive=True)
+
+
 def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any]) -> dict:
     """Write tokenized records to Levanter cache format."""
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
+    record_iter = iter(records)
+    tmp_path = f"{output_path}.tmp"
+    fs = fsspec.core.url_to_fs(output_path)[0]
+
+    if fs.exists(output_path) and fs.exists(tmp_path):
+        logger.info("Removing stale temporary cache %s because %s already exists", tmp_path, output_path)
+        fs.rm(tmp_path, recursive=True)
 
     try:
-        exemplar = next(iter(records))
+        exemplar = next(record_iter)
     except StopIteration:
         return {"path": output_path, "count": 0, "token_count": 0}
 
     count = 1
     token_count = len(exemplar.get("input_ids", []))
     logger.info("write_levanter_cache: starting write to %s", output_path)
-    tmp_path = f"{output_path}.tmp"
-    fs = fsspec.core.url_to_fs(output_path)[0]
 
-    existing_rows = _get_existing_row_count(tmp_path, exemplar)
+    existing_rows = 0 if fs.exists(output_path) else _get_existing_row_count(tmp_path, exemplar)
 
     if existing_rows > 0:
         logger.info("Resuming write to %s from %d existing rows", output_path, existing_rows)
         # we already consumed 1 record (exemplar), skip existing_rows - 1 more
-        for record in itertools.islice(records, existing_rows - 1):
+        rows_to_skip = existing_rows - 1
+        skipped_rows = 0
+        for record in itertools.islice(record_iter, rows_to_skip):
+            skipped_rows += 1
             count += 1
             token_count += len(record.get("input_ids", []))
+        if skipped_rows != rows_to_skip:
+            raise ValueError(
+                f"Temporary cache at {tmp_path} has {existing_rows} rows, but input has only {skipped_rows + 1} rows"
+            )
         mode = "a"
         write_exemplar = False
     else:
@@ -297,21 +337,17 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     ) as writer:
         if write_exemplar:
             writer.write_batch([exemplar])
-        for batch in batchify(records):
+        for batch in batchify(record_iter):
             writer.write_batch(batch)
             count += len(batch)
             for record in batch:
                 token_count += len(record.get("input_ids", []))
-                if count % 1000 == 0:
-                    logger.info(
-                        "write_levanter_cache: %s — %d records, %d tokens so far", output_path, count, token_count
-                    )
+            if count % 1000 == 0:
+                logger.info("write_levanter_cache: %s — %d records, %d tokens so far", output_path, count, token_count)
 
     logger.info("write_levanter_cache: finished %s — %d records, %d tokens", output_path, count, token_count)
 
-    if fs.exists(output_path):
-        fs.rm(output_path, recursive=True)
-    fs.mv(tmp_path, output_path, recursive=True)
+    _promote_tmp_cache(fs, tmp_path, output_path)
 
     # write success sentinel
     with fsspec.open(f"{output_path}/.success", "w") as f:
