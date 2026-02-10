@@ -56,31 +56,80 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class LogEntry:
-    """A single log line from a job.
+class TaskLogEntry:
+    """A log entry with task context.
 
     Attributes:
         timestamp: When the log line was produced
+        worker_id: Worker that produced this log
+        task_id: Task that produced this log
         source: Log source - "stdout", "stderr", or "build"
         data: Log line content
+        attempt_id: Which attempt produced this log (0-indexed)
     """
 
     timestamp: Timestamp
+    worker_id: str
+    task_id: JobName
     source: str
     data: str
+    attempt_id: int = 0
 
-    @classmethod
-    def from_proto(cls, proto: cluster_pb2.Worker.LogEntry) -> "LogEntry":
-        return cls(
-            timestamp=Timestamp.from_proto(proto.timestamp),
-            source=proto.source,
-            data=proto.data,
+
+@dataclass
+class TaskLogError:
+    """Error fetching logs for a task.
+
+    Attributes:
+        task_id: Task we failed to fetch logs for
+        worker_id: Worker we tried to contact (may be empty if task unassigned)
+        error: Error message
+    """
+
+    task_id: JobName
+    worker_id: str
+    error: str
+
+
+@dataclass
+class TaskLogsResult:
+    """Result of fetching task logs.
+
+    Attributes:
+        entries: Log entries sorted by timestamp
+        errors: Errors encountered while fetching logs
+        last_timestamp_ms: Maximum timestamp seen (for pagination cursor)
+        truncated: Whether results were truncated due to max_lines limit
+    """
+
+    entries: list[TaskLogEntry]
+    errors: list[TaskLogError]
+    last_timestamp_ms: int
+    truncated: bool
+
+
+def _log_task_results(result: TaskLogsResult) -> None:
+    """Log task results to the logger, including any errors."""
+    for error in result.errors:
+        logger.warning(
+            "task=%s worker=%s | error fetching logs: %s",
+            error.task_id,
+            error.worker_id or "?",
+            error.error,
+        )
+    for entry in result.entries:
+        logger.info(
+            "worker=%s task=%s attempt=%d | %s",
+            entry.worker_id,
+            entry.task_id,
+            entry.attempt_id,
+            entry.data,
         )
 
 
@@ -95,14 +144,6 @@ class JobFailedError(Exception):
         if status.error:
             msg += f": {status.error}"
         super().__init__(msg)
-
-
-@dataclass
-class _TaskLogState:
-    """Per-task log polling state for multi-task log streaming."""
-
-    task_id: JobName
-    last_timestamp: Timestamp | None = None
 
 
 class Task:
@@ -152,7 +193,7 @@ class Task:
         """Get current task state (shortcut for status().state)."""
         return self.status().state
 
-    def logs(self, *, start: Timestamp | None = None, max_lines: int = 0) -> list[LogEntry]:
+    def logs(self, *, start: Timestamp | None = None, max_lines: int = 0) -> list[TaskLogEntry]:
         """Fetch logs for this task.
 
         Args:
@@ -160,10 +201,27 @@ class Task:
             max_lines: Maximum number of log lines to return (0 = unlimited)
 
         Returns:
-            List of LogEntry objects from the task
+            List of TaskLogEntry objects from the task
         """
-        entries = self._client._cluster_client.fetch_task_logs(self.task_id, start, max_lines)
-        return [LogEntry.from_proto(e) for e in entries]
+        response = self._client._cluster_client.fetch_task_logs(
+            self.task_id,
+            since_ms=start.epoch_ms() if start else 0,
+            max_total_lines=max_lines,
+        )
+        if response.task_logs:
+            batch = response.task_logs[0]
+            return [
+                TaskLogEntry(
+                    timestamp=Timestamp.from_proto(e.timestamp),
+                    worker_id=batch.worker_id or "",
+                    task_id=self.task_id,
+                    source=e.source,
+                    data=e.data,
+                    attempt_id=e.attempt_id,
+                )
+                for e in batch.logs
+            ]
+        return []
 
 
 class Job:
@@ -228,6 +286,7 @@ class Job:
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
+        include_children: bool = False,
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
 
@@ -247,7 +306,7 @@ class Job:
         if not stream_logs:
             status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
         else:
-            status = self._wait_with_multi_task_streaming(timeout, poll_interval)
+            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children)
 
         if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
             raise JobFailedError(self._job_id, status)
@@ -258,58 +317,50 @@ class Job:
         self,
         timeout: float,
         poll_interval: float,
+        include_children: bool,
     ) -> cluster_pb2.JobStatus:
-        """Wait while streaming logs from all tasks.
+        """Wait while streaming logs from all tasks using batch log fetching.
 
-        Uses a fixed low poll interval for responsive log streaming. The poll_interval
-        parameter sets the base rate; we don't use exponential backoff here since
-        we want logs to appear in near real-time during active job execution.
+        Uses a single batch RPC call per poll interval to fetch logs from all tasks,
+        rather than N individual calls. The batch API uses a global since_ms cursor
+        for efficient incremental fetching.
         """
-        log_states: dict[JobName, _TaskLogState] = {}
-        # Use a fixed low interval for responsive streaming (capped at poll_interval)
-        stream_interval = min(0.2, poll_interval)
-        start = time.monotonic()
+        since_ms = 0
+        stream_interval = Duration.from_seconds(min(0.2, poll_interval))
+        deadline = Deadline.from_seconds(timeout)
 
         while True:
             status = self._client._cluster_client.get_job_status(self._job_id)
 
-            # Initialize log pollers when we learn num_tasks
-            if status.tasks:
-                for task_status in status.tasks:
-                    task_id = JobName.from_wire(task_status.task_id)
-                    log_states.setdefault(task_id, _TaskLogState(task_id))
+            try:
+                result = self._client.stream_task_logs(
+                    self._job_id,
+                    include_children=include_children,
+                    since_ms=since_ms,
+                )
 
-            # Poll logs from all tasks
-            for state in log_states.values():
-                try:
-                    entries = self._client._cluster_client.fetch_task_logs(state.task_id, state.last_timestamp, 0)
-                    for proto in entries:
-                        entry = LogEntry.from_proto(proto)
-                        if state.last_timestamp is None or entry.timestamp > state.last_timestamp:
-                            state.last_timestamp = entry.timestamp
-                        logger.info("Task %s log: %s", state.task_id, entry.data)
-                except Exception as e:
-                    logger.debug("Task %s not yet scheduled for job %s: %s", state.task_id, self._job_id, e)
+                _log_task_results(result)
+
+                if result.last_timestamp_ms > since_ms:
+                    since_ms = result.last_timestamp_ms
+            except Exception as e:
+                logger.warning("Failed to fetch job logs: %s", e)
 
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
-                for state in log_states.values():
-                    try:
-                        entries = self._client._cluster_client.fetch_task_logs(state.task_id, state.last_timestamp, 0)
-                        for proto in entries:
-                            entry = LogEntry.from_proto(proto)
-                            logger.info("Task %s log: %s", state.task_id, entry.data)
-                    except Exception:
-                        logger.debug(
-                            "Task %s logs unavailable during final drain for job %s", state.task_id, self._job_id
-                        )
+                try:
+                    result = self._client.stream_task_logs(
+                        self._job_id,
+                        include_children=include_children,
+                        since_ms=since_ms,
+                    )
+                    _log_task_results(result)
+                except Exception as e:
+                    logger.warning("Failed to fetch final job logs: %s", e)
                 return status
 
-            elapsed = time.monotonic() - start
-            if elapsed >= timeout:
-                raise TimeoutError(f"Job {self._job_id} did not complete in {timeout}s")
-
-            time.sleep(stream_interval)
+            deadline.raise_if_expired(f"Job {self._job_id} did not complete in {timeout}s")
+            time.sleep(stream_interval.to_seconds())
 
     def terminate(self) -> None:
         """Terminate this job."""
@@ -423,12 +474,19 @@ class NamespacedResolver:
             prefixed_name = f"{self._namespace}/{name}"
         else:
             prefixed_name = name
+
+        logger.debug("NamespacedResolver resolving: %s", prefixed_name)
         matches = self._cluster.list_endpoints(prefix=prefixed_name)
+        logger.debug(
+            "NamespacedResolver %s => %s",
+            prefixed_name,
+            [{"name": ep.name, "id": ep.endpoint_id, "address": ep.address} for ep in matches],
+        )
 
         # Filter to exact matches
         endpoints = [
             ResolvedEndpoint(
-                url=f"http://{ep.address}",
+                url=ep.address,
                 actor_id=ep.endpoint_id,
                 metadata=dict(ep.metadata),
             )
@@ -565,6 +623,7 @@ class IrisClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        fail_if_exists: bool = False,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -581,6 +640,9 @@ class IrisClient:
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
+            fail_if_exists: If True, return ALREADY_EXISTS error even if an existing
+                job with the same name is finished. If False (default), finished jobs
+                are automatically replaced.
 
         Returns:
             Job handle for the submitted job
@@ -603,6 +665,29 @@ class IrisClient:
         else:
             job_id = JobName.root(name)
 
+        # If running inside a job, inherit env vars, extras, and pip_packages from parent.
+        # Child-specified values take precedence over inherited ones.
+        if parent_job_id:
+            job_info = get_job_info()
+            inherited = dict(job_info.env) if job_info else {}
+            child_env = {**inherited, **(environment.env_vars or {})} if environment else inherited
+
+            parent_extras = job_info.extras if job_info else []
+            parent_pip = job_info.pip_packages if job_info else []
+
+            if environment:
+                environment = EnvironmentSpec(
+                    pip_packages=environment.pip_packages or parent_pip,
+                    env_vars=child_env,
+                    extras=environment.extras or parent_extras,
+                )
+            else:
+                environment = EnvironmentSpec(
+                    env_vars=child_env,
+                    extras=parent_extras,
+                    pip_packages=parent_pip,
+                )
+
         # Convert to wire format
         resources_proto = resources.to_proto()
         environment_proto = environment.to_proto() if environment else None
@@ -622,6 +707,7 @@ class IrisClient:
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
             timeout=timeout,
+            fail_if_exists=fail_if_exists,
         )
 
         return Job(self, job_id)
@@ -727,23 +813,120 @@ class IrisClient:
 
     def fetch_task_logs(
         self,
-        task_name: JobName,
+        target: JobName,
         *,
+        include_children: bool = False,
         start: Timestamp | None = None,
         max_lines: int = 0,
-    ) -> list[LogEntry]:
-        """Fetch logs for a specific task.
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> list[TaskLogEntry]:
+        """Fetch logs for a task or job.
 
         Args:
-            task_name: Full task identifier (/job/.../index)
+            target: Task ID or Job ID (detected by trailing numeric)
+            include_children: Include logs from child jobs (job ID only)
             start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
+            regex: Regex filter for log content
+            attempt_id: Filter to specific attempt (-1 = all attempts)
 
         Returns:
-            List of LogEntry objects from the task
+            List of TaskLogEntry objects, sorted by timestamp
         """
-        entries = self._cluster_client.fetch_task_logs(task_name, start, max_lines)
-        return [LogEntry.from_proto(e) for e in entries]
+        response = self._cluster_client.fetch_task_logs(
+            target,
+            include_children=include_children,
+            since_ms=start.epoch_ms() if start else 0,
+            max_total_lines=max_lines,
+            regex=regex,
+            attempt_id=attempt_id,
+        )
+
+        result: list[TaskLogEntry] = []
+        for batch in response.task_logs:
+            task_id = JobName.from_wire(batch.task_id)
+            worker_id = batch.worker_id or ""
+            for proto in batch.logs:
+                result.append(
+                    TaskLogEntry(
+                        timestamp=Timestamp.from_proto(proto.timestamp),
+                        worker_id=worker_id,
+                        task_id=task_id,
+                        source=proto.source,
+                        data=proto.data,
+                        attempt_id=proto.attempt_id,
+                    )
+                )
+
+        result.sort(key=lambda x: x.timestamp.epoch_ms())
+        return result
+
+    def stream_task_logs(
+        self,
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> TaskLogsResult:
+        """Fetch logs for a task or job with full context.
+
+        Returns structured results including task/worker context and any errors
+        encountered while fetching logs. Entries are sorted by timestamp.
+
+        Args:
+            target: Task ID or Job ID (detected by trailing numeric)
+            include_children: Include logs from child jobs (job ID only)
+            since_ms: Only return logs after this timestamp in epoch ms (exclusive)
+            max_lines: Maximum number of log lines to return (0 = unlimited)
+            regex: Regex filter for log content
+            attempt_id: Filter to specific attempt (-1 = all attempts)
+
+        Returns:
+            TaskLogsResult with entries, errors, and metadata
+        """
+        response = self._cluster_client.fetch_task_logs(
+            target,
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_lines,
+            regex=regex,
+            attempt_id=attempt_id,
+        )
+
+        entries: list[TaskLogEntry] = []
+        errors: list[TaskLogError] = []
+
+        for batch in response.task_logs:
+            task_id = JobName.from_wire(batch.task_id)
+            worker_id = batch.worker_id or ""
+
+            if batch.error:
+                errors.append(TaskLogError(task_id=task_id, worker_id=worker_id, error=batch.error))
+
+            for proto in batch.logs:
+                entries.append(
+                    TaskLogEntry(
+                        timestamp=Timestamp.from_proto(proto.timestamp),
+                        worker_id=worker_id or "?",
+                        task_id=task_id,
+                        source=proto.source,
+                        data=proto.data,
+                        attempt_id=proto.attempt_id,
+                    )
+                )
+
+        entries.sort(key=lambda e: e.timestamp.epoch_ms())
+
+        return TaskLogsResult(
+            entries=entries,
+            errors=errors,
+            last_timestamp_ms=response.last_timestamp_ms,
+            truncated=response.truncated,
+        )
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client.
@@ -911,8 +1094,8 @@ def get_iris_ctx() -> IrisContext | None:
     # Get job info from environment
     job_info = get_job_info()
     if job_info is None:
-        # If no job info available, create minimal context
-        ctx = IrisContext(job_id=None)
+        return None
+
     else:
         # Set up client if controller address is available
         client = None

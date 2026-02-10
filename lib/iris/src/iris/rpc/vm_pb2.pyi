@@ -121,7 +121,14 @@ class ScalingDecision(_message.Message):
     def __init__(self, scale_group: _Optional[str] = ..., action: _Optional[_Union[ScalingAction, str]] = ..., slice_delta: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class ScaleGroupStatus(_message.Message):
-    __slots__ = ("name", "config", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices")
+    __slots__ = ("name", "config", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices", "slice_state_counts")
+    class SliceStateCountsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
     NAME_FIELD_NUMBER: _ClassVar[int]
     CONFIG_FIELD_NUMBER: _ClassVar[int]
     CURRENT_DEMAND_FIELD_NUMBER: _ClassVar[int]
@@ -131,6 +138,7 @@ class ScaleGroupStatus(_message.Message):
     LAST_SCALE_UP_FIELD_NUMBER: _ClassVar[int]
     LAST_SCALE_DOWN_FIELD_NUMBER: _ClassVar[int]
     SLICES_FIELD_NUMBER: _ClassVar[int]
+    SLICE_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
     name: str
     config: _config_pb2.ScaleGroupConfig
     current_demand: int
@@ -140,7 +148,8 @@ class ScaleGroupStatus(_message.Message):
     last_scale_up: _time_pb2.Timestamp
     last_scale_down: _time_pb2.Timestamp
     slices: _containers.RepeatedCompositeFieldContainer[SliceInfo]
-    def __init__(self, name: _Optional[str] = ..., config: _Optional[_Union[_config_pb2.ScaleGroupConfig, _Mapping]] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ...) -> None: ...
+    slice_state_counts: _containers.ScalarMap[str, int]
+    def __init__(self, name: _Optional[str] = ..., config: _Optional[_Union[_config_pb2.ScaleGroupConfig, _Mapping]] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ..., slice_state_counts: _Optional[_Mapping[str, int]] = ...) -> None: ...
 
 class AutoscalerAction(_message.Message):
     __slots__ = ("timestamp", "action_type", "scale_group", "slice_id", "reason", "status")

@@ -143,7 +143,7 @@ def weight_transfer_config(transfer_mode):
 @pytest.fixture(autouse=True)
 def job_context():
     """Ensure a shared job context for all tests."""
-    from fray.job.context import create_job_ctx, fray_default_job_ctx
+    from fray.v1.job.context import create_job_ctx, fray_default_job_ctx
 
     # Use threadpool context for tests to avoid Ray overhead unless needed
     ctx = create_job_ctx("threadpool")

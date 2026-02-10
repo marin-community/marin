@@ -128,7 +128,7 @@ class TokenPassingActor:
             result = f"Complete: {self.actor_id} received token after {len(token.path)} hops"
             print(f"[{self.actor_id}] Token passing complete! Total hops: {len(token.path)}")
             # Notify collector
-            collector = ActorClient(self._resolver, "collector", timeout=30.0)
+            collector = ActorClient(self._resolver, "collector", resolve_timeout=30.0)
             collector.notify_complete(result)
             return
 
@@ -138,7 +138,7 @@ class TokenPassingActor:
 
         # Pick random next actor and send
         next_actor_name = random.choice(self.all_actor_names)
-        next_client = ActorClient(self._resolver, next_actor_name, timeout=300.0)
+        next_client = ActorClient(self._resolver, next_actor_name, resolve_timeout=300.0)
         token.round_num += 1
         token.sender_id = self.actor_id
         next_client.send_token(token)
@@ -172,7 +172,7 @@ def main(rounds: int = 5, delay: float = 0.5):
     collector_port = collector_server.serve_background()
     ctx.registry.register(
         name="collector",
-        address=f"0.0.0.0:{collector_port}",
+        address=f"http://0.0.0.0:{collector_port}",
         metadata={"type": "collector"},
     )
     print(f"Started collector on port {collector_port}")
@@ -187,7 +187,7 @@ def main(rounds: int = 5, delay: float = 0.5):
 
         ctx.registry.register(
             name=name,
-            address=f"0.0.0.0:{actual_port}",
+            address=f"http://0.0.0.0:{actual_port}",
             metadata={"actor_id": actor_id, "type": "token-passer"},
         )
 
@@ -201,7 +201,7 @@ def main(rounds: int = 5, delay: float = 0.5):
     print("\nInitiating token passing...")
     initial_token = Token(round_num=1, sender_id="initiator", path=["initiator"])
 
-    client = ActorClient(resolver, "actor1", timeout=300.0)
+    client = ActorClient(resolver, "actor1", resolve_timeout=300.0)
     client.send_token(initial_token)
 
     # Wait for completion via collector

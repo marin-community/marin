@@ -22,6 +22,9 @@ We are also only lowering the LR to 2.75e-5 instead of 1.7e-5. After around
 that point the loss started to increase again. I still don't know why.
 """
 
+# NOTE: This historical file originally used linear permutation through Marin's old mixture helpers.
+# Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
+
 import dataclasses
 
 from levanter.callbacks.watch import WatchConfig
@@ -91,7 +94,6 @@ spoonbill_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, spoonbill_weights),
     ],
-    permutation_type="linear",
 )
 
 
@@ -234,7 +236,7 @@ tootsie_8b_deeper_spoonbill = dataclasses.replace(
 
 spoonbill_zloss_tulu3_sft_config = dataclasses.replace(
     tulu_sft_config,
-    model_name_or_path=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "hf/step-829999/"),
+    initialize_from_hf=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "hf/step-829999/"),
 )
 
 
@@ -253,7 +255,7 @@ sft_tulu3_deeper_spoonbill = default_sft(
     model_config=llama_8b_fp32_attn,
     sft_config=dataclasses.replace(
         spoonbill_zloss_tulu3_sft_config,
-        model_name_or_path=output_path_of(tootsie_8b_deeper_spoonbill, "hf/step-839999/"),
+        initialize_from_hf=output_path_of(tootsie_8b_deeper_spoonbill, "hf/step-839999/"),
     ),
     tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
 ).with_output_path("checkpoints/sft/tulu3_tootsie_sft_deeper_spoonbill_zloss")

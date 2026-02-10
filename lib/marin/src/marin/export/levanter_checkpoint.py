@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.cluster import (
+from fray.v1.cluster import (
     CpuConfig,
     Entrypoint,
     EnvironmentConfig,

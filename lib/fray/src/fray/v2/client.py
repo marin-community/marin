@@ -21,7 +21,7 @@ import contextvars
 import logging
 import time
 from collections.abc import Generator, Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from fray.v2.actor import ActorGroup, ActorHandle
 from fray.v2.types import JobRequest, JobStatus, ResourceConfig
@@ -29,7 +29,6 @@ from fray.v2.types import JobRequest, JobStatus, ResourceConfig
 logger = logging.getLogger(__name__)
 
 
-@runtime_checkable
 class JobHandle(Protocol):
     @property
     def job_id(self) -> str: ...
@@ -43,7 +42,6 @@ class JobHandle(Protocol):
     def terminate(self) -> None: ...
 
 
-@runtime_checkable
 class Client(Protocol):
     def submit(self, request: JobRequest) -> JobHandle:
         """Submit a job for execution. Returns immediately."""
@@ -142,10 +140,15 @@ def current_client() -> Client:
         3. Auto-detect Ray environment (ray.is_initialized())
         4. LocalClient() default
     """
+
     client = _current_client_var.get()
     if client is not None:
+        logger.info("current_client: using explicitly set client")
         return client
 
+    import os
+
+    # Auto-detect Iris environment (takes priority over Ray)
     try:
         from iris.client.client import get_iris_ctx
 
@@ -153,23 +156,28 @@ def current_client() -> Client:
         if ctx is not None:
             from fray.v2.iris_backend import FrayIrisClient
 
+            logger.info("current_client: using Iris backend (auto-detected)")
             return FrayIrisClient.from_iris_client(ctx.client)
     except ImportError:
-        pass  # Iris not installed
+        logger.warning("current_client: iris not installed")
 
     # Auto-detect Ray environment
     try:
         import ray
 
-        if ray.is_initialized():
+        logger.info("current_client: ray.is_initialized()=%s", ray.is_initialized())
+        # surprisingly, Ray doesn't initialize the worker context by default, so check for the env var for v1 compat
+        if ray.is_initialized() or os.environ.get("FRAY_CLUSTER_SPEC", "").startswith("ray"):
             from fray.v2.ray_backend.backend import RayClient
 
+            logger.info("current_client: using Ray backend (auto-detected)")
             return RayClient()
     except ImportError:
-        pass  # Ray not installed
+        logger.warning("current_client: ray not installed")
 
     from fray.v2.local_backend import LocalClient
 
+    logger.info("current_client: using LocalClient (fallback)")
     return LocalClient()
 
 

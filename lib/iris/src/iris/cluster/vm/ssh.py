@@ -31,7 +31,7 @@ import threading
 import time
 from dataclasses import dataclass
 from collections.abc import Callable
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from iris.time_utils import Duration, ExponentialBackoff
 
@@ -43,7 +43,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-@runtime_checkable
 class SshConnection(Protocol):
     """Execute commands on a remote host via SSH. Carries location metadata.
 

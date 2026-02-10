@@ -12,7 +12,7 @@ This achieves about a 90% "real token" rate, compared to like 10% without packin
 """
 import asyncio
 from dataclasses import dataclass
-from typing import Iterable, Iterator, Literal, Optional, Sequence, TypeVar
+from typing import Iterable, Iterator, Literal, Sequence, TypeVar
 
 import haliax as hax
 import jax
@@ -487,12 +487,6 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         return True
 
     async def async_len(self) -> int:
-        return len(self._pack_indices)
-
-    async def final_length_is_known(self) -> bool:
-        return True
-
-    async def current_len(self) -> Optional[int]:
         return len(self._pack_indices)
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[PyTree[np.ndarray], PyTree[np.ndarray]]]:

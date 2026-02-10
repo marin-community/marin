@@ -21,14 +21,16 @@ from pathlib import PurePath
 
 import draccus
 import levanter.infra.cli_helpers
-from fray.cluster import (
+from fray.v2 import (
+    Client,
     CpuConfig,
     Entrypoint,
-    EnvironmentConfig,
+    GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
-    current_cluster,
+    create_environment,
+    current_client,
 )
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.main import train_lm
@@ -69,6 +71,10 @@ class TrainLmOnPodConfig:
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
+
+
+def _get_client() -> Client:
+    return current_client()
 
 
 def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
@@ -225,17 +231,23 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
-    cluster = current_cluster()
+    client = _get_client()
+
+    extras = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
 
     job_request = JobRequest(
         name="train_lm",
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env),
+        environment=create_environment(env_vars=env, extras=extras),
         max_retries_failure=10,
     )
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
 
 
 def _doublecheck_paths(config: TrainLmOnPodConfig):

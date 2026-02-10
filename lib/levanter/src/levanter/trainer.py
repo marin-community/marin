@@ -533,7 +533,7 @@ class Trainer:
                 f"Training already complete at step {state.step} (target: {self.num_train_steps}). "
                 "Running final hooks only."
             )
-            info = StepInfo(state, jnp.nan, 0.0)
+            info = StepInfo(state, 0.0, 0.0)
             self.run_hooks(info, force=True)
             return info
 

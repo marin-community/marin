@@ -413,6 +413,7 @@ def _gcloud_delete_tpu(project_id: str, zone: str, name: str) -> bool:
         f"--project={project_id}",
         f"--zone={zone}",
         "--quiet",
+        "--async",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
