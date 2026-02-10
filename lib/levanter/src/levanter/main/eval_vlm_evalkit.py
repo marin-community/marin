@@ -269,11 +269,12 @@ DEFAULT_PROCESSOR_PATH = "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-o
 DEFAULT_TOKENIZER_PATH = "gs://marin-vlm/tokenizers/Qwen3-1.7B"
 
 DEFAULT_MESH_CONFIG = MeshConfig(
-    axes={"data": -1, "replica": 1, "model": 1},
+    axes={"data": 1, "replica": 1, "model": -1},  # model parallelism: shard attention heads across chips
+    shared_mapping={"kv_head": "model"},  # shard kv_head across model axis to reduce per-chip VMEM in paged attention
     compute_mapping={
         "vision_batch": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
     },
-    param_mapping={"embed": "data"},
+    param_mapping={"embed": "data"},  # data=1, so effectively unsharded
 )
 
 
