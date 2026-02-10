@@ -28,6 +28,7 @@ from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from connectrpc.errors import ConnectError
 from iris.time_utils import Duration
 
 if TYPE_CHECKING:
@@ -1029,3 +1030,124 @@ class TestTPUSimulation:
         if status["state"] != "JOB_STATE_SUCCEEDED":
             logs = tpu_sim_cluster.get_task_logs(job)
             pytest.fail(f"Job failed: {status}\nLogs:\n" + "\n".join(logs[-50:]))
+
+
+# =============================================================================
+# Tests: Profiling
+# =============================================================================
+
+
+def _wait_for_task_running(cluster: E2ECluster, job, timeout: float = 10.0) -> str:
+    """Wait for task 0 of a job to reach TASK_STATE_RUNNING and return its task_id.
+
+    The worker's profile_task RPC requires the task to be in RUNNING state
+    (not BUILDING), so we poll the task status rather than the job status.
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        task_status = cluster.task_status(job, task_index=0)
+        if task_status["state"] == "TASK_STATE_RUNNING":
+            return task_status["taskId"]
+        time.sleep(0.1)
+    raise AssertionError(f"Task did not reach RUNNING within {timeout}s, last state: {task_status['state']}")
+
+
+class TestProfiling:
+    """Test py-spy profiling via ProfileTask RPC."""
+
+    def test_profile_running_task(self, test_cluster, sentinel):
+        """Profile a running task and verify we get profile data back."""
+
+        def slow_task(s):
+            s.wait()
+
+        job = test_cluster.submit(slow_task, sentinel, name=unique_name("profile-test"))
+        task_id = _wait_for_task_running(test_cluster, job)
+
+        request = cluster_pb2.ProfileTaskRequest(
+            task_id=task_id,
+            duration_seconds=2,
+            format="flamegraph",
+        )
+        assert test_cluster._controller_client is not None
+        response = test_cluster._controller_client.profile_task(request, timeout_ms=30000)
+
+        # In local mode: either real py-spy data or a stub SVG
+        # In docker mode: real py-spy flamegraph SVG
+        assert len(response.profile_data) > 0
+        assert not response.error
+
+        sentinel.signal()
+        test_cluster.wait(job, timeout=test_cluster.wait_timeout)
+
+    def test_profile_formats(self, test_cluster, sentinel):
+        """All three profile formats return data."""
+
+        def slow_task(s):
+            s.wait()
+
+        job = test_cluster.submit(slow_task, sentinel, name=unique_name("profile-fmts"))
+        task_id = _wait_for_task_running(test_cluster, job)
+
+        assert test_cluster._controller_client is not None
+
+        for fmt in ["flamegraph", "speedscope", "raw"]:
+            request = cluster_pb2.ProfileTaskRequest(
+                task_id=task_id,
+                duration_seconds=1,
+                format=fmt,
+            )
+            response = test_cluster._controller_client.profile_task(request, timeout_ms=30000)
+            assert len(response.profile_data) > 0, f"Format {fmt} returned empty data"
+            assert not response.error, f"Format {fmt} returned error: {response.error}"
+
+        sentinel.signal()
+        test_cluster.wait(job, timeout=test_cluster.wait_timeout)
+
+    def test_profile_nonexistent_task(self, test_cluster):
+        """Profiling a non-existent task returns an error."""
+        request = cluster_pb2.ProfileTaskRequest(
+            task_id="/nonexistent/task/0",
+            duration_seconds=1,
+            format="flamegraph",
+        )
+        assert test_cluster._controller_client is not None
+        with pytest.raises(ConnectError):
+            test_cluster._controller_client.profile_task(request, timeout_ms=5000)
+
+
+# =============================================================================
+# Tests: Docker Profiling
+# =============================================================================
+
+
+@pytest.mark.docker
+class TestDockerProfiling:
+    """Test py-spy profiling in Docker containers."""
+
+    @pytest.mark.timeout(180)
+    def test_docker_profile_flamegraph(self, docker_cluster, sentinel):
+        """Profile produces valid SVG flamegraph from Docker container."""
+
+        def slow_task(s):
+            s.wait()
+
+        job = docker_cluster.submit(slow_task, sentinel, name=unique_name("docker-profile"))
+
+        # Docker containers take longer to reach RUNNING (uv sync, etc.)
+        task_id = _wait_for_task_running(docker_cluster, job, timeout=120.0)
+
+        request = cluster_pb2.ProfileTaskRequest(
+            task_id=task_id,
+            duration_seconds=3,
+            format="flamegraph",
+        )
+        assert docker_cluster._controller_client is not None
+        response = docker_cluster._controller_client.profile_task(request, timeout_ms=60000)
+        assert len(response.profile_data) > 0
+        assert not response.error
+        # Real py-spy produces SVG output
+        assert b"<svg" in response.profile_data
+
+        sentinel.signal()
+        docker_cluster.wait(job, timeout=docker_cluster.wait_timeout)
