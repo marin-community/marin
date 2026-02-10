@@ -227,3 +227,4 @@ scr/*
 .marin.yaml
 
 /scratch
+.profiles/

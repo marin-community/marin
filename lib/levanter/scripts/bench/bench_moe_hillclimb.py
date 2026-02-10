@@ -3,11 +3,13 @@
 
 import argparse
 import time
+from functools import partial
 from typing import Callable, Literal
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.sharding import PartitionSpec as P
 
 from haliax.nn.linear import gmm_sharded
 
@@ -27,6 +29,7 @@ CapacityPolicy = Literal["none", "drop", "pad"]
 QueueMode = Literal["full", "prequeue", "both"]
 RoutingPackStrategy = Literal["argsort", "tuple_sort"]
 RematMode = Literal["none", "expert_mlp", "combine"]
+ParallelMode = Literal["none", "ep"]
 
 
 def _time_fn(fn: Callable, *args, warmup: int = 2, iters: int = 5) -> float:
@@ -419,6 +422,7 @@ def _bench_one_distribution(
     capacity_policy: CapacityPolicy,
     routing_pack_strategy: RoutingPackStrategy,
     remat_mode: RematMode,
+    parallel_mode: ParallelMode,
     queue_mode: QueueMode,
     warmup: int,
     iters: int,
@@ -452,6 +456,33 @@ def _bench_one_distribution(
         dropped = int(np.maximum(counts - cap, 0).sum())
         drop_frac = float(dropped / max(1, assignments))
 
+    modes: list[QueueMode]
+    if queue_mode == "both":
+        modes = ["full", "prequeue"]
+    else:
+        modes = [queue_mode]
+    if bench_pass != "forward":
+        modes = ["full"]
+
+    dispatch = _prepare_dispatch(
+        x,
+        topk_idx,
+        topk_weights,
+        num_experts=experts,
+        capacity_factor=capacity_factor,
+        capacity_policy=capacity_policy,
+        routing_pack_strategy=routing_pack_strategy,
+    )
+
+    if parallel_mode == "ep" and capacity_policy == "pad":
+        raise ValueError("parallel_mode='ep' currently does not support capacity_policy='pad'")
+
+    x_dispatch, w_dispatch, token_dispatch, sort_dispatch, group_dispatch = dispatch
+    if capacity_policy == "pad" and cap > 0:
+        sorted_expert_dispatch = jnp.repeat(jnp.arange(experts, dtype=jnp.int32), cap)
+    else:
+        sorted_expert_dispatch = jnp.take(topk_idx.reshape(-1), sort_dispatch, axis=0)
+
     def forward_fn(
         x_in,
         w1_in,
@@ -484,23 +515,187 @@ def _bench_one_distribution(
             remat_mode=remat_mode,
         )
 
-    modes: list[QueueMode]
-    if queue_mode == "both":
-        modes = ["full", "prequeue"]
-    else:
-        modes = [queue_mode]
-    if bench_pass != "forward":
-        modes = ["full"]
+    if parallel_mode == "ep":
+        num_devices = jax.local_device_count()
+        if experts % num_devices != 0:
+            raise ValueError(
+                f"parallel_mode='ep' requires experts divisible by local device count: experts={experts}, devices={num_devices}"
+            )
+        ep_mesh = jax.make_mesh((num_devices,), ("ep",))
+        local_experts = experts // num_devices
 
-    dispatch = _prepare_dispatch(
-        x,
-        topk_idx,
-        topk_weights,
-        num_experts=experts,
-        capacity_factor=capacity_factor,
-        capacity_policy=capacity_policy,
-        routing_pack_strategy=routing_pack_strategy,
-    )
+        sorted_expert_np = np.asarray(sorted_expert_dispatch, dtype=np.int32)
+        token_dispatch_np = np.asarray(token_dispatch, dtype=np.int32)
+        w_dispatch_np = np.asarray(w_dispatch)
+        group_dispatch_np = np.asarray(group_dispatch, dtype=np.int32)
+
+        # Build compact per-shard dispatch once from fixed routing so each shard processes
+        # only its local assignments instead of a dense global-length buffer.
+        per_device_indices: list[np.ndarray] = []
+        per_device_counts: list[int] = []
+        for dev_idx in range(num_devices):
+            start = dev_idx * local_experts
+            end = start + local_experts
+            local_idx = np.nonzero((sorted_expert_np >= start) & (sorted_expert_np < end))[0].astype(np.int32)
+            per_device_indices.append(local_idx)
+            per_device_counts.append(int(local_idx.size))
+
+        local_cap_raw = max(per_device_counts) if per_device_counts else 0
+        if local_cap_raw <= 0:
+            raise ValueError("parallel_mode='ep' found no routed assignments to any local expert shard.")
+        # gmm_sharded currently pads using a float32 literal; keep row count aligned to avoid that path.
+        local_cap = ((local_cap_raw + 511) // 512) * 512
+
+        valid_mask_per_dev = np.zeros((num_devices, local_cap), dtype=bool)
+        token_local_per_dev = np.zeros((num_devices, local_cap), dtype=np.int32)
+        weight_local_per_dev = np.zeros((num_devices, local_cap), dtype=w_dispatch_np.dtype)
+        group_local_per_dev = np.zeros((num_devices, local_experts), dtype=np.int32)
+
+        for dev_idx in range(num_devices):
+            local_idx = per_device_indices[dev_idx]
+            local_count = per_device_counts[dev_idx]
+            if local_count > 0:
+                valid_mask_per_dev[dev_idx, :local_count] = True
+                token_local_per_dev[dev_idx, :local_count] = token_dispatch_np[local_idx]
+                weight_local_per_dev[dev_idx, :local_count] = w_dispatch_np[local_idx]
+
+            start = dev_idx * local_experts
+            end = start + local_experts
+            local_sizes = group_dispatch_np[start:end].copy()
+            local_sizes[0] += local_cap - local_count
+            group_local_per_dev[dev_idx] = local_sizes
+
+        valid_mask_per_dev = jnp.asarray(valid_mask_per_dev)
+        token_local_per_dev = jnp.asarray(token_local_per_dev)
+        weight_local_per_dev = jnp.asarray(weight_local_per_dev)
+        group_local_per_dev = jnp.asarray(group_local_per_dev)
+
+        @partial(
+            jax.shard_map,
+            mesh=ep_mesh,
+            in_specs=(
+                P(None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None),
+                P("ep", None),
+                P("ep", None),
+                P("ep", None),
+            ),
+            out_specs=P(None, None),
+            check_vma=False,
+        )
+        def ep_routed_only(
+            x_in,
+            w1_in,
+            w2_in,
+            w3_in,
+            w13_in,
+            valid_local_in,
+            token_local_in,
+            weight_local_in,
+            group_local_in,
+        ):
+            x_work = x_in[0] if x_in.ndim == 3 and x_in.shape[0] == 1 else x_in
+            valid_local = valid_local_in.reshape(-1)
+            token_local = token_local_in.reshape(-1)
+            weight_local = weight_local_in.reshape(-1)
+            group_local = group_local_in.reshape(-1)
+
+            x_take = jnp.take(x_work, token_local, axis=0)
+            x_local = jnp.where(valid_local[:, None], x_take, jnp.zeros_like(x_take))
+            weight_local = jnp.where(valid_local, weight_local, jnp.zeros_like(weight_local))
+
+            zero_sw1 = jnp.zeros((x_work.shape[1], 0), dtype=x_work.dtype)
+            zero_sw2 = jnp.zeros((0, x_work.shape[1]), dtype=x_work.dtype)
+            zero_sw3 = jnp.zeros((x_work.shape[1], 0), dtype=x_work.dtype)
+            zero_sw13 = jnp.zeros((x_work.shape[1], 0), dtype=x_work.dtype)
+
+            out_local = _moe_from_dispatch(
+                x_work,
+                topk_weights,
+                x_local,
+                weight_local,
+                token_local,
+                jnp.zeros((1,), dtype=jnp.int32),
+                group_local,
+                w1_in,
+                w2_in,
+                w3_in,
+                w13_in,
+                zero_sw1,
+                zero_sw2,
+                zero_sw3,
+                zero_sw13,
+                backend=backend,
+                impl=impl,
+                shared_fused=shared_fused,
+                force_scatter=True,
+                remat_mode=remat_mode,
+            )
+            out_local = jax.lax.psum(out_local, "ep")
+            if x_in.ndim == 3 and x_in.shape[0] == 1:
+                return out_local[None, ...]
+            return out_local
+
+        def ep_forward_fn(
+            x_in,
+            w1_in,
+            w2_in,
+            w3_in,
+            w13_in,
+            sw1_in,
+            sw2_in,
+            sw3_in,
+            sw13_in,
+        ):
+            out = ep_routed_only(
+                x_in,
+                w1_in,
+                w2_in,
+                w3_in,
+                w13_in,
+                valid_mask_per_dev,
+                token_local_per_dev,
+                weight_local_per_dev,
+                group_local_per_dev,
+            )
+            shared_dim = sw2_in.shape[0]
+            if shared_dim > 0:
+                if shared_fused:
+                    shared13 = jax.lax.dot_general(
+                        x_in,
+                        sw13_in,
+                        (((1,), (0,)), ((), ())),
+                        preferred_element_type=jnp.float32,
+                    )
+                    shared1, shared3 = jnp.split(shared13, [shared_dim], axis=-1)
+                else:
+                    shared1 = jax.lax.dot_general(
+                        x_in,
+                        sw1_in,
+                        (((1,), (0,)), ((), ())),
+                        preferred_element_type=jnp.float32,
+                    )
+                    shared3 = jax.lax.dot_general(
+                        x_in,
+                        sw3_in,
+                        (((1,), (0,)), ((), ())),
+                        preferred_element_type=jnp.float32,
+                    )
+                shared_gated = jax.nn.silu(shared1) * shared3
+                shared_out = jax.lax.dot_general(
+                    shared_gated,
+                    sw2_in,
+                    (((1,), (0,)), ((), ())),
+                    preferred_element_type=jnp.float32,
+                )
+                out = out + shared_out.astype(out.dtype)
+            return out.astype(x_in.dtype)
+
+        forward_fn = ep_forward_fn
 
     for mode in modes:
         fn: Callable
@@ -519,27 +714,23 @@ def _bench_one_distribution(
                     shared_w13,
                 )
             else:
-                x_dispatch, w_dispatch, token_dispatch, sort_dispatch, group_dispatch = dispatch
+                if parallel_mode == "ep":
+                    fn = forward_fn
+                    run_args = (
+                        x,
+                        w1,
+                        w2,
+                        w3,
+                        w13,
+                        shared_w1,
+                        shared_w2,
+                        shared_w3,
+                        shared_w13,
+                    )
+                else:
 
-                def prequeue_fn(
-                    x_in,
-                    w_dispatch_in,
-                    token_dispatch_in,
-                    sort_dispatch_in,
-                    group_dispatch_in,
-                    w1_in,
-                    w2_in,
-                    w3_in,
-                    w13_in,
-                    sw1_in,
-                    sw2_in,
-                    sw3_in,
-                    sw13_in,
-                ):
-                    return _moe_from_dispatch(
+                    def prequeue_fn(
                         x_in,
-                        topk_weights,
-                        x_dispatch,
                         w_dispatch_in,
                         token_dispatch_in,
                         sort_dispatch_in,
@@ -552,29 +743,46 @@ def _bench_one_distribution(
                         sw2_in,
                         sw3_in,
                         sw13_in,
-                        backend=backend,
-                        impl=impl,
-                        shared_fused=shared_fused,
-                        force_scatter=(capacity_policy == "pad"),
-                        remat_mode=remat_mode,
-                    )
+                    ):
+                        return _moe_from_dispatch(
+                            x_in,
+                            topk_weights,
+                            x_dispatch,
+                            w_dispatch_in,
+                            token_dispatch_in,
+                            sort_dispatch_in,
+                            group_dispatch_in,
+                            w1_in,
+                            w2_in,
+                            w3_in,
+                            w13_in,
+                            sw1_in,
+                            sw2_in,
+                            sw3_in,
+                            sw13_in,
+                            backend=backend,
+                            impl=impl,
+                            shared_fused=shared_fused,
+                            force_scatter=(capacity_policy == "pad"),
+                            remat_mode=remat_mode,
+                        )
 
-                fn = prequeue_fn
-                run_args = (
-                    x,
-                    w_dispatch,
-                    token_dispatch,
-                    sort_dispatch,
-                    group_dispatch,
-                    w1,
-                    w2,
-                    w3,
-                    w13,
-                    shared_w1,
-                    shared_w2,
-                    shared_w3,
-                    shared_w13,
-                )
+                    fn = prequeue_fn
+                    run_args = (
+                        x,
+                        w_dispatch,
+                        token_dispatch,
+                        sort_dispatch,
+                        group_dispatch,
+                        w1,
+                        w2,
+                        w3,
+                        w13,
+                        shared_w1,
+                        shared_w2,
+                        shared_w3,
+                        shared_w13,
+                    )
         else:
             # Fixed-routing train-like step: includes full backward for x and expert weights.
             def loss_fn(x_in, w1_in, w2_in, w3_in, sw1_in, sw2_in, sw3_in):
@@ -614,6 +822,7 @@ def _bench_one_distribution(
 
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} backend={backend}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} remat_mode={remat_mode}")
+        print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} parallel_mode={parallel_mode}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} time_s={dt:.6f}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} tflops={tflops:.3f}")
         print(
@@ -635,6 +844,9 @@ def _bench_one_distribution(
         )
 
     if stage_timing and bench_pass == "forward":
+        if parallel_mode == "ep":
+            print(f"[{distribution}] pass=forward stage_timing skipped for parallel_mode=ep")
+            return
 
         def pack_fn(x_in):
             return _prepare_dispatch(
@@ -725,6 +937,7 @@ def main() -> None:
     )
     parser.add_argument("--distribution", choices=["random", "runs", "both"], default="both")
     parser.add_argument("--bench-pass", choices=["forward", "forward_backward"], default="forward")
+    parser.add_argument("--parallel-mode", choices=["none", "ep"], default="none")
     parser.add_argument("--queue-mode", choices=["full", "prequeue", "both"], default="full")
     parser.add_argument("--routing-pack-strategy", choices=["argsort", "tuple_sort"], default="argsort")
     parser.add_argument("--remat-mode", choices=["none", "expert_mlp", "combine"], default="none")
@@ -769,6 +982,7 @@ def main() -> None:
         f"experts={args.experts} topk={args.topk} dtype={dtype} backend={args.backend} "
         f"impl={args.impl} shared_expert_dim={args.shared_expert_dim} "
         f"shared_fused={args.shared_fused} bench_pass={args.bench_pass} "
+        f"parallel_mode={args.parallel_mode} "
         f"queue_mode={args.queue_mode} "
         f"routing_pack_strategy={args.routing_pack_strategy} "
         f"remat_mode={args.remat_mode} "
@@ -818,6 +1032,7 @@ def main() -> None:
                     impl=impl,
                     shared_fused=args.shared_fused,
                     bench_pass=args.bench_pass,
+                    parallel_mode=args.parallel_mode,
                     queue_mode=args.queue_mode,
                     stage_timing=args.stage_timing,
                     capacity_factor=args.capacity_factor,
