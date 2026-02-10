@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from iris.cli import iris
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.manager import ClusterManager
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 

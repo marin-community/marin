@@ -12,12 +12,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from iris.cluster.vm.config import (
+from iris.cluster.config import (
     config_to_dict,
-    create_autoscaler,
     get_ssh_config,
     load_config,
+    validate_config,
 )
+from iris.cluster.controller.config import create_autoscaler
 from iris.cluster.vm.platform import create_platform
 from iris.rpc import config_pb2
 
@@ -550,7 +551,7 @@ class TestLocalConfigTransformation:
 
     def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
         """make_local_config transforms GCP config to local mode."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -616,7 +617,7 @@ scale_groups:
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -687,7 +688,7 @@ scale_groups:
 
     def test_example_configs_load_and_transform(self):
         """Example configs in examples/ directory load and transform to local correctly."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
@@ -711,3 +712,70 @@ scale_groups:
             # Verify fast timings applied
             assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
             assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
+
+
+def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
+    """Create a valid ScaleGroupConfig for use in validation tests."""
+    return config_pb2.ScaleGroupConfig(
+        name="test",
+        vm_type=config_pb2.VM_TYPE_MANUAL_VM,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        slice_size=1,
+        resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+    )
+
+
+def _config_with(**overrides) -> config_pb2.IrisClusterConfig:
+    """Build an IrisClusterConfig with a single scale group, overriding fields."""
+    sg = _valid_scale_group()
+    for key, value in overrides.items():
+        if key == "resources":
+            sg.resources.CopyFrom(value)
+        else:
+            setattr(sg, key, value)
+    config = config_pb2.IrisClusterConfig()
+    config.scale_groups["test"].CopyFrom(sg)
+    return config
+
+
+class TestConfigValidation:
+    """Tests for validate_config: the consolidated entry point for config validation."""
+
+    def test_valid_config_accepted(self):
+        validate_config(_config_with())
+
+    def test_rejects_missing_resources(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config.scale_groups["test"]
+        sg.name = "test"
+        sg.vm_type = config_pb2.VM_TYPE_MANUAL_VM
+        sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_size = 1
+        with pytest.raises(ValueError, match="must set resources"):
+            validate_config(config)
+
+    def test_rejects_missing_slice_size(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config.scale_groups["test"]
+        sg.name = "test"
+        sg.vm_type = config_pb2.VM_TYPE_MANUAL_VM
+        sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.resources.CopyFrom(config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3))
+        with pytest.raises(ValueError, match="must set slice_size"):
+            validate_config(config)
+
+    def test_rejects_zero_slice_size(self):
+        with pytest.raises(ValueError, match="invalid slice_size"):
+            validate_config(_config_with(slice_size=0))
+
+    def test_rejects_unspecified_accelerator_type(self):
+        with pytest.raises(ValueError, match="must set accelerator_type"):
+            validate_config(_config_with(accelerator_type=config_pb2.ACCELERATOR_TYPE_UNSPECIFIED))
+
+    def test_rejects_unspecified_vm_type(self):
+        with pytest.raises(ValueError, match="must set vm_type"):
+            validate_config(_config_with(vm_type=config_pb2.VM_TYPE_UNSPECIFIED))
+
+    def test_rejects_negative_cpu(self):
+        with pytest.raises(ValueError, match="invalid cpu"):
+            validate_config(_config_with(resources=config_pb2.ScaleGroupResources(cpu=-1, memory_bytes=16 * 1024**3)))

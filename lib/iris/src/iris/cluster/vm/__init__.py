@@ -1,17 +1,16 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""VM lifecycle management for the Iris autoscaler.
+"""VM lifecycle management and platform abstractions.
 
 Key components:
 - VmManagerProtocol: Factory for creating VM groups (one per scale group)
 - TpuVmManager: Creates TPU VM groups via gcloud
 - ManualVmManager: Manages pre-existing hosts
 - VmGroupProtocol, TpuVmGroup, ManualVmGroup: VM group lifecycle management
-- ScalingGroup: Owns VM groups for a scale group, tracks scaling state
-- Autoscaler: Orchestrates multiple ScalingGroups
 - VmRegistry: Centralized VM tracking for worker lookup
 - ManagedVm: Per-VM lifecycle thread with bootstrap logic
+- Platform: Multi-platform VM orchestration layer
 """
 
 # SSH utilities
@@ -60,35 +59,6 @@ from iris.cluster.vm.managed_vm import (
     VmRegistry,
 )
 
-# Scaling group
-from iris.cluster.vm.scaling_group import (
-    AvailabilityState,
-    GroupAvailability,
-    ScalingGroup,
-)
-
-# Autoscaler
-from iris.cluster.vm.autoscaler import (
-    Autoscaler,
-    DemandEntry,
-    RoutingDecision,
-    ScalingAction,
-    ScalingDecision,
-    UnmetDemand,
-    route_demand,
-)
-
-# Config and factory functions
-from iris.cluster.vm.config import (
-    ScaleGroupSpec,
-    config_to_dict,
-    create_autoscaler,
-    create_autoscaler_from_specs,
-    create_manual_autoscaler,
-    get_ssh_config,
-    load_config,
-)
-
 # Platform abstraction
 from iris.cluster.vm.platform import (
     Platform,
@@ -108,14 +78,10 @@ __all__ = [
     "BOOTSTRAP_SCRIPT",
     "MAX_RECONCILE_WORKERS",
     "PARTIAL_SLICE_GRACE_MS",
-    "Autoscaler",
-    "AvailabilityState",
     "BootstrapError",
-    "DemandEntry",
     "DirectSshConnection",
     "GceSshConnection",
     "GcloudSshConnection",
-    "GroupAvailability",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
@@ -123,17 +89,11 @@ __all__ = [
     "PlatformOps",
     "PoolExhaustedError",
     "QuotaExceededError",
-    "RoutingDecision",
-    "ScaleGroupSpec",
-    "ScalingAction",
-    "ScalingDecision",
-    "ScalingGroup",
     "SshConfig",
     "SshConnection",
     "TpuVmGroup",
     "TpuVmManager",
     "TrackedVmFactory",
-    "UnmetDemand",
     "VmFactory",
     "VmGroupProtocol",
     "VmGroupStatus",
@@ -141,18 +101,11 @@ __all__ = [
     "VmRegistry",
     "VmSnapshot",
     "cleanup_iris_resources",
-    "config_to_dict",
     "connection_available",
-    "create_autoscaler",
-    "create_autoscaler_from_specs",
-    "create_manual_autoscaler",
     "create_platform",
     "discover_controller_vm",
-    "get_ssh_config",
     "list_docker_containers",
     "list_iris_tpus",
-    "load_config",
-    "route_demand",
     "run_streaming_with_retry",
     "wait_for_connection",
 ]

@@ -430,7 +430,7 @@ def _ssh_config_to_dataclass(ssh: config_pb2.SshConfig) -> SshConfig:
     Returns:
         SshConfig dataclass for use by SSH connections
     """
-    from iris.cluster.vm.config import DEFAULT_CONFIG, DEFAULT_SSH_PORT
+    from iris.cluster.config import DEFAULT_CONFIG, DEFAULT_SSH_PORT
 
     connect_timeout = (
         Duration.from_proto(ssh.connect_timeout)

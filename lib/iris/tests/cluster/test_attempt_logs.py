@@ -17,8 +17,8 @@ import uuid
 import pytest
 from iris.chaos import enable_chaos, reset_chaos
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import load_config, make_local_config
+from iris.cluster.manager import ClusterManager
+from iris.cluster.config import load_config, make_local_config
 from iris.client.client import IrisClient
 from iris.rpc import cluster_pb2
 

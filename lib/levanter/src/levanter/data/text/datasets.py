@@ -69,11 +69,9 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
     """
 
     def __init__(self, doc_cache: TreeCache[dict], seq_len: int):
-        super().__init__()
         self.doc_cache = doc_cache
         self.seq_len = seq_len
         self._store: TreeStore | None = doc_cache.store
-        self._cached_len: int | None = None
 
     async def async_len(self) -> int:
         token_arrays = await self._await_token_cache()
@@ -84,21 +82,17 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
             self._store = self.doc_cache.store
         return self._store.tree["input_ids"]
 
-    async def final_length_is_known(self) -> bool:
-        return await self.doc_cache.final_length_is_known()
-
     def is_finite(self) -> bool:
         return True
 
-    async def current_len(self) -> int | None:
-        store = await self._await_token_cache()
-        return store.data_size // self.seq_len
-
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
+        if not indices:
+            return []
+
         token_arrays = await self._await_token_cache()
         # logger.info(f"Time to get token cache: {time.time() - time_in}")
-        ds_len = await self.wait_until_len_at_least(max(indices) + 1)
-        if ds_len is not None and ds_len < max(indices) + 1:
+        ds_len = await self.async_len()
+        if ds_len < max(indices) + 1:
             raise ValueError("Requested indices beyond the end of the dataset")
         offsets = np.array(indices, dtype=np.int64) * self.seq_len
         with ts.Batch():
@@ -108,16 +102,6 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
 
         out = await asyncio.gather(*out)
         return out
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        # length is brutally slow to compute, so we cache it
-        if self._cached_len is not None and self._cached_len >= length:
-            return self._cached_len
-
-        # TODO: would be better to listen for cache updates
-        length = await super().wait_until_len_at_least(length)
-        self._cached_len = length
-        return length
 
 
 class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
@@ -509,6 +493,29 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
     return base
 
 
+def _split_into_trainval_sets(
+    dataset: "AsyncDataset[LmExample]", num_validation_sequences: int, *, shuffle: bool = True
+) -> tuple["AsyncDataset[LmExample]", "AsyncDataset[LmExample]"]:
+    """Split a dataset into train/val portions, optionally shuffling first.
+
+    When shuffle is True, a deterministic shuffle is applied before
+    splitting so that the validation set is a random subset. Uses a fixed key so
+    that train_sets() and validation_sets() produce the same permutation,
+    guaranteeing disjoint splits even though they are constructed independently.
+
+    When shuffle is False, the split is positional: the last
+    num_validation_sequences go to validation and the rest to training.
+    """
+    logger.info(f"Splitting dataset into train/val sets. Shuffle before split: {shuffle}")
+    length = len(dataset.as_sync_dataset())
+    if shuffle:
+        split_key = jax.random.PRNGKey(0)
+        dataset = dataset.shuffle(split_key, perm_type="feistel")
+    train_ds = dataset.slice_dataset(start_index=0, end_index=length - num_validation_sequences)
+    val_ds = dataset.slice_dataset(start_index=length - num_validation_sequences, end_index=length)
+    return train_ds, val_ds
+
+
 @dataclass(frozen=True)
 class LmDataConfig:
     """Unified LM data config built from components."""
@@ -555,6 +562,15 @@ class LmDataConfig:
     mixture_block_size: int = 2048
     max_train_batches: dict[str, int] | None = None
     num_validation_sequences: dict[str, int] | None = None
+    shuffle_before_trainval_split: bool = True
+    """Whether to shuffle the dataset before splitting off validation sequences.
+
+    When True (default), a deterministic shuffle is applied before the train/val
+    split so that the validation set is a random subset rather than a positional
+    slice (e.g. the last N sequences). Set to False to preserve the original
+    dataset ordering for the split. Only relevant when num_validation_sequences
+    is set.
+    """
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -659,15 +675,13 @@ class LmDataConfig:
         doc_caches = self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos, split="train")
 
-        # Slice off validation sequences before shuffling so that the train/val split is
-        # determined by position in the original (unshuffled) cache. This avoids overlap
-        # between the training set and the validation set produced by validation_sets().
         if self.num_validation_sequences is not None:
             for name, ds in datasets.items():
                 if name in self.num_validation_sequences:
-                    num_sequences = self.num_validation_sequences[name]
-                    len_dataset = len(ds.as_sync_dataset())
-                    datasets[name] = ds.slice_dataset(start_index=0, end_index=len_dataset - num_sequences)
+                    train_ds, _ = _split_into_trainval_sets(
+                        ds, self.num_validation_sequences[name], shuffle=self.shuffle_before_trainval_split
+                    )
+                    datasets[name] = train_ds
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -729,11 +743,10 @@ class LmDataConfig:
             train_datasets = self.build_token_datasets(train_doc_caches, Pos, split="train")
 
             for name, num_sequences in self.num_validation_sequences.items():
-                len_dataset = len(train_datasets[name].as_sync_dataset())
-                validation_dataset = train_datasets[name].slice_dataset(
-                    start_index=len_dataset - num_sequences, end_index=len_dataset
+                _, val_ds = _split_into_trainval_sets(
+                    train_datasets[name], num_sequences, shuffle=self.shuffle_before_trainval_split
                 )
-                validation_datasets[name] = validation_dataset
+                validation_datasets[name] = val_ds
 
         return validation_datasets
 

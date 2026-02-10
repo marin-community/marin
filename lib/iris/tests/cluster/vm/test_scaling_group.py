@@ -14,7 +14,7 @@ import pytest
 
 from iris.cluster.types import VmWorkerStatus
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
-from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.cluster.controller.scaling_group import ScalingGroup, SliceLifecycleState
 from iris.rpc import time_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -628,19 +628,19 @@ class TestScalingGroupVmGroupStateCounts:
     """Tests for slice_state_counts() aggregation."""
 
     @pytest.mark.parametrize(
-        "vm_state,expected_category",
+        "vm_state,expected_state",
         [
-            (vm_pb2.VM_STATE_READY, "ready"),
-            (vm_pb2.VM_STATE_BOOTING, "booting"),
-            (vm_pb2.VM_STATE_INITIALIZING, "initializing"),
-            (vm_pb2.VM_STATE_FAILED, "failed"),
+            (vm_pb2.VM_STATE_READY, SliceLifecycleState.READY),
+            (vm_pb2.VM_STATE_BOOTING, SliceLifecycleState.BOOTING),
+            (vm_pb2.VM_STATE_INITIALIZING, SliceLifecycleState.INITIALIZING),
+            (vm_pb2.VM_STATE_FAILED, SliceLifecycleState.FAILED),
         ],
     )
     def test_counts_vm_groups_by_state(
         self,
         scale_group_config: config_pb2.ScaleGroupConfig,
         vm_state: vm_pb2.VmState,
-        expected_category: str,
+        expected_state: SliceLifecycleState,
     ):
         """VM groups are counted in the correct category based on VM state."""
         discovered = [make_mock_vm_group("slice-001", vm_states=[vm_state])]
@@ -650,10 +650,10 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts[expected_category] == 1
-        for category in ["ready", "booting", "initializing", "failed"]:
-            if category != expected_category:
-                assert counts[category] == 0
+        assert counts[expected_state] == 1
+        for state in SliceLifecycleState:
+            if state != expected_state:
+                assert counts[state] == 0
 
     def test_failed_takes_precedence(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """A VM group with any failed VM is counted as failed."""
@@ -669,8 +669,8 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts["failed"] == 1
-        assert counts["ready"] == 0
+        assert counts[SliceLifecycleState.FAILED] == 1
+        assert counts[SliceLifecycleState.READY] == 0
 
     def test_skips_terminated_vm_groups(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Terminated VM groups are not counted."""
@@ -683,10 +683,10 @@ class TestScalingGroupVmGroupStateCounts:
 
         counts = group.slice_state_counts()
 
-        assert counts["ready"] == 0
-        assert counts["booting"] == 0
-        assert counts["initializing"] == 0
-        assert counts["failed"] == 0
+        assert counts[SliceLifecycleState.READY] == 0
+        assert counts[SliceLifecycleState.BOOTING] == 0
+        assert counts[SliceLifecycleState.INITIALIZING] == 0
+        assert counts[SliceLifecycleState.FAILED] == 0
 
 
 class TestScalingGroupAvailability:
@@ -694,7 +694,7 @@ class TestScalingGroupAvailability:
 
     def test_available_when_no_constraints(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Group is AVAILABLE when not in backoff, quota ok, and under capacity."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         group = ScalingGroup(unbounded_config, manager)
@@ -704,7 +704,7 @@ class TestScalingGroupAvailability:
 
     def test_at_capacity_when_at_max_slices(self):
         """Group is AT_CAPACITY when at max_slices."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
@@ -725,7 +725,7 @@ class TestScalingGroupAvailability:
 
     def test_backoff_when_in_backoff_period(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Group is in BACKOFF when backoff timer is active."""
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         group = ScalingGroup(unbounded_config, manager, backoff_initial=Duration.from_seconds(60.0))
@@ -764,7 +764,7 @@ class TestScalingGroupAvailability:
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
         from iris.cluster.vm.managed_vm import QuotaExceededError
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("TPU quota exhausted")
@@ -805,7 +805,7 @@ class TestScalingGroupAvailability:
     def test_quota_exceeded_takes_precedence_over_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded has higher precedence than backoff."""
         from iris.cluster.vm.managed_vm import QuotaExceededError
-        from iris.cluster.vm.scaling_group import GroupAvailability
+        from iris.cluster.controller.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = QuotaExceededError("Quota exhausted")
