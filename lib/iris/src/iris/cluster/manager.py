@@ -25,7 +25,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from iris.cluster.config import IrisConfig
+from iris.cluster.config import IrisConfig, validate_config
 from iris.cluster.controller.lifecycle import create_controller_vm
 from iris.cluster.vm.controller_vm import ControllerProtocol
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -58,6 +58,7 @@ class ClusterManager:
         config: config_pb2.IrisClusterConfig,
         threads: ThreadContainer | None = None,
     ):
+        validate_config(config)
         self._config = config
         self._threads = threads if threads is not None else get_thread_container()
         self._controller: ControllerProtocol | None = None
