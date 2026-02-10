@@ -22,7 +22,7 @@ import yaml
 
 from iris.client import IrisClient
 from iris.cluster.manager import ClusterManager
-from iris.cluster.config import IrisConfig, make_local_config, load_config
+from iris.config import IrisConfig, make_local_config, load_config
 from iris.cli.job import (
     build_resources,
     load_env_vars,

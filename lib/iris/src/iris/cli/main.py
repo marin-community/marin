@@ -72,7 +72,7 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
 
     # Load config if provided
     if config_file:
-        from iris.cluster.config import IrisConfig
+        from iris.config import IrisConfig
 
         iris_config = IrisConfig.load(config_file)
         ctx.obj["config"] = iris_config.proto
