@@ -90,6 +90,7 @@ RESOURCE_TYPE = "v5p-8"
 TENSOR_PARALLEL_SIZE = 4
 BATCH_SIZE = 64
 IS_INSTRUCTION_TUNED = True
+NUM_INSTANCES = (1, 32)  # (min, max) workers - limited to prevent OOM during scaling
 
 # =============================================================================
 # GENERATION & VOTING CONFIGURATION
@@ -211,7 +212,7 @@ generate_with_selection = ExecutorStep(
         apply_chat_template=True,
         save_templated_prompt=False,
         max_doc_tokens=32768,
-        num_instances=(1, 128),
+        num_instances=NUM_INSTANCES,
         batch_size=BATCH_SIZE,
         tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         preserve_order=False,
@@ -326,7 +327,7 @@ if __name__ == "__main__":
                 apply_chat_template=True,
                 save_templated_prompt=False,
                 max_doc_tokens=32768,
-                num_instances=(1, 256),
+                num_instances=NUM_INSTANCES,
                 batch_size=BATCH_SIZE,
                 tensor_parallel_size=TENSOR_PARALLEL_SIZE,
                 preserve_order=False,
@@ -372,7 +373,7 @@ if __name__ == "__main__":
                 apply_chat_template=True,
                 save_templated_prompt=False,
                 max_doc_tokens=32768,
-                num_instances=(1, 256),
+                num_instances=NUM_INSTANCES,
                 batch_size=BATCH_SIZE,
                 tensor_parallel_size=TENSOR_PARALLEL_SIZE,
                 preserve_order=False,
@@ -427,7 +428,7 @@ if __name__ == "__main__":
                     apply_chat_template=True,
                     save_templated_prompt=False,
                     max_doc_tokens=32768,
-                    num_instances=(1, 256),
+                    num_instances=NUM_INSTANCES,
                     batch_size=BATCH_SIZE,
                     tensor_parallel_size=TENSOR_PARALLEL_SIZE,
                     preserve_order=False,
@@ -482,7 +483,7 @@ if __name__ == "__main__":
                     apply_chat_template=True,
                     save_templated_prompt=False,
                     max_doc_tokens=32768,
-                    num_instances=(1, 256),
+                    num_instances=NUM_INSTANCES,
                     batch_size=BATCH_SIZE,
                     tensor_parallel_size=TENSOR_PARALLEL_SIZE,
                     preserve_order=False,
