@@ -24,7 +24,13 @@ This module provides factory functions for creating autoscalers:
 import logging
 from pathlib import Path
 
-from iris.cluster.config import DEFAULT_CONFIG, ScaleGroupSpec, _scale_groups_to_config, _validate_autoscaler_config
+from iris.cluster.config import (
+    DEFAULT_CONFIG,
+    ScaleGroupSpec,
+    _scale_groups_to_config,
+    _validate_autoscaler_config,
+    validate_config,
+)
 from iris.cluster.controller.scaling_group import DEFAULT_HEARTBEAT_GRACE, DEFAULT_STARTUP_GRACE, ScalingGroup
 from iris.cluster.vm.gcp_tpu_platform import TpuVmManager
 from iris.cluster.vm.managed_vm import SshConfig, TrackedVmFactory, VmRegistry
@@ -61,9 +67,7 @@ def create_autoscaler(
 
     # Validate autoscaler config before using it
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
-    from iris.cluster.config import _validate_scale_group_resources
-
-    _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
+    validate_config(_scale_groups_to_config(scale_groups))
 
     # Create shared infrastructure
     vm_registry = VmRegistry()
@@ -141,9 +145,7 @@ def create_autoscaler_from_specs(
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
 
-    from iris.cluster.config import _validate_scale_group_resources
-
-    _validate_scale_group_resources(_scale_groups_to_config({name: spec.config for name, spec in specs.items()}))
+    validate_config(_scale_groups_to_config({name: spec.config for name, spec in specs.items()}))
 
     # Use provided config or DEFAULT_CONFIG
     if autoscaler_config is None:
