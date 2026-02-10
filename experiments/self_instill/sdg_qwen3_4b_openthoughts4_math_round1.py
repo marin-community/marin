@@ -86,10 +86,16 @@ from experiments.self_instill.uq_verification import (
 # MODEL CONFIGURATION
 # =============================================================================
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
-RESOURCE_TYPE = "v5p-8"
-TENSOR_PARALLEL_SIZE = 1
-BATCH_SIZE = 16
+RESOURCE_TYPE = "v5p-32"
+TENSOR_PARALLEL_SIZE = 16
+BATCH_SIZE = 64
 IS_INSTRUCTION_TUNED = True
+
+# =============================================================================
+# GENERATION & VOTING CONFIGURATION
+# =============================================================================
+NUM_GENERATION_SAMPLES = 4  # Number of candidate solutions per prompt
+NUM_VALIDATION_VOTES = 1    # Number of votes for each validation check
 
 # =============================================================================
 # ROUND CONFIGURATION
@@ -198,7 +204,7 @@ generate_with_selection = ExecutorStep(
             "temperature": 0.8,
             "top_p": 0.95,
             "max_tokens": 32768,
-            "n": 4,
+            "n": NUM_GENERATION_SAMPLES,
         },
         template="{example}\n" + REASONING_INSTRUCTION + "\n",
         prompt_column="instruction_seed",
@@ -314,7 +320,7 @@ if __name__ == "__main__":
                 output_path=this_output_path(),
                 model_name=QWEN3_4B_HF_ID,
                 engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
-                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": NUM_VALIDATION_VOTES},
                 template="{example}",
                 prompt_column="cycle_gen_prompt",
                 apply_chat_template=True,
@@ -360,7 +366,7 @@ if __name__ == "__main__":
                 output_path=this_output_path(),
                 model_name=QWEN3_4B_HF_ID,
                 engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
-                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": NUM_VALIDATION_VOTES},
                 template="{example}",
                 prompt_column="cycle_compare_prompt",
                 apply_chat_template=True,
@@ -415,7 +421,7 @@ if __name__ == "__main__":
                     output_path=this_output_path(),
                     model_name=QWEN3_4B_HF_ID,
                     engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
-                    generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                    generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": NUM_VALIDATION_VOTES},
                     template="{example}",
                     prompt_column="factual_prompt",
                     apply_chat_template=True,
@@ -470,7 +476,7 @@ if __name__ == "__main__":
                     output_path=this_output_path(),
                     model_name=QWEN3_4B_HF_ID,
                     engine_kwargs={"tensor_parallel_size": TENSOR_PARALLEL_SIZE, "max_model_len": 32768},
-                    generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": 3},
+                    generation_kwargs={"temperature": 0.6, "top_p": 0.95, "max_tokens": 32768, "n": NUM_VALIDATION_VOTES},
                     template="{example}",
                     prompt_column="correctness_prompt",
                     apply_chat_template=True,
