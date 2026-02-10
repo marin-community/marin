@@ -274,6 +274,7 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
 
     count = 1
     token_count = len(exemplar.get("input_ids", []))
+    logger.info("write_levanter_cache: starting write to %s", output_path)
     tmp_path = f"{output_path}.tmp"
     fs = fsspec.core.url_to_fs(output_path)[0]
 
@@ -301,6 +302,12 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
             count += len(batch)
             for record in batch:
                 token_count += len(record.get("input_ids", []))
+                if count % 1000 == 0:
+                    logger.info(
+                        "write_levanter_cache: %s — %d records, %d tokens so far", output_path, count, token_count
+                    )
+
+    logger.info("write_levanter_cache: finished %s — %d records, %d tokens", output_path, count, token_count)
 
     if fs.exists(output_path):
         fs.rm(output_path, recursive=True)
