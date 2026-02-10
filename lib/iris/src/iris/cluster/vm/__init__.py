@@ -70,12 +70,6 @@ from iris.cluster.vm.managed_vm import (
     VmRegistry,
 )
 
-# Platform-specific config utilities
-from iris.cluster.vm.config import (
-    ScaleGroupSpec,
-    config_to_dict,
-    get_ssh_config,
-)
 
 # Platform abstraction
 from iris.cluster.vm.platform import (
@@ -107,7 +101,6 @@ __all__ = [
     "PlatformOps",
     "PoolExhaustedError",
     "QuotaExceededError",
-    "ScaleGroupSpec",
     "SshConfig",
     "SshConnection",
     "TpuVmGroup",
@@ -120,11 +113,9 @@ __all__ = [
     "VmRegistry",
     "VmSnapshot",
     "cleanup_iris_resources",
-    "config_to_dict",
     "connection_available",
     "create_platform",
     "discover_controller_vm",
-    "get_ssh_config",
     "list_docker_containers",
     "list_iris_tpus",
     "run_streaming_with_retry",

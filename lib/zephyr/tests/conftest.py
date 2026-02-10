@@ -48,7 +48,7 @@ IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "demo.
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
     from iris.cluster.vm.cluster_manager import ClusterManager
-    from iris.cluster.vm.config import load_config, make_local_config
+    from iris.cluster.config import load_config, make_local_config
 
     try:
         config = load_config(IRIS_CONFIG)

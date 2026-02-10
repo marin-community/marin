@@ -20,7 +20,7 @@ from iris.cluster.controller.autoscaler import (
     ScalingDecision,
     UnmetDemand,
 )
-from iris.cluster.controller.config import create_autoscaler, load_config
+from iris.cluster.controller.config import create_autoscaler
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.scaling_group import AvailabilityState, GroupAvailability, ScalingGroup
 
@@ -37,5 +37,4 @@ __all__ = [
     "ScalingGroup",
     "UnmetDemand",
     "create_autoscaler",
-    "load_config",
 ]
