@@ -59,7 +59,8 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.config import create_autoscaler, load_config
+    from iris.cluster.config import load_config
+    from iris.cluster.controller.config import create_autoscaler
     from iris.cluster.vm.platform import create_platform
 
     configure_logging(level=getattr(logging, log_level))
