@@ -15,7 +15,6 @@
 """Tests for writers module."""
 
 import json
-import logging
 import tempfile
 from pathlib import Path
 

@@ -143,9 +143,23 @@ while not deadline.expired():
     time.sleep(0.1)
 ```
 
-### Autoscaler and VM Management
+### Architecture Layers
 
-The autoscaler runs inside the Controller process and manages cloud VMs based on pending task demand. Key files:
+Iris follows a clean layering architecture:
+
+**Controller layer** (`cluster/controller/`): Task scheduling, autoscaling, and demand routing
+- Depends on VM layer for platform abstractions (VmManagerProtocol, VmGroupProtocol)
+- Owns autoscaling logic and scaling group state
+
+**VM layer** (`cluster/vm/`): Platform abstractions for managing VMs
+- Provides VM lifecycle management (GCP, manual, local)
+- Does NOT depend on controller layer
+
+**Cluster layer** (`cluster/`): High-level orchestration
+- ClusterManager coordinates controller and VM lifecycle
+- Configuration and platform abstractions
+
+Key files:
 
 ```
 src/iris/
@@ -157,15 +171,21 @@ src/iris/
 │   ├── run.py                   # Command passthrough job submission
 │   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
+│   ├── config.py                # General Iris configuration (load_config, IrisConfig)
+│   ├── manager.py               # ClusterManager - high-level cluster orchestration
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
-│   │   └── main.py              # Controller daemon CLI (serve command)
+│   │   ├── main.py              # Controller daemon CLI (serve command)
+│   │   ├── autoscaler.py        # Core autoscaling logic and demand routing
+│   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
+│   │   ├── config.py            # Autoscaler factory functions
+│   │   ├── local.py             # LocalController for in-process testing
+│   │   └── lifecycle.py         # Controller factory (create_controller_vm)
 │   └── vm/
-│       ├── autoscaler.py        # Core scaling logic
-│       ├── scaling_group.py     # Per-group state tracking
-│       ├── gcp.py               # GCP TPU management
-│       ├── manual.py            # Pre-existing host management
-│       └── config.py            # Config loading + factory functions
+│       ├── controller_vm.py     # GCP/manual controller VM lifecycle
+│       ├── gcp_tpu_platform.py  # GCP TPU management
+│       ├── manual_platform.py   # Pre-existing host management
+│       └── local_platform.py    # Local development platform
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.
