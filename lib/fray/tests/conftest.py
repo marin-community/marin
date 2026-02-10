@@ -19,12 +19,12 @@ import logging
 
 import pytest
 import ray
-from fray.cluster.local_cluster import LocalCluster, LocalClusterConfig
+from fray.v1.cluster.local_cluster import LocalCluster, LocalClusterConfig
 
 
 @pytest.fixture(scope="module")
 def ray_cluster():
-    from fray.cluster.ray import RayCluster
+    from fray.v1.cluster.ray import RayCluster
 
     if not ray.is_initialized():
         logging.info("Initializing Ray cluster")
@@ -41,7 +41,7 @@ def ray_cluster():
 
 @pytest.fixture(scope="module")
 def local_cluster():
-    yield LocalCluster(LocalClusterConfig(use_isolated_env=True))
+    yield LocalCluster(LocalClusterConfig(use_isolated_env=False))
 
 
 @pytest.fixture(scope="module", params=["local", "ray"])

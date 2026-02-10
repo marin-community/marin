@@ -34,7 +34,10 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
 
       - name: Test iris
+        env:
+          PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev pytest --durations=5 --tb=short -m 'not slow and not docker' -v -s tests/
+          cd lib/iris && uv run --group dev python -X faulthandler -m pytest --durations=5 --tb=short -m 'not slow and not docker and not chaos' -v -s tests/

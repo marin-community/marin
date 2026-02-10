@@ -31,7 +31,8 @@ from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, this_output_path
-from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
+from levanter.data.text import LMMixtureDatasetConfig
+from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
@@ -256,7 +257,6 @@ class TwoStageConfig:
         data_config = lm_varying_mixture_data_config(
             components=components,
             weights_list=weights_list,
-            permutation_type="linear",
             max_train_batches=max_train_batches,
             num_validation_sequences=num_validation_sequences,
         )

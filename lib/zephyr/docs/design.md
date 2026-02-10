@@ -43,7 +43,7 @@ def my_entry_point(conf: Config, backend: zephyr.Backend):
 ```
 
 ```bash
-uv run zephyr experiments/my_processor.py --backend=ray --max_tasks=100 --memory=1GB
+uv run zephyr experiments/my_processor.py --max-parallelism=100 --memory=1GB
 ```
 
 ## Datasets
@@ -260,7 +260,7 @@ Most usage will use the `zephyr` script to handle creating an appropriate
 backend for you and calling your entry point function:
 
 ```
-uv run zephyr src/my/script.py --backend=ray --cluster=xyz
+uv run zephyr src/my/script.py --cluster=ray --cluster-config=xyz
 ```
 
 ### Optimizations

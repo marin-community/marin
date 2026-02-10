@@ -16,10 +16,12 @@
 
 import pytest
 
-from iris.cluster.worker.docker import DockerRuntime
+from iris.cluster.runtime.docker import DockerRuntime
 
 
 @pytest.fixture
-def docker_runtime(docker_cleanup_scope):
-    """DockerRuntime that cleans up containers and images created during test."""
-    yield DockerRuntime()
+def docker_runtime():
+    """DockerRuntime that cleans up its own containers after the test."""
+    rt = DockerRuntime()
+    yield rt
+    rt.cleanup()

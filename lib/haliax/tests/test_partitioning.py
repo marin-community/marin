@@ -66,6 +66,16 @@ def test_pspec_for_plain_array_axis_names():
         assert specs.arr == PartitionSpec(ResourceAxis.DATA, ResourceAxis.MODEL)
 
 
+def test_pspec_for_namedarray_with_missing_array():
+    mesh = Mesh(np.array(jax.devices()).reshape(-1, 1), (ResourceAxis.DATA, ResourceAxis.MODEL))
+    with axis_mapping(resource_map), mesh:
+        named = NamedArray(None, ("dim2", "dim3"))
+
+        spec = pspec_for(named)
+
+        assert spec == PartitionSpec(ResourceAxis.DATA, ResourceAxis.MODEL)
+
+
 def test_pspec_for_plain_array_uses_typeof_sharding():
     # In explicit sharding mode, jax.typeof carries sharding info for plain arrays.
     devices = jax.devices()

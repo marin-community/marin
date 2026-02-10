@@ -205,7 +205,7 @@ def test_force_run_failed():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        with pytest.raises(Exception, match="Failed"):
+        with pytest.raises(RuntimeError, match=r"1 step\(s\) failed"):
             executor_initial.run(steps=[a])
 
         with pytest.raises(FileNotFoundError):
@@ -214,11 +214,11 @@ def test_force_run_failed():
         # remove the file to say we're allowed to run
         os.unlink(temp_file_to_mark_failure.name)
 
-        # Re-run without force_run
+        # Re-run with force_run_failed=False
         executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
 
         with pytest.raises(Exception, match=r".*failed previously.*"):
-            executor_non_force.run(steps=[a])
+            executor_non_force.run(steps=[a], force_run_failed=False)
 
         # should still be failed
         with pytest.raises(FileNotFoundError):

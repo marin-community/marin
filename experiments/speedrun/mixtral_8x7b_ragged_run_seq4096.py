@@ -30,7 +30,6 @@ nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
 nemotron_cc_mixture = lm_mixture_data_config(
     components=nemotron_cc_steps,
     weights=NEMOTRON_WEIGHTS,
-    permutation_type="linear",
 )
 
 # Full Mixtral 8x7B configuration using ragged-dot MoE kernels.
@@ -48,7 +47,6 @@ mixtral_8x7b_ragged = MixtralConfig(
     gradient_checkpointing=True,
     scan_layers=True,
     use_gmm=False,  # stick with ragged-dot experts
-    cross_entropy_block_size=32000,
     lbl_coef=None,
     rzl_coef=None,
 )
@@ -76,10 +74,9 @@ speedrun_config = SpeedrunConfig(
 if __name__ == "__main__":
     logger.info("Launching Mixtral 8x7B ragged-dot speedrun (seq_len=4096).")
     logger.info(
-        "Settings: batch_size=%s, seq_len=%s, steps=%s, cross_entropy_block_size=%s",
+        "Settings: batch_size=%s, seq_len=%s, steps=%s",
         speedrun_config.train_config.train_batch_size,
         mixtral_8x7b_ragged.seq_len,
         speedrun_config.train_config.num_train_steps,
-        mixtral_8x7b_ragged.cross_entropy_block_size,
     )
     executor_main(steps=default_speedrun("mixtral_8x7b_ragged_speedrun_bs32_seq4096_v5p-64", speedrun_config))

@@ -27,7 +27,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
@@ -314,6 +314,7 @@ class RLJob:
                 "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_seq_len=%d", max_seqs, max_seq_len
             )
             inference_config = LevanterInferenceContextConfig(
+                mesh=self.config.trainer.device_mesh,
                 inference_server_config=inference_server_config,
                 tokenizer=tokenizer,
                 axis_mapping=self.config.trainer.compute_axis_mapping,

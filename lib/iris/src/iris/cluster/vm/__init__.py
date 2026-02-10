@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""VM lifecycle management for the Iris autoscaler.
+"""VM lifecycle management and platform abstractions.
 
 Key components:
 - VmManagerProtocol: Factory for creating VM groups (one per scale group)
 - TpuVmManager: Creates TPU VM groups via gcloud
 - ManualVmManager: Manages pre-existing hosts
 - VmGroupProtocol, TpuVmGroup, ManualVmGroup: VM group lifecycle management
-- ScalingGroup: Owns VM groups for a scale group, tracks scaling state
-- Autoscaler: Orchestrates multiple ScalingGroups
 - VmRegistry: Centralized VM tracking for worker lookup
 - ManagedVm: Per-VM lifecycle thread with bootstrap logic
+- Platform: Multi-platform VM orchestration layer
 """
 
 # SSH utilities
@@ -31,10 +30,8 @@ from iris.cluster.vm.ssh import (
     GceSshConnection,
     GcloudSshConnection,
     SshConnection,
-    check_health,
     connection_available,
     run_streaming_with_retry,
-    shutdown_worker,
     wait_for_connection,
 )
 
@@ -73,58 +70,36 @@ from iris.cluster.vm.managed_vm import (
     VmRegistry,
 )
 
-# Scaling group
-from iris.cluster.vm.scaling_group import (
-    AvailabilityState,
-    GroupAvailability,
-    ScalingGroup,
+# Platform abstraction
+from iris.cluster.vm.platform import (
+    Platform,
+    PlatformOps,
+    create_platform,
 )
 
-# Autoscaler
-from iris.cluster.vm.autoscaler import (
-    Autoscaler,
-    AutoscalerConfig,
-    DemandEntry,
-    RoutingResult,
-    ScalingAction,
-    ScalingDecision,
-    route_demand,
-)
-
-# Config and factory functions
-from iris.cluster.vm.config import (
-    ScaleGroupSpec,
-    config_to_dict,
-    create_autoscaler_from_config,
-    create_autoscaler_from_specs,
-    create_manual_autoscaler,
-    get_ssh_config,
-    load_config,
+# Debug utilities
+from iris.cluster.vm.debug import (
+    cleanup_iris_resources,
+    discover_controller_vm,
+    list_docker_containers,
+    list_iris_tpus,
 )
 
 __all__ = [
     "BOOTSTRAP_SCRIPT",
     "MAX_RECONCILE_WORKERS",
     "PARTIAL_SLICE_GRACE_MS",
-    "Autoscaler",
-    "AutoscalerConfig",
-    "AvailabilityState",
     "BootstrapError",
-    "DemandEntry",
     "DirectSshConnection",
     "GceSshConnection",
     "GcloudSshConnection",
-    "GroupAvailability",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
+    "Platform",
+    "PlatformOps",
     "PoolExhaustedError",
     "QuotaExceededError",
-    "RoutingResult",
-    "ScaleGroupSpec",
-    "ScalingAction",
-    "ScalingDecision",
-    "ScalingGroup",
     "SshConfig",
     "SshConnection",
     "TpuVmGroup",
@@ -136,16 +111,12 @@ __all__ = [
     "VmManagerProtocol",
     "VmRegistry",
     "VmSnapshot",
-    "check_health",
-    "config_to_dict",
+    "cleanup_iris_resources",
     "connection_available",
-    "create_autoscaler_from_config",
-    "create_autoscaler_from_specs",
-    "create_manual_autoscaler",
-    "get_ssh_config",
-    "load_config",
-    "route_demand",
+    "create_platform",
+    "discover_controller_vm",
+    "list_docker_containers",
+    "list_iris_tpus",
     "run_streaming_with_retry",
-    "shutdown_worker",
     "wait_for_connection",
 ]

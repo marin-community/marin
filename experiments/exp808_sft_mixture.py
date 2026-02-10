@@ -97,7 +97,7 @@ mixture_sft_config = SimpleSFTConfig(
     learning_rate=5e-6,
     resources=ResourceConfig.with_tpu("v4-128"),
     tokenizer=marin_tokenizer,
-    model_name_or_path="meta-llama/Llama-3.1-8B",
+    initialize_from_hf="meta-llama/Llama-3.1-8B",
     max_seq_len=4096,
     seed=0,
 )
@@ -105,7 +105,6 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    permutation_type="linear",
     shuffle=True,
     missing_weights_are_validation=True,
 )

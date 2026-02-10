@@ -30,7 +30,7 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
@@ -131,7 +131,8 @@ def download(cfg: DownloadConfig) -> None:
         .map(process_shard)
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
-    Backend.execute(pipeline)
+    with ZephyrContext(name="download-ar5iv") as ctx:
+        ctx.execute(pipeline)
 
     logger.info("Transfer completed successfully!")
 
