@@ -30,6 +30,7 @@ QueueMode = Literal["full", "prequeue", "both"]
 RoutingPackStrategy = Literal["argsort", "tuple_sort"]
 RematMode = Literal["none", "expert_mlp", "combine"]
 ParallelMode = Literal["none", "ep"]
+QuantMode = Literal["none", "int8"]
 
 
 def _time_fn(fn: Callable, *args, warmup: int = 2, iters: int = 5) -> float:
@@ -58,6 +59,46 @@ def _ragged_dot(
         rhs=rhs,
         group_sizes=group_sizes,
         ragged_dot_dimension_numbers=dim_numbers,
+    )
+
+
+def _int8_qdq(x: jax.Array, *, axis: int | tuple[int, ...]) -> jax.Array:
+    """Symmetric per-axis int8 fake quantization followed by dequantization."""
+    if not isinstance(axis, tuple):
+        axis = (axis,)
+    axis = tuple(a % x.ndim for a in axis)
+    scale_dtype = jnp.float32
+    amax = jnp.max(jnp.abs(x.astype(scale_dtype)), axis=axis, keepdims=True)
+    scale = (amax / 127.0 + jnp.finfo(scale_dtype).tiny).astype(scale_dtype)
+    q = jnp.clip(jnp.round(x.astype(scale_dtype) / scale), -127, 127).astype(jnp.int8)
+    return (q.astype(scale_dtype) * scale).astype(x.dtype)
+
+
+def _expert_matmul(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    backend: Backend,
+    quant_mode: QuantMode,
+) -> jax.Array:
+    if quant_mode == "int8":
+        lhs = _int8_qdq(lhs, axis=1)
+        rhs = _int8_qdq(rhs, axis=1)
+    if backend == "gmm":
+        return gmm_sharded(lhs, rhs, group_sizes)
+    return _ragged_dot(lhs, rhs, group_sizes)
+
+
+def _dense_dot(lhs: jax.Array, rhs: jax.Array, *, quant_mode: QuantMode) -> jax.Array:
+    if quant_mode == "int8":
+        lhs = _int8_qdq(lhs, axis=-1)
+        rhs = _int8_qdq(rhs, axis=0)
+    return jax.lax.dot_general(
+        lhs,
+        rhs,
+        (((1,), (0,)), ((), ())),
+        preferred_element_type=jnp.float32,
     )
 
 
@@ -151,6 +192,7 @@ def _moe_block(
     capacity_policy: CapacityPolicy,
     routing_pack_strategy: RoutingPackStrategy,
     remat_mode: RematMode,
+    quant_mode: QuantMode,
 ) -> jax.Array:
     tokens, hidden = x.shape
     num_experts = w1.shape[0]
@@ -186,6 +228,7 @@ def _moe_block(
         shared_fused=shared_fused,
         force_scatter=(capacity_policy == "pad"),
         remat_mode=remat_mode,
+        quant_mode=quant_mode,
     )
 
 
@@ -211,6 +254,7 @@ def _moe_from_dispatch(
     shared_fused: bool,
     force_scatter: bool = False,
     remat_mode: RematMode = "none",
+    quant_mode: QuantMode = "none",
 ) -> jax.Array:
     tokens, hidden = x.shape
     topk = topk_weights.shape[1]
@@ -230,28 +274,42 @@ def _moe_from_dispatch(
         w13_in: jax.Array,
     ) -> tuple[jax.Array, jax.Array]:
         if fuse_w13:
-            if backend == "gmm":
-                w13_out = gmm_sharded(x_repeat_sort_in, w13_in, group_sizes_in)
-            else:
-                w13_out = _ragged_dot(x_repeat_sort_in, w13_in, group_sizes_in)
+            w13_out = _expert_matmul(
+                x_repeat_sort_in,
+                w13_in,
+                group_sizes_in,
+                backend=backend,
+                quant_mode=quant_mode,
+            )
             w1_out, w3_out = jnp.split(w13_out, [w1_in.shape[2]], axis=-1)
         else:
-            if backend == "gmm":
-                w1_out = gmm_sharded(x_repeat_sort_in, w1_in, group_sizes_in)
-                w3_out = gmm_sharded(x_repeat_sort_in, w3_in, group_sizes_in)
-            else:
-                w1_out = _ragged_dot(x_repeat_sort_in, w1_in, group_sizes_in)
-                w3_out = _ragged_dot(x_repeat_sort_in, w3_in, group_sizes_in)
+            w1_out = _expert_matmul(
+                x_repeat_sort_in,
+                w1_in,
+                group_sizes_in,
+                backend=backend,
+                quant_mode=quant_mode,
+            )
+            w3_out = _expert_matmul(
+                x_repeat_sort_in,
+                w3_in,
+                group_sizes_in,
+                backend=backend,
+                quant_mode=quant_mode,
+            )
 
         gated = jax.nn.silu(w1_out) * w3_out
         sorted_weights_cast = sorted_weights_in.astype(gated.dtype)
         if preweight:
             gated = gated * sorted_weights_cast[:, None]
 
-        if backend == "gmm":
-            out_repeat_sort_out = gmm_sharded(gated, w2_in, group_sizes_in)
-        else:
-            out_repeat_sort_out = _ragged_dot(gated, w2_in, group_sizes_in)
+        out_repeat_sort_out = _expert_matmul(
+            gated,
+            w2_in,
+            group_sizes_in,
+            backend=backend,
+            quant_mode=quant_mode,
+        )
         return out_repeat_sort_out, sorted_weights_cast
 
     if remat_mode == "expert_mlp":
@@ -284,32 +342,28 @@ def _moe_from_dispatch(
     shared_dim = shared_w2.shape[0]
     if shared_dim > 0:
         if shared_fused:
-            shared13 = jax.lax.dot_general(
+            shared13 = _dense_dot(
                 x,
                 shared_w13,
-                (((1,), (0,)), ((), ())),
-                preferred_element_type=jnp.float32,
+                quant_mode=quant_mode,
             )
             shared1, shared3 = jnp.split(shared13, [shared_dim], axis=-1)
         else:
-            shared1 = jax.lax.dot_general(
+            shared1 = _dense_dot(
                 x,
                 shared_w1,
-                (((1,), (0,)), ((), ())),
-                preferred_element_type=jnp.float32,
+                quant_mode=quant_mode,
             )
-            shared3 = jax.lax.dot_general(
+            shared3 = _dense_dot(
                 x,
                 shared_w3,
-                (((1,), (0,)), ((), ())),
-                preferred_element_type=jnp.float32,
+                quant_mode=quant_mode,
             )
         shared_gated = jax.nn.silu(shared1) * shared3
-        shared_out = jax.lax.dot_general(
+        shared_out = _dense_dot(
             shared_gated,
             shared_w2,
-            (((1,), (0,)), ((), ())),
-            preferred_element_type=jnp.float32,
+            quant_mode=quant_mode,
         )
         out = out + shared_out.astype(out.dtype)
 
@@ -428,6 +482,7 @@ def _bench_one_distribution(
     iters: int,
     run_alpha: float,
     run_noise_scale: float,
+    quant_mode: QuantMode,
 ) -> None:
     tokens = x.shape[0]
     hidden = x.shape[1]
@@ -513,6 +568,7 @@ def _bench_one_distribution(
             capacity_policy=capacity_policy,
             routing_pack_strategy=routing_pack_strategy,
             remat_mode=remat_mode,
+            quant_mode=quant_mode,
         )
 
     if parallel_mode == "ep":
@@ -634,6 +690,7 @@ def _bench_one_distribution(
                 shared_fused=shared_fused,
                 force_scatter=True,
                 remat_mode=remat_mode,
+                quant_mode=quant_mode,
             )
             out_local = jax.lax.psum(out_local, "ep")
             if x_in.ndim == 3 and x_in.shape[0] == 1:
@@ -665,32 +722,28 @@ def _bench_one_distribution(
             shared_dim = sw2_in.shape[0]
             if shared_dim > 0:
                 if shared_fused:
-                    shared13 = jax.lax.dot_general(
+                    shared13 = _dense_dot(
                         x_in,
                         sw13_in,
-                        (((1,), (0,)), ((), ())),
-                        preferred_element_type=jnp.float32,
+                        quant_mode=quant_mode,
                     )
                     shared1, shared3 = jnp.split(shared13, [shared_dim], axis=-1)
                 else:
-                    shared1 = jax.lax.dot_general(
+                    shared1 = _dense_dot(
                         x_in,
                         sw1_in,
-                        (((1,), (0,)), ((), ())),
-                        preferred_element_type=jnp.float32,
+                        quant_mode=quant_mode,
                     )
-                    shared3 = jax.lax.dot_general(
+                    shared3 = _dense_dot(
                         x_in,
                         sw3_in,
-                        (((1,), (0,)), ((), ())),
-                        preferred_element_type=jnp.float32,
+                        quant_mode=quant_mode,
                     )
                 shared_gated = jax.nn.silu(shared1) * shared3
-                shared_out = jax.lax.dot_general(
+                shared_out = _dense_dot(
                     shared_gated,
                     sw2_in,
-                    (((1,), (0,)), ((), ())),
-                    preferred_element_type=jnp.float32,
+                    quant_mode=quant_mode,
                 )
                 out = out + shared_out.astype(out.dtype)
             return out.astype(x_in.dtype)
@@ -765,6 +818,7 @@ def _bench_one_distribution(
                             shared_fused=shared_fused,
                             force_scatter=(capacity_policy == "pad"),
                             remat_mode=remat_mode,
+                            quant_mode=quant_mode,
                         )
 
                     fn = prequeue_fn
@@ -821,6 +875,7 @@ def _bench_one_distribution(
         tokens_per_sec = tokens / dt
 
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} backend={backend}")
+        print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} quant_mode={quant_mode}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} remat_mode={remat_mode}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} parallel_mode={parallel_mode}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} time_s={dt:.6f}")
@@ -867,18 +922,11 @@ def _bench_one_distribution(
 
         def up_fn(x_in, groups_in, w_in):
             if fuse_w13:
-                if backend == "gmm":
-                    w13_out = gmm_sharded(x_in, w13, groups_in)
-                else:
-                    w13_out = _ragged_dot(x_in, w13, groups_in)
+                w13_out = _expert_matmul(x_in, w13, groups_in, backend=backend, quant_mode=quant_mode)
                 w1_out, w3_out = jnp.split(w13_out, [w1.shape[2]], axis=-1)
             else:
-                if backend == "gmm":
-                    w1_out = gmm_sharded(x_in, w1, groups_in)
-                    w3_out = gmm_sharded(x_in, w3, groups_in)
-                else:
-                    w1_out = _ragged_dot(x_in, w1, groups_in)
-                    w3_out = _ragged_dot(x_in, w3, groups_in)
+                w1_out = _expert_matmul(x_in, w1, groups_in, backend=backend, quant_mode=quant_mode)
+                w3_out = _expert_matmul(x_in, w3, groups_in, backend=backend, quant_mode=quant_mode)
             gated = jax.nn.silu(w1_out) * w3_out
             return gated * w_in[:, None] if preweight else gated
 
@@ -886,9 +934,7 @@ def _bench_one_distribution(
         gated_dispatch = jax.jit(up_fn)(x_dispatch, group_dispatch, w_dispatch)
 
         def down_fn(gated_in, groups_in):
-            if backend == "gmm":
-                return gmm_sharded(gated_in, w2, groups_in)
-            return _ragged_dot(gated_in, w2, groups_in)
+            return _expert_matmul(gated_in, w2, groups_in, backend=backend, quant_mode=quant_mode)
 
         down_dt = _time_fn(down_fn, gated_dispatch, group_dispatch, warmup=warmup, iters=iters)
         out_dispatch = jax.jit(down_fn)(gated_dispatch, group_dispatch)
@@ -938,6 +984,7 @@ def main() -> None:
     parser.add_argument("--distribution", choices=["random", "runs", "both"], default="both")
     parser.add_argument("--bench-pass", choices=["forward", "forward_backward"], default="forward")
     parser.add_argument("--parallel-mode", choices=["none", "ep"], default="none")
+    parser.add_argument("--quant-mode", choices=["none", "int8"], default="none")
     parser.add_argument("--queue-mode", choices=["full", "prequeue", "both"], default="full")
     parser.add_argument("--routing-pack-strategy", choices=["argsort", "tuple_sort"], default="argsort")
     parser.add_argument("--remat-mode", choices=["none", "expert_mlp", "combine"], default="none")
@@ -983,6 +1030,7 @@ def main() -> None:
         f"impl={args.impl} shared_expert_dim={args.shared_expert_dim} "
         f"shared_fused={args.shared_fused} bench_pass={args.bench_pass} "
         f"parallel_mode={args.parallel_mode} "
+        f"quant_mode={args.quant_mode} "
         f"queue_mode={args.queue_mode} "
         f"routing_pack_strategy={args.routing_pack_strategy} "
         f"remat_mode={args.remat_mode} "
@@ -1043,6 +1091,7 @@ def main() -> None:
                     iters=args.iters,
                     run_alpha=args.run_alpha,
                     run_noise_scale=args.run_noise_scale,
+                    quant_mode=args.quant_mode,
                 )
 
 
