@@ -394,6 +394,7 @@ def evaluate_evalchemy(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
+    base_eval_run_name: str | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Evalchemy.
@@ -414,10 +415,12 @@ def evaluate_evalchemy(
         wandb_tags (list[str] | None): Tags to add to the WandB run.
         discover_latest_checkpoint (bool): Whether to discover the latest checkpoint.
     """
-    # Include task names in the step name to ensure different tasks get different output paths
+    # Include task names and seed in the step name to ensure different runs get different output paths
     task_names = "_".join(sorted(e.name for e in evals))
+    seed = generation_params.get("seed") if generation_params else None
+    seed_suffix = f"_seed{seed}" if seed is not None else ""
     return ExecutorStep(
-        name=f"evaluation/evalchemy/{model_name}/{task_names}",
+        name=f"evaluation/evalchemy/{model_name}/{task_names}{seed_suffix}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="evalchemy",
@@ -433,6 +436,7 @@ def evaluate_evalchemy(
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
+            base_eval_run_name=base_eval_run_name,
         ),
     )
 
@@ -446,6 +450,7 @@ def default_evalchemy_eval(
     generation_params: dict | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
+    base_eval_run_name: str | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Evalchemy reasoning benchmarks.
@@ -483,10 +488,16 @@ def default_evalchemy_eval(
         resource_config=resource_config,
         apply_chat_template=apply_chat_template,
         discover_latest_checkpoint=discover_latest_checkpoint,
+        base_eval_run_name=base_eval_run_name,
     )
 
 
-def compile_evalchemy_results(steps: list[ExecutorStep], seeds: list[int] | None = None) -> ExecutorStep:
+def compile_evalchemy_results(
+    steps: list[ExecutorStep],
+    seeds: list[int] | None = None,
+    base_eval_run_name: str | None = None,
+    model_path: str | None = None,
+) -> ExecutorStep:
     """
     Compile results from multiple Evalchemy evaluation steps into aggregated metrics.
 
@@ -505,6 +516,7 @@ def compile_evalchemy_results(steps: list[ExecutorStep], seeds: list[int] | None
     def _compile_results_fn(config) -> None:
         """Function that will be executed by the ExecutorStep to compile results."""
         import json
+        import os
         import re
         import fsspec
         import pandas as pd
@@ -513,6 +525,8 @@ def compile_evalchemy_results(steps: list[ExecutorStep], seeds: list[int] | None
         input_paths = config["input_paths"]
         output_path = config["output_path"]
         seeds_config = config.get("seeds", [])
+        base_eval_run_name = config.get("base_eval_run_name")
+        config_model_path = config.get("model_path")
 
         logger.info(f"Compiling evalchemy results from {len(input_paths)} input paths")
 
@@ -665,14 +679,33 @@ def compile_evalchemy_results(steps: list[ExecutorStep], seeds: list[int] | None
 
                 num_seeds = len(seeds_config) if seeds_config else avg_df['num_seeds'].max()
 
+                wandb_entity = os.environ.get("WANDB_ENTITY", "marin-community")
+
+                # Extract step suffix from model_path for custom run names
+                step_suffix = ""
+                if config_model_path:
+                    step_match = re.search(r'step-(\d+)', config_model_path)
+                    if step_match:
+                        step_suffix = f"-step{step_match.group(1)}"
+
                 for base_model in avg_df['base_model_name'].unique():
                     model_df = avg_df[avg_df['base_model_name'] == base_model]
 
-                    # Wandb run name: evalchemy-{model}-averaged-{n}seeds (lowercase)
-                    wandb_run_name = f"evalchemy-{base_model.lower()}-averaged-{num_seeds}seeds"
+                    if base_eval_run_name:
+                        # Build per-dataset aggregate run names
+                        # e.g., evalchemy-{name}-step7022-AIME25-avg10seeds
+                        datasets = model_df['dataset_name'].unique()
+                        dataset_suffix = "-".join(sorted(datasets))
+                        wandb_run_name = (
+                            f"evalchemy-{base_eval_run_name}{step_suffix}"
+                            f"-{dataset_suffix}-avg{num_seeds}seeds"
+                        )
+                    else:
+                        wandb_run_name = f"evalchemy-{base_model.lower()}-averaged-{num_seeds}seeds"
 
                     wandb.init(
                         project=WANDB_PROJECT,
+                        entity=wandb_entity,
                         name=wandb_run_name,
                         job_type="eval",
                         tags=["evalchemy", "averaged-results", base_model.lower()[:64]],
@@ -712,6 +745,12 @@ def compile_evalchemy_results(steps: list[ExecutorStep], seeds: list[int] | None
     return ExecutorStep(
         name="evaluation/evalchemy/compile_results",
         fn=_compile_results_fn,
-        config={"input_paths": input_paths, "output_path": output_path, "seeds": seeds or []},
+        config={
+            "input_paths": input_paths,
+            "output_path": output_path,
+            "seeds": seeds or [],
+            "base_eval_run_name": base_eval_run_name,
+            "model_path": model_path,
+        },
         description="Compile results from multiple evalchemy evaluation steps",
     )

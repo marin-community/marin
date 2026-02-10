@@ -105,3 +105,7 @@ class EvaluationConfig:
     """
     Tags to add to the wandb run.
     """
+
+    base_eval_run_name: str | None = None
+    """Custom base name for wandb runs. If set, wandb runs will be named
+    evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""

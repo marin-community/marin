@@ -61,7 +61,14 @@ from marin.execution.executor import executor_main
 # =============================================================================
 # Model Configuration
 # =============================================================================
-MODEL_NAME_OR_GCS_PATH = "Qwen/Qwen3-4B"
+MODEL_NAME_OR_GCS_PATH = "Qwen/Qwen2.5-7B-Instruct"
+
+# Custom base name for wandb runs. When set, wandb runs will be named:
+#   Per-seed:  evalchemy-{BASE_EVAL_RUN_NAME}[-step{N}]-{task}-seed{S}
+#   Aggregate: evalchemy-{BASE_EVAL_RUN_NAME}[-step{N}]-{task}-avg{X}seeds
+# Step suffix is auto-extracted from MODEL_NAME_OR_GCS_PATH if it contains step-NNNN.
+# Set to None to use the default auto-generated wandb run names.
+BASE_EVAL_RUN_NAME = None
 
 # Whether to auto-discover the latest checkpoint in a training run directory.
 # Set to True when MODEL_NAME_OR_GCS_PATH points to a training output directory
@@ -74,9 +81,9 @@ DISCOVER_LATEST_CHECKPOINT = False
 # =============================================================================
 
 # Seeds for multiple evaluation runs to compute averaged results
-# Set to [42] for single run, or expand for multiple iterations
-SEEDS = [42]  # Single seed for quick testing
-# SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]  # 10 seeds for full evaluation
+# SEEDS = [42]  # 1 seed
+SEEDS = [42, 43, 44]  # 3 seeds
+# SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]  # 10 seeds
 
 # -----------------------------------------------------------------------------
 # Task Selection - Uncomment the tasks you want to evaluate
@@ -140,9 +147,11 @@ BASE_GENERATION_PARAMS = {
 # tensor_parallel_size: Number of TPU chips to use for tensor parallelism
 # v5p-8 has 4 chips, so we use tensor_parallel_size=4 to utilize all chips
 # max_num_seqs: Batch size for parallel generation (default is very low!)
+BATCH_SIZE = 30
 ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
-    "max_num_seqs": 30,  # Enable batched generation for better throughput
+    "max_num_seqs": BATCH_SIZE,  # For vLLM: Enable batched generation for better throughput
+    "batch_size": BATCH_SIZE,  # For lm-eval: Submit all requests at once for batched inference
 }
 
 # =============================================================================
@@ -163,13 +172,16 @@ if __name__ == "__main__":
             generation_params=generation_params,
             apply_chat_template=True,
             discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
+            base_eval_run_name=BASE_EVAL_RUN_NAME,
         )
         all_steps.append(step)
 
     # Add compile step to aggregate results across seeds and log to wandb
     # Only add compile step if we have multiple seeds (aggregation needs >1 run)
     if len(SEEDS) > 1:
-        compile_step = compile_evalchemy_results(all_steps, seeds=SEEDS)
+        compile_step = compile_evalchemy_results(
+            all_steps, seeds=SEEDS, base_eval_run_name=BASE_EVAL_RUN_NAME, model_path=MODEL_NAME_OR_GCS_PATH
+        )
         all_steps.append(compile_step)
 
     executor_main(steps=all_steps)

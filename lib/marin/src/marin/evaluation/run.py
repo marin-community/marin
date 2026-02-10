@@ -65,6 +65,7 @@ def evaluate(config: EvaluationConfig) -> None:
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
             resource_config=config.resource_config,
+            wandb_tags=config.wandb_tags,
         )
     else:
         evaluator.evaluate(
@@ -72,6 +73,7 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
+            wandb_tags=config.wandb_tags,
         )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
@@ -130,6 +132,7 @@ def _impute_model_config(config):
         engine_kwargs=engine_kwargs,
         generation_params=generation_params,
         apply_chat_template=config.apply_chat_template,
+        base_eval_run_name=config.base_eval_run_name,
     )
 
 

@@ -64,6 +64,9 @@ class ModelConfig:
     Whether or not this model was trained with a Chat Template in the tokenizer
     """
 
+    base_eval_run_name: str | None = None
+    """Custom base name for wandb runs."""
+
     downloaded_to: str | None = field(default=None, init=False, repr=False)
     """Local path used when staging a remote checkpoint for this run."""
 

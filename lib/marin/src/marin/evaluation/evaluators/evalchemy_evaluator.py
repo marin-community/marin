@@ -71,6 +71,16 @@ N_REPEAT_BENCHMARK_PATHS = {
 }
 
 
+def _extract_step_suffix(path: str) -> str:
+    """Extract step number from a model path and return as a suffix string.
+
+    E.g., "gs://bucket/checkpoints/run/hf/step-7022/" -> "-step7022"
+    E.g., "Qwen/Qwen2.5-7B-Instruct" -> ""
+    """
+    match = re.search(r'step-(\d+)', path)
+    return f"-step{match.group(1)}" if match else ""
+
+
 class EvalchemyEvaluator(VllmTpuEvaluator):
     """
     Evaluator that runs Evalchemy reasoning benchmarks on TPU via vLLM.
@@ -110,10 +120,13 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
     def get_runtime_env(self) -> dict:
         """Returns the runtime environment for the Ray cluster."""
         env_vars = {"HF_ALLOW_CODE_EVAL": "1"}
-        # Pass WANDB_API_KEY if set, so that wandb logging works on TPU nodes
+        # Pass wandb env vars so that logging works on TPU nodes
         wandb_api_key = os.environ.get("WANDB_API_KEY")
         if wandb_api_key:
             env_vars["WANDB_API_KEY"] = wandb_api_key
+        wandb_entity = os.environ.get("WANDB_ENTITY")
+        if wandb_entity:
+            env_vars["WANDB_ENTITY"] = wandb_entity
         return build_runtime_env_for_packages(
             extra=["evalchemy"],
             env_vars=env_vars,
@@ -164,21 +177,28 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
 
         wandb_initialized = False
         try:
-            # Find results.json file (evalchemy saves results as results.json)
-            results_pattern = os.path.join(result_dir, "*", "results.json")
-            results_files = glob.glob(results_pattern)
+            # Find results file. Evalchemy saves results as
+            # <output_path>/<model_name_sanitized>/results_<ISO_TIMESTAMP>.json
+            # e.g., result_dir/vllm/results_2024-01-22T18-04-30.123456.json
+            results_pattern = os.path.join(result_dir, "*", "results_*.json")
+            results_files = sorted(glob.glob(results_pattern))
 
             if not results_files:
                 # Try directly in result_dir
-                results_pattern = os.path.join(result_dir, "results.json")
+                results_pattern = os.path.join(result_dir, "results_*.json")
+                results_files = sorted(glob.glob(results_pattern))
+
+            if not results_files:
+                # Also try the exact name results.json as fallback
+                results_pattern = os.path.join(result_dir, "*", "results.json")
                 results_files = glob.glob(results_pattern)
 
             if not results_files:
-                logger.warning(f"No results.json found in {result_dir}, skipping wandb logging")
+                logger.warning(f"No results file found in {result_dir}, skipping wandb logging")
                 return
 
-            # Read the first results file
-            results_file = results_files[0]
+            # Read the latest results file (sorted alphabetically, timestamp in name)
+            results_file = results_files[-1]
             logger.info(f"Reading results from {results_file}")
 
             with open(results_file, "r") as f:
@@ -192,8 +212,10 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                 tags.extend([tag[:64] for tag in wandb_tags])
 
             # Initialize wandb run
+            wandb_entity = os.environ.get("WANDB_ENTITY", "marin-community")
             wandb.init(
                 project=WANDB_PROJECT,
+                entity=wandb_entity,
                 name=run_name,
                 job_type="eval",
                 tags=tags,
@@ -274,6 +296,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
         self._patch_eval_py_imports()
         self._patch_vllm_version()
         self._patch_vllm_seed_for_tpu()
+        self._patch_vllm_stat_logging()
 
     def _patch_benchmark_n_repeat(self, task_name: str, n_repeat: int) -> None:
         """
@@ -486,6 +509,49 @@ _patch_lmeval_vllm_seed()
             logger.info("Patched eval.py to disable per-request seeds for TPU")
         else:
             logger.warning("Could not find _patch_vllm_version() call in eval.py - evalchemy may have changed")
+
+    def _patch_vllm_stat_logging(self) -> None:
+        """
+        Patch vLLM's LLM class to enable stat logging (tokens/sec throughput).
+
+        vLLM's offline LLM class sets disable_log_stats=True by default, which
+        suppresses periodic throughput logging. This patch overrides that default
+        so that "Avg generation throughput: X tokens/s" lines are printed during
+        generation. These log lines stream properly through the subprocess
+        (unlike tqdm progress bars which use \\r and don't flush line-by-line).
+        """
+        path = os.path.join(self.EVALCHEMY_PATH, "eval", "eval.py")
+        if not os.path.exists(path):
+            return
+
+        content = self._read_file(path)
+        if "# Patch vLLM stat logging" in content:
+            return  # Already patched
+
+        patch = '''
+# Patch vLLM stat logging to show tokens/sec throughput during generation
+def _enable_vllm_stat_logging():
+    try:
+        from vllm import LLM
+        _original_init = LLM.__init__
+
+        def _patched_init(self, *args, **kwargs):
+            kwargs["disable_log_stats"] = False
+            return _original_init(self, *args, **kwargs)
+
+        LLM.__init__ = _patched_init
+        print("Enabled vLLM throughput logging (disable_log_stats=False)")
+    except Exception as e:
+        print(f"Warning: Could not enable vLLM stat logging: {e}")
+
+_enable_vllm_stat_logging()
+'''
+        marker = "_patch_lmeval_vllm_seed()\n"
+        if marker in content:
+            self._write_file(path, content.replace(marker, marker + patch, 1))
+            logger.info("Patched eval.py to enable vLLM throughput logging")
+        else:
+            logger.warning("Could not find _patch_lmeval_vllm_seed() call in eval.py for stat logging patch")
 
     def _download_config_files_from_gcs(self, gcs_path: str) -> str:
         """
@@ -742,9 +808,15 @@ _patch_autoconfig_for_gcs()
                 #   (lm-eval line 161: self._max_length = max_model_len if max_model_len is not None else max_length)
                 # - max_gen_toks: Maximum generation tokens (lm-eval default is only 256!)
                 # - seed: Engine-level seed for reproducible sampling with temperature > 0
+                # Determine batch_size: use engine_kwargs override if provided, else default to "auto"
+                # Note: batch_size is a separate lm-eval CLI arg, NOT a vLLM model arg
+                batch_size = "auto"
+                engine_kwargs = dict(model.engine_kwargs) if model.engine_kwargs else {}
+                if "batch_size" in engine_kwargs:
+                    batch_size = engine_kwargs.pop("batch_size")
+
                 model_args_parts = [
                     f"pretrained={model_name_or_path}",
-                    "batch_size=auto",  # Enable batched inference (default is 1!)
                 ]
                 if engine_seed != 0:
                     model_args_parts.append(f"seed={engine_seed}")
@@ -754,19 +826,22 @@ _patch_autoconfig_for_gcs()
                     # Set at model level so lm-eval's default (256) is overridden
                     model_args_parts.append(f"max_gen_toks={max_gen_toks}")
 
-                # Add engine_kwargs (e.g., tensor_parallel_size=4 for multi-chip TPU)
-                if model.engine_kwargs:
-                    for key, value in model.engine_kwargs.items():
-                        model_args_parts.append(f"{key}={value}")
+                # Add remaining engine_kwargs (e.g., tensor_parallel_size=4 for multi-chip TPU)
+                for key, value in engine_kwargs.items():
+                    model_args_parts.append(f"{key}={value}")
 
                 model_args = ",".join(model_args_parts)
                 logger.info(f"model_args: {model_args}")
 
-                # Build wandb run name: evalchemy-{model_name}-{task_name}-seed{N} (lowercase)
-                wandb_run_name = f"evalchemy-{model.name.lower()}"
+                # Build wandb run name
+                if model.base_eval_run_name:
+                    step_suffix = _extract_step_suffix(model_name_or_path)
+                    wandb_run_name = f"evalchemy-{model.base_eval_run_name}{step_suffix}"
+                else:
+                    wandb_run_name = f"evalchemy-{model.name}"
                 if eval_task.name:
-                    wandb_run_name = f"{wandb_run_name}-{eval_task.name.lower()}"
-                if engine_seed != 0:
+                    wandb_run_name = f"{wandb_run_name}-{eval_task.name}"
+                if "seed" in gen_params:
                     wandb_run_name = f"{wandb_run_name}-seed{engine_seed}"
 
                 # Build evalchemy CLI command
@@ -775,6 +850,7 @@ _patch_autoconfig_for_gcs()
                     "--model", "vllm",
                     "--tasks", eval_task.name,
                     "--model_args", model_args,
+                    "--batch_size", str(batch_size),
                     "--output_path", result_dir,
                     "--verbosity", "INFO",
                 ]
