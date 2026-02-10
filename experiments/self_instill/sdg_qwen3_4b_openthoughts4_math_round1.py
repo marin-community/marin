@@ -86,15 +86,15 @@ from experiments.self_instill.uq_verification import (
 # MODEL CONFIGURATION
 # =============================================================================
 QWEN3_4B_HF_ID = "Qwen/Qwen3-4B"
-RESOURCE_TYPE = "v5p-32"
-TENSOR_PARALLEL_SIZE = 8
+RESOURCE_TYPE = "v5p-8"
+TENSOR_PARALLEL_SIZE = 4
 BATCH_SIZE = 64
 IS_INSTRUCTION_TUNED = True
 
 # =============================================================================
 # GENERATION & VOTING CONFIGURATION
 # =============================================================================
-NUM_GENERATION_SAMPLES = 4  # Number of candidate solutions per prompt
+NUM_GENERATION_SAMPLES = 1  # Number of candidate solutions per prompt
 NUM_VALIDATION_VOTES = 1    # Number of votes for each validation check
 
 # =============================================================================
