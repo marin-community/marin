@@ -80,6 +80,9 @@ setup_commands:
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
   # this is set to 30s by default, which is much too short for our use case
   - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
+  # RAY_JOB_START_TIMEOUT_SECONDS controls the timeout for Ray job startup
+  # Default is 300s (5 minutes), increased to 1800s (30 minutes) for longer startup times
+  - echo 'export RAY_JOB_START_TIMEOUT_SECONDS=1800' >> $HOME/.bashrc
   - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
