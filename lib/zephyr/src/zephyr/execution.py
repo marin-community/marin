@@ -684,7 +684,7 @@ class ZephyrWorker:
 
         # Build descriptive worker ID from actor context
         actor_ctx = current_actor()
-        self._worker_id = f"{actor_ctx.group_name}-{actor_ctx.index}-{socket.gethostname()}"
+        self._worker_id = f"{actor_ctx.group_name}-{actor_ctx.index}"
 
         # Register with coordinator
         self._coordinator.register_worker.remote(self._worker_id, actor_ctx.handle)
