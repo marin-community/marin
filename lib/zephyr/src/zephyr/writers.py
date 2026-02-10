@@ -243,12 +243,29 @@ def batchify(batch: Iterable, n: int = 1024) -> Iterable:
         yield batch
 
 
+def _get_existing_row_count(tmp_path: str, exemplar: dict[str, Any]) -> int:
+    """Read the number of rows already written in a partial .tmp cache directory.
+
+    Returns 0 if the path doesn't exist, has no data, or can't be read.
+    """
+    fs = fsspec.core.url_to_fs(tmp_path)[0]
+    if not fs.exists(tmp_path):
+        return 0
+    try:
+        from levanter.store.tree_store import TreeStore
+
+        store = TreeStore.open(exemplar, tmp_path, mode="r", cache_metadata=False)
+        return len(store)
+    except Exception:
+        logger.debug("Could not read existing rows from %s, starting fresh", tmp_path, exc_info=True)
+        return 0
+
+
 def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any]) -> dict:
     """Write tokenized records to Levanter cache format."""
-    from levanter.store.cache import SerialCacheWriter
+    from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
-    from levanter.store.cache import CacheMetadata
 
     try:
         exemplar = next(iter(records))
@@ -257,14 +274,37 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
 
     count = 1
     token_count = len(exemplar.get("input_ids", []))
-    with atomic_rename(output_path) as tmp_path:
-        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
+    tmp_path = f"{output_path}.tmp"
+    fs = fsspec.core.url_to_fs(output_path)[0]
+
+    existing_rows = _get_existing_row_count(tmp_path, exemplar)
+
+    if existing_rows > 0:
+        logger.info("Resuming write to %s from %d existing rows", output_path, existing_rows)
+        # we already consumed 1 record (exemplar), skip existing_rows - 1 more
+        for record in itertools.islice(records, existing_rows - 1):
+            count += 1
+            token_count += len(record.get("input_ids", []))
+        mode = "a"
+        write_exemplar = False
+    else:
+        mode = "w"
+        write_exemplar = True
+
+    with SerialCacheWriter(
+        tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata), mode=mode
+    ) as writer:
+        if write_exemplar:
             writer.write_batch([exemplar])
-            for batch in batchify(records):
-                writer.write_batch(batch)
-                count += len(batch)
-                for record in batch:
-                    token_count += len(record.get("input_ids", []))
+        for batch in batchify(records):
+            writer.write_batch(batch)
+            count += len(batch)
+            for record in batch:
+                token_count += len(record.get("input_ids", []))
+
+    if fs.exists(output_path):
+        fs.rm(output_path, recursive=True)
+    fs.mv(tmp_path, output_path, recursive=True)
 
     # write success sentinel
     with fsspec.open(f"{output_path}/.success", "w") as f:
