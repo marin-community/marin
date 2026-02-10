@@ -87,7 +87,7 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
         platform = iris_config.platform()
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.vm.cluster_manager import ClusterManager
+            from iris.cluster.manager import ClusterManager
 
             manager = ClusterManager(iris_config.proto)
             controller_address = manager.start()

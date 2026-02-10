@@ -43,7 +43,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     ResourceSpec,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.manager import ClusterManager
 from iris.cluster.config import load_config, make_local_config
 from iris.rpc import cluster_pb2
 

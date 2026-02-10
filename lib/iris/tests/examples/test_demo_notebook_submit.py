@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.manager import ClusterManager
 from iris.cluster.config import IrisConfig
 from iris.rpc import config_pb2
 

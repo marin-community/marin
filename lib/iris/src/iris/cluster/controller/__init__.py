@@ -22,6 +22,8 @@ from iris.cluster.controller.autoscaler import (
 )
 from iris.cluster.controller.config import create_autoscaler
 from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.lifecycle import create_controller_vm
+from iris.cluster.controller.local import LocalController
 from iris.cluster.controller.scaling_group import AvailabilityState, GroupAvailability, ScalingGroup
 
 __all__ = [
@@ -31,10 +33,12 @@ __all__ = [
     "ControllerConfig",
     "DemandEntry",
     "GroupAvailability",
+    "LocalController",
     "RoutingDecision",
     "ScalingAction",
     "ScalingDecision",
     "ScalingGroup",
     "UnmetDemand",
     "create_autoscaler",
+    "create_controller_vm",
 ]

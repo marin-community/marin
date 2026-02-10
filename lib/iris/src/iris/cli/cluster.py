@@ -32,9 +32,9 @@ from iris.cli.debug import debug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.manager import ClusterManager
 from iris.cluster.config import make_local_config
-from iris.cluster.vm.controller_vm import create_controller_vm
+from iris.cluster.controller.lifecycle import create_controller_vm
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name

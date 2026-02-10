@@ -48,7 +48,7 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.manager import ClusterManager
 from iris.cluster.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 
