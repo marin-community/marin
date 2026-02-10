@@ -482,15 +482,23 @@ class Trainer:
                     "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
                 )
 
-            loss = result.loss.item()
+            total_loss = result.loss.item()
 
-            if self.config.crash_on_nan and jnp.isnan(loss):
+            if self.config.crash_on_nan and jnp.isnan(total_loss):
                 raise RuntimeError("Loss is NaN")
 
-            if self.config.crash_on_inf and jnp.isinf(loss):
+            if self.config.crash_on_inf and jnp.isinf(total_loss):
                 raise RuntimeError("Loss is Inf")
 
-            info = StepInfo(result.new_state, loss, step_time())
+            # Default hooks log StepInfo.loss as `train/loss`. If the loss_fn provided a `base_loss` metric,
+            # prefer that for logging so `train/loss` reflects CE without auxiliary terms.
+            base_loss = result.loss_metrics.get("train/base_loss", None)
+            if base_loss is not None:
+                loss_for_logging = float(base_loss.item())
+            else:
+                loss_for_logging = float(total_loss)
+
+            info = StepInfo(result.new_state, loss_for_logging, step_time())
 
             with capture_time() as hook_time:
                 self.run_hooks(info)
