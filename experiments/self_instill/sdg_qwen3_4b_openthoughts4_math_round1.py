@@ -90,7 +90,7 @@ RESOURCE_TYPE = "v5p-8"
 TENSOR_PARALLEL_SIZE = 4
 BATCH_SIZE = 64
 IS_INSTRUCTION_TUNED = True
-NUM_INSTANCES = (1, 32)  # (min, max) workers - limited to prevent OOM during scaling
+NUM_INSTANCES = (1, 16)  # (min, max) workers - limited to prevent OOM during scaling
 
 # =============================================================================
 # GENERATION & VOTING CONFIGURATION

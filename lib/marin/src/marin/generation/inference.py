@@ -172,6 +172,7 @@ def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     return {
         "resources": resources,
         "max_restarts": -1,
+        "max_task_retries": -1,  # Infinite retries for task-level failures (e.g., node preemption)
         "runtime_env": runtime_env,
     }
 
