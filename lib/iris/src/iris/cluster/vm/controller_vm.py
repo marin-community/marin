@@ -28,14 +28,11 @@ import json
 import logging
 import shlex
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
-from iris.config import config_to_dict
-from iris.managed_thread import ThreadContainer
+from iris.cluster.config import config_to_dict
 from iris.cluster.vm.gcp_tpu_platform import (
     controller_address_metadata_key,
     controller_metadata_key,

@@ -25,7 +25,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from iris.config import IrisConfig
+from iris.cluster.config import IrisConfig
 from iris.cluster.controller.lifecycle import create_controller_vm
 from iris.cluster.vm.controller_vm import ControllerProtocol
 from iris.managed_thread import ThreadContainer, get_thread_container

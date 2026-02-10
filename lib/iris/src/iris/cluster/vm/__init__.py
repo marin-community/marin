@@ -70,7 +70,6 @@ from iris.cluster.vm.managed_vm import (
     VmRegistry,
 )
 
-
 # Platform abstraction
 from iris.cluster.vm.platform import (
     Platform,

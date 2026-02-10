@@ -19,13 +19,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from iris.config import config_to_dict, load_config
+from iris.cluster.config import config_to_dict, load_config
+from iris.cluster.controller.lifecycle import create_controller_vm
 from iris.cluster.vm.controller_vm import (
     GcpController,
     HealthCheckResult,
     ManualController,
     check_health,
-    create_controller_vm,
 )
 from iris.cluster.vm.managed_vm import (
     _build_bootstrap_script,
