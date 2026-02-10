@@ -23,12 +23,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from iris.cluster.vm.config import (
+from iris.cluster.config import (
     config_to_dict,
-    create_autoscaler,
     get_ssh_config,
     load_config,
 )
+from iris.cluster.controller.config import create_autoscaler
 from iris.cluster.vm.platform import create_platform
 from iris.rpc import config_pb2
 
@@ -561,7 +561,7 @@ class TestLocalConfigTransformation:
 
     def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
         """make_local_config transforms GCP config to local mode."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -627,7 +627,7 @@ scale_groups:
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -698,7 +698,7 @@ scale_groups:
 
     def test_example_configs_load_and_transform(self):
         """Example configs in examples/ directory load and transform to local correctly."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
