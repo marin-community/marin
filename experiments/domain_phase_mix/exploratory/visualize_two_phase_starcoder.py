@@ -55,7 +55,8 @@ BASELINE_LABELS = {
     90004: "99/1 → 50/50",
     90005: "Nemotron only",
     90006: "StarCoder only",
-    90007: "RegMix optimized",
+    90007: "RegMix (leaves=15)",
+    90008: "RegMix (leaves=63)",
 }
 
 # Predicted values for base_90007 from regmix_two_phase_starcoder.result
@@ -63,6 +64,10 @@ REGMIX_PREDICTIONS = {
     90007: {
         "eval/paloma/dolma_100_programing_languages/bpb": 0.9425,
         "eval/uncheatable_eval/github_python/bpb": 0.8560,
+    },
+    90008: {
+        "eval/paloma/dolma_100_programing_languages/bpb": 0.9098,
+        "eval/uncheatable_eval/github_python/bpb": 0.8437,
     },
 }
 
@@ -77,7 +82,7 @@ METRIC_SHORT = {
 }
 
 
-def create_baselines_chart(baselines: list[dict], width: int = 1800, height: int = 550) -> go.Figure:
+def create_baselines_chart(baselines: list[dict], width: int = 2200, height: int = 600) -> go.Figure:
     """Create a comparison chart showing all baselines as stacked bar charts with metrics."""
     n = len(baselines)
     domain_names = ["nemotron_full", "starcoder"]
@@ -95,7 +100,7 @@ def create_baselines_chart(baselines: list[dict], width: int = 1800, height: int
             if val is not None:
                 line = f"{short}: {val:.4f}"
                 if pred is not None:
-                    line += f" (pred: {pred:.4f})"
+                    line += f"  (pred: {pred:.4f})"
                 lines.append(line)
 
         subplot_titles.append("<br>".join(lines))
@@ -104,7 +109,7 @@ def create_baselines_chart(baselines: list[dict], width: int = 1800, height: int
         rows=1,
         cols=n,
         subplot_titles=subplot_titles,
-        horizontal_spacing=0.03,
+        horizontal_spacing=0.02,
     )
 
     for col, b in enumerate(baselines, 1):
@@ -113,7 +118,8 @@ def create_baselines_chart(baselines: list[dict], width: int = 1800, height: int
             domain_weights = [w[i] for w in weights]
             show_legend = col == 1
 
-            text_positions = ["inside" if w >= 0.05 else "none" for w in domain_weights]
+            # text_positions = ["inside" if w >= 0.05 else "none" for w in domain_weights]
+            text_positions = "inside"
             fig.add_trace(
                 go.Bar(
                     name=DOMAIN_LABELS[domain],
@@ -143,14 +149,14 @@ def create_baselines_chart(baselines: list[dict], width: int = 1800, height: int
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.12,
+            y=1.22,
             xanchor="center",
             x=0.5,
-            font=dict(size=13, family="Arial"),
+            font=dict(size=14, family="Arial"),
         ),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        margin=dict(l=50, r=30, t=200, b=40),
+        margin=dict(l=50, r=30, t=250, b=40),
         width=width,
         height=height,
         bargap=0,
@@ -184,7 +190,7 @@ def create_baselines_chart(baselines: list[dict], width: int = 1800, height: int
     fig.update_yaxes(title=dict(text="Weight", font=dict(size=13, family="Arial")), row=1, col=1)
 
     for annotation in fig["layout"]["annotations"]:
-        annotation["font"] = dict(size=11, family="Arial")
+        annotation["font"] = dict(size=10, family="Arial")
 
     return fig
 
