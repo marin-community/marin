@@ -19,7 +19,7 @@ Shared constants, configs, and helper functions for DNA experiments.
 import dataclasses
 from collections.abc import Sequence
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.data.text import DNALmDatasetFormat, TextLmDatasetFormat
 
 from experiments.defaults import default_tokenize, default_train

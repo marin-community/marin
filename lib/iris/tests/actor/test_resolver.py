@@ -37,10 +37,13 @@ def test_client_with_resolver():
     server.register("echo", Echo())
     port = server.serve_background()
 
-    resolver = FixedResolver({"echo": f"http://127.0.0.1:{port}"})
-    client = ActorClient(resolver, "echo")
+    try:
+        resolver = FixedResolver({"echo": f"http://127.0.0.1:{port}"})
+        client = ActorClient(resolver, "echo")
 
-    assert client.echo("hello") == "echo: hello"
+        assert client.echo("hello") == "echo: hello"
+    finally:
+        server.stop()
 
 
 def test_gcs_resolver_finds_actors():

@@ -39,10 +39,13 @@ def test_basic_actor_call():
     server.register("calc", Calculator())
     port = server.serve_background()
 
-    resolver = FixedResolver({"calc": f"http://127.0.0.1:{port}"})
-    client = ActorClient(resolver, "calc")
-    assert client.add(2, 3) == 5
-    assert client.multiply(4, 5) == 20
+    try:
+        resolver = FixedResolver({"calc": f"http://127.0.0.1:{port}"})
+        client = ActorClient(resolver, "calc")
+        assert client.add(2, 3) == 5
+        assert client.multiply(4, 5) == 20
+    finally:
+        server.stop()
 
 
 def test_actor_exception_propagation():
@@ -51,7 +54,10 @@ def test_actor_exception_propagation():
     server.register("calc", Calculator())
     port = server.serve_background()
 
-    resolver = FixedResolver({"calc": f"http://127.0.0.1:{port}"})
-    client = ActorClient(resolver, "calc")
-    with pytest.raises(ZeroDivisionError):
-        client.divide(1, 0)
+    try:
+        resolver = FixedResolver({"calc": f"http://127.0.0.1:{port}"})
+        client = ActorClient(resolver, "calc")
+        with pytest.raises(ZeroDivisionError):
+            client.divide(1, 0)
+    finally:
+        server.stop()

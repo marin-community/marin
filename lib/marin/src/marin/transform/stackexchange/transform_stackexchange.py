@@ -29,7 +29,7 @@ import random
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
@@ -163,4 +163,5 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
         .filter(lambda record: record is not None)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
-    Backend.execute(pipeline)
+    with ZephyrContext(name="transform-stackexchange") as ctx:
+        ctx.execute(pipeline)

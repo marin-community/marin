@@ -14,8 +14,8 @@
 
 
 import pytest
-from fray.cluster import create_cluster, set_current_cluster
-from fray.job.context import _job_context
+from fray.v1.cluster import create_cluster, set_current_cluster
+from fray.v1.job.context import _job_context
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"

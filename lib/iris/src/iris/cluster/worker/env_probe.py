@@ -18,11 +18,12 @@ import logging
 import os
 import socket
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -55,31 +56,6 @@ def _probe_gpu_info() -> tuple[int, str, int]:
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError) as e:
         logger.debug("GPU probe failed (nvidia-smi not available or error): %s", type(e).__name__)
         return 0, "", 0
-
-
-def _probe_gce_metadata() -> tuple[str, str]:
-    """Query GCE metadata server.
-
-    Returns ("", "") if not on GCE.
-    """
-    try:
-        headers = {"Metadata-Flavor": "Google"}
-
-        def fetch(path: str) -> str:
-            req = urllib.request.Request(
-                f"http://169.254.169.254/computeMetadata/v1/{path}",
-                headers=headers,
-            )
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
-                return resp.read().decode().strip()
-
-        instance_name = fetch("instance/name")
-        zone_full = fetch("instance/zone")
-        zone = zone_full.split("/")[-1] if zone_full else ""
-        return instance_name, zone
-    except Exception:
-        logger.debug("GCE metadata probe failed (not running on GCE or metadata server unavailable)")
-        return "", ""
 
 
 def _get_memory_total_bytes() -> int:
@@ -131,6 +107,26 @@ def collect_workdir_size_mb(workdir: Path) -> int:
     size_str = output.split("\t")[0]
 
     return int(size_str)
+
+
+def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
+    """Detect whether this worker is running on a preemptible/spot VM.
+
+    Checks the GCP metadata server first (authoritative for GCP VMs), then
+    falls back to IRIS_WORKER_ATTRIBUTES. Defaults to False for non-GCP
+    environments without explicit configuration.
+    """
+    try:
+        req = urllib.request.Request(
+            "http://metadata.google.internal/computeMetadata/v1/instance/scheduling/preemptible",
+            headers={"Metadata-Flavor": "Google"},
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.read().decode().strip().upper() == "TRUE"
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
+
+    return extra_attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY, "false").lower() == "true"
 
 
 def _get_extra_attributes() -> dict[str, str]:
@@ -200,6 +196,10 @@ def _build_worker_attributes(
     for key, value in extra_attributes.items():
         attributes[key] = cluster_pb2.AttributeValue(string_value=value)
 
+    # Preemptible detection: GCP metadata server, then IRIS_WORKER_ATTRIBUTES fallback
+    is_preemptible = _detect_preemptible(extra_attributes)
+    attributes[PREEMPTIBLE_ATTRIBUTE_KEY] = cluster_pb2.AttributeValue(string_value=str(is_preemptible).lower())
+
     return attributes
 
 
@@ -207,6 +207,38 @@ class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
+
+
+class TPUSimEnvironmentProvider:
+    """Simulated TPU environment for testing multi-host JAX coordination.
+
+    Wraps DefaultEnvironmentProvider and adds fake TPU metadata so that
+    _build_device_env_vars() sets JAX_COORDINATOR_ADDRESS, JAX_PROCESS_ID,
+    and JAX_NUM_PROCESSES correctly.
+    """
+
+    def __init__(
+        self,
+        worker_id: int,
+        num_workers: int,
+        coordinator_host: str = "127.0.0.1",
+        tpu_variant: str = "v4-8-sim",
+    ):
+        self._worker_id = worker_id
+        self._num_workers = num_workers
+        self._coordinator_host = coordinator_host
+        self._tpu_variant = tpu_variant
+
+    def probe(self) -> cluster_pb2.WorkerMetadata:
+        base = DefaultEnvironmentProvider().probe()
+        # Simulate TPU slice membership
+        base.tpu_name = "sim-tpu-slice"
+        base.tpu_worker_id = str(self._worker_id)
+        base.tpu_worker_hostnames = self._coordinator_host
+        base.tpu_chips_per_host_bounds = "2,2,1"
+        # Mark device as TPU so _build_device_env_vars triggers
+        base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
+        return base
 
 
 class DefaultEnvironmentProvider:
@@ -219,8 +251,11 @@ class DefaultEnvironmentProvider:
         memory_bytes = _get_memory_total_bytes()
         disk_bytes = _get_disk_bytes()
 
-        # TPU environment variables
+        # TPU environment variables:
+        # - TPU_NAME: TPU slice name (e.g., iris-tpu_v5e_16-xxx) for coscheduling group_by
+        # - TPU_TYPE: accelerator type (e.g., v5litepod-16) for topology/chip count lookup
         tpu_name = os.environ.get("TPU_NAME", "")
+        tpu_type = os.environ.get("TPU_TYPE", "")
         tpu_worker_hostnames = os.environ.get("TPU_WORKER_HOSTNAMES", "")
         tpu_worker_id = os.environ.get("TPU_WORKER_ID", "")
         tpu_chips_per_host_bounds = os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS", "")
@@ -228,22 +263,19 @@ class DefaultEnvironmentProvider:
         # GPU info via nvidia-smi
         gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
 
-        # GCE metadata
-        gce_instance_name, gce_zone = _probe_gce_metadata()
-
-        # Build device config
+        # Build device config using TPU_TYPE for topology lookup
         device = cluster_pb2.DeviceConfig()
-        if tpu_name:
+        if tpu_type:
             tpu_chip_count = 0
             try:
-                topo = get_tpu_topology(tpu_name)
+                topo = get_tpu_topology(tpu_type)
                 tpu_chip_count = topo.chips_per_vm
             except ValueError:
-                logger.warning("Unknown TPU topology: %s", tpu_name)
+                logger.warning("Unknown TPU topology: %s", tpu_type)
 
             device.tpu.CopyFrom(
                 cluster_pb2.TpuDevice(
-                    variant=tpu_name,
+                    variant=tpu_type,
                     count=tpu_chip_count,
                 )
             )
@@ -272,7 +304,8 @@ class DefaultEnvironmentProvider:
             extra_attributes or "none",
         )
 
-        # Build worker attributes for constraint-based scheduling
+        # Build worker attributes for constraint-based scheduling.
+        # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
 
         # VM address from environment (injected by ManagedVm bootstrap)
@@ -284,15 +317,13 @@ class DefaultEnvironmentProvider:
             cpu_count=cpu_count,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            tpu_name=tpu_name,
+            tpu_name=tpu_name,  # TPU slice name for coscheduling (from TPU_NAME env var)
             tpu_worker_hostnames=tpu_worker_hostnames,
             tpu_worker_id=tpu_worker_id,
             tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
             gpu_count=gpu_count,
             gpu_name=gpu_name,
             gpu_memory_mb=gpu_memory_mb,
-            gce_instance_name=gce_instance_name,
-            gce_zone=gce_zone,
             device=device,
             attributes=attributes,
             vm_address=vm_address,

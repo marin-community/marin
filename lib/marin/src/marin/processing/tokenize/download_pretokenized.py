@@ -23,7 +23,7 @@ import os
 
 from levanter.data.text import (
     LmDatasetFormatBase,
-    LMDatasetSourceConfig,
+    LmDatasetSourceConfigBase,
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
 )
@@ -56,13 +56,13 @@ class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
     cache_options: CacheOptions | None = None  # For TokenizeConfigBase interface, not used during download
 
-    tags: list[str] = dataclasses.field(default_factory=list)  # Tags for Levanter's LMDatasetSourceConfig
+    tags: list[str] = dataclasses.field(default_factory=list)  # Tags for Levanter's dataset source config
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         """
-        Returns a Levanter LMDatasetSourceConfig that points to the downloaded cache.
+        Returns a Levanter dataset source config that points to the downloaded cache.
         Since the cache is already tokenized and in Levanter format, train_urls and validation_urls
         are empty. Levanter will load directly from the cache_dir.
         """
@@ -98,7 +98,7 @@ def download_pretokenized_cache(
         tokenizer: The name or path of the tokenizer associated with this cache.
         hf_revision: The specific revision, branch, or tag of the repository to download.
         hf_token: An optional Hugging Face API token for accessing private repositories.
-        tags: Optional list of tags for the Levanter LMDatasetSourceConfig.
+        tags: Optional list of tags for the Levanter dataset source config.
         format: The format of the dataset (default is TextLmDatasetFormat).
 
     Returns:

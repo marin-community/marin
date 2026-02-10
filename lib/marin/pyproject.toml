@@ -17,23 +17,21 @@ dependencies = [
     "draccus>=0.11.5",
     "dupekit",
     "fasteners>=0.19",
-    "floret",
     "flask",
+    "floret",
+    "fray",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
+    "haliax",
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
     "jaxopt>=0.8.3",
-    "haliax",
     "levanter[serve]",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
     "lxml[html_clean]",
     "lz4",
     "markdownify==0.12.1",
-    "zephyr",
-    "fray",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
@@ -43,6 +41,7 @@ dependencies = [
     "ray==2.53.0",
     "regex",
     "requests",
+    "resiliparse>=0.17.2",
     "s3fs>=2024",
     "toml",
     "torch>=2.7.0",
@@ -51,7 +50,7 @@ dependencies = [
     "tqdm-loggable",
     "wandb",
     "warcio",
-    "resiliparse>=0.17.2",
+    "zephyr",
 ]
 
 [project.license]
@@ -129,7 +128,6 @@ conflicts = [
 [project.optional-dependencies]
 
 gpu = ["jax[cuda12]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
-
 tpu = ["jax[tpu]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
 
 cpu = [

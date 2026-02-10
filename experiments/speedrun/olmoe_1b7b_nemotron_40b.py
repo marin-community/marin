@@ -74,7 +74,6 @@ def _build_olmoe_1b7b_config(seq_len: int) -> MixtralConfig:
         gradient_checkpointing=True,
         scan_layers=True,
         use_gmm=True,
-        cross_entropy_block_size=32000,
         reference_checkpoint=OLMOE_1B7B_REFERENCE_CHECKPOINT,
         tokenizer=OLMOE_1B7B_REFERENCE_CHECKPOINT,
     )
@@ -97,7 +96,6 @@ def _build_mixtral_8x7b_config(seq_len: int) -> MixtralConfig:
         # MaxText's high-MFU recipe uses Megablox (dropless) MoE kernels; for us this maps most closely to
         # `use_gmm=True`.
         use_gmm=True,
-        cross_entropy_block_size=32000,
         lbl_coef=None,
         rzl_coef=None,
     )
@@ -115,7 +113,6 @@ nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
 nemotron_cc_mixture = lm_mixture_data_config(
     components=nemotron_cc_steps,
     weights=NEMOTRON_WEIGHTS,
-    permutation_type="linear",
 )
 
 DATASET_OPTIONS = {
@@ -146,7 +143,6 @@ def nemotron_only_speedrun(
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=[],
-            permutation_type="linear",
         )
     else:
         pretraining_data = config.tokenized_dataset

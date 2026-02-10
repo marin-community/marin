@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import pytest
-from fray.cluster.device_flops import (
+from fray.v1.cluster.device_flops import (
     device_flops,
     device_flops_for_jax_device,
     jax_device_kind_to_fray_device_type,

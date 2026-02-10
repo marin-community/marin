@@ -68,7 +68,7 @@ def test_train_worker_with_manual_cats_rollout(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+            rl_loss=RLOOLoss(kl_coef=0.0),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,

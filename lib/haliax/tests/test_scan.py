@@ -3,15 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import warnings
 import equinox as eqx
 import jax
+import numpy as np
 import pytest
-import warnings
 from equinox import filter_grad
+from jax.sharding import AxisType, Mesh
 
 import haliax as hax
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.scan import BlockSeq, ScanCheckpointPolicy, Stacked
+from haliax.partitioning import axis_mapping, pspec_for_axis, set_mesh
+from test_utils import skip_if_not_enough_devices
 
 
 def test_unstacked():
@@ -165,6 +169,50 @@ def test_seq_and_stacked_give_same_results():
 
     with pytest.raises(ValueError):
         m_seq.scan(x, key=jax.random.split(jax.random.PRNGKey(2), Block.size))
+
+
+@skip_if_not_enough_devices(4)
+def test_stacked_init_shards_mlp_params_on_mesh():
+    devices = jax.devices()
+    if len(devices) % 2 != 0:
+        pytest.skip("Need even number of devices to build (data, model) mesh")
+
+    mesh = Mesh(
+        np.array(devices).reshape(-1, 2),
+        ("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+
+    Block = hax.Axis("block", 2)
+    Hidden = hax.Axis("hidden", mesh.devices.shape[0])
+    Mlp = hax.Axis("mlp", mesh.devices.shape[1] * 2)
+
+    class MLP(eqx.Module):
+        w1: hax.NamedArray
+        w2: hax.NamedArray
+
+        def __call__(self, x):
+            hidden = hax.dot(Hidden, x, self.w1)
+            hidden = hax.tanh(hidden)
+            return hax.dot(Mlp, hidden, self.w2)
+
+        @staticmethod
+        def init(hidden, mlp):
+            return MLP(w1=hax.ones((hidden, mlp)), w2=hax.ones((mlp, hidden)))
+
+    resource_map = {"hidden": "data", "mlp": "model"}
+
+    with axis_mapping(resource_map), set_mesh(mesh):
+        stacked = hax.named_jit(Stacked.init(Block, MLP))(hidden=Hidden, mlp=Mlp)
+
+    assert stacked.stacked.w1.axes == (Block, Hidden, Mlp)
+    assert stacked.stacked.w2.axes == (Block, Mlp, Hidden)
+
+    expected_w1 = pspec_for_axis((Block, Hidden, Mlp), resource_map)
+    expected_w2 = pspec_for_axis((Block, Mlp, Hidden), resource_map)
+
+    assert stacked.stacked.w1.array.sharding.spec == expected_w1
+    assert stacked.stacked.w2.array.sharding.spec == expected_w2
 
 
 def test_using_scan():
@@ -1057,3 +1105,39 @@ def test_vmap_via_consistency():
     outs_direct = m.vmap(x)
 
     assert hax.all(hax.isclose(outs_via, outs_direct))
+
+
+@skip_if_not_enough_devices(2)
+def test_auto_sharded_inside_vmap_needs_batch_dim_guard():
+    devices = jax.devices()
+    mesh = Mesh(np.array(devices), ("data",), axis_types=(AxisType.Explicit,))
+
+    Block = hax.Axis("block", 2)
+    Hidden = hax.Axis("hidden", 8 * len(jax.devices()))
+
+    def inner(x):
+        # x.axes == (Hidden,) but x.array is a batched tracer with leading batch_dim
+        return hax.auto_sharded(x)
+
+    x = hax.ones((Block, Hidden))
+
+    with axis_mapping({"hidden": "data"}), set_mesh(mesh):
+        hax.vmap(inner, Block)(x)
+
+
+@skip_if_not_enough_devices(2)
+def test_auto_sharded_inside_jax_vmap_batched_input():
+    devices = jax.devices()
+    mesh = Mesh(np.array(devices), ("data",), axis_types=(AxisType.Explicit,))
+    Hidden = hax.Axis("hidden", 8 * len(jax.devices()))
+
+    def inner(x):
+        # x is a BatchTracer with batch_dim=0, aval shape (hidden,)
+        na = hax.NamedArray(x, (Hidden,))
+        return hax.auto_sharded(na)
+
+    x = jax.numpy.ones((2, Hidden.size))
+
+    with axis_mapping({"hidden": "data"}), set_mesh(mesh):
+        # add jit to force lowering
+        jax.jit(jax.vmap(inner))(x)

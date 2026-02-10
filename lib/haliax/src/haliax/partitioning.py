@@ -15,7 +15,7 @@ from typing import Any, Callable, ContextManager, Mapping, Optional, ParamSpec, 
 import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
-from jax._src.pjit import reshard
+from jax.sharding import reshard
 from jax.experimental.shard_map import shard_map as jax_shard_map
 from jax.lax import with_sharding_constraint
 from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
@@ -28,7 +28,7 @@ from haliax._src.compile_utils import compile_cache
 
 from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict
 from .core import NamedArray
-from .jax_utils import Static, is_in_jit, is_jax_array_like, is_on_mac_metal
+from .jax_utils import Static, is_jax_array_like, is_on_mac_metal, is_in_jit
 from .tree_util import hashable_combine, hashable_partition
 from .util import StringHolderEnum
 
@@ -250,7 +250,7 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
 
         pspec = pspec_for(named, mapping)
         assert isinstance(pspec, PartitionSpec)
-        if is_in_jit():
+        if _is_jit_tracer(named.array):
             # ok so jax is mildly annoying right now. we have to use reshard if *all* mesh axes are explicit.
             # otherwise, we need to use with_sharding_constraint.
             if all_mesh_axes_explicit(resolved_mesh, pspec):
@@ -290,7 +290,7 @@ def pspec_for(
 
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
-            return pspec_for_axis(node.axes, resource_mapping)
+            return pspec_for_axis(node.axis_names, resource_mapping)
         elif isinstance(node, eqx.Module):
             # handle eqx.Module explicitly so that we can look at axis_names metadata
             updates: dict[str, typing.Any] = {}
