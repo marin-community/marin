@@ -363,7 +363,7 @@ def tokenize(config: TokenizeConfigBase):
         # Broadcast the tokenizer to all workers via ZephyrContext
         ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
-        shard_paths = ctx.execute(temp_shards, max_parallelism=config.zephyr_max_parallelism)
+        shard_paths = ctx.execute(temp_shards)
 
         logger.info("Computing exemplar for cache consolidation")
         exemplar = ctx.execute(
@@ -372,7 +372,6 @@ def tokenize(config: TokenizeConfigBase):
             .take_per_shard(1)
             .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
             verbose=False,
-            max_parallelism=config.zephyr_max_parallelism,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")

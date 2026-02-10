@@ -426,7 +426,10 @@ class ExponentialBackoff:
         self._attempt = 0
 
     def next_interval(self) -> float:
-        interval = self._initial * (self._factor**self._attempt)
+        try:
+            interval = self._initial * (self._factor**self._attempt)
+        except OverflowError:
+            interval = self._maximum
         interval = min(interval, self._maximum)
 
         if self._jitter > 0:
