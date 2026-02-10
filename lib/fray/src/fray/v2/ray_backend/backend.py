@@ -27,7 +27,7 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorFuture, ActorGroup, ActorHandle
+from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -38,6 +38,7 @@ from fray.v2.types import (
     ResourceConfig,
     TpuConfig,
     create_environment,
+    get_tpu_topology,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ class RayJobHandle:
             ray.get(self._ref)
             return JobStatus.SUCCEEDED
         except Exception:
+            logger.error("Job %s failed:", self._job_id, exc_info=True)
             return JobStatus.FAILED
 
     def _poll_submission(self) -> JobStatus:
@@ -111,6 +113,7 @@ class RayJobHandle:
         except Exception:
             if raise_on_failure:
                 raise
+            logger.error("Job %s failed:", self._job_id, exc_info=True)
         return self.status()
 
     def _wait_submission(self, timeout: float | None, raise_on_failure: bool) -> JobStatus:
@@ -330,11 +333,14 @@ class RayClient:
         else:
             remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(callable_ep.callable)
 
-        # JobRequest.replicas maps to num_slices for TPU gang scheduling
+        # Convert replicas (total VMs) back to num_slices for Ray's gang scheduler
+        topo = get_tpu_topology(device.variant)
+        replicas = request.replicas or 1
+        num_slices = max(1, replicas // topo.vm_count)
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,
-            num_slices=request.replicas,
+            num_slices=num_slices,
             max_retries_preemption=request.max_retries_preemption,
             max_retries_failure=request.max_retries_failure,
         )
@@ -363,15 +369,20 @@ class RayClient:
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
-        """Create N Ray actors named "{name}-0", "{name}-1", ..."""
+        """Create N Ray actors named "{name}-0", "{name}-1", ...
+
+        Uses _RayActorHost to wrap actors, enabling them to access their
+        own handle via current_actor().handle during __init__.
+        """
         ray_options = _actor_ray_options(resources)
         # Don't specify runtime_env - let actors inherit from parent job
         # This prevents rebuilding packages that are already available
         handles: list[RayActorHandle] = []
         for i in range(count):
             actor_name = f"{name}-{i}"
-            remote_cls = ray.remote(actor_class)
-            actor_ref = remote_cls.options(name=actor_name, **ray_options).remote(*args, **kwargs)
+            actor_ref = _RayActorHost.options(name=actor_name, **ray_options).remote(
+                actor_class, actor_name, i, name, args, kwargs
+            )
             handles.append(RayActorHandle(actor_ref))
         return RayActorGroup(cast(list[ActorHandle], handles))
 
@@ -402,32 +413,106 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
     return options
 
 
+@ray.remote(enable_task_events=False)
+class _RayActorHost:
+    """Wrapper that sets up ActorContext before creating the real actor.
+
+    This enables actors to access their own handle via current_actor().handle
+    during __init__, even though __init__ runs in a separate process.
+
+    Uses _proxy_call for method dispatch since Ray doesn't support __getattr__
+    for dynamic method lookup on actor handles.
+    """
+
+    def __init__(
+        self,
+        actor_class: type,
+        actor_name: str,
+        actor_index: int,
+        group_name: str,
+        args: tuple,
+        kwargs: dict,
+    ):
+        # Ensure the root logger is configured in this worker process so that
+        # library code using logging.getLogger(__name__).info() is visible.
+        # Ray forwards stdout/stderr to the driver, but Python's root logger
+        # defaults to WARNING in fresh processes.
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s:%(lineno)d %(message)s",
+            force=True,
+        )
+
+        # Create handle by name - will resolve via ray.get_actor() when used
+        handle = RayActorHandle(actor_name)
+        ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name)
+        token = _set_current_actor(ctx)
+        try:
+            self._instance = actor_class(*args, **kwargs)
+        finally:
+            _reset_current_actor(token)
+
+    def _proxy_call(self, method_name: str, args: tuple, kwargs: dict) -> Any:
+        """Proxy method calls to the wrapped actor instance."""
+        return getattr(self._instance, method_name)(*args, **kwargs)
+
+
 class RayActorHandle:
-    """Handle to a Ray actor. Attribute access returns RayActorMethod objects."""
+    """Handle to a Ray actor. Supports both direct ref and name-based lazy resolution.
 
-    def __init__(self, actor_ref: ray.actor.ActorHandle):
-        # Store under a mangled name so __getattr__ doesn't recurse
-        object.__setattr__(self, "_actor_ref", actor_ref)
+    All fray v2 Ray actors are wrapped by _RayActorHost, so method calls go through
+    _proxy_call to reach the wrapped instance.
+    """
 
-    def __getattr__(self, method_name: str) -> RayActorMethod:
+    def __init__(self, actor_ref_or_name: ray.actor.ActorHandle | str):
+        # Store under mangled names so __getattr__ doesn't recurse
+        if isinstance(actor_ref_or_name, str):
+            object.__setattr__(self, "_actor_name", actor_ref_or_name)
+            object.__setattr__(self, "_actor_ref", None)
+        else:
+            object.__setattr__(self, "_actor_name", None)
+            object.__setattr__(self, "_actor_ref", actor_ref_or_name)
+
+    def _resolve(self) -> ray.actor.ActorHandle:
+        """Get the underlying Ray actor handle, resolving by name if needed."""
+        if self._actor_ref is None:
+            object.__setattr__(self, "_actor_ref", ray.get_actor(self._actor_name))
+        return self._actor_ref
+
+    def __getattr__(self, method_name: str) -> RayProxyMethod:
         if method_name.startswith("_"):
             raise AttributeError(method_name)
-        ray_method = getattr(self._actor_ref, method_name)
-        return RayActorMethod(ray_method)
+        return RayProxyMethod(self._resolve(), method_name)
+
+    def __getstate__(self) -> dict:
+        """Serialize by name for cross-process transfer."""
+        if self._actor_name:
+            return {"name": self._actor_name}
+        return {"ref": self._actor_ref}
+
+    def __setstate__(self, state: dict) -> None:
+        """Deserialize from name or ref."""
+        if "name" in state:
+            object.__setattr__(self, "_actor_name", state["name"])
+            object.__setattr__(self, "_actor_ref", None)
+        else:
+            object.__setattr__(self, "_actor_name", None)
+            object.__setattr__(self, "_actor_ref", state["ref"])
 
 
-class RayActorMethod:
-    """Wraps a Ray actor method with .remote() → ActorFuture and __call__ → blocking."""
+class RayProxyMethod:
+    """Wraps a method call that goes through _RayActorHost._proxy_call."""
 
-    def __init__(self, ray_method: Any):
-        self._ray_method = ray_method
+    def __init__(self, ray_handle: ray.actor.ActorHandle, method_name: str):
+        self._ray_handle = ray_handle
+        self._method_name = method_name
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
-        object_ref = self._ray_method.remote(*args, **kwargs)
+        object_ref = self._ray_handle._proxy_call.remote(self._method_name, args, kwargs)
         return RayActorFuture(object_ref)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        object_ref = self._ray_method.remote(*args, **kwargs)
+        object_ref = self._ray_handle._proxy_call.remote(self._method_name, args, kwargs)
         return ray.get(object_ref)
 
 

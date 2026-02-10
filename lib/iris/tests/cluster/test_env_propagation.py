@@ -18,8 +18,7 @@ Env inheritance uses JobInfo.env (populated from IRIS_JOB_ENV) which contains
 only the explicit vars from the parent's EnvironmentConfig — not infrastructure
 vars like TPU_NAME or PATH that happen to be in os.environ.
 
-Extras and pip_packages are conveyed through the inherited dockerfile
-(IRIS_DOCKERFILE), not through IRIS_JOB_ENV.
+Extras and pip_packages are inherited via IRIS_JOB_EXTRAS and IRIS_JOB_PIP_PACKAGES.
 """
 
 import json
@@ -183,7 +182,8 @@ def _chain_job(output_file: str, child_spec: dict | None = None):
     info = get_job_info()
     state = {
         "env": dict(info.env) if info else {},
-        "dockerfile": info.dockerfile if info else None,
+        "extras": list(info.extras) if info else [],
+        "pip_packages": list(info.pip_packages) if info else [],
     }
     with open(output_file, "w") as f:
         json.dump(state, f)
@@ -203,15 +203,15 @@ def _chain_job(output_file: str, child_spec: dict | None = None):
 
 @pytest.mark.timeout(120)
 def test_env_propagates_through_job_chain(tmp_path):
-    """E2E: env vars propagate A → B → C; extras conveyed via dockerfile, child overrides parent."""
+    """E2E: env vars and extras propagate A → B → C; child overrides parent."""
     out_a = str(tmp_path / "a.json")
     out_b = str(tmp_path / "b.json")
     out_c = str(tmp_path / "c.json")
 
     # Chain: A → B → C
-    # C: leaf job, no children (inherits B's dockerfile)
-    # B: submits C with extras=["extra-from-b"] (generates new dockerfile)
-    # A: submits B with no explicit extras (B inherits A's dockerfile)
+    # C: leaf job, no children (inherits B's extras)
+    # B: submits C with extras=["extra-from-b"] (overrides parent extras)
+    # A: submits B with no explicit extras (B inherits A's extras)
     chain_spec = {
         "output_file": out_b,
         "extras": None,
@@ -247,12 +247,11 @@ def test_env_propagates_through_job_chain(tmp_path):
         assert "PATH" not in state["env"]
         assert "HOME" not in state["env"]
 
-    # A was launched with extras=["extra-from-a"], its dockerfile should contain that
-    assert "--extra extra-from-a" in state_a["dockerfile"]
+    # A was launched with extras=["extra-from-a"]
+    assert state_a["extras"] == ["extra-from-a"]
 
-    # B was launched without explicit extras, so it inherits A's dockerfile
-    assert "--extra extra-from-a" in state_b["dockerfile"]
+    # B was launched without explicit extras, so it inherits A's extras
+    assert state_b["extras"] == ["extra-from-a"]
 
-    # C was launched by B with extras=["extra-from-b"], which generates a NEW dockerfile
-    assert "--extra extra-from-b" in state_c["dockerfile"]
-    assert "--extra extra-from-a" not in state_c["dockerfile"]
+    # C was launched by B with extras=["extra-from-b"], which overrides parent extras
+    assert state_c["extras"] == ["extra-from-b"]

@@ -108,6 +108,9 @@ message ScaleGroupStatus {
 
   // Slices in this group
   repeated SliceInfo slices = 50;
+
+  // Slice lifecycle state counts (booting, initializing, ready, failed, requesting)
+  map<string, int32> slice_state_counts = 60;
 }
 
 // Autoscaler action/event log entry

@@ -28,22 +28,11 @@ import json
 import logging
 import shlex
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.vm.autoscaler import Autoscaler
-
-from iris.cluster.controller.controller import (
-    Controller as _InnerController,
-    ControllerConfig as _InnerControllerConfig,
-    RpcWorkerStubFactory,
-)
-from iris.cluster.vm.config import config_to_dict, create_local_autoscaler
-from iris.cluster.vm.local_platform import find_free_port
-from iris.managed_thread import ThreadContainer
+from iris.cluster.config import config_to_dict
 from iris.cluster.vm.gcp_tpu_platform import (
     controller_address_metadata_key,
     controller_metadata_key,
@@ -1004,130 +993,3 @@ class ManualController:
         except Exception as e:
             logger.warning("Error fetching container logs: %s", e)
             return None
-
-
-class _InProcessController(Protocol):
-    """Protocol for the in-process Controller used by LocalController.
-
-    Avoids importing iris.cluster.controller.controller at module level
-    which would create a circular dependency through the autoscaler.
-    """
-
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-
-    @property
-    def url(self) -> str: ...
-
-
-class LocalController:
-    """In-process controller for local testing.
-
-    Runs Controller + Autoscaler(LocalVmManagers) in the current process.
-    Workers are threads, not VMs. No Docker, no GCS, no SSH.
-    """
-
-    def __init__(
-        self,
-        config: config_pb2.IrisClusterConfig,
-        threads: ThreadContainer | None = None,
-    ):
-        self._config = config
-        self._threads = threads
-        self._controller: _InProcessController | None = None
-        self._temp_dir: tempfile.TemporaryDirectory | None = None
-        self._autoscaler: Autoscaler | None = None
-
-    def start(self) -> str:
-        # Create temp dir for controller's bundle storage
-        self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_")
-        bundle_dir = Path(self._temp_dir.name) / "bundles"
-        bundle_dir.mkdir()
-
-        port = self._config.controller.local.port or find_free_port()
-        address = f"http://127.0.0.1:{port}"
-
-        controller_threads = self._threads.create_child("controller") if self._threads else None
-        autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
-
-        # Autoscaler creates its own temp dirs for worker resources
-        self._autoscaler = create_local_autoscaler(
-            self._config,
-            address,
-            threads=autoscaler_threads,
-        )
-
-        self._controller = _InnerController(
-            config=_InnerControllerConfig(
-                host="127.0.0.1",
-                port=port,
-                bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
-            ),
-            worker_stub_factory=RpcWorkerStubFactory(),
-            autoscaler=self._autoscaler,
-            threads=controller_threads,
-        )
-        self._controller.start()
-        return self._controller.url
-
-    def stop(self) -> None:
-        if self._controller:
-            self._controller.stop()
-            self._controller = None
-        # Clean up autoscaler's temp dir
-        if self._autoscaler and hasattr(self._autoscaler, "_temp_dir"):
-            self._autoscaler._temp_dir.cleanup()
-            self._autoscaler = None
-        # Clean up controller's temp dir
-        if self._temp_dir:
-            self._temp_dir.cleanup()
-            self._temp_dir = None
-
-    def restart(self) -> str:
-        self.stop()
-        return self.start()
-
-    def reload(self) -> str:
-        return self.restart()
-
-    def discover(self) -> str | None:
-        return self._controller.url if self._controller else None
-
-    def status(self) -> ControllerStatus:
-        if self._controller:
-            return ControllerStatus(
-                running=True,
-                address=self._controller.url,
-                healthy=True,
-            )
-        return ControllerStatus(running=False, address="", healthy=False)
-
-    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
-        return "(local controller — no startup logs)"
-
-
-def create_controller_vm(
-    config: config_pb2.IrisClusterConfig,
-    threads: ThreadContainer | None = None,
-) -> ControllerProtocol:
-    """Factory function to create appropriate controller VM type.
-
-    Dispatches based on the controller.controller oneof field:
-    - gcp: Creates GcpController for GCP-managed VMs
-    - manual: Creates ManualController for SSH bootstrap to pre-existing hosts
-    - local: Creates LocalController for in-process testing
-
-    Args:
-        config: Cluster configuration.
-        threads: Optional parent ThreadContainer. Only used by LocalController
-            to integrate in-process threads into the caller's hierarchy.
-    """
-    controller = config.controller
-    which = controller.WhichOneof("controller")
-    if which == "gcp":
-        return GcpController(config)
-    if which == "manual":
-        return ManualController(config)
-    if which == "local":
-        return LocalController(config, threads=threads)
-    raise ValueError("No controller config specified in controller")

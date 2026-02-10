@@ -28,7 +28,7 @@ import jax.random as jrandom
 import jmp
 import levanter
 import numpy
-from fray.cluster import (
+from fray.v1.cluster import (
     CpuConfig,
     EnvironmentConfig,
     Entrypoint,

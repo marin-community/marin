@@ -33,10 +33,10 @@ from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 
-def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
-    """Create a minimal Entrypoint proto for testing."""
-    entrypoint = cluster_pb2.Entrypoint()
-    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
+    """Create a minimal RuntimeEntrypoint proto for testing."""
+    entrypoint = cluster_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
@@ -343,6 +343,59 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     assert int(job_status["startedAt"]["epochMs"]) == 3000
 
 
+def test_get_job_status_returns_original_request(client, state):
+    """GetJobStatus RPC returns the original LaunchJobRequest for the job detail page."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="request-detail-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=4,
+            memory_bytes=8 * 1024**3,
+            disk_bytes=100 * 1024**3,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(
+            pip_packages=["torch", "numpy"],
+            python_version="3.11",
+        ),
+        replicas=2,
+        constraints=[
+            cluster_pb2.Constraint(
+                key="tpu-name",
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="my-tpu"),
+            ),
+        ],
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+    )
+    job_id = submit_job(state, "request-detail-job", request)
+
+    resp = rpc_post(client, "GetJobStatus", {"jobId": job_id.to_wire()})
+    returned_request = resp.get("request", {})
+
+    assert returned_request is not None
+    # Verify entrypoint command is preserved
+    ep = returned_request.get("entrypoint", {})
+    assert ep.get("runCommand", {}).get("argv") == ["python", "-c", "pass"]
+    # Verify resources
+    res = returned_request.get("resources", {})
+    assert res["cpu"] == 4
+    assert int(res["memoryBytes"]) == 8 * 1024**3
+    assert int(res["diskBytes"]) == 100 * 1024**3
+    # Verify environment
+    env = returned_request.get("environment", {})
+    assert env["pipPackages"] == ["torch", "numpy"]
+    assert env["pythonVersion"] == "3.11"
+    # Verify replicas
+    assert returned_request["replicas"] == 2
+    # Verify constraints
+    constraints = returned_request.get("constraints", [])
+    assert len(constraints) == 1
+    assert constraints[0]["key"] == "tpu-name"
+    assert constraints[0]["value"]["stringValue"] == "my-tpu"
+    # Verify coscheduling
+    assert returned_request["coscheduling"]["groupBy"] == "tpu-name"
+
+
 def test_get_job_status_returns_error_for_missing_job(client):
     """GetJobStatus RPC returns error for non-existent job."""
     resp = client.post(
@@ -538,7 +591,7 @@ def test_get_task_logs_error_for_unassigned_task(client, state, job_request):
     assert resp.status_code == 200
     data = resp.json()
     assert len(data.get("taskLogs", [])) == 1
-    assert "no assigned worker" in data["taskLogs"][0].get("error", "").lower()
+    assert "not found" in data["taskLogs"][0].get("error", "").lower()
 
 
 # =============================================================================

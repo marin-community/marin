@@ -58,8 +58,9 @@ def serve(
     When --config is provided, the controller runs an integrated autoscaler
     that provisions/terminates VM slices based on pending task demand.
     """
-    from iris.cluster.vm.autoscaler import Autoscaler
-    from iris.cluster.vm.config import create_autoscaler, load_config
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.config import load_config
+    from iris.cluster.controller.config import create_autoscaler
     from iris.cluster.vm.platform import create_platform
 
     configure_logging(level=getattr(logging, log_level))
@@ -68,6 +69,7 @@ def serve(
 
     # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
+    cluster_config = None
     if config_file:
         logger.info("Loading cluster config from %s", config_file)
         try:
@@ -112,15 +114,23 @@ def serve(
     else:
         logger.info("No cluster config provided, autoscaler disabled")
 
+    # Use worker_timeout from cluster config if available
+    if cluster_config and cluster_config.controller.worker_timeout.milliseconds > 0:
+        effective_timeout = Duration.from_proto(cluster_config.controller.worker_timeout)
+    else:
+        effective_timeout = Duration.from_seconds(worker_timeout)
+
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
-    logger.info("Configuration: scheduler_interval=%.2fs worker_timeout=%.2fs", scheduler_interval, worker_timeout)
+    logger.info(
+        "Configuration: scheduler_interval=%.2fs worker_timeout=%.0fms", scheduler_interval, effective_timeout.to_ms()
+    )
 
     config = ControllerConfig(
         host=host,
         port=port,
         bundle_prefix=bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
-        worker_timeout=Duration.from_seconds(worker_timeout),
+        worker_timeout=effective_timeout,
     )
 
     try:

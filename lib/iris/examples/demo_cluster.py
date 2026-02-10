@@ -48,8 +48,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import make_local_config
+from iris.cluster.manager import ClusterManager
+from iris.cluster.config import make_local_config
 from iris.rpc import cluster_pb2, config_pb2
 
 # The iris project root (lib/iris/) - used as workspace for the example
@@ -106,7 +106,7 @@ class DemoCluster:
     def _load_or_default_config(self) -> config_pb2.IrisClusterConfig:
         """Load config from file or build a default demo config."""
         if self._config_path:
-            from iris.cluster.vm.config import load_config
+            from iris.cluster.config import load_config
 
             return load_config(Path(self._config_path))
 
@@ -115,6 +115,9 @@ class DemoCluster:
         cpu_sg = config.scale_groups["cpu"]
         cpu_sg.name = "cpu"
         cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        cpu_sg.resources.memory_bytes = int(16 * 1e9)
+        cpu_sg.resources.disk_bytes = int(128 * 1e9)
+        cpu_sg.resources.cpu = 1
         cpu_sg.min_slices = 0
         cpu_sg.max_slices = 4
 
@@ -122,6 +125,11 @@ class DemoCluster:
         tpu_sg.name = "tpu_v5e_16"
         tpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
         tpu_sg.accelerator_variant = "v5litepod-16"
+        tpu_sg.resources.memory_bytes = int(16 * 1e9)
+        tpu_sg.resources.disk_bytes = int(128 * 1e9)
+        tpu_sg.resources.cpu = 128
+        tpu_sg.resources.tpu_count = 4  # chips_per_vm for v5litepod-16
+        tpu_sg.slice_size = 4
         tpu_sg.min_slices = 0
         tpu_sg.max_slices = 4
 

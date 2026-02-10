@@ -20,7 +20,7 @@ import pytest
 
 from iris.client.client import IrisClient, Job
 from iris.cluster.client.local_client import LocalClusterClient
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from iris.rpc import cluster_pb2
 
 
@@ -111,9 +111,7 @@ def test_command_entrypoint_with_custom_env_var(client):
     entrypoint = Entrypoint.from_command("sh", "-c", "echo CUSTOM_VAR=$CUSTOM_VAR")
 
     resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
-    environment = cluster_pb2.EnvironmentConfig(
-        env_vars={"CUSTOM_VAR": "custom_value"},
-    )
+    environment = EnvironmentSpec(env_vars={"CUSTOM_VAR": "custom_value"}).to_proto()
 
     client.submit_job(
         job_id=job_id,
@@ -158,3 +156,57 @@ def test_job_wait_with_stream_logs(client, caplog):
     # like typos or API mismatches that get silently swallowed.
     fetch_failures = [r.message for r in caplog.records if "Failed to fetch" in r.message]
     assert not fetch_failures, f"Log fetching failed during streaming: {fetch_failures}"
+
+
+def _parent_with_two_children():
+    """Parent callable that submits two child jobs and waits for both."""
+    from iris.client.client import iris_ctx
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+
+    ctx = iris_ctx()
+    res = ResourceSpec(cpu=1, memory="1g")
+    env = EnvironmentSpec()
+
+    job_a = ctx.client.submit(
+        Entrypoint.from_command("sh", "-c", "echo CHILD_A_LINE_1"),
+        "child-a",
+        res,
+        environment=env,
+    )
+    job_b = ctx.client.submit(
+        Entrypoint.from_command("sh", "-c", "echo CHILD_B_LINE_1"),
+        "child-b",
+        res,
+        environment=env,
+    )
+    job_a.wait(timeout=30, raise_on_failure=True)
+    job_b.wait(timeout=30, raise_on_failure=True)
+
+
+def test_child_job_logs_sorted_by_timestamp(client):
+    """Logs from multiple child jobs are sorted globally by timestamp and include worker_id."""
+    parent_id = JobName.root("test-child-logs")
+    entrypoint = Entrypoint.from_callable(_parent_with_two_children)
+    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+
+    client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
+
+    status = client.wait_for_job(parent_id, timeout=60.0, poll_interval=0.2)
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Parent job failed: {status}"
+
+    response = client.fetch_task_logs(parent_id, include_children=True)
+
+    all_entries = []
+    for batch in response.task_logs:
+        for entry in batch.logs:
+            all_entries.append((entry.timestamp.epoch_ms, batch.worker_id, batch.task_id, entry.data))
+
+    log_text = " ".join(e[3] for e in all_entries)
+    assert "CHILD_A_LINE_1" in log_text, f"Missing child-a logs in: {log_text}"
+    assert "CHILD_B_LINE_1" in log_text, f"Missing child-b logs in: {log_text}"
+
+    # Verify worker_id is populated in every batch that has logs
+    batches_with_logs = [b for b in response.task_logs if len(b.logs) > 0]
+    assert all(
+        b.worker_id for b in batches_with_logs
+    ), f"worker_id missing in batches: {[(b.task_id, b.worker_id) for b in batches_with_logs]}"

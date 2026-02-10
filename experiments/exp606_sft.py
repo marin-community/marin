@@ -46,8 +46,8 @@ tulu3_llama_tokenize_step = default_tokenize(
     format=llama3_instruct_chat_format,
 )
 
-# This dataset should only by used for older runs. Don't use this in new experiments
-tulu3_llama_data_old = lm_data_config(tulu3_llama_tokenize_step, permutation_type="linear")
+# This dataset should only by used for older runs. Don't use this in new experiments.
+tulu3_llama_data_old = lm_data_config(tulu3_llama_tokenize_step)
 
 tulu_sft_config = SimpleSFTConfig(
     train_batch_size=128,
@@ -55,7 +55,7 @@ tulu_sft_config = SimpleSFTConfig(
     learning_rate=5e-6,
     resources=ResourceConfig.with_tpu("v4-128", slice_count=1),
     tokenizer=llama3_instruct_tokenizer,
-    model_name_or_path="meta-llama/Llama-3.1-8B",
+    initialize_from_hf="meta-llama/Llama-3.1-8B",
     max_seq_len=4096,
     seed=1,
 )

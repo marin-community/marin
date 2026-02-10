@@ -143,9 +143,23 @@ while not deadline.expired():
     time.sleep(0.1)
 ```
 
-### Autoscaler and VM Management
+### Architecture Layers
 
-The autoscaler runs inside the Controller process and manages cloud VMs based on pending task demand. Key files:
+Iris follows a clean layering architecture:
+
+**Controller layer** (`cluster/controller/`): Task scheduling, autoscaling, and demand routing
+- Depends on VM layer for platform abstractions (VmManagerProtocol, VmGroupProtocol)
+- Owns autoscaling logic and scaling group state
+
+**VM layer** (`cluster/vm/`): Platform abstractions for managing VMs
+- Provides VM lifecycle management (GCP, manual, local)
+- Does NOT depend on controller layer
+
+**Cluster layer** (`cluster/`): High-level orchestration
+- ClusterManager coordinates controller and VM lifecycle
+- Configuration and platform abstractions
+
+Key files:
 
 ```
 src/iris/
@@ -157,15 +171,74 @@ src/iris/
 │   ├── run.py                   # Command passthrough job submission
 │   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
+│   ├── config.py                # General Iris configuration (load_config, IrisConfig)
+│   ├── manager.py               # ClusterManager - high-level cluster orchestration
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
-│   │   └── main.py              # Controller daemon CLI (serve command)
+│   │   ├── main.py              # Controller daemon CLI (serve command)
+│   │   ├── autoscaler.py        # Core autoscaling logic and demand routing
+│   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
+│   │   ├── config.py            # Autoscaler factory functions
+│   │   ├── local.py             # LocalController for in-process testing
+│   │   └── lifecycle.py         # Controller factory (create_controller_vm)
 │   └── vm/
-│       ├── autoscaler.py        # Core scaling logic
-│       ├── scaling_group.py     # Per-group state tracking
-│       ├── gcp.py               # GCP TPU management
-│       ├── manual.py            # Pre-existing host management
-│       └── config.py            # Config loading + factory functions
+│       ├── controller_vm.py     # GCP/manual controller VM lifecycle
+│       ├── gcp_tpu_platform.py  # GCP TPU management
+│       ├── manual_platform.py   # Pre-existing host management
+│       └── local_platform.py    # Local development platform
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.
+
+### Dashboard Frontend
+
+The controller and worker dashboards are client-side SPAs using Preact + HTM.
+
+**Directory structure:**
+```
+src/iris/cluster/static/
+├── controller/          # Controller dashboard
+│   ├── app.js           # Main app (tabs, state, data fetching)
+│   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
+│   ├── job-detail.js    # Job detail page with task list
+│   ├── workers-tab.js   # Workers table
+│   └── vms-tab.js       # VM management table
+├── shared/              # Shared utilities
+│   ├── rpc.js           # Connect RPC client wrapper
+│   ├── utils.js         # Formatting (dates, durations)
+│   └── styles.css       # Consolidated CSS
+├── vendor/              # Third-party ES modules
+│   ├── preact.mjs       # UI framework
+│   └── htm.mjs          # HTML template literals
+└── worker/              # Worker dashboard components
+```
+
+**Key patterns:**
+- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
+- No REST endpoints - RPC only
+- State management with Preact hooks (`useState`, `useEffect`)
+- HTML templates via `htm.bind(h)` tagged template literals
+- Jobs displayed as a hierarchical tree based on name structure
+
+**When modifying the dashboard:**
+1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
+2. Ensure any new UI features have corresponding RPC endpoints
+3. Follow existing component patterns (functional components, hooks)
+
+## Debugging Container Failures
+
+**Exit code 137** = 128 + 9 = SIGKILL, typically OOM. Check:
+- `ContainerStatus.oom_killed` field (from `docker inspect .State.OOMKilled`)
+- Job's `resources.memory_bytes` vs what was requested
+- Resource flow: `JobRequest.resources` → Iris protobuf → `ContainerConfig` → `docker --memory`
+
+**Resource propagation path:**
+```
+fray.v2.ResourceConfig → iris.cluster.types.ResourceSpec.to_proto()
+  → cluster_pb2.ResourceSpecProto → docker.py _docker_create() --memory/--cpus
+```
+
+**Key files for container debugging:**
+- `cluster/runtime/docker.py`: Docker CLI wrapper, resource limits at lines 396-403
+- `cluster/runtime/types.py`: ContainerStatus with oom_killed field
+- `cluster/worker/task_attempt.py`: _format_exit_error() interprets signals
