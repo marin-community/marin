@@ -43,6 +43,12 @@ from experiments.kelp.tree.subtree_bank import (
     SubtreeEntry,
 )
 
+_EGGLOG_AVAILABLE = True
+try:
+    from experiments.kelp.tree.egraph_augmentation import augment_bank_with_egraph
+except ImportError:
+    _EGGLOG_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # --- Variable renaming ---
@@ -489,11 +495,15 @@ def augment_bank(
     n_renamed: int = 2,
     n_perturbed: int = 2,
     synthetic_count: int = 50,
+    use_egraph: bool = True,
+    egraph_max_variants: int = 5,
 ) -> SubtreeBank:
     """Augment a subtree bank with generated variations.
 
     For each existing entry, generates up to n_renamed variable-renamed variants
     and n_perturbed operator-perturbed variants. Also adds synthetic subtrees.
+    If egglog is installed, generates e-graph expression variants via equality
+    saturation.
 
     Args:
         bank: Original subtree bank.
@@ -501,6 +511,8 @@ def augment_bank(
         n_renamed: Number of renamed variants per entry.
         n_perturbed: Number of operator-perturbed variants per entry.
         synthetic_count: Number of synthetic subtrees per template category.
+        use_egraph: Whether to run e-graph augmentation (requires egglog).
+        egraph_max_variants: Max variants per expression entry from e-graph rewriting.
 
     Returns:
         New SubtreeBank with original entries plus augmented entries.
@@ -559,10 +571,20 @@ def augment_bank(
             augmented.add(entry)
             synthetic_added += 1
 
+    # Run e-graph equality saturation on expression entries.
+    egraph_added = 0
+    if use_egraph and _EGGLOG_AVAILABLE:
+        augmented, egraph_added = augment_bank_with_egraph(
+            augmented,
+            max_variants_per_entry=egraph_max_variants,
+        )
+    elif use_egraph and not _EGGLOG_AVAILABLE:
+        logger.warning("egglog not installed; skipping e-graph augmentation (pip install egglog)")
+
     logger.info(
         f"Augmented subtree bank: {original_count} original + "
         f"{renamed_count} renamed + {perturbed_count} perturbed + "
-        f"{synthetic_added} synthetic = {augmented.total_entries} total"
+        f"{synthetic_added} synthetic + {egraph_added} egraph = {augmented.total_entries} total"
     )
 
     return augmented
