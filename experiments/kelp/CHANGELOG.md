@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Add e-graph augmentation using egglog equality saturation for principled expression variant generation (#62, #63, #64)
 - Add execution-guided reranking to evaluation pipeline using test case feedback (#53)
 - Add MBPP-based evaluation with held-out test programs and executable test cases (#51)
 - Add diagnostic analysis of model repair outputs for failed eval tasks (#54)

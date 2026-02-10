@@ -232,5 +232,5 @@ def test_augment_bank_no_duplicates(bank, rng):
 
 
 def test_augment_bank_zero_augmentation_preserves_bank(bank, rng):
-    augmented = augment_bank(bank, rng, n_renamed=0, n_perturbed=0, synthetic_count=0)
+    augmented = augment_bank(bank, rng, n_renamed=0, n_perturbed=0, synthetic_count=0, use_egraph=False)
     assert augmented.total_entries == bank.total_entries
