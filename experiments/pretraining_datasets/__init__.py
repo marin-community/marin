@@ -83,6 +83,11 @@ DATASETS = {
         "download": simple_downloads["proofpile_2"],
         "tokenize_fn": lambda: {"proofpile_2/all": simple_tokenized["proofpile_2"]},
     },
+    "nemotron_pretraining_code_v1": {
+        "subsets": ["all"],
+        "download": simple_downloads["nemotron_pretraining_code_v1"],
+        "tokenize_fn": lambda: {"nemotron_pretraining_code_v1/all": simple_tokenized["nemotron_pretraining_code_v1"]},
+    },
     "slimpajama_6b": {
         "subsets": ["all"],
         "download": simple_downloads["slimpajama_6b"],
