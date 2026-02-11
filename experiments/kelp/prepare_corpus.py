@@ -290,7 +290,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--holdout-mbpp",
         action="store_true",
-        help="Exclude all MBPP programs from training corpus (use as held-out eval set)",
+        default=True,
+        help="Exclude all MBPP programs from training corpus (default: True, since evaluate_mbpp.py uses all splits)",
+    )
+    parser.add_argument(
+        "--include-mbpp",
+        dest="holdout_mbpp",
+        action="store_false",
+        help="Include MBPP programs in training (WARNING: contaminates evaluate_mbpp.py eval)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for shuffling")
     return parser.parse_args()
