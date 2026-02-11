@@ -271,7 +271,7 @@ class Job:
     def wait(
         self,
         timeout: float = 300.0,
-        poll_interval: float = 2.0,
+        poll_interval: float = 5.0,
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
@@ -315,7 +315,7 @@ class Job:
         for efficient incremental fetching.
         """
         since_ms = 0
-        stream_interval = Duration.from_seconds(min(0.2, poll_interval))
+        stream_interval = Duration.from_seconds(poll_interval)
         deadline = Deadline.from_seconds(timeout)
 
         while True:

@@ -28,6 +28,12 @@ def cli():
     "--controller-address", default=None, help="Controller URL for auto-registration (e.g., http://controller:8080)"
 )
 @click.option("--worker-id", default=None, help="Worker ID (auto-generated if not provided)")
+@click.option(
+    "--config",
+    "config_file",
+    type=click.Path(exists=True),
+    help="Cluster config for platform-based controller discovery",
+)
 def serve(
     host: str,
     port: int,
@@ -35,9 +41,21 @@ def serve(
     port_range: str,
     controller_address: str | None,
     worker_id: str | None,
+    config_file: str | None,
 ):
     """Start the Iris worker service."""
     configure_logging(level=logging.INFO)
+
+    if config_file and not controller_address:
+        from iris.cluster.config import load_config
+        from iris.cluster.platform.factory import create_platform
+
+        cluster_config = load_config(Path(config_file))
+        platform = create_platform(
+            platform_config=cluster_config.platform,
+            ssh_config=cluster_config.defaults.ssh,
+        )
+        controller_address = f"http://{platform.discover_controller(cluster_config.controller)}"
 
     port_start, port_end = map(int, port_range.split("-"))
 

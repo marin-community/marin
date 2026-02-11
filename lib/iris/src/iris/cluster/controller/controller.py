@@ -15,7 +15,7 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
-from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
@@ -42,7 +42,7 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +261,8 @@ class Controller:
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None
+        self._scheduling_thread: ManagedThread | None = None
+        self._heartbeat_thread: ManagedThread | None = None
 
         # Thread pool for parallel heartbeat dispatch, owned by the ThreadContainer
         # so it is shut down automatically during stop().
@@ -271,7 +273,9 @@ class Controller:
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
-        self._last_autoscaler_run: float = 0.0
+        self._autoscaler_limiter: RateLimiter | None = (
+            RateLimiter(autoscaler.evaluation_interval.to_seconds()) if autoscaler else None
+        )
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -285,8 +289,8 @@ class Controller:
 
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
-        self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
-        self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
+        self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
+        self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
@@ -312,21 +316,30 @@ class Controller:
     def stop(self) -> None:
         """Stop all background components gracefully.
 
-        Signals all managed threads via their stop events, then joins.
-        If shutdown hangs, test framework timeout will kill the process.
+        Shutdown ordering is critical to avoid thread leaks:
+        1. Stop scheduling/heartbeat loops first so no new autoscaler
+           work (scale-ups, worker creation) can be triggered.
+        2. Shut down the autoscaler, which terminates all VMs/workers.
+        3. Stop remaining threads (server) and executors.
         """
-        # Wake the loops so they check stop_event promptly
+        # Step 1: Stop scheduling and heartbeat loops so no new workers
+        # can be created during autoscaler shutdown.
         self._wake_event.set()
         self._heartbeat_event.set()
+        join_timeout = Duration.from_seconds(5.0)
+        if self._scheduling_thread:
+            self._scheduling_thread.stop()
+            self._scheduling_thread.join(timeout=join_timeout)
+        if self._heartbeat_thread:
+            self._heartbeat_thread.stop()
+            self._heartbeat_thread.join(timeout=join_timeout)
 
-        # Stop all managed threads and executors (signals stop_event + joins;
-        # server stop is handled by spawn_server's stop_event bridge, executor
-        # shutdown is handled by ThreadContainer)
-        self._threads.stop()
-
-        # Shutdown autoscaler
+        # Step 2: Shutdown autoscaler (terminates VMs, stops workers, stops platform)
         if self._autoscaler:
             self._autoscaler.shutdown()
+
+        # Step 3: Stop remaining threads (server) and executors
+        self._threads.stop()
 
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
@@ -571,19 +584,11 @@ class Controller:
 
         Called from the scheduling loop every cycle. Computes demand from pending
         tasks and worker idle state, then runs the autoscaler.
-
-        Rate-limits evaluations based on the autoscaler's configured evaluation_interval_seconds.
         """
-        if not self._autoscaler:
+        if not self._autoscaler or not self._autoscaler_limiter:
             return
-
-        from time import monotonic
-
-        now = monotonic()
-        interval = self._autoscaler.evaluation_interval_seconds
-        if interval > 0 and now - self._last_autoscaler_run < interval:
+        if not self._autoscaler_limiter.should_run():
             return
-        self._last_autoscaler_run = now
 
         demand_entries = compute_demand_entries(self._state)
         vm_status_map = self._build_vm_status_map()
@@ -593,7 +598,7 @@ class Controller:
         """Build a map of VM address to worker status for autoscaler.
 
         The autoscaler needs to look up worker status by VM address (not worker_id)
-        because ManagedVm only knows the VM's IP address, not the worker's self-assigned ID.
+        because VmHandle only exposes the VM's IP address, not the worker's self-assigned ID.
         Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
         """
         result: VmWorkerStatusMap = {}

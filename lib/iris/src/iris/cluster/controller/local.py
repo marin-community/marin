@@ -27,15 +27,15 @@ import tempfile
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.config import create_local_autoscaler
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.config import create_local_autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
     ControllerConfig as _InnerControllerConfig,
     RpcWorkerStubFactory,
 )
-from iris.cluster.vm.controller_vm import ControllerStatus
-from iris.cluster.vm.local_platform import find_free_port
+from iris.cluster.controller.lifecycle import ControllerStatus
+from iris.cluster.platform.local import find_free_port
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
@@ -58,7 +58,7 @@ class _InProcessController(Protocol):
 class LocalController:
     """In-process controller for local testing.
 
-    Runs Controller + Autoscaler(LocalVmManagers) in the current process.
+    Runs Controller + Autoscaler(LocalPlatform) in the current process.
     Workers are threads, not VMs. No Docker, no GCS, no SSH.
     """
 
@@ -115,11 +115,12 @@ class LocalController:
         if self._controller:
             self._controller.stop()
             self._controller = None
-        # Clean up autoscaler's temp dir
-        if self._autoscaler and hasattr(self._autoscaler, "_temp_dir"):
-            self._autoscaler._temp_dir.cleanup()
+        if self._autoscaler is not None:
+            # _temp_dir is set by create_local_autoscaler for cleanup
+            temp_dir = getattr(self._autoscaler, "_temp_dir", None)
+            if temp_dir is not None:
+                temp_dir.cleanup()
             self._autoscaler = None
-        # Clean up controller's temp dir
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None

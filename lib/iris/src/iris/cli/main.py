@@ -76,22 +76,18 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
         platform = iris_config.platform()
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.manager import ClusterManager
+            from iris.cluster.controller.local import LocalController
 
-            manager = ClusterManager(iris_config.proto)
-            controller_address = manager.start()
-            ctx.call_on_close(manager.stop)
+            controller = LocalController(iris_config.proto)
+            controller_address = controller.start()
+            ctx.call_on_close(controller.stop)
         else:
             controller_address = iris_config.controller_address()
 
-        # Establish tunnel with 5-second timeout and keep it alive for command duration
+        # Establish tunnel and keep it alive for command duration
         try:
             logger.info("Establishing tunnel to controller...")
-            tunnel_cm = platform.tunnel(
-                controller_address=controller_address,
-                timeout=5.0,
-                tunnel_logger=logger,
-            )
+            tunnel_cm = platform.tunnel(address=controller_address)
             tunnel_url = tunnel_cm.__enter__()
             ctx.obj["controller_url"] = tunnel_url
             # Clean up tunnel when context closes

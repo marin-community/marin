@@ -1,15 +1,11 @@
 # Iris demo configuration
 # Multiple scale groups for realistic testing with diverse scenarios
 # Uses env var for controller address (external controller)
-# Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_16
 
 platform:
   label_prefix: iris
   gcp:
     project_id: hai-gcp-models
-    region: europe-west4
-    zone: europe-west4-b
-    default_zones: [europe-west4-b]
 
 defaults:
   timeouts:
@@ -37,16 +33,15 @@ controller:
   image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
   bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
   gcp:
+    zone: europe-west4-b
     machine_type: n2-standard-4
     port: 10000
 
 scale_groups:
   # Active scale group with capacity
   tpu_v5e_4:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-4
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 4
     resources:
       cpu: 64
@@ -56,15 +51,17 @@ scale_groups:
       gpu_count: 0
     min_slices: 2
     max_slices: 10
-    zones: [europe-west4-b]
-    preemptible: true
+    slice_template:
+      preemptible: true
+      gcp:
+        zone: europe-west4-b
+        zones: [europe-west4-b]
+        runtime_version: v2-alpha-tpuv5-lite
 
   # Scale group with some capacity but lower limits
   tpu_v5e_16:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 16
     resources:
       cpu: 128
@@ -74,15 +71,17 @@ scale_groups:
       gpu_count: 0
     min_slices: 1
     max_slices: 5
-    zones: [europe-west4-b]
-    preemptible: true
+    slice_template:
+      preemptible: true
+      gcp:
+        zone: europe-west4-b
+        zones: [europe-west4-b]
+        runtime_version: v2-alpha-tpuv5-lite
 
   # Zero quota group - simulates quota exhaustion
   tpu_v6e_256_no_quota:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v6e-256
-    runtime_version: v2-alpha-tpuv6e
     slice_size: 256
     resources:
       cpu: 256
@@ -92,15 +91,17 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 0  # ZERO MAX - simulates no quota available
-    zones: [europe-west4-b]
-    preemptible: true
+    slice_template:
+      preemptible: true
+      gcp:
+        zone: europe-west4-b
+        zones: [europe-west4-b]
+        runtime_version: v2-alpha-tpuv6e
 
   # Disabled group - min and max both zero
   gpu_disabled:
-    vm_type: tpu_vm
     accelerator_type: gpu
     accelerator_variant: a100-40gb
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 1
     resources:
       cpu: 64
@@ -110,15 +111,17 @@ scale_groups:
       gpu_count: 1
     min_slices: 0
     max_slices: 0
-    zones: [europe-west4-b]
-    preemptible: false
+    slice_template:
+      preemptible: false
+      gcp:
+        zone: europe-west4-b
+        zones: [europe-west4-b]
+        runtime_version: v2-alpha-tpuv5-lite
 
   # Group with multi-zone configuration
   tpu_v5e_8_multizone:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 8
     resources:
       cpu: 96
@@ -128,5 +131,8 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 3
-    zones: [europe-west4-a, europe-west4-b, europe-west4-c]
-    preemptible: true
+    slice_template:
+      preemptible: true
+      gcp:
+        zones: [europe-west4-a, europe-west4-b, europe-west4-c]
+        runtime_version: v2-alpha-tpuv5-lite

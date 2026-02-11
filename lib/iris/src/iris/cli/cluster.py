@@ -9,7 +9,6 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import signal
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,10 +20,11 @@ from iris.cli.debug import debug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.manager import ClusterManager
-from iris.cluster.config import make_local_config
-from iris.cluster.controller.lifecycle import create_controller_vm
-from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.cluster.config import IrisConfig, make_local_config
+from iris.cluster.controller.lifecycle import reload_controller, start_controller
+from iris.cluster.controller.local import LocalController
+from iris.cluster.manager import stop_all
+from iris.cluster.controller.slice_status import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -202,12 +202,18 @@ def cluster_start(ctx, local: bool):
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
-    manager = ClusterManager(config)
-    if not manager.is_local:
+    is_local = config.controller.WhichOneof("controller") == "local"
+    if not is_local:
         _build_cluster_images(config)
     click.echo("Starting controller...")
     try:
-        address = manager.start()
+        if is_local:
+            controller = LocalController(config)
+            address = controller.start()
+        else:
+            iris_config = IrisConfig(config)
+            platform = iris_config.platform()
+            address, _vm = start_controller(platform, config)
         click.echo(f"Controller started at {address}")
         click.echo("\nController is running with integrated autoscaler.")
         click.echo("Use 'iris cluster --config=... status' to check cluster state.")
@@ -223,46 +229,14 @@ def cluster_stop(ctx):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster stop")
-    from iris.cluster.config import IrisConfig
 
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
-    ops = platform.vm_ops()
-    slice_ids_by_group: dict[str, list[str]] = {}
-
-    # Discover slices via platform ops (more reliable than RPC since controller may be down)
-    click.echo("Discovering existing slices via platform ops...")
-    for name, group_config in config.scale_groups.items():
-        slice_ids = ops.list_slices(group_config)
-        if slice_ids:
-            slice_ids_by_group[name] = slice_ids
-        click.echo(f"  Found {len(slice_ids)} slice(s) in group '{name}'")
-
-    ctrl = create_controller_vm(config)
-    click.echo("Stopping controller...")
-
-    total = sum(len(ids) for ids in slice_ids_by_group.values())
-    click.echo(f"Terminating {total} slice(s)...")
-
-    # make an executor for these
-    with ThreadPoolExecutor(max_workers=total + 1) as pool:
-        futures = []
-        futures.append(pool.submit(ctrl.stop))
-        for name, slice_ids in slice_ids_by_group.items():
-            group_config = config.scale_groups[name]
-            for slice_id in slice_ids:
-                try:
-                    futures.append(pool.submit(ops.delete_slice, group_config, slice_id))
-                except Exception as e:
-                    click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
-
-        for future in as_completed(futures):
-            try:
-                future.result()
-                click.echo(f"Terminated: {future.result()}")
-            except Exception as e:
-                click.echo(f"Failed to terminate: {e}", err=True)
-    click.echo("Cluster stopped")
+    click.echo("Stopping cluster (controller + all slices)...")
+    try:
+        stop_all(config)
+        click.echo("Cluster stopped")
+    except Exception as e:
+        click.echo(f"Failed to stop cluster: {e}", err=True)
+        raise SystemExit(1) from e
 
 
 @cluster.command("restart")
@@ -285,10 +259,11 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
         raise click.ClickException("--config is required for cluster reload")
     if not no_build:
         _build_cluster_images(config)
-    manager = ClusterManager(config)
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
     click.echo("Reloading controller (workers will be re-bootstrapped automatically)...")
     try:
-        address = manager.reload()
+        address = reload_controller(platform, config)
         click.echo(f"Controller reloaded at {address}")
     except Exception as e:
         click.echo(f"Failed to reload cluster: {e}", err=True)

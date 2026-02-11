@@ -148,15 +148,15 @@ while not deadline.expired():
 Iris follows a clean layering architecture:
 
 **Controller layer** (`cluster/controller/`): Task scheduling, autoscaling, and demand routing
-- Depends on VM layer for platform abstractions (VmManagerProtocol, VmGroupProtocol)
+- Depends on Platform layer for VM abstractions (Platform, SliceHandle, VmHandle)
 - Owns autoscaling logic and scaling group state
 
-**VM layer** (`cluster/vm/`): Platform abstractions for managing VMs
-- Provides VM lifecycle management (GCP, manual, local)
+**Platform layer** (`cluster/platform/`): Platform abstractions for managing VMs
+- Provides VM lifecycle management (GCP, manual, local, CoreWeave)
 - Does NOT depend on controller layer
 
 **Cluster layer** (`cluster/`): High-level orchestration
-- ClusterManager coordinates controller and VM lifecycle
+- `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
 - Configuration and platform abstractions
 
 Key files:
@@ -172,7 +172,7 @@ src/iris/
 │   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
 │   ├── config.py                # General Iris configuration (load_config, IrisConfig)
-│   ├── manager.py               # ClusterManager - high-level cluster orchestration
+│   ├── manager.py               # connect_cluster() + stop_all() free functions
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
 │   │   ├── main.py              # Controller daemon CLI (serve command)
@@ -180,12 +180,17 @@ src/iris/
 │   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
 │   │   ├── config.py            # Autoscaler factory functions
 │   │   ├── local.py             # LocalController for in-process testing
-│   │   └── lifecycle.py         # Controller factory (create_controller_vm)
-│   └── vm/
-│       ├── controller_vm.py     # GCP/manual controller VM lifecycle
-│       ├── gcp_tpu_platform.py  # GCP TPU management
-│       ├── manual_platform.py   # Pre-existing host management
-│       └── local_platform.py    # Local development platform
+│   │   └── lifecycle.py         # Controller lifecycle (start/stop/reload via Platform)
+│   └── platform/
+│       ├── base.py              # Platform protocol and SliceHandle/VmHandle
+│       ├── gcp.py               # GCP TPU platform
+│       ├── manual.py            # Pre-existing host platform
+│       ├── local.py             # Local development platform
+│       ├── coreweave.py         # CoreWeave stub
+│       ├── bootstrap.py         # Worker bootstrap script generation
+│       ├── ssh.py               # SSH connection management
+│       ├── factory.py           # Platform factory from config
+│       └── debug.py             # Platform debugging utilities
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.

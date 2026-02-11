@@ -17,8 +17,8 @@ import uuid
 import pytest
 from iris.chaos import enable_chaos, reset_chaos
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.manager import ClusterManager
 from iris.cluster.config import load_config, make_local_config
+from iris.cluster.manager import connect_cluster
 from iris.client.client import IrisClient
 from iris.rpc import cluster_pb2
 
@@ -57,11 +57,10 @@ def _reset_chaos_fixture():
 
 @pytest.fixture
 def local_cluster():
-    """Boots a local cluster via ClusterManager, yields (url, client)."""
+    """Boots a local cluster, yields (url, client)."""
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         yield url, client
 

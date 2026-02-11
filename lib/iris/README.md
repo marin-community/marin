@@ -49,7 +49,7 @@ Controller Process (in Docker container):
 ├── HTTP dashboard (monitoring, status)
 ├── Scheduler thread (task→worker matching)
 ├── Autoscaler thread (VM lifecycle management)
-└── ManagedVm threads (per-VM state machines)
+└── WorkerVm threads (per-VM state machines)
 
 Worker Process (on each VM):
 ├── Task executor (runs jobs in containers)
@@ -106,7 +106,7 @@ result = client.predict({"text": "hello"})
 | **Worker** | Execution agent running jobs in isolated containers |
 | **Scale Group** | Configuration for a type of accelerator (TPU, GPU) with min/max slices |
 | **Slice** | Atomic scaling unit - a complete TPU pod that succeeds or fails as a whole |
-| **VmManager** | Abstraction for VM lifecycle (GCP, Manual, or Fake for testing) |
+| **Platform** | Protocol for VM/slice lifecycle (GCP, Manual, Local, or Fake for testing) |
 
 ### Network Architecture
 
@@ -337,9 +337,6 @@ platform:
   label_prefix: iris
   gcp:
     project_id: my-project
-    region: us-central1
-    zone: us-central1-a
-    default_zones: [us-central1-a, us-central1-b]
 
 defaults:
   timeouts:
@@ -364,15 +361,14 @@ controller:
   image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
   bundle_prefix: gs://my-bucket/iris/bundles
   gcp:
+    zone: us-central1-a
     machine_type: n2-standard-4
     port: 10000
 
 scale_groups:
   tpu_v5e_4:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-4
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 4
     resources:
       cpu: 64
@@ -382,11 +378,14 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 10
-    preemptible: true
-    zones: [us-central1-a, us-central1-b]
+    slice_template:
+      preemptible: true
+      gcp:
+        zone: us-central1-a
+        zones: [us-central1-a, us-central1-b]
+        runtime_version: v2-alpha-tpuv5-lite
 
   manual_hosts:
-    vm_type: manual_vm
     accelerator_type: cpu
     slice_size: 1
     resources:
@@ -397,10 +396,11 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 2
-    manual:
-      hosts: [10.0.0.1, 10.0.0.2]
-      ssh_user: ubuntu
-      ssh_key_file: ~/.ssh/manual_key
+    slice_template:
+      manual:
+        hosts: [10.0.0.1, 10.0.0.2]
+        ssh_user: ubuntu
+        ssh_key_file: ~/.ssh/manual_key
 ```
 
 ## Directory Structure
@@ -417,9 +417,10 @@ src/iris/
 │   ├── resolver.py          # ClusterResolver
 │   └── worker_pool.py       # Task dispatch
 ├── cluster/                  # Cluster orchestration
+│   ├── manager.py           # connect_cluster() + stop_all() free functions
 │   ├── controller/          # Controller service + autoscaler
 │   ├── worker/              # Worker service
-│   └── vm/                  # VM management + autoscaling
+│   └── platform/            # Platform abstractions (GCP, Manual, Local, CoreWeave)
 ├── rpc/                      # Protocol definitions + generated code
 └── cli/                      # CLI package
     ├── main.py               # Top-level iris group

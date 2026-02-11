@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.manager import ClusterManager
 from iris.cluster.config import IrisConfig
+from iris.cluster.controller.local import LocalController
 from iris.rpc import config_pb2
 
 
@@ -29,19 +29,16 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
 
 @pytest.fixture
 def demo_client() -> IrisClient:
-    manager = ClusterManager(_make_demo_config())
-    manager.start()
+    controller = LocalController(_make_demo_config())
+    address = controller.start()
     try:
-        controller_url = manager.controller.discover()
-        assert controller_url is not None
-
         client = IrisClient.remote(
-            controller_url,
+            address,
             workspace=Path(__file__).resolve().parents[3],
         )
         yield client
     finally:
-        manager.stop()
+        controller.stop()
 
 
 def test_demo_notebook_hello_world_submit(demo_client: IrisClient) -> None:

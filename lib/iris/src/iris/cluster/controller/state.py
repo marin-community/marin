@@ -1061,7 +1061,7 @@ class ControllerState:
             tasks_to_kill: set[JobName] = set()
             failed_vm_addresses: list[str] = []
 
-            for worker in self._workers.values():
+            for worker in list(self._workers.values()):
                 if worker.healthy and worker.is_heartbeat_expired(timeout):
                     logger.warning(f"Worker {worker.worker_id} timed out (no heartbeat for {timeout.to_ms()}ms)")
                     txn = TransactionLog(

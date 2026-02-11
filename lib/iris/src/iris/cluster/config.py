@@ -11,20 +11,44 @@ Supports YAML config files for cluster management. This module provides:
 - IrisConfig high-level wrapper with component factories
 """
 
+from __future__ import annotations
+
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.types import parse_memory_string
-from iris.cluster.vm.managed_vm import SshConfig
+from iris.cluster.platform.ssh import SshConfig
+from iris.cluster.worker.port_allocator import PortAllocator
+from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
+
+
+class WorkerBootstrapProtocol(Protocol):
+    """Protocol for worker bootstrap functionality.
+
+    This protocol allows type checking without creating a circular import between
+    config.py and bootstrap.py. The actual WorkerBootstrap class in bootstrap.py
+    satisfies this protocol.
+    """
+
+    def bootstrap_slice(self, handle) -> dict[str, str]:
+        """Bootstrap all VMs in a newly created slice.
+
+        Returns:
+            Mapping of vm_id to bootstrap log text.
+        """
+        ...
+
 
 DEFAULT_SSH_PORT = 22
 
@@ -61,13 +85,6 @@ _ACCELERATOR_TYPE_MAP = {
     "tpu": "ACCELERATOR_TYPE_TPU",
 }
 
-_VM_TYPE_MAP = {
-    "tpu_vm": "VM_TYPE_TPU_VM",
-    "gce_vm": "VM_TYPE_GCE_VM",
-    "manual_vm": "VM_TYPE_MANUAL_VM",
-    "local_vm": "VM_TYPE_LOCAL_VM",
-}
-
 
 def _normalize_accelerator_types(data: dict) -> None:
     """Convert lowercase accelerator_type values to proto enum format.
@@ -92,36 +109,11 @@ def _normalize_accelerator_types(data: dict) -> None:
                 sg_data["accelerator_type"] = _ACCELERATOR_TYPE_MAP[lower_type]
 
 
-def _normalize_vm_types(data: dict) -> None:
-    """Convert lowercase vm_type values to proto enum format."""
-    if "scale_groups" not in data:
-        return
-
-    for sg_data in data["scale_groups"].values():
-        if sg_data is None:
-            continue
-        if "vm_type" not in sg_data:
-            continue
-
-        vm_type = sg_data["vm_type"]
-        if isinstance(vm_type, str):
-            lower_type = vm_type.lower()
-            if lower_type in _VM_TYPE_MAP:
-                sg_data["vm_type"] = _VM_TYPE_MAP[lower_type]
-
-
 def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
     """Validate that scale groups have explicit accelerator types."""
     for name, sg_config in config.scale_groups.items():
         if sg_config.accelerator_type == config_pb2.ACCELERATOR_TYPE_UNSPECIFIED:
             raise ValueError(f"Scale group '{name}' must set accelerator_type to cpu, gpu, or tpu.")
-
-
-def _validate_vm_types(config: config_pb2.IrisClusterConfig) -> None:
-    """Validate that scale groups have explicit vm_type."""
-    for name, sg_config in config.scale_groups.items():
-        if sg_config.vm_type == config_pb2.VM_TYPE_UNSPECIFIED:
-            raise ValueError(f"Scale group '{name}' must set vm_type to tpu_vm, gce_vm, manual_vm, or local_vm.")
 
 
 def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
@@ -152,17 +144,13 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
 
     Checks all scale groups for:
     - Required fields (name, resources, slice_size)
-    - Enum fields are not UNSPECIFIED (accelerator_type, vm_type)
+    - Enum fields are not UNSPECIFIED (accelerator_type)
     - Resource values are non-negative
-
-    Args:
-        config: IrisClusterConfig proto to validate
 
     Raises:
         ValueError: If any validation constraint is violated
     """
     _validate_accelerator_types(config)
-    _validate_vm_types(config)
     _validate_scale_group_resources(config)
 
 
@@ -344,10 +332,6 @@ def make_local_config(
     config.controller.local.port = 0  # auto-assign
     config.controller.bundle_prefix = ""  # LocalController will set temp path
 
-    # Transform all scale groups to local VMs
-    for sg in config.scale_groups.values():
-        sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
-
     # Apply local defaults (fast timings for testing)
     # Unconditionally use fast timings for local mode - this overrides any production timings
     # from DEFAULT_CONFIG that may have been applied during load_config()
@@ -414,7 +398,6 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
 
     # Convert lowercase accelerator types to enum format
     _normalize_accelerator_types(data)
-    _normalize_vm_types(data)
 
     config = ParseDict(data, config_pb2.IrisClusterConfig())
     config = apply_defaults(config)
@@ -543,11 +526,11 @@ def get_ssh_config(
         else Duration.from_proto(DEFAULT_CONFIG.ssh.connect_timeout)
     )
 
-    # Apply per-group overrides if group_name provided
+    # Apply per-group overrides if group uses manual slice_template
     if group_name and group_name in cluster_config.scale_groups:
         group_config = cluster_config.scale_groups[group_name]
-        if group_config.manual.hosts:
-            manual = group_config.manual
+        if group_config.HasField("slice_template") and group_config.slice_template.HasField("manual"):
+            manual = group_config.slice_template.manual
             if manual.ssh_user:
                 user = manual.ssh_user
             if manual.ssh_key_file:
@@ -600,7 +583,7 @@ class IrisConfig:
         self._proto = apply_defaults(proto)
 
     @classmethod
-    def load(cls, config_path: Path | str) -> "IrisConfig":
+    def load(cls, config_path: Path | str) -> IrisConfig:
         """Load IrisConfig from YAML file.
 
         Args:
@@ -623,16 +606,14 @@ class IrisConfig:
         Returns:
             Platform implementation (GCP, Manual, or Local)
         """
-        from iris.cluster.vm.platform import create_platform
+        from iris.cluster.platform.factory import create_platform
 
         return create_platform(
             platform_config=self._proto.platform,
-            bootstrap_config=self._proto.defaults.bootstrap,
-            timeout_config=self._proto.defaults.timeouts,
             ssh_config=self._proto.defaults.ssh,
         )
 
-    def as_local(self) -> "IrisConfig":
+    def as_local(self) -> IrisConfig:
         """Create local variant of this config.
 
         Returns:
@@ -652,3 +633,139 @@ class IrisConfig:
         if bootstrap.HasField("controller_address"):
             return bootstrap.controller_address
         return ""
+
+
+def create_autoscaler(
+    platform,
+    autoscaler_config: config_pb2.AutoscalerConfig,
+    scale_groups: dict[str, config_pb2.ScaleGroupConfig],
+    label_prefix: str = "iris",
+    worker_bootstrap: WorkerBootstrapProtocol | None = None,
+):
+    """Create autoscaler from Platform and explicit config.
+
+    Args:
+        platform: Platform instance for creating/discovering slices
+        autoscaler_config: Autoscaler settings (already resolved with defaults)
+        scale_groups: Map of scale group name to config
+        label_prefix: Prefix for labels on managed resources
+        worker_bootstrap: WorkerBootstrap for initializing new VMs (None disables bootstrap)
+
+    Returns:
+        Configured Autoscaler instance
+
+    Raises:
+        ValueError: If autoscaler_config has invalid timing values
+    """
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.controller.scaling_group import (
+        DEFAULT_HEARTBEAT_GRACE,
+        DEFAULT_STARTUP_GRACE,
+        ScalingGroup,
+    )
+
+    _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
+    _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
+
+    scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
+    scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
+    startup_grace = (
+        Duration.from_proto(autoscaler_config.startup_grace_period)
+        if autoscaler_config.startup_grace_period.milliseconds > 0
+        else DEFAULT_STARTUP_GRACE
+    )
+    heartbeat_grace = (
+        Duration.from_proto(autoscaler_config.heartbeat_grace_period)
+        if autoscaler_config.heartbeat_grace_period.milliseconds > 0
+        else DEFAULT_HEARTBEAT_GRACE
+    )
+
+    scaling_groups: dict[str, ScalingGroup] = {}
+    for name, group_config in scale_groups.items():
+        scaling_groups[name] = ScalingGroup(
+            config=group_config,
+            platform=platform,
+            label_prefix=label_prefix,
+            scale_up_cooldown=scale_up_delay,
+            scale_down_cooldown=scale_down_delay,
+            startup_grace_period=startup_grace,
+            heartbeat_grace_period=heartbeat_grace,
+        )
+        logger.info("Created scale group %s", name)
+
+    return Autoscaler.from_config(
+        scale_groups=scaling_groups,
+        config=autoscaler_config,
+        platform=platform,
+        worker_bootstrap=worker_bootstrap,
+    )
+
+
+def create_local_autoscaler(
+    config: config_pb2.IrisClusterConfig,
+    controller_address: str,
+    threads: ThreadContainer | None = None,
+):
+    """Create Autoscaler with LocalPlatform for all scale groups.
+
+    Creates temp directories and a PortAllocator so that LocalPlatform can
+    spawn real Worker threads that register with the controller.
+
+    Args:
+        config: Cluster configuration (with defaults already applied)
+        controller_address: Address for workers to connect to
+        threads: Optional thread container for testing
+
+    Returns:
+        Configured Autoscaler with LocalPlatform. The autoscaler has a _temp_dir
+        attribute for cleanup by the caller.
+    """
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.controller.scaling_group import (
+        ScalingGroup,
+    )
+    from iris.cluster.platform.local import LocalPlatform
+
+    label_prefix = config.platform.label_prefix or "iris"
+
+    temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_autoscaler_")
+    temp_path = Path(temp_dir.name)
+    cache_path = temp_path / "cache"
+    cache_path.mkdir()
+    fake_bundle = temp_path / "fake_bundle"
+    fake_bundle.mkdir()
+    (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'test'\n")
+
+    port_allocator = PortAllocator()
+
+    platform = LocalPlatform(
+        label_prefix=label_prefix,
+        threads=threads,
+        controller_address=controller_address,
+        cache_path=cache_path,
+        fake_bundle=fake_bundle,
+        port_allocator=port_allocator,
+    )
+
+    scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
+    scale_down_delay = Duration.from_proto(config.defaults.autoscaler.scale_down_delay)
+
+    scale_groups: dict[str, ScalingGroup] = {}
+    for name, sg_config in config.scale_groups.items():
+        scale_groups[name] = ScalingGroup(
+            config=sg_config,
+            platform=platform,
+            label_prefix=label_prefix,
+            scale_up_cooldown=scale_up_delay,
+            scale_down_cooldown=scale_down_delay,
+        )
+
+    autoscaler = Autoscaler.from_config(
+        scale_groups=scale_groups,
+        config=config.defaults.autoscaler,
+        platform=platform,
+        threads=threads,
+    )
+    # Attach temp_dir for cleanup by LocalController.stop()
+    autoscaler._temp_dir = temp_dir
+    return autoscaler

@@ -100,11 +100,24 @@ def _get_zone_project(ctx: click.Context) -> tuple[str, str]:
     if config.platform.WhichOneof("platform") != "gcp":
         click.echo("Error: Debug commands require a GCP platform config", err=True)
         raise SystemExit(1)
-    platform = config.platform.gcp
-    zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
-    project = platform.project_id
-    if not zone or not project:
-        click.echo("Error: Config must specify platform.gcp.project_id and zone", err=True)
+    project = config.platform.gcp.project_id
+    if not project:
+        click.echo("Error: Config must specify platform.gcp.project_id", err=True)
+        raise SystemExit(1)
+    # Zone is now per-slice in ScaleGroupConfig.slice_template.gcp.
+    # For debug commands, pick the zone from the first GCP scale group.
+    zone = ""
+    for sg in config.scale_groups.values():
+        if sg.HasField("slice_template") and sg.slice_template.HasField("gcp"):
+            gcp_slice = sg.slice_template.gcp
+            if gcp_slice.zones:
+                zone = gcp_slice.zones[0]
+            elif gcp_slice.zone:
+                zone = gcp_slice.zone
+            if zone:
+                break
+    if not zone:
+        click.echo("Error: No zone found in any scale group's slice_template.gcp", err=True)
         raise SystemExit(1)
     return zone, project
 

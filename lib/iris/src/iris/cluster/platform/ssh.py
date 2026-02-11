@@ -28,6 +28,21 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# SSH Configuration
+# ============================================================================
+
+
+@dataclass
+class SshConfig:
+    """SSH configuration for remote hosts."""
+
+    user: str = "root"
+    key_file: str | None = None
+    port: int = 22
+    connect_timeout: Duration = dataclasses.field(default_factory=lambda: Duration.from_seconds(30))
+
+
+# ============================================================================
 # Protocol
 # ============================================================================
 

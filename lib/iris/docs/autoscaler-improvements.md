@@ -7,7 +7,7 @@ DO NOT use it as a canonical source of information about the project.
 
 The Iris autoscaler has two issues affecting controller responsiveness:
 
-1. **Blocking scale-up**: When `_execute_scale_up()` (autoscaler.py:361) triggers `ScalingGroup.scale_up()` (scaling_group.py:174), it synchronously calls `VmManager.create_vm_group()`, which for TPUs blocks on a `subprocess.run()` gcloud call for 10-60+ seconds. This blocks the entire scheduling loop (`controller.py:350`), preventing task dispatch and worker timeout checks.
+1. **Blocking scale-up**: When `_execute_scale_up()` (autoscaler.py:361) triggers `ScalingGroup.scale_up()` (scaling_group.py:174), it synchronously calls `Platform.create_slice()`, which for TPUs blocks on a `subprocess.run()` gcloud call for 10-60+ seconds. This blocks the entire scheduling loop (`controller.py:350`), preventing task dispatch and worker timeout checks.
 
 2. **Excessive evaluation**: The autoscaler runs every scheduling cycle (0.5s default) via `_run_autoscaler_once()` (controller.py:616). `AutoscalerConfig.evaluation_interval_seconds` exists (autoscaler.py:98) and `_last_evaluation_ms` is tracked (autoscaler.py:187), but the interval is never enforced.
 
@@ -18,7 +18,7 @@ The Iris autoscaler has two issues affecting controller responsiveness:
 - Add autoscaler config to `config.proto` so it's YAML-configurable
 - Introduce a REQUESTING group state so demand isn't double-routed to groups with pending scale-ups
 
-**Non-goals**: Changing VmManager interfaces, parallel multi-group scale-up, changing scale-down behavior
+**Non-goals**: Changing Platform interfaces, parallel multi-group scale-up, changing scale-down behavior
 
 ## Proposed Solution
 

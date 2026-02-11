@@ -4,10 +4,9 @@
 """Autoscaler manages scaling across scale groups.
 
 The autoscaler coordinates scaling decisions across multiple scale groups,
-delegating slice ownership to ScalingGroup and VM tracking to VmRegistry.
+delegating slice ownership to ScalingGroup.
 
 Key design principles:
-- Autoscaler does NOT own VMs directly - that's VmRegistry's job
 - Autoscaler does NOT track slices directly - that's ScalingGroup's job
 - Scale-up decisions come from Autoscaler, scale-down is delegated to ScalingGroup
 - ScalingGroup owns per-slice idle tracking and decides which slices to scale down
@@ -25,15 +24,44 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
+from typing import Protocol
 
+from iris.cluster.platform.base import Platform, QuotaExhaustedError, SliceHandle, VmHandle
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.cluster.vm.managed_vm import VmRegistry
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+
+class WorkerBootstrapProtocol(Protocol):
+    """Protocol for worker bootstrap functionality.
+
+    This protocol allows type checking without creating a circular import between
+    config.py, autoscaler.py, and bootstrap.py.
+    """
+
+    def bootstrap_slice(self, handle) -> dict[str, str]:
+        """Bootstrap all VMs in a newly created slice.
+
+        Returns:
+            Mapping of vm_id to bootstrap log text.
+        """
+        ...
+
+
+@dataclass
+class TrackedVm:
+    """Per-VM state tracked by the autoscaler across bootstrap and lifecycle."""
+
+    vm_id: str
+    slice_id: str
+    scale_group: str
+    handle: VmHandle
+    bootstrap_log: str = ""
+
 
 # Slices that die within this time of creation trigger backoff (preemption detection)
 SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
@@ -117,7 +145,7 @@ def route_demand(
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
             return False
-        if entry.preemptible is not None and group.config.preemptible != entry.preemptible:
+        if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
             return False
         if entry.invalid_reason:
             return False
@@ -169,7 +197,7 @@ def route_demand(
             g
             for g in sorted_groups
             if g.matches_device_requirement(entry.device_type, entry.device_variant)
-            and (entry.preemptible is None or g.config.preemptible == entry.preemptible)
+            and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
         ]
         if not matching_groups:
             reason = (
@@ -243,10 +271,8 @@ class Autoscaler:
     - Receives demand from a DemandSource
     - Evaluates scaling decisions based on demand vs capacity
     - Executes decisions by calling ScalingGroup.scale_up/scale_down
-    - Reports status via VmRegistry
 
     It does NOT:
-    - Own VMs (VmRegistry does that)
     - Track VM groups (ScalingGroup does that)
     - Know about controller internals (DemandSource abstracts that)
     """
@@ -254,27 +280,27 @@ class Autoscaler:
     def __init__(
         self,
         scale_groups: dict[str, ScalingGroup],
-        vm_registry: VmRegistry,
         evaluation_interval: Duration,
-        requesting_timeout: Duration,
+        platform: Platform,
         threads: ThreadContainer | None = None,
+        worker_bootstrap: WorkerBootstrapProtocol | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
         Args:
             scale_groups: Map of scale group name to ScalingGroup instance
-            vm_registry: Shared VM registry for tracking all VMs
             evaluation_interval: How often to evaluate scaling decisions
-            requesting_timeout: How long to wait for VMs to provision before timing out
+            platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
+            worker_bootstrap: WorkerBootstrap for initializing new VMs (None in test/local mode)
         """
         self._groups = scale_groups
-        self._vm_registry = vm_registry
-        self._evaluation_interval = evaluation_interval
-        self._requesting_timeout = requesting_timeout
+        self._platform = platform
+        self.evaluation_interval = evaluation_interval
+        self._worker_bootstrap = worker_bootstrap
 
-        # Track slice creation times for short-lived slice detection
-        self._slice_created_at: dict[str, int] = {}
+        # Centralized per-VM state indexed by vm_id
+        self._vms: dict[str, TrackedVm] = {}
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
@@ -289,27 +315,29 @@ class Autoscaler:
     def from_config(
         cls,
         scale_groups: dict[str, ScalingGroup],
-        vm_registry: VmRegistry,
         config: config_pb2.AutoscalerConfig,
+        platform: Platform,
         threads: ThreadContainer | None = None,
+        worker_bootstrap: WorkerBootstrapProtocol | None = None,
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
         Args:
             scale_groups: Map of scale group name to ScalingGroup instance
-            vm_registry: Shared VM registry for tracking all VMs
             config: Autoscaler configuration proto (with defaults already applied)
+            platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
+            worker_bootstrap: WorkerBootstrap for initializing new VMs
 
         Returns:
             Configured Autoscaler instance
         """
         return cls(
             scale_groups=scale_groups,
-            vm_registry=vm_registry,
             evaluation_interval=Duration.from_proto(config.evaluation_interval),
-            requesting_timeout=Duration.from_proto(config.requesting_timeout),
+            platform=platform,
             threads=threads,
+            worker_bootstrap=worker_bootstrap,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -321,30 +349,27 @@ class Autoscaler:
         self._threads.wait()
 
     def shutdown(self) -> None:
-        """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups.
+        """Shutdown the autoscaler, terminate all VM groups, and clean up platform.
 
         Shutdown ordering:
-        1. Wait for in-flight scale-up threads to complete
-        2. Stop all VM bootstrap threads (call vm.stop() on each VM)
-        3. Terminate VMs and cleanup (group.terminate_all())
-        4. Stop VM managers (cleanup local platform threads if present)
+        1. Stop all threads in the autoscaler's ThreadContainer. This signals
+           stop_events for both in-flight scale-up threads AND worker lifecycle
+           threads (via child containers), then joins with timeout.
+        2. Terminate all VM groups — calls Worker.stop() for final cleanup
+           of any workers that didn't exit in step 1.
+        3. Shutdown platform — clears local tracking state.
         """
-        # Step 1: Wait for in-flight scale-up threads
-        self._threads.wait()
+        # Step 1: Stop all threads (scale-ups + workers) via ThreadContainer.
+        # Using stop() rather than wait() because wait() doesn't signal
+        # stop_events and would block forever on worker-lifecycle threads.
+        self._threads.stop()
 
-        # Step 2: Stop all VM bootstrap threads
-        for group in self._groups.values():
-            for vm_group in group.vm_groups():
-                for vm in vm_group.vms():
-                    vm.stop()
-
-        # Step 3: Terminate VMs and cleanup
+        # Step 2: Terminate VMs and cleanup (idempotent with step 1)
         for group in self._groups.values():
             group.terminate_all()
 
-        # Step 4: Stop VM managers (cleanup local platform threads if present)
-        for group in self._groups.values():
-            group._vm_manager.stop()
+        # Step 3: Shutdown platform (cleanup remaining threads)
+        self._platform.shutdown()
 
     def __enter__(self) -> Autoscaler:
         return self
@@ -360,9 +385,8 @@ class Autoscaler:
         """
         for group in self._groups.values():
             group.reconcile()
-            # Track creation times for discovered slices
-            for slice_obj in group.vm_groups():
-                self._slice_created_at[slice_obj.slice_id] = slice_obj.created_at_ms
+            for slice_obj in group.slice_handles():
+                self._register_slice_vms(slice_obj, group.name)
 
     def _log_action(
         self,
@@ -447,7 +471,8 @@ class Autoscaler:
         """Evaluate scaling decision for a single group."""
         counts = group.slice_state_counts()
         ready = counts[SliceLifecycleState.READY]
-        pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING]
+        requesting = counts[SliceLifecycleState.REQUESTING]
+        pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING] + requesting
         total = sum(counts.values())
 
         capacity = ready + pending
@@ -517,22 +542,22 @@ class Autoscaler:
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.
 
-        Marks the group as REQUESTING and spawns a background thread for the
-        actual scale-up work. Returns immediately without blocking.
+        Inserts a REQUESTING placeholder into the group's slice tracking and
+        spawns a background thread for the actual scale-up work. The placeholder
+        counts toward slice_count(), preventing double scale-up without any
+        timeout-based deadline.
         """
-        # Mark group as requesting before spawning thread
-        group.mark_requesting(ts, self._requesting_timeout)
+        placeholder_id = group.begin_scale_up(ts)
 
-        # Spawn background thread for scale-up
         def _scale_up_wrapper(stop_event):
-            self._do_scale_up(group, ts, reason)
+            self._do_scale_up(group, placeholder_id, ts, reason)
 
         self._threads.spawn(
             target=_scale_up_wrapper,
             name=f"scale-up-{group.name}",
         )
 
-    def _do_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> bool:
+    def _do_scale_up(self, group: ScalingGroup, placeholder_id: str, ts: Timestamp, reason: str = "") -> bool:
         """Execute the actual blocking scale-up work.
 
         This runs in a background thread and should not be called directly.
@@ -541,36 +566,68 @@ class Autoscaler:
         Returns:
             True if scale-up succeeded, False otherwise.
         """
-        from iris.cluster.vm.managed_vm import QuotaExceededError
-
-        # Log action as pending BEFORE execution
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
             slice_obj = group.scale_up(timestamp=ts)
-            self._slice_created_at[slice_obj.slice_id] = slice_obj.created_at_ms
+            group.complete_scale_up(placeholder_id, slice_obj, ts)
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
-            # Update action with result
             action.slice_id = slice_obj.slice_id
             action.status = "completed"
+            self._bootstrap_slice(slice_obj, group.name)
             return True
-        except QuotaExceededError as e:
+        except QuotaExhaustedError as e:
+            group.fail_scale_up(placeholder_id)
+            group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
+            group._quota_reason = str(e)
             logger.warning("Quota exceeded for %s: %s", group.name, e)
-            # Update the pending action to reflect quota failure
             action.action_type = "quota_exceeded"
             action.status = "failed"
             action.reason = str(e)
             return False
         except Exception as e:
+            group.fail_scale_up(placeholder_id)
             logger.error("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
-        finally:
-            # Always clear requesting state when done
-            group.clear_requesting()
+
+    def _bootstrap_slice(self, handle: SliceHandle, scale_group: str) -> None:
+        """Bootstrap all VMs in a newly created slice and register them in the VM registry.
+
+        Collects bootstrap logs from the bootstrap process (if available) and
+        stores them on TrackedVm entries for later retrieval via get_init_log().
+        """
+        bootstrap_logs: dict[str, str] = {}
+        if self._worker_bootstrap:
+            bootstrap_logs = self._worker_bootstrap.bootstrap_slice(handle)
+
+        self._register_slice_vms(handle, scale_group, bootstrap_logs)
+
+    def _register_slice_vms(
+        self,
+        handle: SliceHandle,
+        scale_group: str,
+        bootstrap_logs: dict[str, str] | None = None,
+    ) -> None:
+        """Register all VMs from a slice handle into the VM registry."""
+        logs = bootstrap_logs or {}
+        for vm in handle.list_vms():
+            self._vms[vm.vm_id] = TrackedVm(
+                vm_id=vm.vm_id,
+                slice_id=handle.slice_id,
+                scale_group=scale_group,
+                handle=vm,
+                bootstrap_log=logs.get(vm.vm_id, ""),
+            )
+
+    def _unregister_slice_vms(self, slice_id: str) -> None:
+        """Remove all TrackedVm entries belonging to a slice."""
+        to_remove = [vm_id for vm_id, tv in self._vms.items() if tv.slice_id == slice_id]
+        for vm_id in to_remove:
+            del self._vms[vm_id]
 
     def run_once(
         self,
@@ -594,7 +651,7 @@ class Autoscaler:
         for group in self._groups.values():
             cleaned = group.cleanup_failed_slices(timestamp)
             for slice_obj in cleaned:
-                self._slice_created_at.pop(slice_obj.slice_id, None)
+                self._unregister_slice_vms(slice_obj.slice_id)
                 self._log_action(
                     "failed_cleanup",
                     group.name,
@@ -606,7 +663,7 @@ class Autoscaler:
             group.update_slice_liveness(vm_status_map, timestamp)
             dead = group.cleanup_dead_slices(timestamp)
             for slice_obj in dead:
-                self._slice_created_at.pop(slice_obj.slice_id, None)
+                self._unregister_slice_vms(slice_obj.slice_id)
                 self._log_action(
                     "liveness_reap",
                     group.name,
@@ -627,7 +684,7 @@ class Autoscaler:
             target_capacity = max(group.current_demand, group.min_slices)
             scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
             if scaled_down:
-                self._slice_created_at.pop(scaled_down.slice_id, None)
+                self._unregister_slice_vms(scaled_down.slice_id)
                 self._log_action(
                     "scale_down",
                     group.name,
@@ -637,16 +694,35 @@ class Autoscaler:
 
         return decisions
 
-    # Status reporting via VmRegistry
-
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get VM info by ID."""
-        vm = self._vm_registry.get_vm(vm_id)
-        return vm.info if vm else None
+        """Get VM info by ID from the centralized VM registry."""
+        tracked = self._vms.get(vm_id)
+        if not tracked:
+            return None
+
+        from iris.cluster.controller.slice_status import _cloud_vm_state_to_iris
+
+        vm_status = tracked.handle.status()
+        iris_state = _cloud_vm_state_to_iris(vm_status.state)
+
+        return vm_pb2.VmInfo(
+            vm_id=tracked.vm_id,
+            state=iris_state,
+            address=tracked.handle.internal_address,
+            scale_group=tracked.scale_group,
+            slice_id=tracked.slice_id,
+        )
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get initialization log for a VM."""
-        return self._vm_registry.get_init_log(vm_id, tail)
+        """Get bootstrap log for a VM from the centralized VM registry."""
+        tracked = self._vms.get(vm_id)
+        if not tracked:
+            return ""
+        log = tracked.bootstrap_log
+        if tail and log:
+            lines = log.splitlines()
+            return "\n".join(lines[-tail:])
+        return log
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
@@ -716,19 +792,9 @@ class Autoscaler:
         return self._groups.get(name)
 
     @property
-    def vm_registry(self) -> VmRegistry:
-        """Access the VM registry for RPC/status use."""
-        return self._vm_registry
-
-    @property
     def groups(self) -> dict[str, ScalingGroup]:
         """All scale groups."""
         return self._groups
-
-    @property
-    def evaluation_interval_seconds(self) -> float:
-        """Configured evaluation interval in seconds."""
-        return self._evaluation_interval.to_seconds()
 
     def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.
@@ -760,16 +826,16 @@ class Autoscaler:
 
         try:
             group.scale_down(slice_id)
-            self._slice_created_at.pop(slice_id, None)
+            self._unregister_slice_vms(slice_id)
         except Exception as e:
             logger.warning("Failed to terminate slice %s: %s", slice_id, e)
 
     def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
         """Find the slice and group containing a worker by VM address."""
         for group in self._groups.values():
-            for slice_obj in group.vm_groups():
-                for vm in slice_obj.vms():
-                    if vm.info.address == vm_address:
+            for slice_obj in group.slice_handles():
+                for vm in slice_obj.list_vms():
+                    if vm.internal_address == vm_address:
                         return slice_obj.slice_id, group
         return None, None
 
@@ -778,12 +844,13 @@ class Autoscaler:
 
         Short-lived slices (died within SHORT_LIVED_SLICE_THRESHOLD of creation)
         indicate bad zone/quota issues or preemption. Apply backoff to prevent thrashing.
+        Uses slice handle's created_at timestamp retrieved from the ScalingGroup.
         """
-        created_at = self._slice_created_at.get(slice_id)
-        if created_at is None:
+        slice_handle = group.get_slice(slice_id)
+        if slice_handle is None:
             return
 
-        age_ms = Timestamp.now().epoch_ms() - created_at
+        age_ms = Timestamp.now().epoch_ms() - slice_handle.created_at.epoch_ms()
         age = Duration.from_ms(age_ms)
         if age < SHORT_LIVED_SLICE_THRESHOLD:
             logger.warning(
