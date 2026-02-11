@@ -32,7 +32,7 @@ controller:
   bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
   gcp:
     zone: europe-west4-b
-    machine_type: n2-standard-4
+    machine_type: e2-standard-4
     port: 10000
 
 scale_groups:
@@ -50,6 +50,9 @@ scale_groups:
     max_slices: 4
     priority: 100
     slice_template:
+      accelerator_type: tpu
+      accelerator_variant: v5litepod-16
+      slice_size: 16
       preemptible: true
       gcp:
         zone: europe-west4-b

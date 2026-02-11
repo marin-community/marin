@@ -116,7 +116,7 @@ def _build_image(
 
     click.echo(f"Using Dockerfile: {dockerfile_path}")
 
-    cmd = ["docker", "buildx", "build", "--no-cache", "--platform", platform]
+    cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["-t", tag])
     cmd.extend(["-f", str(dockerfile_path)])
     cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])

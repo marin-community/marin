@@ -110,6 +110,8 @@ message ManualSliceConfig {
   string ssh_key_file = 3;
 }
 
+message LocalSliceConfig {}
+
 message SliceConfig {
   string name_prefix = 1;
   int32 slice_size = 2;
@@ -121,6 +123,7 @@ message SliceConfig {
     GcpSliceConfig gcp = 10;
     CoreweaveSliceConfig coreweave = 11;
     ManualSliceConfig manual = 12;
+    LocalSliceConfig local = 13;
   }
 }
 

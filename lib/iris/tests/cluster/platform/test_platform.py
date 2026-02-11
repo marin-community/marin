@@ -121,7 +121,7 @@ def test_create_slice_returns_handle_with_vms_and_scale_group(platform_env: Plat
     assert handle.slice_id
     assert handle.scale_group == "my-group"
     assert handle.zone
-    assert len(handle.list_vms()) >= 1
+    assert len(handle.describe().vms) >= 1
 
 
 def test_created_slice_appears_in_list_slices(platform_env: PlatformEnv):
@@ -197,7 +197,7 @@ def test_terminate_then_status_is_deleting(in_memory_env: PlatformEnv):
     handle = in_memory_env.platform.create_slice(cfg)
 
     handle.terminate()
-    assert handle.status().state == CloudSliceState.DELETING
+    assert handle.describe().state == CloudSliceState.DELETING
 
 
 def test_tunnel_returns_address_directly(in_memory_env: PlatformEnv):

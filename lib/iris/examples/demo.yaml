@@ -52,6 +52,9 @@ scale_groups:
     min_slices: 2
     max_slices: 10
     slice_template:
+      accelerator_type: tpu
+      accelerator_variant: v5litepod-4
+      slice_size: 4
       preemptible: true
       gcp:
         zone: europe-west4-b
@@ -71,6 +74,9 @@ scale_groups:
     min_slices: 1
     max_slices: 5
     slice_template:
+      accelerator_type: tpu
+      accelerator_variant: v5litepod-16
+      slice_size: 16
       preemptible: true
       gcp:
         zone: europe-west4-b
@@ -90,6 +96,9 @@ scale_groups:
     min_slices: 0
     max_slices: 0  # ZERO MAX - simulates no quota available
     slice_template:
+      accelerator_type: tpu
+      accelerator_variant: v6e-256
+      slice_size: 256
       preemptible: true
       gcp:
         zone: europe-west4-b
@@ -109,6 +118,9 @@ scale_groups:
     min_slices: 0
     max_slices: 0
     slice_template:
+      accelerator_type: gpu
+      accelerator_variant: a100-40gb
+      slice_size: 1
       preemptible: false
       gcp:
         zone: europe-west4-b
@@ -128,6 +140,9 @@ scale_groups:
     min_slices: 0
     max_slices: 1
     slice_template:
+      accelerator_type: tpu
+      accelerator_variant: v5litepod-8
+      slice_size: 8
       preemptible: true
       gcp:
         zone: europe-west4-a
@@ -146,6 +161,9 @@ scale_groups:
     min_slices: 0
     max_slices: 1
     slice_template:
+      accelerator_type: tpu
+      accelerator_variant: v5litepod-8
+      slice_size: 8
       preemptible: true
       gcp:
         zone: europe-west4-b
@@ -164,6 +182,9 @@ scale_groups:
     min_slices: 0
     max_slices: 1
     slice_template:
+      accelerator_type: tpu
+      accelerator_variant: v5litepod-8
+      slice_size: 8
       preemptible: true
       gcp:
         zone: europe-west4-c

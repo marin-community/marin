@@ -55,8 +55,11 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     if controller_url and config_file:
         raise click.UsageError("Cannot specify both --controller-url and --config")
 
-    # Skip expensive operations when showing help or doing shell completion
-    if ctx.resilient_parsing or "--help" in sys.argv or "-h" in sys.argv:
+    # Skip expensive operations when showing help or doing shell completion.
+    # Only check for help flags before "--" to avoid matching help flags
+    # intended for the user's command (e.g., "job run -- python script.py --help").
+    argv_before_separator = sys.argv[: sys.argv.index("--")] if "--" in sys.argv else sys.argv
+    if ctx.resilient_parsing or "--help" in argv_before_separator or "-h" in argv_before_separator:
         return
 
     # Load config if provided
@@ -102,8 +105,8 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
 # always available when the ``iris`` group is used.
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
-from iris.cli.rpc import register_rpc_commands  # noqa: E402
 from iris.cli.job import job  # noqa: E402
+from iris.cli.rpc import register_rpc_commands  # noqa: E402
 
 iris.add_command(cluster)
 iris.add_command(build)

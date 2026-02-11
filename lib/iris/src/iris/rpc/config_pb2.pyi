@@ -139,8 +139,12 @@ class ManualSliceConfig(_message.Message):
     ssh_key_file: str
     def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ...) -> None: ...
 
+class LocalSliceConfig(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
 class SliceConfig(_message.Message):
-    __slots__ = ("name_prefix", "slice_size", "accelerator_type", "accelerator_variant", "labels", "preemptible", "gcp", "coreweave", "manual")
+    __slots__ = ("name_prefix", "slice_size", "accelerator_type", "accelerator_variant", "labels", "preemptible", "gcp", "coreweave", "manual", "local")
     class LabelsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -157,6 +161,7 @@ class SliceConfig(_message.Message):
     GCP_FIELD_NUMBER: _ClassVar[int]
     COREWEAVE_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_FIELD_NUMBER: _ClassVar[int]
     name_prefix: str
     slice_size: int
     accelerator_type: AcceleratorType
@@ -166,7 +171,8 @@ class SliceConfig(_message.Message):
     gcp: GcpSliceConfig
     coreweave: CoreweaveSliceConfig
     manual: ManualSliceConfig
-    def __init__(self, name_prefix: _Optional[str] = ..., slice_size: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: _Optional[bool] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ...) -> None: ...
+    local: LocalSliceConfig
+    def __init__(self, name_prefix: _Optional[str] = ..., slice_size: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: _Optional[bool] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ..., local: _Optional[_Union[LocalSliceConfig, _Mapping]] = ...) -> None: ...
 
 class ScaleGroupResources(_message.Message):
     __slots__ = ("cpu", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")

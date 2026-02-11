@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import socket
 import subprocess
 import time
@@ -731,26 +730,6 @@ class GcpPlatform:
 # ============================================================================
 
 
-def _discover_controller_vm_name(project: str, zone: str, label_prefix: str) -> str | None:
-    """Find controller VM by name pattern."""
-    name_filter = f"name~^iris-controller-{re.escape(label_prefix)}$"
-    cmd = [
-        "gcloud",
-        "compute",
-        "instances",
-        "list",
-        f"--project={project}",
-        f"--zones={zone}",
-        f"--filter={name_filter}",
-        "--format=value(name)",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        return None
-    names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
-    return names[0] if names else None
-
-
 @contextmanager
 def _gcp_tunnel(
     project: str,
@@ -759,23 +738,20 @@ def _gcp_tunnel(
     timeout: float = 60.0,
 ) -> Iterator[str]:
     """SSH tunnel to the controller VM, yielding the local URL."""
-    # We need to discover the controller VM and its zone. For now, list across
-    # all zones by using a broad filter (gcloud instances list is project-wide
-    # when --zones is omitted).
-    name_filter = f"name~^iris-controller-{re.escape(label_prefix)}$ AND status=RUNNING"
+    label_filter = f"labels.{label_prefix}-controller=true AND status=RUNNING"
     cmd = [
         "gcloud",
         "compute",
         "instances",
         "list",
         f"--project={project}",
-        f"--filter={name_filter}",
+        f"--filter={label_filter}",
         "--format=value(name,zone)",
         "--limit=1",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
-        raise RuntimeError(f"No controller VM found for prefix '{label_prefix}'")
+        raise RuntimeError(f"No controller VM found (label={label_prefix}-controller=true, project={project})")
 
     parts = result.stdout.strip().split()
     vm_name = parts[0]

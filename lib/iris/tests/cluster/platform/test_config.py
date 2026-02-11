@@ -710,12 +710,16 @@ scale_groups:
 
 def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
     """Create a valid ScaleGroupConfig for use in validation tests."""
-    return config_pb2.ScaleGroupConfig(
+    sg = config_pb2.ScaleGroupConfig(
         name="test",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         slice_size=1,
         resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
     )
+    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.slice_template.slice_size = 1
+    sg.slice_template.local.SetInParent()
+    return sg
 
 
 def _config_with(**overrides) -> config_pb2.IrisClusterConfig:

@@ -64,27 +64,32 @@ _ACCELERATOR_TYPE_MAP = {
 }
 
 
+def _normalize_accelerator_type_field(d: dict) -> None:
+    """Normalize a single accelerator_type field from lowercase to proto enum format."""
+    accel_type = d.get("accelerator_type")
+    if isinstance(accel_type, str):
+        lower_type = accel_type.lower()
+        if lower_type in _ACCELERATOR_TYPE_MAP:
+            d["accelerator_type"] = _ACCELERATOR_TYPE_MAP[lower_type]
+
+
 def _normalize_accelerator_types(data: dict) -> None:
     """Convert lowercase accelerator_type values to proto enum format.
 
-    Modifies data in-place, converting values like "tpu" to "ACCELERATOR_TYPE_TPU".
-    This allows YAML configs to use the simpler lowercase format while maintaining
-    compatibility with protobuf's enum parsing.
+    Modifies data in-place, converting values like "tpu" to "ACCELERATOR_TYPE_TPU"
+    on both scale groups and their slice_templates.
     """
     if "scale_groups" not in data:
         return
 
     for sg_data in data["scale_groups"].values():
-        if sg_data is None:
+        if not sg_data:
             continue
-        if "accelerator_type" not in sg_data:
-            continue
+        _normalize_accelerator_type_field(sg_data)
 
-        accel_type = sg_data["accelerator_type"]
-        if isinstance(accel_type, str):
-            lower_type = accel_type.lower()
-            if lower_type in _ACCELERATOR_TYPE_MAP:
-                sg_data["accelerator_type"] = _ACCELERATOR_TYPE_MAP[lower_type]
+        st = sg_data.get("slice_template")
+        if st:
+            _normalize_accelerator_type_field(st)
 
 
 def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
@@ -118,21 +123,20 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
 
 
 def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
-    """Validate that slice templates have required platform-specific fields.
+    """Validate that every scale group has a slice_template with a platform set.
 
-    Scale groups without a slice_template are allowed (legacy flat fields).
-    When a slice_template is present, the platform oneof must be set with
-    valid fields — otherwise scale_up() will fail at runtime.
+    Each slice_template must declare a platform (gcp, manual, coreweave, local)
+    with valid platform-specific fields.
     """
     for name, sg_config in config.scale_groups.items():
         if not sg_config.HasField("slice_template"):
-            continue
+            raise ValueError(f"Scale group '{name}': slice_template is required.")
 
         template = sg_config.slice_template
         platform = template.WhichOneof("platform")
         if platform is None:
             raise ValueError(
-                f"Scale group '{name}': slice_template is set but no platform " "(gcp, manual, coreweave) is configured."
+                f"Scale group '{name}': slice_template must have a platform (gcp, manual, coreweave, local)."
             )
 
         if platform == "gcp":
@@ -146,6 +150,8 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
         elif platform == "coreweave":
             if not template.coreweave.region:
                 raise ValueError(f"Scale group '{name}': slice_template.coreweave.region must be non-empty.")
+        elif platform == "local":
+            pass
 
 
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
@@ -393,7 +399,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
             elif "name" not in sg_data:
                 sg_data["name"] = name
 
-    # Normalize platform/controller oneof sections when YAML uses null values.
+    # Normalize oneof sections when YAML uses null values.
     # PyYAML parses:
     #   platform:
     #     local:
@@ -406,6 +412,18 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
             for oneof_key in oneof_keys:
                 if oneof_key in data[section_key] and data[section_key][oneof_key] is None:
                     data[section_key][oneof_key] = {}
+
+    # Also normalize null oneof values inside slice_template blocks
+    if "scale_groups" in data:
+        for sg_data in data["scale_groups"].values():
+            if not sg_data:
+                continue
+            st = sg_data.get("slice_template")
+            if not st:
+                continue
+            for oneof_key in ("gcp", "manual", "local", "coreweave"):
+                if oneof_key in st and st[oneof_key] is None:
+                    st[oneof_key] = {}
 
     # Convert lowercase accelerator types to enum format
     _normalize_accelerator_types(data)

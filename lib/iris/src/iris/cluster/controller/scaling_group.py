@@ -298,22 +298,14 @@ def prepare_slice_config(
     """Build a SliceConfig for platform.create_slice() from a template.
 
     Copies the template and sets the name_prefix and managed/scale-group labels.
-    Fields that are set on the parent ScaleGroupConfig but not on the template
-    (accelerator_variant, accelerator_type, slice_size) are propagated down,
-    since real config files typically set these on the parent only.
+    The template must already have accelerator_type, accelerator_variant, and
+    slice_size set directly.
     """
     config = config_pb2.SliceConfig()
     config.CopyFrom(template)
     config.name_prefix = f"{label_prefix}-{parent_config.name}"
     config.labels[f"{label_prefix}-managed"] = "true"
     config.labels[f"{label_prefix}-scale-group"] = parent_config.name
-
-    if not config.accelerator_variant and parent_config.accelerator_variant:
-        config.accelerator_variant = parent_config.accelerator_variant
-    if not config.accelerator_type and parent_config.accelerator_type:
-        config.accelerator_type = parent_config.accelerator_type
-    if not config.slice_size and parent_config.slice_size:
-        config.slice_size = parent_config.slice_size
 
     return config
 

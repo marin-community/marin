@@ -78,13 +78,10 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
 
         for group_config in config.scale_groups.values():
             try:
-                zones: list[str] = []
-                if group_config.HasField("slice_template"):
-                    template = group_config.slice_template
-                    if template.HasField("gcp"):
-                        if template.gcp.zone:
-                            zones = [template.gcp.zone]
-                if not zones:
+                template = group_config.slice_template
+                if template.HasField("gcp") and template.gcp.zone:
+                    zones = [template.gcp.zone]
+                else:
                     zones = ["local"]
 
                 for slice_handle in platform.list_slices(

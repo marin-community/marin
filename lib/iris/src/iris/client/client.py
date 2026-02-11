@@ -567,6 +567,7 @@ class IrisClient:
         if workspace is not None:
             creator = BundleCreator(workspace)
             bundle_blob = creator.create_bundle()
+            logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,

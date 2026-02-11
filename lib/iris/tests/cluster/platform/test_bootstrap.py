@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from iris.cluster.platform.base import PlatformError
+from iris.cluster.platform.base import CloudSliceState, PlatformError, SliceStatus
 from iris.cluster.platform.bootstrap import WorkerBootstrap
 from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
@@ -62,10 +62,10 @@ def test_bootstrap_slice_succeeds_with_valid_addresses():
 
     logs = bootstrap.bootstrap_slice(handle)
 
-    for vm in handle.list_vms():
+    for vm in handle.describe().vms:
         assert vm._bootstrap_count == 1
     assert len(logs) == 2
-    for vm in handle.list_vms():
+    for vm in handle.describe().vms:
         assert vm.vm_id in logs
 
 
@@ -118,26 +118,27 @@ def test_bootstrap_slice_waits_for_all_vms():
         labels={"iris-accelerator-variant": "v4-16"},  # Expect 2 VMs
     )
 
-    # Store a reference to track VM list updates
-    vm_list_calls = []
+    # Store a reference to track describe() calls
+    describe_calls = []
+    original_describe = handle.describe
 
-    def mock_list_vms():
-        vm_list_calls.append(len(handle._vms))
+    def mock_describe():
+        describe_calls.append(len(handle._vms))
         # Simulate gradual VM appearance: first call returns 1, second returns 2
-        if len(vm_list_calls) == 1:
-            return all_vms[:1]
+        if len(describe_calls) == 1:
+            return SliceStatus(state=CloudSliceState.CREATING, vm_count=len(all_vms[:1]), vms=list(all_vms[:1]))
         else:
             # Update internal state to show both VMs
             handle._vms = all_vms[:2]
-            return all_vms[:2]
+            return original_describe()
 
-    handle.list_vms = mock_list_vms
+    handle.describe = mock_describe
 
     # Bootstrap should succeed after waiting
     logs = bootstrap.bootstrap_slice(handle)
 
-    # Should have called list_vms multiple times and bootstrapped all VMs
-    assert len(vm_list_calls) >= 2
+    # Should have called describe() multiple times and bootstrapped all VMs
+    assert len(describe_calls) >= 2
     assert len(logs) == 2
 
 
@@ -165,10 +166,10 @@ def test_bootstrap_slice_raises_on_partial_vm_count_timeout():
         labels={"iris-accelerator-variant": "v4-16"},  # Expect 2 VMs, but only 1 present
     )
 
-    # Mock time.time to advance quickly and avoid waiting 60 seconds
+    # Mock time.time to advance quickly and avoid waiting 600 seconds
     with unittest.mock.patch("iris.cluster.platform.bootstrap.time") as mock_time:
-        # Make time.time() advance by 65 seconds on each call (exceeds 60s timeout)
-        mock_time.time.side_effect = [0.0, 65.0]
+        # Make time.time() return 0 at start, then 601 to exceed timeout
+        mock_time.time.side_effect = [0.0, 601.0]
         mock_time.sleep.return_value = None  # No-op sleep
 
         with pytest.raises(PlatformError, match="has only 1/2 VMs ready"):

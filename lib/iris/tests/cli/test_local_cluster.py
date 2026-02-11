@@ -59,6 +59,11 @@ def cluster_config_file(tmp_path: Path) -> Path:
                             "gpu_count": 0,
                             "tpu_count": 0,
                         },
+                        "slice_template": {
+                            "accelerator_type": "ACCELERATOR_TYPE_CPU",
+                            "slice_size": 1,
+                            "local": {},
+                        },
                     },
                 },
             }
