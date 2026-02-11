@@ -120,9 +120,10 @@ class ProcessContainer:
     def start(self):
         """Start container as subprocess and begin streaming logs."""
         self._running = True
-        cmd = self._build_command()
+        cmd = list(self.command)
         if cmd and cmd[0] in {"python", "python3"}:
-            # Ensure we use the current interpreter even when PATH lacks "python".
+            # For Entrypoint.from_command("python", ...) — rewrite to the
+            # current interpreter since "python" may not be on PATH.
             cmd = [sys.executable, *cmd[1:]]
 
         try:
@@ -168,9 +169,6 @@ class ProcessContainer:
             self._exit_code = 1
             self._running = False
             logger.exception("Failed to start container")
-
-    def _build_command(self) -> list[str]:
-        return self.command
 
     def _stream_logs(self, stop_event: threading.Event):
         """Stream stdout/stderr from subprocess to log buffer.
@@ -303,6 +301,10 @@ class ProcessContainerHandle:
         for key, value in env.items():
             if value in mount_map:
                 env[key] = mount_map[value]
+
+        # In local mode, resolve IRIS_PYTHON to the current interpreter so that
+        # bash -c "exec $IRIS_PYTHON ..." works even when "python" isn't on PATH.
+        env["IRIS_PYTHON"] = sys.executable
 
         # Extract the command from the RuntimeEntrypoint proto
         cmd = list(config.entrypoint.run_command.argv)
