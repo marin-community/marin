@@ -61,69 +61,39 @@ from marin.execution.executor import executor_main
 # =============================================================================
 # Model Configuration
 # =============================================================================
-MODEL_NAME_OR_GCS_PATH = "Qwen/Qwen2.5-7B-Instruct"
+# List of checkpoint paths to evaluate. Each checkpoint is evaluated on all tasks below.
+CHECKPOINTS = [
+    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-234/",
+    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-468/",
+    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-702/",
+    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-936/",
+    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1170/",
+    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1404/",
+    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1638/",
+    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1872/",
+]
 
 # Custom base name for wandb runs. When set, wandb runs will be named:
 #   Per-seed:  evalchemy-{BASE_EVAL_RUN_NAME}[-step{N}]-{task}-seed{S}
 #   Aggregate: evalchemy-{BASE_EVAL_RUN_NAME}[-step{N}]-{task}-avg{X}seeds
-# Step suffix is auto-extracted from MODEL_NAME_OR_GCS_PATH if it contains step-NNNN.
+# Step suffix is auto-extracted from each checkpoint path if it contains step-NNNN.
 # Set to None to use the default auto-generated wandb run names.
-BASE_EVAL_RUN_NAME = None
+BASE_EVAL_RUN_NAME = "exp2262pt2a-qwen2.5-7b-instruct-finetuned-ot4-30k-math-qwen3-32b-32768tokens"
 
 # Whether to auto-discover the latest checkpoint in a training run directory.
-# Set to True when MODEL_NAME_OR_GCS_PATH points to a training output directory
-# (e.g., gs://bucket/training/run-name/) that contains step-N subdirectories.
-# Set to False when using a direct HuggingFace model ID (e.g., "Qwen/Qwen3-8B").
 DISCOVER_LATEST_CHECKPOINT = False
 
 # =============================================================================
 # Evaluation Configuration
 # =============================================================================
 
-# Seeds for multiple evaluation runs to compute averaged results
-# SEEDS = [42]  # 1 seed
-SEEDS = [42, 43, 44]  # 3 seeds
-# SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]  # 10 seeds
+# Tasks with per-task seed counts.
+# Each entry is (task, num_seeds). Tasks are evaluated independently per checkpoint.
+MULTI_SEED_TASKS = [AIME24, AIME25, AMC23]  # 5 seeds each
+SINGLE_SEED_TASKS = [MATH500]                # 1 seed each
 
-# -----------------------------------------------------------------------------
-# Task Selection - Uncomment the tasks you want to evaluate
-# -----------------------------------------------------------------------------
-
-# === Math Benchmarks ===
-EVAL_TASKS = [AIME25]
-# EVAL_TASKS = [AIME24]  # AIME 2024 (30 problems)
-# EVAL_TASKS = [AIME25]  # AIME 2025 (30 problems)
-# EVAL_TASKS = [AMC23]  # AMC 2023
-# EVAL_TASKS = [MATH500]  # MATH dataset (500 problems)
-# EVAL_TASKS = [HMMT]  # Harvard-MIT Math Tournament
-
-# === Code Benchmarks ===
-# EVAL_TASKS = [HUMANEVAL_PLUS]  # HumanEval+ (improved HumanEval)
-# EVAL_TASKS = [MBPP_PLUS]  # MBPP+ (improved MBPP)
-# EVAL_TASKS = [LIVECODEBENCH]  # LiveCodeBench (competitive programming)
-# EVAL_TASKS = [BIGCODEBENCH]  # BigCodeBench
-# EVAL_TASKS = [CODEFORCES]  # Codeforces problems
-# EVAL_TASKS = [CODEELO]  # CodeElo benchmark
-
-# === Science Benchmarks ===
-# EVAL_TASKS = [GPQA_DIAMOND]  # GPQA Diamond (graduate-level science)
-# EVAL_TASKS = [JEEBENCH]  # IIT JEE entrance exam problems
-
-# === Reasoning Benchmarks ===
-# EVAL_TASKS = [ALICE_IN_WONDERLAND]  # Alice in Wonderland reasoning
-# EVAL_TASKS = [HUMANITYS_LAST_EXAM]  # Humanity's Last Exam
-
-# === Task Groups (multiple benchmarks) ===
-# EVAL_TASKS = list(EVALCHEMY_MATH_TASKS)  # All math tasks
-# EVAL_TASKS = list(EVALCHEMY_CODE_TASKS)  # All code tasks
-# EVAL_TASKS = list(EVALCHEMY_SCIENCE_TASKS)  # All science tasks
-# EVAL_TASKS = list(EVALCHEMY_REASONING_TASKS)  # All reasoning tasks
-# EVAL_TASKS = list(EVALCHEMY_CORE_TASKS)  # All tasks combined
-
-# === Custom combinations ===
-# EVAL_TASKS = [AIME24, AIME25, MATH500]  # Math-focused evaluation
-# EVAL_TASKS = [HUMANEVAL_PLUS, LIVECODEBENCH]  # Code-focused evaluation
-# EVAL_TASKS = [GPQA_DIAMOND, JEEBENCH]  # Science-focused evaluation
+MULTI_SEED_SEEDS = [42, 43, 44, 45, 46]  # 5 seeds
+SINGLE_SEED_SEEDS = [42]                  # 1 seed
 
 # =============================================================================
 # Generation Parameters
@@ -155,33 +125,60 @@ ENGINE_KWARGS = {
 }
 
 # =============================================================================
+# Parallel Job Limit
+# =============================================================================
+# Maximum number of eval jobs to run in parallel. Eval steps are split into
+# batches of this size, with each batch submitted as a separate executor_main
+# call. Set to None to run all eval steps in a single executor_main call.
+MAX_PARALLEL_JOBS = 10
+
+# =============================================================================
 # Main Execution
 # =============================================================================
 if __name__ == "__main__":
-    all_steps = []
+    eval_steps = []
+    compile_steps = []
 
-    # Create one evaluation step per seed
-    for seed in SEEDS:
-        generation_params = {**BASE_GENERATION_PARAMS, "seed": seed}
+    # Create one evaluation step per (checkpoint, task, seed) combination.
+    # Each combination runs as an independent parallel step.
+    for checkpoint in CHECKPOINTS:
+        for task, seeds in [(t, MULTI_SEED_SEEDS) for t in MULTI_SEED_TASKS] + \
+                           [(t, SINGLE_SEED_SEEDS) for t in SINGLE_SEED_TASKS]:
+            task_steps = []
+            for seed in seeds:
+                generation_params = {**BASE_GENERATION_PARAMS, "seed": seed}
+                step = default_evalchemy_eval(
+                    step=checkpoint,
+                    resource_config=ResourceConfig.with_tpu("v5p-8"),
+                    evals=[task],
+                    engine_kwargs=ENGINE_KWARGS,
+                    generation_params=generation_params,
+                    apply_chat_template=True,
+                    discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
+                    base_eval_run_name=BASE_EVAL_RUN_NAME,
+                )
+                task_steps.append(step)
+                eval_steps.append(step)
 
-        step = default_evalchemy_eval(
-            step=MODEL_NAME_OR_GCS_PATH,
-            resource_config=ResourceConfig.with_tpu("v5p-8"),
-            evals=EVAL_TASKS,
-            engine_kwargs=ENGINE_KWARGS,
-            generation_params=generation_params,
-            apply_chat_template=True,
-            discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
-            base_eval_run_name=BASE_EVAL_RUN_NAME,
-        )
-        all_steps.append(step)
+            # Add compile step to aggregate results across seeds for this checkpoint+task
+            if len(seeds) > 1:
+                compile_step = compile_evalchemy_results(
+                    task_steps, seeds=seeds,
+                    base_eval_run_name=BASE_EVAL_RUN_NAME, model_path=checkpoint,
+                )
+                compile_steps.append(compile_step)
 
-    # Add compile step to aggregate results across seeds and log to wandb
-    # Only add compile step if we have multiple seeds (aggregation needs >1 run)
-    if len(SEEDS) > 1:
-        compile_step = compile_evalchemy_results(
-            all_steps, seeds=SEEDS, base_eval_run_name=BASE_EVAL_RUN_NAME, model_path=MODEL_NAME_OR_GCS_PATH
-        )
-        all_steps.append(compile_step)
+    # Run eval steps in batches to limit parallelism.
+    # Each executor_main call runs up to MAX_PARALLEL_JOBS eval steps concurrently.
+    # Already-completed steps are automatically skipped via status files on disk.
+    if MAX_PARALLEL_JOBS is not None:
+        for i in range(0, len(eval_steps), MAX_PARALLEL_JOBS):
+            batch = eval_steps[i : i + MAX_PARALLEL_JOBS]
+            executor_main(steps=batch)
+    else:
+        executor_main(steps=eval_steps)
 
-    executor_main(steps=all_steps)
+    # Run compile steps separately. Their eval-step dependencies have already
+    # succeeded, so the executor skips them and only runs the compile steps.
+    if compile_steps:
+        executor_main(steps=compile_steps)

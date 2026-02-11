@@ -549,17 +549,17 @@ def compile_evalchemy_results(
             else:
                 gcs_root = "gs://" + base_dir.lstrip("/")
 
-            # Pattern for sample files (evalchemy uses same structure as lm-eval)
-            pattern = gcs_root.rstrip("/") + "/*/*/samples_*.jsonl"
-            sample_files = fs.glob(pattern)
+            # Pattern for result files (evalchemy produces results_*.json)
+            pattern = gcs_root.rstrip("/") + "/*/*/results_*.json"
+            result_files = fs.glob(pattern)
 
-            if not sample_files:
-                logger.warning(f"No samples_*.jsonl files found for input root {base_dir}")
+            if not result_files:
+                logger.warning(f"No results_*.json files found for input root {base_dir}")
                 continue
 
-            for sample_file in sample_files:
-                logger.info(f"Reading samples from {sample_file}")
-                path_parts = sample_file.split("/")
+            for result_file in result_files:
+                logger.info(f"Reading results from {result_file}")
+                path_parts = result_file.split("/")
 
                 # Infer dataset_name from the task directory
                 if len(path_parts) >= 3:
@@ -585,20 +585,27 @@ def compile_evalchemy_results(
                 else:
                     model_name = model_dir
 
-                # Read JSONL samples
-                with fs.open(sample_file, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            record = json.loads(line)
-                        except Exception:
-                            logger.warning(f"Failed to parse JSON line in {sample_file}")
-                            continue
+                # Read JSON results
+                try:
+                    with fs.open(result_file, "r") as f:
+                        data = json.load(f)
+                except Exception:
+                    logger.warning(f"Failed to parse JSON in {result_file}")
+                    continue
 
-                        record["dataset_name"] = dataset_name.lower()
-                        record["model_name"] = model_name.lower()
+                for task_name, task_data in data.get("results", {}).items():
+                    for example in task_data.get("examples", []):
+                        expected = str(example.get("answer", "")).strip()
+                        model_answers = example.get("model_answers", [])
+                        model_answer = str(model_answers[0]).strip() if model_answers else ""
+                        correct = 1 if (model_answer == expected and expected) else 0
+
+                        record = {
+                            "id": example.get("id"),
+                            "correct": correct,
+                            "dataset_name": dataset_name.lower(),
+                            "model_name": model_name.lower(),
+                        }
                         all_results.append(record)
 
         if not all_results:
@@ -608,8 +615,8 @@ def compile_evalchemy_results(
 
         # Extract base model name and seed from model_name
         def extract_base_model_and_seed(model_name):
-            """Extract base model name and seed from model_name like 'model-task-seed42'"""
-            match = re.search(r'-seed(\d+)(?=-|$)', model_name)
+            """Extract base model name and seed from model_name like 'model_task_seed42'"""
+            match = re.search(r'[-_]seed(\d+)(?=[-_]|$)', model_name)
             if match:
                 seed = int(match.group(1))
                 base_model = model_name[:match.start()]

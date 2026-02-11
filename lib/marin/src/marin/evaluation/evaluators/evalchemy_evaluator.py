@@ -846,7 +846,7 @@ _patch_autoconfig_for_gcs()
 
                 # Build evalchemy CLI command
                 cmd = [
-                    "python", "-m", "eval.eval",
+                    sys.executable, "-m", "eval.eval",
                     "--model", "vllm",
                     "--tasks", eval_task.name,
                     "--model_args", model_args,
@@ -887,15 +887,33 @@ _patch_autoconfig_for_gcs()
                 )
 
                 if returncode != 0:
+                    # Read log file contents to include in the error message
+                    log_contents = ""
+                    if os.path.exists(log_file):
+                        with open(log_file, "r") as lf:
+                            log_contents = lf.read()
+
+                    # Also write error file for reference
                     error_file = os.path.join(result_dir, "evalchemy_error.txt")
                     with open(error_file, "w") as f:
                         f.write(f"Command: {' '.join(cmd)}\n")
                         f.write(f"Return code: {returncode}\n")
                         f.write(f"\n=== OUTPUT LOG ===\n")
-                        if os.path.exists(log_file):
-                            with open(log_file, "r") as lf:
-                                f.write(lf.read())
-                    raise RuntimeError(f"Evalchemy failed for {eval_task.name}, see {error_file}")
+                        f.write(log_contents)
+
+                    # Surface the last portion of the log directly in the error
+                    # so it appears in the main logs without needing to find temp files
+                    log_tail = log_contents[-5000:] if len(log_contents) > 5000 else log_contents
+                    if len(log_contents) > 5000:
+                        log_tail = "... [truncated] ...\n" + log_tail
+
+                    error_msg = (
+                        f"Evalchemy failed for {eval_task.name} (return code {returncode}).\n"
+                        f"=== Command ===\n{' '.join(cmd)}\n"
+                        f"=== Output (last 5000 chars) ===\n{log_tail}"
+                    )
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
 
                 logger.info(f"Completed {eval_task.name}")
 
