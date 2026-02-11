@@ -179,23 +179,10 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
         i = 0
         format = _sniff_format_for_dataset(url)
         if format == ".parquet":
-            # Handle parquet files
-            import pyarrow as pa
             import pyarrow.parquet as pq
 
             with fsspec.open(url, "rb") as f:
-                # Use iter_batches() to read as record batches, avoiding
-                # ArrowNotImplementedError: "Nested data conversions not
-                # implemented for chunked array outputs". This error occurs
-                # with nested columns (e.g. messages: list<struct>) even in
-                # single row group files, because PyArrow's read_row_group()
-                # and read_table() try nested type conversions on chunked
-                # data pages. iter_batches() reads non-chunked record batches
-                # that bypass this limitation.
-                pf = pq.ParquetFile(f)
-                table = pa.Table.from_batches(
-                    pf.iter_batches(), schema=pf.schema_arrow
-                )
+                table = pq.read_table(f)
                 data = table.to_pydict()
                 num_rows = table.num_rows
                 for idx in range(row, num_rows):

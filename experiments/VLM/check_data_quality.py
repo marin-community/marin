@@ -350,6 +350,13 @@ def clean_shard(
     pa_mask = pa.array(mask, type=pa.bool_())
     cleaned_table = table.filter(pa_mask)
 
+    # CRITICAL: combine_chunks() after filter() to avoid chunked arrays.
+    # filter() can produce multi-chunk arrays. When pq.write_table() writes
+    # nested types (list<struct>) with multiple chunks, the resulting parquet
+    # file triggers "ArrowNotImplementedError: Nested data conversions not
+    # implemented for chunked array outputs" on read.
+    cleaned_table = cleaned_table.combine_chunks()
+
     # Generate cleaned path: train-00900.parquet -> train-00900_cleaned.parquet
     cleaned_path = shard_path.replace(".parquet", "_cleaned.parquet")
 
