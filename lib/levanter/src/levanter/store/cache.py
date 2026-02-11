@@ -226,12 +226,13 @@ class SerialCacheWriter:
         exemplar: T,
         metadata: Optional["CacheMetadata"] = None,
         shard_name: str = "",
+        mode: str = "w",
     ):
         self.cache_dir = cache_dir
         self.metadata = metadata
         self._exemplar = exemplar
         self._shard_name = shard_name
-        self._tree_store = TreeStore.open(exemplar, self.cache_dir, mode="w", cache_metadata=True)
+        self._tree_store = TreeStore.open(exemplar, self.cache_dir, mode=mode, cache_metadata=True)
         self._is_closed = False
 
     def __enter__(self) -> "SerialCacheWriter":
