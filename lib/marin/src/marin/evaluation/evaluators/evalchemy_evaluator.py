@@ -28,12 +28,15 @@ This evaluator handles several compatibility issues:
 4. GCS model paths not supported by transformers AutoConfig
 """
 
+import gc
 import glob
 import hashlib
+import io
 import json
 import logging
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -79,6 +82,32 @@ def _extract_step_suffix(path: str) -> str:
     """
     match = re.search(r'step-(\d+)', path)
     return f"-step{match.group(1)}" if match else ""
+
+
+class _TeeWriter(io.TextIOBase):
+    """Writes to both a log file and original stdout simultaneously."""
+
+    def __init__(self, log_file, original_stdout):
+        self._log_file = log_file
+        self._original_stdout = original_stdout
+
+    def write(self, s):
+        if s:
+            self._log_file.write(s)
+            self._log_file.flush()
+            self._original_stdout.write(s)
+            self._original_stdout.flush()
+        return len(s) if s else 0
+
+    def flush(self):
+        self._log_file.flush()
+        self._original_stdout.flush()
+
+    def fileno(self):
+        return self._original_stdout.fileno()
+
+    def isatty(self):
+        return False
 
 
 class EvalchemyEvaluator(VllmTpuEvaluator):
@@ -131,24 +160,6 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
             extra=["evalchemy"],
             env_vars=env_vars,
         )
-
-    def _get_subprocess_env(self) -> dict:
-        """Build environment for evalchemy subprocess.
-
-        Includes vLLM env vars and propagates WANDB_API_KEY for post-evaluation
-        wandb logging (done in _log_results_to_wandb after subprocess completes).
-        """
-        env = self._vllm_env()
-        wandb_api_key = os.environ.get("WANDB_API_KEY")
-        if wandb_api_key and "WANDB_API_KEY" not in env:
-            env["WANDB_API_KEY"] = wandb_api_key
-        # Ensure Python output is unbuffered for real-time progress visibility
-        env["PYTHONUNBUFFERED"] = "1"
-        # Allow extending max_model_len beyond model's max_position_embeddings
-        # This is needed when max_gen_toks + context_buffer > max_position_embeddings
-        # Safe for RoPE models (like Qwen) which use relative position encoding
-        env["VLLM_ALLOW_LONG_MAX_MODEL_LEN"] = "1"
-        return env
 
     def _log_results_to_wandb(
         self,
@@ -638,57 +649,119 @@ _patch_autoconfig_for_gcs()
         else:
             logger.warning("Could not find eval_logger marker in eval.py for GCS patch - evalchemy may have changed")
 
-    def _run_with_streaming(
+    def _run_evalchemy_in_process(
         self,
         cmd: list[str],
-        env: dict,
         cwd: str,
         log_file: str,
     ) -> int:
-        """Run a subprocess with real-time output streaming.
+        """Run evalchemy in-process using runpy instead of a subprocess.
 
-        Streams stdout/stderr to the console in real-time for progress visibility,
-        while also saving all output to a log file for error reporting.
-
-        Note: We read stdout line-by-line in a loop, which prevents buffer deadlocks
-        as long as the subprocess produces line-based output (which lm-eval does).
+        Executes the evalchemy CLI entrypoint (eval.eval) directly in the current
+        process. This ensures that when the Ray worker dies (due to error or preemption),
+        all TPU handles die with it — no orphaned subprocesses.
 
         Args:
-            cmd: Command to run as list of strings
-            env: Environment variables dict
-            cwd: Working directory
+            cmd: Original command list (e.g., [sys.executable, "-m", "eval.eval", ...])
+            cwd: Working directory (evalchemy repo path)
             log_file: Path to save combined output
 
         Returns:
-            Process return code
+            0 on success, non-zero on failure
         """
-        with open(log_file, "w") as lf:
-            # Use Popen to get real-time output
-            process = subprocess.Popen(
-                cmd,
-                env=env,
-                cwd=cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Merge stderr into stdout
-                text=True,
-                bufsize=1,  # Line buffered
-            )
+        # Save state to restore after execution
+        saved_argv = sys.argv[:]
+        saved_path = sys.path[:]
+        saved_cwd = os.getcwd()
+        saved_stdout = sys.stdout
+        saved_stderr = sys.stderr
+        saved_env = {}
+        env_vars_to_set = {
+            # Tell vLLM-TPU to use the vLLM model implementation
+            "MODEL_IMPL_TYPE": "vllm",
+            # Allow max_model_len > max_position_embeddings (safe for RoPE models)
+            "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
+            # Disable Python output buffering for real-time log streaming
+            "PYTHONUNBUFFERED": "1",
+        }
+        for key in env_vars_to_set:
+            saved_env[key] = os.environ.get(key)
 
-            # Stream output line by line
-            try:
-                for line in process.stdout:
-                    # Write to log file
-                    lf.write(line)
-                    lf.flush()
-                    # Print to console (will appear in Ray logs)
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
-            except Exception as e:
-                logger.warning(f"Error streaming output: {e}")
+        try:
+            # Set environment variables (replaces _get_subprocess_env)
+            for key, value in env_vars_to_set.items():
+                os.environ[key] = value
 
-            # Wait for process to complete
-            process.wait()
-            return process.returncode
+            # Insert evalchemy repo at front of sys.path
+            if cwd not in sys.path:
+                sys.path.insert(0, cwd)
+
+            # Change to evalchemy directory (it uses relative paths)
+            os.chdir(cwd)
+
+            # Set sys.argv from cmd, stripping "python -m" prefix
+            # cmd = [sys.executable, "-m", "eval.eval", "--model", "vllm", ...]
+            # sys.argv should be ["eval/eval.py", "--model", "vllm", ...]
+            # But runpy handles the module name, so we just need the args after the module
+            argv_start = 0
+            for i, arg in enumerate(cmd):
+                if arg == "-m":
+                    argv_start = i + 2  # Skip "-m" and "eval.eval"
+                    break
+            sys.argv = [os.path.join(cwd, "eval", "eval.py")] + cmd[argv_start:]
+
+            # Tee output to both log file and console
+            with open(log_file, "w") as lf:
+                tee = _TeeWriter(lf, saved_stdout)
+                sys.stdout = tee
+                sys.stderr = tee
+
+                runpy.run_module("eval.eval", run_name="__main__", alter_sys=True)
+
+            return 0
+
+        except SystemExit as e:
+            # CLI tools use sys.exit(); extract the return code
+            code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+            if code != 0:
+                logger.error(f"evalchemy exited with code {code}")
+            return code
+
+        except Exception as e:
+            logger.error(f"evalchemy failed in-process: {e}")
+            traceback.print_exc(file=saved_stderr)
+            return 1
+
+        finally:
+            # Restore all saved state
+            sys.argv = saved_argv
+            sys.stdout = saved_stdout
+            sys.stderr = saved_stderr
+            os.chdir(saved_cwd)
+            sys.path = saved_path
+
+            # Restore environment variables
+            for key, orig_value in saved_env.items():
+                if orig_value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = orig_value
+
+            # Remove eval.* modules to prevent stale state between tasks
+            modules_to_remove = [m for m in sys.modules if m == "eval" or m.startswith("eval.")]
+            for m in modules_to_remove:
+                del sys.modules[m]
+
+    def _cleanup_vllm_between_tasks(self) -> None:
+        """Clean up vLLM state between tasks to release TPU devices."""
+        gc.collect()
+        try:
+            import vllm.distributed
+            if hasattr(vllm.distributed, "destroy_model_parallel"):
+                vllm.distributed.destroy_model_parallel()
+                logger.info("Destroyed vLLM model parallel state")
+        except (ImportError, Exception) as e:
+            logger.debug(f"vLLM cleanup skipped: {e}")
 
     def _get_max_model_len_from_config(self, config_dir: str) -> int | None:
         """Read max_position_embeddings from config.json for vLLM max_model_len."""
@@ -877,11 +950,10 @@ _patch_autoconfig_for_gcs()
 
                 logger.info(f"Running: {' '.join(cmd)}")
 
-                # Stream output in real-time while also capturing for error reporting
+                # Run evalchemy in-process (no subprocess, TPU handles die with worker)
                 log_file = os.path.join(result_dir, "evalchemy_output.log")
-                returncode = self._run_with_streaming(
+                returncode = self._run_evalchemy_in_process(
                     cmd=cmd,
-                    env=self._get_subprocess_env(),
                     cwd=evalchemy_path,
                     log_file=log_file,
                 )
@@ -926,6 +998,9 @@ _patch_autoconfig_for_gcs()
                     engine_seed=engine_seed,
                     wandb_tags=wandb_tags,
                 )
+
+                # Clean up vLLM state between tasks to release TPU devices
+                self._cleanup_vllm_between_tasks()
 
         except Exception as e:
             traceback.print_exc()
