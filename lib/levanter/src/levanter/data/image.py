@@ -1738,21 +1738,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             if images_data is None:
                 images_data = []
 
-            # Sanitize: remove <image> from text content when {"type": "image"} dicts exist
-            # This prevents double-counting when both formats coexist in the same message
-            if messages:
-                for msg in messages:
-                    content = msg.get("content", [])
-                    if isinstance(content, list):
-                        has_image_dicts = any(
-                            isinstance(c, dict) and c.get("type") == "image" for c in content
-                        )
-                        if has_image_dicts:
-                            for c in content:
-                                if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str):
-                                    if "<image>" in c["text"]:
-                                        c["text"] = c["text"].replace("<image>", "")
-
             # Validate messages/images consistency before processing
             # Count image references in messages
             num_image_refs = 0
@@ -1778,26 +1763,43 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             # Load all images for this example
             all_images.extend(load_image(img) for img in images_data)
             images_per_example.append(len(images_data))
+            num_images = len(images_data)
 
             # Apply chat template to get the text with image placeholders
             template_text = self.processor.apply_chat_template(
                 messages,
                 add_generation_prompt=self.add_generation_prompt,
             )
-            all_texts.append(template_text)
 
-            # Check apply_chat_template output for image placeholders that our pre-check missed
-            # This catches message formats like {"type": "image_url"} that produce <image> tokens
+            # Validate: <image> placeholder count must match actual images count.
+            # Mismatches happen when data has both {"type": "image"} dicts AND "<image>"
+            # in text content, or duplicate {"type": "image"} entries for a single image.
+            # Without this fix, the mismatch propagates to the model forward pass where
+            # input_ids has N*features_per_patch image tokens but vision encoder only
+            # produces M*features_per_patch features (N != M).
             template_image_count = template_text.count("<image>")
-            if template_image_count > 0 and len(images_data) == 0:
+            if template_image_count > num_images and num_images > 0:
+                logger.warning(
+                    f"batch_item_idx={item_idx}: chat template produced {template_image_count} "
+                    f"<image> placeholder(s) but only {num_images} image(s) provided. "
+                    f"Removing {template_image_count - num_images} extra placeholder(s). "
+                    f"messages={json.dumps(messages, ensure_ascii=False, default=str)[:500]}"
+                )
+                # Keep only the first num_images <image> placeholders, remove the rest
+                parts = template_text.split("<image>")
+                # parts has (template_image_count + 1) elements
+                # Rejoin first (num_images + 1) parts with <image>, append remaining without
+                template_text = "<image>".join(parts[: num_images + 1]) + "".join(parts[num_images + 1 :])
+            elif template_image_count > 0 and num_images == 0:
                 raise ValueError(
                     f"Data inconsistency: apply_chat_template produced {template_image_count} "
                     f"<image> placeholder(s) but images list is empty! "
-                    f"This suggests messages have image references in a format our pre-check missed. "
                     f"batch_item_idx={item_idx}, "
                     f"template_text={template_text[:500]!r}, "
                     f"messages={json.dumps(messages, ensure_ascii=False, default=str)[:500]}"
                 )
+
+            all_texts.append(template_text)
 
         # Process all images and texts together in one call
         if all_images:
