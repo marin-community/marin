@@ -22,15 +22,16 @@ The remaining blocking operations are terminate() calls for failed/dead/idle sli
 from __future__ import annotations
 
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.platform.base import Platform, QuotaExhaustedError, SliceHandle, VmHandle
+from iris.cluster.platform.base import Platform, PlatformError, QuotaExhaustedError, SliceHandle, VmHandle
 from iris.cluster.platform.bootstrap import WorkerBootstrap
-from iris.cluster.types import DeviceType, VmWorkerStatusMap
+from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_tpu_topology
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -247,6 +248,91 @@ def route_demand(
         unmet_entries=unmet,
         group_reasons=group_reasons,
     )
+
+
+def _get_expected_vm_count(handle: SliceHandle) -> int | None:
+    """Derive expected VM count from slice labels. Returns None if unknown."""
+    variant = handle.labels.get("iris-accelerator-variant", "")
+    if not variant:
+        return None
+    try:
+        return get_tpu_topology(variant).vm_count
+    except ValueError:
+        return None
+
+
+def bootstrap_slice_vms(
+    handle: SliceHandle,
+    worker_bootstrap: WorkerBootstrap,
+    threads: ThreadContainer,
+    timeout: float = 600.0,
+    poll_interval: float = 10.0,
+) -> dict[str, str]:
+    """Discover VMs and bootstrap each as it appears.
+
+    Polls handle.describe() and spawns a bootstrap thread (via ThreadContainer)
+    for each newly-seen VM. Returns bootstrap logs keyed by vm_id.
+    Raises PlatformError if expected VM count isn't reached or any VM fails.
+    """
+    expected = _get_expected_vm_count(handle)
+    seen: set[str] = set()
+
+    # result_box per VM: list containing a single ("ok", log) or ("error", exception) tuple
+    results: dict[str, list] = {}
+    spawned_threads: list[ManagedThread] = []
+
+    start = time.time()
+    while True:
+        for vm in handle.describe().vms:
+            if vm.vm_id not in seen:
+                seen.add(vm.vm_id)
+                result_box: list = []
+                results[vm.vm_id] = result_box
+
+                def _do_bootstrap(stop_event, *, _vm=vm, _box=result_box):
+                    try:
+                        _box.append(("ok", worker_bootstrap.bootstrap_vm(_vm)))
+                    except Exception as e:
+                        _box.append(("error", e))
+
+                t = threads.spawn(
+                    target=_do_bootstrap,
+                    name=f"bootstrap-vm-{vm.vm_id}",
+                )
+                spawned_threads.append(t)
+                logger.info(
+                    "Spawned bootstrap for VM %s (%d/%s seen)",
+                    vm.vm_id,
+                    len(seen),
+                    expected or "?",
+                )
+
+        if expected is None or len(seen) >= expected:
+            break
+        if time.time() - start > timeout:
+            raise PlatformError(
+                f"Slice {handle.slice_id}: only {len(seen)}/{expected} VMs " f"appeared after {timeout}s"
+            )
+        time.sleep(poll_interval)
+
+    for t in spawned_threads:
+        t.join()
+
+    logs: dict[str, str] = {}
+    errors: list[tuple[str, Exception]] = []
+    for vm_id, box in results.items():
+        if not box:
+            errors.append((vm_id, RuntimeError("bootstrap thread produced no result")))
+        elif box[0][0] == "error":
+            errors.append((vm_id, box[0][1]))
+            logger.error("Bootstrap failed for VM %s: %s", vm_id, box[0][1])
+        else:
+            logs[vm_id] = box[0][1]
+
+    if errors:
+        failed = [vm_id for vm_id, _ in errors]
+        raise PlatformError(f"Bootstrap failed for {len(errors)} VMs in {handle.slice_id}: {failed}")
+    return logs
 
 
 class Autoscaler:
@@ -558,24 +644,26 @@ class Autoscaler:
         """Execute the actual blocking scale-up work.
 
         This runs in a background thread and should not be called directly.
-        Use _execute_scale_up instead.
+        Use _execute_scale_up instead. Bootstrap is spawned in a separate thread
+        so scale-up completes promptly and the slice is tracked immediately.
 
         Returns:
             True if scale-up succeeded, False otherwise.
         """
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
-        completed = False
-        slice_obj: SliceHandle | None = None
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
             slice_obj = group.scale_up(timestamp=ts)
             group.complete_scale_up(slice_obj, ts)
-            completed = True
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id
             action.status = "completed"
-            self._bootstrap_slice(slice_obj, group.name)
+
+            self._threads.spawn(
+                target=lambda stop: self._bootstrap_slice_safe(slice_obj, group),
+                name=f"bootstrap-{slice_obj.slice_id}",
+            )
             return True
         except QuotaExhaustedError as e:
             group.cancel_scale_up()
@@ -586,22 +674,30 @@ class Autoscaler:
             action.reason = str(e)
             return False
         except Exception as e:
-            if completed and slice_obj is not None:
-                logger.error(
-                    "Bootstrap failed for slice %s in %s, cleaning up: %s",
-                    slice_obj.slice_id,
-                    group.name,
-                    e,
-                )
-                group.scale_down(slice_obj.slice_id)
-                self._unregister_slice_vms(slice_obj.slice_id)
-            else:
-                group.cancel_scale_up()
+            group.cancel_scale_up()
             logger.error("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
+
+    def _bootstrap_slice_safe(self, handle: SliceHandle, group: ScalingGroup) -> None:
+        """Bootstrap a slice with error handling. Runs in a background thread.
+
+        On failure, scales down the failed slice and records a failure on the group.
+        """
+        try:
+            self._bootstrap_slice(handle, group.name)
+        except Exception as e:
+            logger.error(
+                "Bootstrap failed for slice %s in %s, cleaning up: %s",
+                handle.slice_id,
+                group.name,
+                e,
+            )
+            group.scale_down(handle.slice_id)
+            self._unregister_slice_vms(handle.slice_id)
+            group.record_failure()
 
     def _bootstrap_slice(self, handle: SliceHandle, scale_group: str) -> None:
         """Bootstrap all VMs in a newly created slice and register them in the VM registry.
@@ -611,7 +707,7 @@ class Autoscaler:
         """
         bootstrap_logs: dict[str, str] = {}
         if self._worker_bootstrap:
-            bootstrap_logs = self._worker_bootstrap.bootstrap_slice(handle)
+            bootstrap_logs = bootstrap_slice_vms(handle, self._worker_bootstrap, self._threads)
 
         self._register_slice_vms(handle, scale_group, bootstrap_logs)
 

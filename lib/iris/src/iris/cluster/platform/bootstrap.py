@@ -12,12 +12,10 @@ from __future__ import annotations
 
 import logging
 import shlex
-import time
 
 import yaml
 
-from iris.cluster.platform.base import PlatformError, SliceHandle
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.platform.base import PlatformError, VmHandle
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
@@ -29,116 +27,29 @@ logger = logging.getLogger(__name__)
 
 
 class WorkerBootstrap:
-    """Bootstraps worker VMs with embedded cluster config.
+    """Bootstraps individual worker VMs with embedded cluster config.
 
     Workers receive the full cluster config.yaml and use it to discover
     the controller themselves via platform.discover_controller().
-    The autoscaler creates a WorkerBootstrap and calls bootstrap_slice()
-    after each scale-up.
+    The autoscaler calls bootstrap_vm() for each VM in parallel via
+    bootstrap_slice_vms().
     """
 
     def __init__(self, cluster_config: config_pb2.IrisClusterConfig):
         self._cluster_config = cluster_config
 
-    def bootstrap_slice(self, handle: SliceHandle) -> dict[str, str]:
-        """Bootstrap all VMs in a newly created slice.
+    def bootstrap_vm(self, vm: VmHandle) -> str:
+        """Bootstrap a single VM: wait for connection, validate, run script.
 
-        Args:
-            handle: SliceHandle for the newly created slice.
-
-        Returns:
-            Mapping of vm_id to bootstrap log text captured during bootstrap.
-
-        Raises:
-            PlatformError: If any VM has no internal address after becoming reachable,
-                or if wait_for_connection times out, or if not all expected VMs are present.
+        Returns bootstrap log text. Raises PlatformError on failure.
         """
-        # Wait for all expected VMs to be present before bootstrapping.
-        # TPU slices can return partial VM lists during provisioning (e.g., 3 of 4 VMs).
-        self._wait_for_all_vms(handle)
-
-        logs: dict[str, str] = {}
-        for vm in handle.describe().vms:
-            if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
-                raise PlatformError(
-                    f"VM {vm.vm_id} in slice {handle.slice_id} failed to become reachable "
-                    f"within timeout. The VM may be stuck in a boot loop or networking may be misconfigured."
-                )
-            if not vm.internal_address:
-                raise PlatformError(
-                    f"VM {vm.vm_id} in slice {handle.slice_id} has no internal address. "
-                    f"The slice may still be provisioning network endpoints."
-                )
-            script = self._build_script(vm.internal_address)
-            vm.bootstrap(script)
-            logs[vm.vm_id] = vm.bootstrap_log
-        return logs
-
-    def _wait_for_all_vms(self, handle: SliceHandle) -> None:
-        """Wait for all expected VMs to be present in the slice.
-
-        During TPU provisioning, list_vms() may return partial results as network
-        endpoints are gradually created. This polls until the expected VM count
-        (from TPU topology) is reached or times out.
-
-        Raises:
-            PlatformError: If the expected VM count is not reached within timeout.
-        """
-        # Derive expected VM count from accelerator_variant label if present.
-        # For slices created by the autoscaler, this label is always set.
-        # For manually created slices or other platforms (manual, local), skip the check.
-        accelerator_variant = handle.labels.get("iris-accelerator-variant", "")
-        if not accelerator_variant:
-            logger.debug(
-                "Slice %s has no iris-accelerator-variant label; skipping VM count check",
-                handle.slice_id,
-            )
-            return
-
-        try:
-            topology = get_tpu_topology(accelerator_variant)
-            expected_vm_count = topology.vm_count
-        except ValueError:
-            logger.warning(
-                "Unknown accelerator variant %s for slice %s; skipping VM count check",
-                accelerator_variant,
-                handle.slice_id,
-            )
-            return
-
-        # Poll for up to 600 seconds
-        timeout = 600.0
-        poll_interval = 10.0
-        start = time.time()
-
-        while time.time() - start < timeout:
-            desc = handle.describe()
-            if len(desc.vms) >= expected_vm_count:
-                logger.info(
-                    "Slice %s has all %d expected VMs ready for bootstrap",
-                    handle.slice_id,
-                    expected_vm_count,
-                )
-                return
-            logger.debug(
-                "Slice %s has %d/%d VMs ready; waiting for remaining VMs...",
-                handle.slice_id,
-                len(desc.vms),
-                expected_vm_count,
-            )
-            time.sleep(poll_interval)
-
-        # Final check after timeout
-        desc = handle.describe()
-        if len(desc.vms) < expected_vm_count:
-            raise PlatformError(
-                f"Slice {handle.slice_id} has only {len(desc.vms)}/{expected_vm_count} VMs "
-                f"ready after {timeout}s. The slice may be stuck in provisioning."
-            )
-
-    def _build_script(self, vm_address: str) -> str:
-        """Build the full bootstrap script for a single VM."""
-        return build_worker_bootstrap_script(self._cluster_config, vm_address)
+        if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
+            raise PlatformError(f"VM {vm.vm_id} failed to become reachable within timeout.")
+        if not vm.internal_address:
+            raise PlatformError(f"VM {vm.vm_id} has no internal address.")
+        script = build_worker_bootstrap_script(self._cluster_config, vm.internal_address)
+        vm.bootstrap(script)
+        return vm.bootstrap_log
 
 
 # Bootstrap script template for worker VMs.
