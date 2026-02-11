@@ -251,6 +251,22 @@ class ProcessContainer:
             self._exit_code = 137  # 128 + SIGKILL
 
 
+def _profile_stub(output_format: str) -> bytes:
+    """Return a minimal stub profile for when py-spy is unavailable."""
+    if output_format == "flamegraph":
+        return (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="50">'
+            b'<text x="10" y="30" font-size="14">py-spy unavailable in local mode</text></svg>'
+        )
+    elif output_format == "speedscope":
+        return (
+            b'{"version":"0.1.0","$schema":"https://www.speedscope.app/file-format-schema.json",'
+            b'"profiles":[],"shared":{"frames":[]}}'
+        )
+    else:
+        return b"py-spy unavailable in local mode\n"
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -353,6 +369,52 @@ class ProcessContainerHandle:
     def stats(self) -> ContainerStats:
         """Get resource usage statistics."""
         return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
+
+    def profile(self, duration_seconds: int = 10, rate_hz: int = 100, output_format: str = "flamegraph") -> bytes:
+        """Profile the running process using py-spy, with fallback stubs."""
+        if not self._container or not self._container._process:
+            raise RuntimeError("Cannot profile: no running process")
+
+        pid = self._container._process.pid
+
+        output_path = None
+        try:
+            import tempfile
+
+            ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
+            ext = ext_map.get(output_format, "svg")
+            with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
+                output_path = f.name
+
+            cmd = [
+                "py-spy",
+                "record",
+                "--pid",
+                str(pid),
+                "--duration",
+                str(duration_seconds),
+                "--rate",
+                str(rate_hz),
+                "--format",
+                output_format,
+                "--output",
+                output_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
+            if result.returncode == 0:
+                data = Path(output_path).read_bytes()
+                return data
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
+            logger.warning(
+                "py-spy profiling failed for PID %s; falling back to stub profile output",
+                pid,
+                exc_info=True,
+            )
+        finally:
+            if output_path is not None:
+                Path(output_path).unlink(missing_ok=True)
+
+        return _profile_stub(output_format)
 
     def cleanup(self) -> None:
         """Kill the subprocess and clean up resources."""

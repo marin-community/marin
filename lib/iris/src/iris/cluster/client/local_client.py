@@ -8,7 +8,6 @@ instead of Docker containers, ensuring local execution follows the same code pat
 as production cluster execution.
 """
 
-import time
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
@@ -17,7 +16,7 @@ from iris.cluster.controller.local import LocalController
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from iris.time_utils import Duration, ExponentialBackoff
 
 
 def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
@@ -91,13 +90,11 @@ class LocalClusterClient:
             timeout_ms=30000,
         )
         try:
-            start = time.monotonic()
-            while time.monotonic() - start < timeout:
-                response = temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
-                if response.workers:
-                    return
-                time.sleep(0.1)
-            raise TimeoutError("Worker failed to register with controller")
+            ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+                lambda: bool(temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers),
+                timeout=Duration.from_seconds(timeout),
+                error_message="Worker failed to register with controller",
+            )
         finally:
             temp_client.close()
 

@@ -76,6 +76,28 @@ class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class ProfileTaskRequest(_message.Message):
+    __slots__ = ("task_id", "duration_seconds", "rate_hz", "format")
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    DURATION_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    RATE_HZ_FIELD_NUMBER: _ClassVar[int]
+    FORMAT_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    duration_seconds: int
+    rate_hz: int
+    format: str
+    def __init__(self, task_id: _Optional[str] = ..., duration_seconds: _Optional[int] = ..., rate_hz: _Optional[int] = ..., format: _Optional[str] = ...) -> None: ...
+
+class ProfileTaskResponse(_message.Message):
+    __slots__ = ("profile_data", "format", "error")
+    PROFILE_DATA_FIELD_NUMBER: _ClassVar[int]
+    FORMAT_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    profile_data: bytes
+    format: str
+    error: str
+    def __init__(self, profile_data: _Optional[bytes] = ..., format: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+
 class ProcessLogRecord(_message.Message):
     __slots__ = ("timestamp", "level", "logger_name", "message")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]

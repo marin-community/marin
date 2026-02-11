@@ -70,6 +70,9 @@ class ControllerService(Protocol):
     async def get_process_logs(self, request: cluster__pb2.Controller.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetProcessLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
@@ -255,6 +258,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_process_logs,
+                ),
+                "/iris.cluster.ControllerService/ProfileTask": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ProfileTask",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.ProfileTaskRequest,
+                        output=cluster__pb2.ProfileTaskResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.profile_task,
                 ),
             },
             interceptors=interceptors,
@@ -628,6 +641,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def profile_task(
+        self,
+        request: cluster__pb2.ProfileTaskRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.ProfileTaskResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ProfileTask",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.ProfileTaskRequest,
+                output=cluster__pb2.ProfileTaskResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 
 class WorkerService(Protocol):
@@ -647,6 +680,9 @@ class WorkerService(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def heartbeat(self, request: cluster__pb2.HeartbeatRequest, ctx: RequestContext) -> cluster__pb2.HeartbeatResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -714,6 +750,16 @@ class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.heartbeat,
+                ),
+                "/iris.cluster.WorkerService/ProfileTask": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ProfileTask",
+                        service_name="iris.cluster.WorkerService",
+                        input=cluster__pb2.ProfileTaskRequest,
+                        output=cluster__pb2.ProfileTaskResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.profile_task,
                 ),
             },
             interceptors=interceptors,
@@ -847,6 +893,26 @@ class WorkerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def profile_task(
+        self,
+        request: cluster__pb2.ProfileTaskRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.ProfileTaskResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ProfileTask",
+                service_name="iris.cluster.WorkerService",
+                input=cluster__pb2.ProfileTaskRequest,
+                output=cluster__pb2.ProfileTaskResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class ControllerServiceSync(Protocol):
     def launch_job(self, request: cluster__pb2.Controller.LaunchJobRequest, ctx: RequestContext) -> cluster__pb2.Controller.LaunchJobResponse:
@@ -884,6 +950,8 @@ class ControllerServiceSync(Protocol):
     def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_process_logs(self, request: cluster__pb2.Controller.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetProcessLogsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1070,6 +1138,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_process_logs,
+                ),
+                "/iris.cluster.ControllerService/ProfileTask": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ProfileTask",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.ProfileTaskRequest,
+                        output=cluster__pb2.ProfileTaskResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.profile_task,
                 ),
             },
             interceptors=interceptors,
@@ -1443,6 +1521,26 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
+    def profile_task(
+        self,
+        request: cluster__pb2.ProfileTaskRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.ProfileTaskResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ProfileTask",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.ProfileTaskRequest,
+                output=cluster__pb2.ProfileTaskResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 class WorkerServiceSync(Protocol):
     def get_task_status(self, request: cluster__pb2.Worker.GetTaskStatusRequest, ctx: RequestContext) -> cluster__pb2.TaskStatus:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1455,6 +1553,8 @@ class WorkerServiceSync(Protocol):
     def get_process_logs(self, request: cluster__pb2.Worker.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Worker.GetProcessLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def heartbeat(self, request: cluster__pb2.HeartbeatRequest, ctx: RequestContext) -> cluster__pb2.HeartbeatResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1521,6 +1621,16 @@ class WorkerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.heartbeat,
+                ),
+                "/iris.cluster.WorkerService/ProfileTask": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ProfileTask",
+                        service_name="iris.cluster.WorkerService",
+                        input=cluster__pb2.ProfileTaskRequest,
+                        output=cluster__pb2.ProfileTaskResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.profile_task,
                 ),
             },
             interceptors=interceptors,
@@ -1648,6 +1758,26 @@ class WorkerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.WorkerService",
                 input=cluster__pb2.HeartbeatRequest,
                 output=cluster__pb2.HeartbeatResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def profile_task(
+        self,
+        request: cluster__pb2.ProfileTaskRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.ProfileTaskResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ProfileTask",
+                service_name="iris.cluster.WorkerService",
+                input=cluster__pb2.ProfileTaskRequest,
+                output=cluster__pb2.ProfileTaskResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
