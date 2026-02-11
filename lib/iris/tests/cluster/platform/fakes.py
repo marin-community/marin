@@ -6,8 +6,8 @@
 Provides:
 - FakePlatform / FakeSliceHandle / FakeVmHandle: In-memory Platform that
   simulates VM lifecycle with configurable delays and failure injection.
-- FakeGcloud: In-memory gcloud CLI fake that intercepts subprocess.run calls,
-  simulating TPU and GCE instance lifecycle for testing GcpPlatform.
+- FakeTpuApi / FakeComputeApi: Protocol-based fakes implementing TpuApi and
+  ComputeApi protocols for testing GcpPlatform.
 
 Usage (FakePlatform):
     config = config_pb2.ScaleGroupConfig(name="test-group", ...)
@@ -15,22 +15,20 @@ Usage (FakePlatform):
     handle = platform.create_slice(slice_config)
     platform.tick(ts=now_ms())
 
-Usage (FakeGcloud):
-    fake = FakeGcloud()
-    fake.set_failure("tpu_create", "RESOURCE_EXHAUSTED: no capacity")
-    # Use via the fake_gcloud pytest fixture, which patches subprocess.run.
+Usage (FakeTpuApi/FakeComputeApi):
+    fake_apis = FakeGcpApis(tpu=FakeTpuApi(), compute=FakeComputeApi())
+    fake_apis.set_tpu_failure("create_node", "RESOURCE_EXHAUSTED: no capacity")
+    platform = GcpPlatform(gcp_config, label_prefix="iris",
+                          tpu_api=fake_apis.tpu, compute_api=fake_apis.compute)
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from unittest.mock import patch
 
 import pytest
 
@@ -331,244 +329,146 @@ class FakePlatform:
 
 
 # =============================================================================
-# FakeGcloud — in-memory gcloud CLI fake for testing GcpPlatform
+# FakeTpuApi and FakeComputeApi — protocol-based fakes for testing GcpPlatform
 # =============================================================================
 
 
 @dataclass
-class FakeResult:
-    """Drop-in for subprocess.CompletedProcess returned by FakeGcloud."""
+class FakeTpuApi:
+    """In-memory fake implementation of TpuApi protocol.
 
-    returncode: int = 0
-    stdout: str = ""
-    stderr: str = ""
-
-
-def _parse_flag(cmd: list[str], flag: str) -> str | None:
-    """Extract value from --flag=value style args in a command list.
-
-    Returns None if the flag is not present.
-    """
-    prefix = f"--{flag}="
-    for arg in cmd:
-        if arg.startswith(prefix):
-            return arg[len(prefix) :]
-    return None
-
-
-def _parse_labels_string(s: str) -> dict[str, str]:
-    """Parse 'k1=v1,k2=v2' into {'k1': 'v1', 'k2': 'v2'}."""
-    if not s:
-        return {}
-    result: dict[str, str] = {}
-    for pair in s.split(","):
-        if "=" in pair:
-            k, v = pair.split("=", 1)
-            result[k] = v
-    return result
-
-
-def _parse_filter_labels(filter_str: str) -> dict[str, str]:
-    """Parse gcloud filter expressions like 'labels.k=v AND labels.k2=v2' into a dict."""
-    if not filter_str:
-        return {}
-    labels: dict[str, str] = {}
-    for match in re.finditer(r"labels\.([^=\s]+)=([^\s]+)", filter_str):
-        labels[match.group(1)] = match.group(2)
-    return labels
-
-
-@dataclass
-class FakeGcloud:
-    """In-memory gcloud CLI fake that intercepts subprocess.run calls.
-
-    Maintains TPU and VM state dictionaries keyed by (name, zone). Each gcloud
-    subcommand is dispatched to a handler method. Unrecognized commands raise
-    ValueError so test bugs surface immediately.
+    Maintains TPU state dictionary keyed by (name, zone). Supports failure
+    injection for testing error paths.
     """
 
     _tpus: dict[tuple[str, str], dict] = field(default_factory=dict)
-    _vms: dict[tuple[str, str], dict] = field(default_factory=dict)
-    _failures: dict[str, tuple[str, int]] = field(default_factory=dict)
+    _failures: dict[str, str] = field(default_factory=dict)
 
-    def set_failure(self, operation: str, error: str, code: int = 1) -> None:
+    def set_failure(self, operation: str, error: str) -> None:
         """Make a specific operation type fail on the next call.
 
         Args:
-            operation: One of "tpu_create", "tpu_list", "tpu_describe", "tpu_delete",
-                       "vm_create", "vm_list", "vm_describe", "vm_delete".
-            error: The stderr message to return.
-            code: The returncode to return (default 1).
+            operation: One of "get_node", "create_node", "delete_node", "list_nodes".
+            error: The error message to raise.
         """
-        self._failures[operation] = (error, code)
+        self._failures[operation] = error
 
     def clear_failure(self) -> None:
         """Remove all injected failures."""
         self._failures.clear()
 
-    def _check_failure(self, operation: str) -> FakeResult | None:
+    def _check_failure(self, operation: str) -> None:
         if operation in self._failures:
-            error, code = self._failures.pop(operation)
-            return FakeResult(returncode=code, stderr=error)
-        return None
+            error = self._failures.pop(operation)
+            from iris.cluster.platform.base import PlatformError, QuotaExhaustedError
 
-    def __call__(self, cmd: list[str], **kwargs) -> FakeResult:
-        """Drop-in replacement for subprocess.run. Dispatches by gcloud subcommand."""
-        if not cmd or cmd[0] != "gcloud":
-            raise ValueError(f"FakeGcloud: unrecognized command: {cmd}")
+            if "RESOURCE_EXHAUSTED" in error or "Quota exceeded" in error:
+                raise QuotaExhaustedError(error)
+            raise PlatformError(error)
 
-        # Extract subcommand tokens, skipping flags and their arguments.
-        # Handles both --flag=value and --flag value forms.
-        tokens: list[str] = []
-        skip_next = False
-        for arg in cmd[1:]:
-            if skip_next:
-                skip_next = False
-                continue
-            if arg.startswith("--"):
-                # If it's --flag (no =), the next arg is the value
-                if "=" not in arg:
-                    skip_next = True
-                continue
-            tokens.append(arg)
+    def get_node(self, project: str, zone: str, name: str) -> dict:
+        self._check_failure("get_node")
+        key = (name, zone)
+        if key not in self._tpus:
+            from iris.cluster.platform.base import PlatformError
 
-        if _matches_gcloud(tokens, ["compute", "tpus", "tpu-vm", "create", None]):
-            return self._tpu_create(cmd, tokens[4])
-        if _matches_gcloud(tokens, ["compute", "tpus", "tpu-vm", "list"]):
-            return self._tpu_list(cmd)
-        if _matches_gcloud(tokens, ["compute", "tpus", "tpu-vm", "describe", None]):
-            return self._tpu_describe(cmd, tokens[4])
-        if _matches_gcloud(tokens, ["compute", "tpus", "tpu-vm", "delete", None]):
-            return self._tpu_delete(cmd, tokens[4])
-        if _matches_gcloud(tokens, ["compute", "instances", "create", None]):
-            return self._vm_create(cmd, tokens[3])
-        if _matches_gcloud(tokens, ["compute", "instances", "describe", None]):
-            return self._vm_describe(cmd, tokens[3])
-        if _matches_gcloud(tokens, ["compute", "instances", "list"]):
-            return self._vm_list(cmd)
-        if _matches_gcloud(tokens, ["compute", "instances", "delete", None]):
-            return self._vm_delete(cmd, tokens[3])
-        if _matches_gcloud(tokens, ["compute", "instances", "update", None]):
-            return self._vm_update(cmd, tokens[3])
-        if _matches_gcloud(tokens, ["compute", "instances", "add-metadata", None]):
-            return self._vm_add_metadata(cmd, tokens[3])
+            raise PlatformError(f"TPU node {name} not found in zone {zone}")
+        return dict(self._tpus[key])
 
-        raise ValueError(f"FakeGcloud: unrecognized command: {cmd}")
-
-    # -------------------------------------------------------------------------
-    # TPU handlers
-    # -------------------------------------------------------------------------
-
-    def _tpu_create(self, cmd: list[str], name: str) -> FakeResult:
-        if failure := self._check_failure("tpu_create"):
-            return failure
-
-        accel_type = _parse_flag(cmd, "accelerator-type")
-        if not accel_type:
-            return FakeResult(
-                returncode=1,
-                stderr="ERROR: (gcloud.compute.tpus.tpu-vm.create) argument --accelerator-type: expected one argument",
-            )
-
-        zone = _parse_flag(cmd, "zone")
-        if not zone:
-            return FakeResult(
-                returncode=1,
-                stderr="ERROR: (gcloud.compute.tpus.tpu-vm.create) argument --zone: expected one argument",
-            )
-
-        labels: dict[str, str] = {}
-        # Labels can appear as --labels=K=V,... or --labels K=V,...
-        labels_str = _parse_flag(cmd, "labels")
-        if labels_str is None:
-            # Check for the two-token form: --labels K=V,...
-            for i, arg in enumerate(cmd):
-                if arg == "--labels" and i + 1 < len(cmd):
-                    labels_str = cmd[i + 1]
-                    break
-        if labels_str:
-            labels = _parse_labels_string(labels_str)
+    def create_node(
+        self,
+        project: str,
+        zone: str,
+        node_id: str,
+        accelerator_type: str,
+        runtime_version: str,
+        labels: dict[str, str] | None = None,
+        preemptible: bool = False,
+    ) -> None:
+        self._check_failure("create_node")
 
         idx = len(self._tpus)
         tpu_data = {
-            "name": name,
+            "name": node_id,
             "state": "READY",
-            "acceleratorType": accel_type,
-            "labels": labels,
+            "acceleratorType": accelerator_type,
+            "labels": dict(labels) if labels else {},
             "networkEndpoints": [{"ipAddress": f"10.0.0.{idx + 1}"}],
             "createTime": "2024-01-15T10:30:00.000Z",
         }
-        self._tpus[(name, zone)] = tpu_data
-        return FakeResult(returncode=0)
+        self._tpus[(node_id, zone)] = tpu_data
 
-    def _tpu_list(self, cmd: list[str]) -> FakeResult:
-        if failure := self._check_failure("tpu_list"):
-            return failure
+    def delete_node(self, project: str, zone: str, name: str) -> None:
+        self._check_failure("delete_node")
+        self._tpus.pop((name, zone), None)
 
-        zone = _parse_flag(cmd, "zone")
-        filter_str = _parse_flag(cmd, "filter")
-        required_labels = _parse_filter_labels(filter_str) if filter_str else {}
-
+    def list_nodes(self, project: str, zone: str) -> list[dict]:
+        self._check_failure("list_nodes")
         matching = []
         for (_, tpu_zone), tpu in self._tpus.items():
-            if zone and tpu_zone != zone:
-                continue
-            tpu_labels = tpu.get("labels", {})
-            if all(tpu_labels.get(k) == v for k, v in required_labels.items()):
-                matching.append(tpu)
+            if tpu_zone == zone:
+                matching.append(dict(tpu))
+        return matching
 
-        return FakeResult(returncode=0, stdout=json.dumps(matching))
 
-    def _tpu_describe(self, cmd: list[str], name: str) -> FakeResult:
-        if failure := self._check_failure("tpu_describe"):
-            return failure
+@dataclass
+class FakeComputeApi:
+    """In-memory fake implementation of ComputeApi protocol.
 
-        zone = _parse_flag(cmd, "zone")
-        key = (name, zone)
-        if key not in self._tpus:
-            return FakeResult(returncode=1, stderr="NOT_FOUND")
+    Maintains VM state dictionary keyed by (name, zone). Supports failure
+    injection for testing error paths.
+    """
 
-        return FakeResult(returncode=0, stdout=json.dumps(self._tpus[key]))
+    _vms: dict[tuple[str, str], dict] = field(default_factory=dict)
+    _failures: dict[str, str] = field(default_factory=dict)
 
-    def _tpu_delete(self, cmd: list[str], name: str) -> FakeResult:
-        if failure := self._check_failure("tpu_delete"):
-            return failure
+    def set_failure(self, operation: str, error: str) -> None:
+        """Make a specific operation type fail on the next call.
 
-        zone = _parse_flag(cmd, "zone")
-        self._tpus.pop((name, zone), None)
-        return FakeResult(returncode=0)
+        Args:
+            operation: One of "get_instance", "create_instance", "delete_instance",
+                       "list_instances", "reset_instance", "set_labels", "set_metadata".
+            error: The error message to raise.
+        """
+        self._failures[operation] = error
 
-    # -------------------------------------------------------------------------
-    # VM handlers
-    # -------------------------------------------------------------------------
+    def clear_failure(self) -> None:
+        """Remove all injected failures."""
+        self._failures.clear()
 
-    def _vm_create(self, cmd: list[str], name: str) -> FakeResult:
-        if failure := self._check_failure("vm_create"):
-            return failure
+    def _check_failure(self, operation: str) -> None:
+        if operation in self._failures:
+            error = self._failures.pop(operation)
+            from iris.cluster.platform.base import PlatformError, QuotaExhaustedError
 
-        machine_type = _parse_flag(cmd, "machine-type")
-        if not machine_type:
-            return FakeResult(
-                returncode=1,
-                stderr="ERROR: (gcloud.compute.instances.create) argument --machine-type: expected one argument",
-            )
+            if "RESOURCE_EXHAUSTED" in error or "Quota exceeded" in error:
+                raise QuotaExhaustedError(error)
+            raise PlatformError(error)
 
-        zone = _parse_flag(cmd, "zone")
-        if not zone:
-            return FakeResult(
-                returncode=1,
-                stderr="ERROR: (gcloud.compute.instances.create) argument --zone: expected one argument",
-            )
+    def get_instance(self, project: str, zone: str, instance: str) -> dict:
+        self._check_failure("get_instance")
+        key = (instance, zone)
+        if key not in self._vms:
+            from iris.cluster.platform.base import PlatformError
 
-        labels_str = _parse_flag(cmd, "labels")
-        labels = _parse_labels_string(labels_str) if labels_str else {}
+            raise PlatformError(f"Instance {instance} not found in zone {zone}")
+        return dict(self._vms[key])
 
-        metadata_str = _parse_flag(cmd, "metadata")
-        metadata = _parse_labels_string(metadata_str) if metadata_str else {}
+    def create_instance(
+        self,
+        project: str,
+        zone: str,
+        instance_name: str,
+        machine_type: str,
+        boot_disk_size_gb: int,
+        labels: dict[str, str] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> dict:
+        self._check_failure("create_instance")
 
         idx = len(self._vms) + 1
         vm_data = {
-            "name": name,
+            "name": instance_name,
             "status": "RUNNING",
             "networkInterfaces": [
                 {
@@ -576,92 +476,90 @@ class FakeGcloud:
                     "accessConfigs": [{"natIP": f"34.1.2.{idx}"}],
                 }
             ],
-            "labels": labels,
-            "metadata": metadata,
+            "labels": dict(labels) if labels else {},
+            "metadata": dict(metadata) if metadata else {},
         }
-        self._vms[(name, zone)] = vm_data
-        return FakeResult(returncode=0, stdout=json.dumps([vm_data]))
+        self._vms[(instance_name, zone)] = vm_data
+        return dict(vm_data)
 
-    def _vm_describe(self, cmd: list[str], name: str) -> FakeResult:
-        if failure := self._check_failure("vm_describe"):
-            return failure
+    def delete_instance(self, project: str, zone: str, instance: str) -> None:
+        self._check_failure("delete_instance")
+        self._vms.pop((instance, zone), None)
 
-        zone = _parse_flag(cmd, "zone")
-        key = (name, zone)
-        if key not in self._vms:
-            return FakeResult(returncode=1, stderr="NOT_FOUND")
-
-        fmt = _parse_flag(cmd, "format")
-        if fmt == "value(status)":
-            return FakeResult(returncode=0, stdout=self._vms[key]["status"] + "\n")
-
-        return FakeResult(returncode=0, stdout=json.dumps(self._vms[key]))
-
-    def _vm_list(self, cmd: list[str]) -> FakeResult:
-        if failure := self._check_failure("vm_list"):
-            return failure
-
-        # gcloud instances list uses --zones (plural)
-        zones_str = _parse_flag(cmd, "zones")
-        zones = set(zones_str.split(",")) if zones_str else set()
-        filter_str = _parse_flag(cmd, "filter")
-        required_labels = _parse_filter_labels(filter_str) if filter_str else {}
-
+    def list_instances(self, project: str, zone: str) -> list[dict]:
+        self._check_failure("list_instances")
         matching = []
         for (_, vm_zone), vm in self._vms.items():
-            if zones and vm_zone not in zones:
-                continue
-            vm_labels = vm.get("labels", {})
-            if all(vm_labels.get(k) == v for k, v in required_labels.items()):
-                matching.append(vm)
+            if vm_zone == zone:
+                matching.append(dict(vm))
+        return matching
 
-        return FakeResult(returncode=0, stdout=json.dumps(matching))
-
-    def _vm_delete(self, cmd: list[str], name: str) -> FakeResult:
-        if failure := self._check_failure("vm_delete"):
-            return failure
-
-        zone = _parse_flag(cmd, "zone")
-        self._vms.pop((name, zone), None)
-        return FakeResult(returncode=0)
-
-    def _vm_update(self, cmd: list[str], name: str) -> FakeResult:
-        zone = _parse_flag(cmd, "zone")
-        key = (name, zone)
+    def reset_instance(self, project: str, zone: str, instance: str) -> None:
+        self._check_failure("reset_instance")
+        key = (instance, zone)
         if key not in self._vms:
-            return FakeResult(returncode=1, stderr="NOT_FOUND")
+            from iris.cluster.platform.base import PlatformError
 
-        update_labels_str = _parse_flag(cmd, "update-labels")
-        if update_labels_str:
-            new_labels = _parse_labels_string(update_labels_str)
-            self._vms[key].setdefault("labels", {}).update(new_labels)
+            raise PlatformError(f"Instance {instance} not found in zone {zone}")
 
-        return FakeResult(returncode=0)
-
-    def _vm_add_metadata(self, cmd: list[str], name: str) -> FakeResult:
-        zone = _parse_flag(cmd, "zone")
-        key = (name, zone)
+    def set_labels(self, project: str, zone: str, instance: str, labels: dict[str, str]) -> None:
+        self._check_failure("set_labels")
+        key = (instance, zone)
         if key not in self._vms:
-            return FakeResult(returncode=1, stderr="NOT_FOUND")
+            from iris.cluster.platform.base import PlatformError
 
-        metadata_str = _parse_flag(cmd, "metadata")
-        if metadata_str:
-            new_metadata = _parse_labels_string(metadata_str)
-            self._vms[key].setdefault("metadata", {}).update(new_metadata)
+            raise PlatformError(f"Instance {instance} not found in zone {zone}")
+        self._vms[key].setdefault("labels", {}).update(labels)
 
-        return FakeResult(returncode=0)
+    def set_metadata(self, project: str, zone: str, instance: str, metadata: dict[str, str]) -> None:
+        self._check_failure("set_metadata")
+        key = (instance, zone)
+        if key not in self._vms:
+            from iris.cluster.platform.base import PlatformError
+
+            raise PlatformError(f"Instance {instance} not found in zone {zone}")
+        self._vms[key].setdefault("metadata", {}).update(metadata)
 
 
-def _matches_gcloud(tokens: list[str], pattern: list[str | None]) -> bool:
-    """Check if tokens match a pattern where None means 'any single token'."""
-    if len(tokens) != len(pattern):
-        return False
-    return all(p is None or t == p for t, p in zip(tokens, pattern, strict=True))
+# =============================================================================
+# Pytest Fixtures
+# =============================================================================
 
 
 @pytest.fixture
-def fake_gcloud() -> FakeGcloud:
-    """Pytest fixture that patches iris.cluster.platform.gcp.subprocess.run with a FakeGcloud."""
-    fake = FakeGcloud()
-    with patch("iris.cluster.platform.gcp.subprocess.run", fake):
-        yield fake
+def fake_tpu_api() -> FakeTpuApi:
+    """Pytest fixture providing a FakeTpuApi instance."""
+    return FakeTpuApi()
+
+
+@pytest.fixture
+def fake_compute_api() -> FakeComputeApi:
+    """Pytest fixture providing a FakeComputeApi instance."""
+    return FakeComputeApi()
+
+
+@dataclass
+class FakeGcpApis:
+    """Container for fake GCP APIs."""
+
+    tpu: FakeTpuApi
+    compute: FakeComputeApi
+
+    def set_tpu_failure(self, operation: str, error: str) -> None:
+        """Convenience method to set TPU API failures."""
+        self.tpu.set_failure(operation, error)
+
+    def set_compute_failure(self, operation: str, error: str) -> None:
+        """Convenience method to set Compute API failures."""
+        self.compute.set_failure(operation, error)
+
+    def clear_failures(self) -> None:
+        """Clear all failures from both APIs."""
+        self.tpu.clear_failure()
+        self.compute.clear_failure()
+
+
+@pytest.fixture
+def fake_gcp_apis() -> FakeGcpApis:
+    """Pytest fixture providing both fake GCP APIs in a container."""
+    return FakeGcpApis(tpu=FakeTpuApi(), compute=FakeComputeApi())

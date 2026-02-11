@@ -4,14 +4,13 @@
 """Consolidated Platform protocol tests.
 
 Tests exercise the Platform protocol contract through parameterized fixtures
-(GCP via FakeGcloud, Manual, Local). Platform-specific behavioral tests
+(GCP via FakeTpuApi/FakeComputeApi, Manual, Local). Platform-specific behavioral tests
 that cannot be expressed through the protocol are in dedicated sections.
 """
 
 from __future__ import annotations
 
 import threading
-import unittest.mock
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -26,7 +25,7 @@ from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.platform.manual import ManualPlatform
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
-from tests.cluster.platform.fakes import FakeGcloud
+from tests.cluster.platform.fakes import FakeComputeApi, FakeGcpApis, FakeTpuApi
 
 # =============================================================================
 # Fixture infrastructure
@@ -84,16 +83,20 @@ def _make_vm_config(env: PlatformEnv, name: str = "test-controller") -> config_p
 def platform_env(request) -> Iterator[PlatformEnv]:
     """Yield a PlatformEnv for each platform implementation.
 
-    GCP is backed by FakeGcloud patching subprocess.run.
+    GCP is backed by FakeTpuApi and FakeComputeApi.
     """
     name = request.param
 
     if name == "gcp":
-        fake = FakeGcloud()
+        fake_apis = FakeGcpApis(tpu=FakeTpuApi(), compute=FakeComputeApi())
         gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-        platform = GcpPlatform(gcp_config, label_prefix="iris")
-        with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
-            yield PlatformEnv(platform=platform, zone="us-central2-b", name="gcp", label_prefix="iris")
+        platform = GcpPlatform(
+            gcp_config,
+            label_prefix="iris",
+            tpu_api=fake_apis.tpu,
+            compute_api=fake_apis.compute,
+        )
+        yield PlatformEnv(platform=platform, zone="us-central2-b", name="gcp", label_prefix="iris")
     elif name == "manual":
         platform = ManualPlatform(
             label_prefix="iris",
@@ -215,12 +218,17 @@ def test_tunnel_returns_address_directly(in_memory_env: PlatformEnv):
 
 
 def test_gcp_quota_error_raises_quota_exhausted():
-    """GcpPlatform raises QuotaExhaustedError when gcloud reports RESOURCE_EXHAUSTED."""
-    fake = FakeGcloud()
-    fake.set_failure("tpu_create", "RESOURCE_EXHAUSTED: no capacity")
+    """GcpPlatform raises QuotaExhaustedError when TPU API reports RESOURCE_EXHAUSTED."""
+    fake_apis = FakeGcpApis(tpu=FakeTpuApi(), compute=FakeComputeApi())
+    fake_apis.set_tpu_failure("create_node", "RESOURCE_EXHAUSTED: no capacity")
 
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpPlatform(gcp_config, label_prefix="iris")
+    platform = GcpPlatform(
+        gcp_config,
+        label_prefix="iris",
+        tpu_api=fake_apis.tpu,
+        compute_api=fake_apis.compute,
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu-group",
@@ -230,9 +238,8 @@ def test_gcp_quota_error_raises_quota_exhausted():
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
 
-    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
-        with pytest.raises(QuotaExhaustedError):
-            platform.create_slice(cfg)
+    with pytest.raises(QuotaExhaustedError):
+        platform.create_slice(cfg)
 
 
 def test_gcp_validate_slice_config_reports_all_missing_fields():
@@ -247,9 +254,14 @@ def test_gcp_validate_slice_config_reports_all_missing_fields():
 
 def test_gcp_empty_accelerator_variant_rejected():
     """create_slice with empty accelerator_variant raises ValueError."""
-    fake = FakeGcloud()
+    fake_apis = FakeGcpApis(tpu=FakeTpuApi(), compute=FakeComputeApi())
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpPlatform(gcp_config, label_prefix="iris")
+    platform = GcpPlatform(
+        gcp_config,
+        label_prefix="iris",
+        tpu_api=fake_apis.tpu,
+        compute_api=fake_apis.compute,
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu-group",
@@ -259,51 +271,58 @@ def test_gcp_empty_accelerator_variant_rejected():
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
 
-    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
-        with pytest.raises(ValueError, match="accelerator_variant"):
-            platform.create_slice(cfg)
+    with pytest.raises(ValueError, match="accelerator_variant"):
+        platform.create_slice(cfg)
 
 
 def test_gcp_create_vm_validates_config():
     """create_vm with empty zone raises ValueError."""
-    fake = FakeGcloud()
+    fake_apis = FakeGcpApis(tpu=FakeTpuApi(), compute=FakeComputeApi())
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpPlatform(gcp_config, label_prefix="iris")
+    platform = GcpPlatform(
+        gcp_config,
+        label_prefix="iris",
+        tpu_api=fake_apis.tpu,
+        compute_api=fake_apis.compute,
+    )
 
     cfg = config_pb2.VmConfig(name="test-vm")
 
-    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
-        with pytest.raises(ValueError, match="zone"):
-            platform.create_vm(cfg)
+    with pytest.raises(ValueError, match="zone"):
+        platform.create_vm(cfg)
 
 
 def test_gcp_list_slices_skips_deleting_tpus():
     """list_slices omits TPUs in DELETING state."""
-    fake = FakeGcloud()
+    fake_apis = FakeGcpApis(tpu=FakeTpuApi(), compute=FakeComputeApi())
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpPlatform(gcp_config, label_prefix="iris")
+    platform = GcpPlatform(
+        gcp_config,
+        label_prefix="iris",
+        tpu_api=fake_apis.tpu,
+        compute_api=fake_apis.compute,
+    )
 
-    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
-        cfg = config_pb2.SliceConfig(
-            name_prefix="iris-tpu",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-16",
-        )
-        cfg.gcp.zone = "us-central2-b"
-        cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg.labels["iris-managed"] = "true"
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-16",
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+    cfg.labels["iris-managed"] = "true"
 
-        handle = platform.create_slice(cfg)
+    handle = platform.create_slice(cfg)
 
-        # Mark the TPU as DELETING in the fake's internal state
-        for _key, tpu_data in fake._tpus.items():
-            if tpu_data["name"] == handle.slice_id:
-                tpu_data["state"] = "DELETING"
-                break
+    # Mark the TPU as DELETING in the fake's internal state
+    for _key, tpu_data in fake_apis.tpu._tpus.items():
+        if tpu_data["name"] == handle.slice_id:
+            tpu_data["state"] = "DELETING"
+            break
 
-        slices = platform.list_slices(zones=["us-central2-b"])
-        slice_ids = {s.slice_id for s in slices}
-        assert handle.slice_id not in slice_ids
+    slices = platform.list_slices(zones=["us-central2-b"])
+    slice_ids = {s.slice_id for s in slices}
+    assert handle.slice_id not in slice_ids
 
 
 # =============================================================================
@@ -433,38 +452,42 @@ def test_gcp_list_all_slices_raises_without_zones():
 
 def test_gcp_list_all_slices_multi_zone():
     """GcpPlatform.list_all_slices returns slices across multiple zones."""
-    fake = FakeGcloud()
+    fake_apis = FakeGcpApis(tpu=FakeTpuApi(), compute=FakeComputeApi())
     gcp_config = config_pb2.GcpPlatformConfig(
         project_id="test-project",
         zones=["zone-a", "zone-b"],
     )
-    platform = GcpPlatform(gcp_config, label_prefix="iris")
+    platform = GcpPlatform(
+        gcp_config,
+        label_prefix="iris",
+        tpu_api=fake_apis.tpu,
+        compute_api=fake_apis.compute,
+    )
 
-    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
-        cfg_a = config_pb2.SliceConfig(
-            name_prefix="iris-tpu",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-16",
-        )
-        cfg_a.gcp.zone = "zone-a"
-        cfg_a.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg_a.labels["iris-managed"] = "true"
+    cfg_a = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-16",
+    )
+    cfg_a.gcp.zone = "zone-a"
+    cfg_a.gcp.runtime_version = "tpu-ubuntu2204-base"
+    cfg_a.labels["iris-managed"] = "true"
 
-        cfg_b = config_pb2.SliceConfig(
-            name_prefix="iris-tpu",
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-16",
-        )
-        cfg_b.gcp.zone = "zone-b"
-        cfg_b.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg_b.labels["iris-managed"] = "true"
+    cfg_b = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-16",
+    )
+    cfg_b.gcp.zone = "zone-b"
+    cfg_b.gcp.runtime_version = "tpu-ubuntu2204-base"
+    cfg_b.labels["iris-managed"] = "true"
 
-        handle_a = platform.create_slice(cfg_a)
-        handle_b = platform.create_slice(cfg_b)
+    handle_a = platform.create_slice(cfg_a)
+    handle_b = platform.create_slice(cfg_b)
 
-        all_slices = platform.list_all_slices()
-        slice_ids = {s.slice_id for s in all_slices}
-        assert handle_a.slice_id in slice_ids
-        assert handle_b.slice_id in slice_ids
-        assert handle_a.slice_id in slice_ids
-        assert handle_b.slice_id in slice_ids
+    all_slices = platform.list_all_slices()
+    slice_ids = {s.slice_id for s in all_slices}
+    assert handle_a.slice_id in slice_ids
+    assert handle_b.slice_id in slice_ids
+    assert handle_a.slice_id in slice_ids
+    assert handle_b.slice_id in slice_ids
