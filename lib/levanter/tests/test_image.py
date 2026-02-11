@@ -50,8 +50,9 @@ def test_batch_image_processor(processor, dataset):
 
 
 def test_image_data_loader(processor, dataset):
-    """Test ImageDataLoader with cached data."""
-    from levanter.data.image import ImageDataLoader, ImageTextExample
+    """Test image data loading with ImageTextDataset + DataLoader."""
+    from levanter.data.image import ImageTextDataset, ImageTextExample
+    from levanter.data.loader import DataLoader
 
     batch_processor = BatchImageProcessor(
         processor,
@@ -98,14 +99,17 @@ def test_image_data_loader(processor, dataset):
         axis_resources = {"batch": "data"}
 
         with mesh:
-            loader = ImageDataLoader(
-                data=cache,
-                batch_size=batch_size,
-                Pos=Pos,
+            wrapped_dataset = ImageTextDataset(
+                cache,
+                Position=Pos,
                 NumPatches=NumPatches,
                 Channels=Channels,
                 Height=Height,
                 Width=Width,
+            )
+            loader = DataLoader(
+                wrapped_dataset,
+                batch_size=batch_size,
                 mesh=mesh,
                 axis_resources=axis_resources,
                 max_buffered_batches=0,
@@ -123,7 +127,8 @@ def test_llava_with_image_dataloader(processor, dataset):
 
     import dataclasses
     import torch
-    from levanter.data.image import ImageDataLoader, ImageTextExample, create_custom_processor
+    from levanter.data.image import ImageTextDataset, ImageTextExample, create_custom_processor
+    from levanter.data.loader import DataLoader
     from levanter.models.llava_onevision import LlavaOnevisionConfig, LlavaOnevisionModel
     from levanter.layers.attention import AttentionBackend
     from levanter.trainer import TrainerConfig
@@ -231,19 +236,22 @@ def test_llava_with_image_dataloader(processor, dataset):
 
             mesh = get_concrete_mesh()
 
-            loader = ImageDataLoader(
-                data=cache,
-                batch_size=batch_size,
-                Pos=Pos,
+            wrapped_dataset = ImageTextDataset(
+                cache,
+                Position=Pos,
                 NumPatches=NumPatches,
                 Channels=Channels,
                 Height=Height,
                 Width=Width,
+                NumImageTokens=NumImageTokens,
+            )
+            loader = DataLoader(
+                wrapped_dataset,
+                batch_size=batch_size,
                 axis_resources=trainer_config.compute_axis_mapping,
                 mesh=mesh,
                 max_buffered_batches=0,
                 allow_nondivisible_batch_size=True,
-                NumImageTokens=NumImageTokens,
             )
 
             batch = next(iter(loader))

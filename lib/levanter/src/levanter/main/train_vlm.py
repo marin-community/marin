@@ -30,10 +30,10 @@ from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, save_hf_checkpoint_callback
 from levanter.data.image import (
     ImageIODatasetConfig,
-    ImageDataLoader,
     ImageMixtureDatasetConfig,
     ImageTextDataset,
 )
+from levanter.data.loader import DataLoader
 from levanter.models.llava_onevision import LlavaOnevisionConfig, LlavaOnevisionModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -289,12 +289,13 @@ def compute_vlm_loss(
     targets = hax.roll(example.input_ids, -1, Pos)
 
     # Compute loss weight from loss_mask
+    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
     if example.loss_mask is not None:
-        # Shift loss mask to align with targets
-        loss_weight = hax.roll(example.loss_mask, -1, Pos)
+        # Shift loss mask to align with targets, and mask out the last position
+        # (its target is meaningless due to roll wrapping around)
+        loss_weight = hax.roll(example.loss_mask, -1, Pos) * not_last_mask.astype(jnp.float32)
     else:
-        # Create a mask that excludes the last token
-        not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
+        # Exclude the last token
         loss_weight = not_last_mask.astype(jnp.float32)
 
     # Use fused_cross_entropy_loss for blockwise computation
@@ -483,9 +484,8 @@ def main(config: TrainVLMConfig):
         compute_dtype = trainer.mp.compute_dtype
         logger.info(f"Using compute dtype {compute_dtype} for pixel values")
 
-        # Note: We use train_dataset_mixture (raw ImageTextDict) directly with ImageDataLoader
-        # instead of wrapping it in ImageTextDataset. The ImageDataLoader handles
-        # the conversion to ImageTextExample during batching.
+        # ImageTextDataset wraps raw ImageTextDict and converts to ImageTextExample.
+        # The base DataLoader handles batching and device placement.
 
         # Determine vocab size - use HF checkpoint vocab if loading from HF, otherwise use tokenizer
         vocab_size, vocab_source = _determine_vocab_size(config, converter, tokenizer)
@@ -566,7 +566,6 @@ def main(config: TrainVLMConfig):
                     Channels=Channels,
                     Height=Height,
                     Width=Width,
-                    ignore_index=config.data.pad_token_id,
                     pixel_dtype=compute_dtype,  # Use same compute precision for eval
                     grid_pinpoints=config.model.image_grid_pinpoints,
                     patch_size=config.model.vision_config.image_size,
@@ -584,25 +583,29 @@ def main(config: TrainVLMConfig):
                 every=config.hf_save_steps,
             )
 
-        # Create data loader - ImageDataLoader converts raw ImageTextDict to ImageTextExample
-        # during batching, handling grid_mask computation and NamedArray creation
+        # Wrap raw dataset with ImageTextDataset to convert ImageTextDict -> ImageTextExample
         pixel_dtype = np.dtype(compute_dtype)
+        train_dataset = ImageTextDataset(
+            train_dataset_mixture,
+            Position=Pos,
+            NumPatches=NumPatches,
+            Channels=Channels,
+            Height=Height,
+            Width=Width,
+            pixel_dtype=pixel_dtype,
+            grid_pinpoints=config.model.image_grid_pinpoints,
+            patch_size=config.model.vision_config.image_size,
+        )
 
         # Check if streaming mode for loader configuration
         is_streaming = hasattr(config.data, "use_cache") and not config.data.use_cache
 
-        # Build loader kwargs with common parameters
+        # Build loader kwargs for base DataLoader
         loader_kwargs = {
-            "Pos": Pos,
-            "NumPatches": NumPatches,
-            "Channels": Channels,
-            "Height": Height,
-            "Width": Width,
             "mesh": trainer.device_mesh,
             "axis_resources": trainer.compute_axis_mapping,
             "batch_axis_name": Batch.name,
             "allow_nondivisible_batch_size": trainer.config.allow_nondivisible_batch_size,
-            "pixel_dtype": pixel_dtype,
         }
 
         if is_streaming:
@@ -615,12 +618,12 @@ def main(config: TrainVLMConfig):
                 }
             )
             logger.info(
-                f"Using streaming mode with ImageDataLoader (prefetch_size={STREAMING_PREFETCH_SIZE}, max_buffered={STREAMING_MAX_BUFFERED_BATCHES})"
+                f"Using streaming mode with DataLoader (prefetch_size={STREAMING_PREFETCH_SIZE}, max_buffered={STREAMING_MAX_BUFFERED_BATCHES})"
             )
         else:
             loader_kwargs["batch_size"] = Batch
 
-        train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
+        train_loader = DataLoader(train_dataset, **loader_kwargs).iter_from_step(state.step)
 
         # Run training
         trainer.train(state, train_loader)
