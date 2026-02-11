@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
@@ -18,7 +7,7 @@ import os
 import sys
 
 import draccus
-from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
+from fray.v1.cluster import ResourceConfig, create_cluster, set_current_cluster
 import humanfriendly
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
@@ -27,11 +16,12 @@ from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
     executor_main,
-    output_path_of,
     this_output_path,
     versioned,
 )
+from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate, ConsolidateConfig
 from marin.processing.classification.dataset_utils import DatasetConfig
+from marin.processing.classification.deduplication.dedup_commons import DedupConfig, DedupMode, deduplicate
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
@@ -82,12 +72,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainFasttextClassifierConfig(
             datasets=[
                 DatasetConfig(
-                    input_doc_path=output_path_of(transform_hq_data_step),
+                    input_doc_path=transform_hq_data_step,
                     label="hq",
                     sampling_rate=1.0,
                 ),
                 DatasetConfig(
-                    input_doc_path=output_path_of(transform_lq_data_step),
+                    input_doc_path=transform_lq_data_step,
                     label="lq",
                     sampling_rate=1.0,
                 ),
@@ -111,9 +101,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "hq-inference"),
         fn=run_inference,
         config=InferenceConfig(
-            input_path=output_path_of(transform_hq_data_step),
+            input_path=transform_hq_data_step,
             output_path=this_output_path(),
-            model_name=output_path_of(train_quality_step),
+            model_name=train_quality_step,
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
         ),
@@ -123,9 +113,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "lq-inference"),
         fn=run_inference,
         config=InferenceConfig(
-            input_path=output_path_of(transform_lq_data_step),
+            input_path=transform_lq_data_step,
             output_path=this_output_path(),
-            model_name=output_path_of(train_quality_step),
+            model_name=train_quality_step,
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
@@ -134,12 +124,60 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     ############################################################
     # Deduplicate
 
+    dedup_exact_paragraph_step = ExecutorStep(
+        name=os.path.join(prefix, "dedup_exact_paragraph"),
+        fn=deduplicate,
+        config=DedupConfig(
+            input_paths=transform_hq_data_step,
+            output_path=this_output_path(),
+            mode=DedupMode.EXACT_PARAGRAPH,
+            ray_memory=humanfriendly.parse_size("1GB", binary=True),
+            ray_num_cpus=1,
+        ),
+    )
+    dedup_fuzzy_document_step = ExecutorStep(
+        name=os.path.join(prefix, "dedup_fuzzy_document"),
+        fn=deduplicate,
+        config=DedupConfig(
+            input_paths=transform_hq_data_step,
+            output_path=this_output_path(),
+            mode=DedupMode.FUZZY_DOCUMENT,
+            ray_memory=humanfriendly.parse_size("1GB", binary=True),
+            ray_num_cpus=1,
+        ),
+    )
+
+    ############################################################
+    # Consolidate
+
+    consolidate_step = ExecutorStep(
+        name=os.path.join(prefix, "cleaned"),
+        fn=consolidate,
+        config=ConsolidateConfig(
+            input_path=transform_hq_data_step,
+            output_path=this_output_path(),
+            # TODO (rav): add quality filters
+            filters=[
+                FilterConfig(
+                    type=FilterType.REMOVE_SPANS,
+                    attribute_path=dedup_exact_paragraph_step.cd("data"),
+                    name=str(DedupMode.EXACT_PARAGRAPH),
+                ),
+                FilterConfig(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=dedup_fuzzy_document_step.cd("data"),
+                    name=str(DedupMode.FUZZY_DOCUMENT),
+                ),
+            ],
+        ),
+    )
+
     ############################################################
     # Tokenize
     tokenizer = "gpt2"
 
     tokenize_config = TokenizeConfig(
-        train_paths=[transform_hq_data_step],
+        train_paths=[consolidate_step],
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=tokenizer,
@@ -172,7 +210,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             resources=pod_config,
             env_vars=train_env_vars,
             train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step, permutation_type="linear"),
+                data=lm_data_config(tokenize_step),
                 hf_save_steps=1,
                 model=Gpt2Config(
                     num_layers=2,
@@ -197,8 +235,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         train_quality_step,
         inference_hq_step,
         inference_lq_step,
-        # dedupe_step,
-        # consolidate_step,
+        dedup_exact_paragraph_step,
+        dedup_fuzzy_document_step,
+        consolidate_step,
         tokenize_step,
         train_step,
         # evaluate_step,
@@ -225,7 +264,12 @@ def main(config: ExecutorMainConfig):
             raise RuntimeError("integration_test.py must not be launched via `uv run`. Please run it directly.")
         import ray
 
-        ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=16)
+        ray.init(
+            resources={"head_node": 1},
+            runtime_env={"working_dir": None},
+            num_cpus=os.cpu_count(),
+            _memory=1024 * 1024 * 1024 * 1024,  # 1TB
+        )
         set_current_cluster(create_cluster("ray"))
 
         # path to synthetic test data

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Script to create tokenized subcaches for speedrun.
@@ -24,12 +13,18 @@ Running this experiment will create two subcaches:
 You probably don't need to run this script unless you're adding a new dataset or changing the tokenization process.
 """
 
-from experiments.exp524_tokenizers import fineweb_edu_llama3_tokenized
+from experiments.defaults import default_tokenize
+from experiments.pretraining_datasets.simple import downloads
 from experiments.speedrun.prebuilt_caches import fineweb_edu_10B_repo_id, fineweb_edu_10M_repo_id
 from marin.execution import executor_main
 from marin.export import upload_dir_to_hf
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.tokenize.slice_cache import slice_cache
+
+# Inlined from deleted exp524_tokenizers.py
+fineweb_edu_llama3_tokenized = default_tokenize(
+    name="fineweb-edu", dataset=downloads["fineweb_edu"], tokenizer="meta-llama/Meta-Llama-3.1-8B"
+)
 
 base_cache = fineweb_edu_llama3_tokenized
 

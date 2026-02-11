@@ -6,7 +6,7 @@ import gc
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional
 
 import haliax as hax
 import jax.numpy as jnp
@@ -21,7 +21,8 @@ import levanter.eval_harness
 from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
-from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfig, UrlSingleDatasetLMConfig
+from levanter.data.mixture import MixtureDataset
+from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -34,16 +35,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TrainLmConfig:
-    data: Union[SingleDatasetLMConfig, LMMixtureDatasetConfig] = field(default_factory=UrlSingleDatasetLMConfig)
+    data: LmDataConfig = field(default_factory=LmDataConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     model: LmConfig = field(default_factory=LlamaConfig)
     train_seq_len: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
     # config related to continued pretraining
-    initialize_from_hf: Union[bool, str] = False
+    initialize_from_hf: bool | str = False
     """if provided, this will override the model config in the config. if true, use the default hf checkpoint for this model class"""
     use_hf_model_config: bool = False  # if true, replace the model config with the hf config from the checkpoint
+    pad_tokenizer_to_match_model: bool = False
+    """If True, pad the tokenizer's vocab to match the model's vocab size by adding dummy tokens.
+    Useful when the model checkpoint has a larger vocab than the tokenizer (e.g., Qwen models
+    pad their vocab to be divisible by 4 for TPU efficiency)."""
 
     # TODO: atm we don't support loading from a checkpoint that has a different tokenizer. this is a bit annoying
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
@@ -61,7 +66,6 @@ class TrainLmConfig:
     If provided, will initialize from this checkpoint, used for llama style ablation. This resets the data loader.
     Note that this differs from --trainer.initialize_from, which does not reset the data loader.
     """
-    epoch: int = 0
     eval_harness: Optional[LmEvalHarnessConfig] = None
     eval_harness_steps: int = 10000
 
@@ -88,6 +92,9 @@ def main(config: TrainLmConfig):
         else:
             converter = converter.replaced(tokenizer=tokenizer)
 
+        if config.pad_tokenizer_to_match_model:
+            converter = converter.with_tokenizer_padded_to_match_model()
+
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
             # NB: gross mutability
@@ -95,6 +102,8 @@ def main(config: TrainLmConfig):
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
+        if config.pad_tokenizer_to_match_model:
+            converter = converter.with_tokenizer_padded_to_match_model()
     else:
         converter = None
 
@@ -154,7 +163,6 @@ def main(config: TrainLmConfig):
             Pos,
             config.trainer.batch_schedule,
             key=data_key,
-            epochs=config.epoch,
         )
 
         # Get the tagged evaluation datasets
@@ -221,6 +229,23 @@ def main(config: TrainLmConfig):
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
+
+        if isinstance(train_dataset, MixtureDataset):
+            last_stage = -1
+
+            def log_mixture_weights(step_info):
+                nonlocal last_stage
+                seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
+                block_id = seq_index // train_dataset.block_size
+                stage = train_dataset._get_stage_for_block(block_id)
+                weights = train_dataset.weight_stages[stage][1]
+                if stage != last_stage:
+                    metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
+                    metrics["mixture/stage"] = stage
+                    levanter.tracker.log(metrics, step=step_info.step)
+                    last_stage = stage
+
+            trainer.add_hook(log_mixture_weights, every=1)
         # trainer.add_hook(callbacks.GradWatchCallback(include_histograms=True), every=5)
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:
@@ -284,13 +309,7 @@ def main(config: TrainLmConfig):
             train_loader = train_loader.iter_from_step(0)
 
         ## OK, actually run training!
-        last_info = trainer.train(state, train_loader)
-
-        # If running EpochDataset save latest checkpoint by default
-        if trainer.config.checkpointer is not None and config.epoch > 0:
-            trainer.run_hooks(last_info, force=True)
-            checkpointer = trainer.config.checkpointer.create(trainer.run_id)
-            checkpointer.wait_until_finished()
+        trainer.train(state, train_loader)
 
     # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
     trainer.tracker.finish()

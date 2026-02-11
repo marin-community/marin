@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import typing
 import warnings
 
@@ -125,7 +124,6 @@ def maybe_reduce_loss(
     weight: NamedArray | None,
 ):
     effective_weight: NamedArray | None = _resolve_effective_weight(arr, weight, where)
-    del where, weight
 
     if reduction is not None and reduction_axis != ():
         if reduction is UNSPECIFIED:

@@ -1,18 +1,14 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "click",
+#     "pyyaml",
+# ]
+# ///
 """
 Run pre-commits and lint checks for Marin.
 
@@ -141,7 +137,7 @@ def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nRuff linter:")
-    args = ["uv", "run", "--all-packages", "ruff", "check"]
+    args = ["uvx", "ruff@0.14.3", "check"]
     if fix:
         args.extend(["--fix", "--exit-non-zero-on-fix"])
 
@@ -156,7 +152,7 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
         return 0
 
     click.echo("\nBlack formatter:")
-    args = ["uv", "run", "--all-packages", "black", "--check"]
+    args = ["uvx", "black@25.9.0", "--check"]
     if fix:
         # When fixing, use --diff to show changes but still exit non-zero if files would be formatted
         args.append("--diff")
@@ -170,7 +166,7 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
 
     # If check failed (files need formatting) and fix is requested, format them
     if result.returncode != 0 and fix:
-        format_args = ["uv", "run", "--all-packages", "black"]
+        format_args = ["uvx", "black@25.9.0"]
         if config:
             format_args.extend(["--config", str(config)])
         format_args.extend(file_args)
@@ -253,7 +249,7 @@ def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nMypy type checker:")
-    args = ["uv", "run", "--all-packages", "mypy", "--ignore-missing-imports", "--python-version=3.11"]
+    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.11"]
 
     test_excluded = [f for f in files if not str(f.relative_to(ROOT_DIR)).startswith("tests/")]
     if not test_excluded:
@@ -532,7 +528,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nPyrefly type checker:")
-    args = ["uv", "run", "--all-packages", "pyrefly", "check", "--baseline", ".pyrefly-baseline.json"]
+    args = ["uvx", "pyrefly@0.40.0", "check", "--baseline", ".pyrefly-baseline.json"]
     return run_cmd(args).returncode
 
 
@@ -571,7 +567,14 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
-        patterns=["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"],
+        patterns=[
+            "lib/marin/src/**/*.py",
+            "lib/levanter/src/**/*.py",
+            "lib/haliax/src/**/*.py",
+            "lib/fray/src/**/*.py",
+            "lib/iris/src/**/*.py",
+            "lib/zephyr/src/**/*.py",
+        ],
         checks=[
             check_pyrefly,
         ],

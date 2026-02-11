@@ -27,18 +27,18 @@ clean:
 	find . -name "__pycache__" | xargs rm -rf
 
 check:
-	uv run python infra/pre-commit.py
+	./infra/pre-commit.py
 
 fix:
 	@FILES=$$(git diff --name-only HEAD); \
 	if [ -n "$$FILES" ]; then \
-		uv run python infra/pre-commit.py --fix $$FILES && git add $$FILES; \
+		./infra/pre-commit.py --fix $$FILES && git add $$FILES; \
 	else \
 		echo "No modified files to fix"; \
 	fi
 
 lint:
-	uv run python infra/pre-commit.py --all-files
+	./infra/pre-commit.py --all-files
 
 test:
 	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
@@ -175,6 +175,7 @@ install_gcloud:
 
 # get secret ssh key from gcp secrets
 get_secret_key: install_gcloud
+	mkdir -p ~/.ssh
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
 	chmod 600 ~/.ssh/marin_ray_cluster.pem
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
@@ -200,7 +201,7 @@ init_ray_auth_token_secret: install_gcloud
 setup_pre_commit:
 	@HOOK_PATH=.git/hooks/pre-commit; \
 	mkdir -p .git/hooks; \
-	printf '%s\n' '#!/bin/sh' 'set -e' 'REPO_ROOT="$$(git rev-parse --show-toplevel)"' 'cd "$$REPO_ROOT"' 'uv run python infra/pre-commit.py --fix' > $$HOOK_PATH; \
+	printf '%s\n' '#!/bin/sh' 'set -e' 'REPO_ROOT="$$(git rev-parse --show-toplevel)"' 'cd "$$REPO_ROOT"' './infra/pre-commit.py --fix' > $$HOOK_PATH; \
 	chmod +x $$HOOK_PATH; \
 	echo "Installed git pre-commit hook -> $$HOOK_PATH"
 

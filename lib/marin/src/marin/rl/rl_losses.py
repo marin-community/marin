@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """RL loss functions."""
 
@@ -25,7 +14,7 @@ import numpy as np
 import haliax as hax
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.loss import _blockwise_cross_entropy_loss
+from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.metrics import Metric, ReductionType
 
 from marin.rl.types import Rollout, TrainingBatch
@@ -146,7 +135,7 @@ def chunked_compute_logprobs(
     """Compute log probabilities of target tokens in a chunked manner to save memory.
 
     This avoids materializing the full [batch, seq, vocab] logits tensor by using
-    the blockwise cross-entropy implementation with a custom VJP.
+    the fused cross-entropy kernel with blockwise processing.
     """
     # Get activations
     activations = model.activations(
@@ -167,12 +156,15 @@ def chunked_compute_logprobs(
     pos_axis = batch.input_ids.resolve_axis("position")
     target_y = hax.roll(batch.input_ids, -1, pos_axis)
 
-    loss, _log_z = _blockwise_cross_entropy_loss(
-        (pred_embeddings, pred_lm_head),
-        model.Embed,
-        model.Vocab,
-        target_y,
-        block_size,
+    loss = fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
+        Contract=model.Embed,
+        Label=model.Vocab,
+        target_y=target_y,
+        reduction=None,
+        logsumexp_weight=0.0,
+        block_size=block_size,
         dtype=jnp.float32,
     )
 

@@ -85,29 +85,48 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.access_token }}
 
-      - name: Build and push Marin cluster image
+      - name: Build Marin cluster image
         run: |
           docker buildx build --file docker/marin/Dockerfile.cluster \
             --provenance=false \
-            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --push .
+            --load \
+            --tag marin_cluster:local \
+            .
+
+      - name: Verify Marin cluster image
+        # TODO (rav): should we just run tests inside the container?
+        run: |
+          echo "Verifying critical imports work correctly..."
+          docker run --rm marin_cluster:local python -c "
+          import sys
+          print(f'Python: {sys.version}')
+
+          import numpy
+          print(f'numpy: {numpy.__version__}')
+
+          import pandas
+          print(f'pandas: {pandas.__version__}')
+
+          import ray
+          print(f'ray: {ray.__version__}')
+
+          import torch
+          print(f'torch: {torch.__version__}')
+
+          print('All critical imports verified successfully!')
+          "
+
+      - name: Push Marin cluster image
+        run: |
+          REGISTRIES="europe-west4 us-central1 us-central2 us-east1 us-east5 us-west4"
+          TAGS="latest ${{ steps.set-tags.outputs.DATE_TAG }} ${{ steps.set-tags.outputs.HASH_TAG }}"
+
+          for registry in $REGISTRIES; do
+            for tag in $TAGS; do
+              docker tag marin_cluster:local ${registry}-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${tag}
+              docker push ${registry}-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${tag}
+            done
+          done
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6

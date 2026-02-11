@@ -1,22 +1,14 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 https://github.com/marin-community/marin/issues/1529
 
 Cooldown run for the 32B Tootsie model using MegaMath in place of the Dolmino math mixture.
 """
+
+# NOTE: This historical file originally used linear permutation through Marin's old mixture helpers.
+# Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
 
 import dataclasses
 
@@ -130,7 +122,6 @@ mantis_cooldown_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, mantis_cooldown_weights),
         (STACKV2_EDU_PYTHON_INTRO_STEP, mantis_cooldown_weights_with_stackv2_python),
     ],
-    permutation_type="feistel",  # the first phase was actually linear, but this is better for mixing things up
 )
 
 DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END

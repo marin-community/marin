@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Canonical set of evals.
@@ -106,9 +95,12 @@ def _infer_model_name_for_path(model_path: str) -> str:
 def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, InputName | str]:
     """
     Extract the model name and path from a step.
+
+    Always appends /hf for ExecutorSteps; run.py's _normalize_model_path handles
+    detecting whether the HF files are at root or in /hf at evaluation time.
     """
     if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step, "hf" if "gcsfuse" not in step.name else "")
+        model_step_path = output_path_of(step, "hf")
         name = step.name
     elif isinstance(step, InputName):
         # `InputName.hardcoded(...)` has `step.step is None`; treat it as a direct path.
@@ -119,12 +111,8 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
             name = _infer_model_name_for_path(step.name)
         else:
             # If `name` is already set, the InputName refers to a specific subpath under the step's output.
-            # Otherwise default to the HF export directory (except for gcsfuse mounts).
-            model_step_path = (
-                step
-                if step.name is not None
-                else output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
-            )
+            # Otherwise default to the HF export directory.
+            model_step_path = step if step.name is not None else output_path_of(step.step, "hf")
             name = step.step.name
     elif isinstance(step, str):
         model_step_path = step

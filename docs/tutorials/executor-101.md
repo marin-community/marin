@@ -146,7 +146,7 @@ if __name__ == "__main__":
 To run this experiment:
 
 ```bash
-python experiments/tutorial/hello_world.py --prefix local_store
+python experiments/tutorials/hello_world.py --prefix local_store
 ```
 
 This command will create several output files:

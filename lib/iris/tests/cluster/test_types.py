@@ -1,85 +1,85 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
-"""Tests for cluster types and utilities."""
+"""Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
-import os
-from unittest.mock import patch
+import pytest
 
-from iris.cluster.types import EnvironmentSpec, ResourceSpec
+from iris.cluster.types import Entrypoint, JobName
 
 
-def test_resource_spec_with_device():
-    """Verify ResourceSpec copies device configuration to proto."""
-    from iris.rpc import cluster_pb2
-
-    gpu_device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(count=2, variant="a100"))
-    spec = ResourceSpec(cpu=4, memory="16g", device=gpu_device)
-    proto = spec.to_proto()
-    assert proto.device.HasField("gpu")
-    assert proto.device.gpu.count == 2
-    assert proto.device.gpu.variant == "a100"
+def _add(a, b):
+    return a + b
 
 
-def test_resource_spec_with_all_fields():
-    """Verify all ResourceSpec fields are copied to proto."""
-    from iris.rpc import cluster_pb2
-
-    tpu_device = cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16"))
-    spec = ResourceSpec(
-        cpu=8,
-        memory="32g",
-        disk="500g",
-        device=tpu_device,
-        replicas=4,
-        preemptible=True,
-        regions=["us-central1", "us-east1"],
-    )
-    proto = spec.to_proto()
-    assert proto.cpu == 8
-    assert proto.memory_bytes == 32 * 1024**3
-    assert proto.disk_bytes == 500 * 1024**3
-    assert proto.device.HasField("tpu")
-    assert proto.device.tpu.variant == "v5litepod-16"
-    assert proto.replicas == 4
-    assert proto.preemptible is True
-    assert list(proto.regions) == ["us-central1", "us-east1"]
+def test_entrypoint_from_callable_resolve_roundtrip():
+    ep = Entrypoint.from_callable(_add, 3, b=4)
+    fn, args, kwargs = ep.resolve()
+    assert fn(*args, **kwargs) == 7
 
 
-def test_environment_spec_env_vars_override_defaults():
-    """User env_vars override default values."""
-    spec = EnvironmentSpec(env_vars={"TOKENIZERS_PARALLELISM": "true"})
-    proto = spec.to_proto()
-    assert proto.env_vars["TOKENIZERS_PARALLELISM"] == "true"
+def test_entrypoint_proto_roundtrip_preserves_bytes():
+    """Bytes survive to_proto -> from_proto without deserialization."""
+    ep = Entrypoint.from_callable(_add, 1, 2)
+    original_files = ep.workdir_files
+
+    proto = ep.to_proto()
+    ep2 = Entrypoint.from_proto(proto)
+
+    assert ep2.workdir_files == original_files
+    fn, args, kwargs = ep2.resolve()
+    assert fn(*args, **kwargs) == 3
 
 
-def test_environment_spec_inherits_env_tokens():
-    """EnvironmentSpec inherits HF_TOKEN and WANDB_API_KEY from environment."""
-    with patch.dict(os.environ, {"HF_TOKEN": "test-hf-token", "WANDB_API_KEY": "test-wandb-key"}):
-        spec = EnvironmentSpec()
-        proto = spec.to_proto()
-        assert proto.env_vars["HF_TOKEN"] == "test-hf-token"
-        assert proto.env_vars["WANDB_API_KEY"] == "test-wandb-key"
+def test_entrypoint_command():
+    ep = Entrypoint.from_command("echo", "hello")
+    assert not ep.workdir_files
+    assert ep.command == ["echo", "hello"]
 
 
-def test_environment_spec_omits_none_env_vars():
-    """EnvironmentSpec omits env vars with None values."""
-    with patch.dict(os.environ, {}, clear=True):
-        # Remove HF_TOKEN and WANDB_API_KEY from environment
-        os.environ.pop("HF_TOKEN", None)
-        os.environ.pop("WANDB_API_KEY", None)
-        spec = EnvironmentSpec()
-        proto = spec.to_proto()
-        assert "HF_TOKEN" not in proto.env_vars
-        assert "WANDB_API_KEY" not in proto.env_vars
+def test_entrypoint_callable_has_workdir_files():
+    ep = Entrypoint.from_callable(_add, 1, 2)
+    assert "_callable.pkl" in ep.workdir_files
+    assert "_callable_runner.py" in ep.workdir_files
+    assert ep.command is not None
+
+
+def test_job_name_roundtrip_and_hierarchy():
+    job = JobName.root("root")
+    child = job.child("child")
+    task = child.task(0)
+
+    assert str(job) == "/root"
+    assert str(child) == "/root/child"
+    assert str(task) == "/root/child/0"
+    assert task.parent == child
+    assert child.parent == job
+    assert job.parent is None
+
+    parsed = JobName.from_string("/root/child/0")
+    assert parsed == task
+    assert parsed.namespace == "root"
+    assert parsed.is_task
+    assert parsed.task_index == 0
+    assert JobName.root("root").is_ancestor_of(parsed)
+    assert not parsed.is_ancestor_of(JobName.root("root"), include_self=False)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "root", "/root//child", "/root/ ", "/root/child/", "/root/child//0"],
+)
+def test_job_name_rejects_invalid_inputs(value: str):
+    with pytest.raises(ValueError):
+        JobName.from_string(value)
+
+
+def test_job_name_require_task_errors_on_non_task():
+    with pytest.raises(ValueError):
+        JobName.from_string("/root/child").require_task()
+
+
+def test_job_name_to_safe_token_and_deep_nesting():
+    job = JobName.from_string("/a/b/c/d/e/0")
+    assert job.to_safe_token() == "job__a__b__c__d__e__0"
+    assert job.require_task()[1] == 0

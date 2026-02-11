@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the scaling_laws module.
 
@@ -27,14 +16,13 @@ from marin.scaling_laws.isoflop_analysis import (
     robust_quad_logx,
 )
 
-# Import the concrete recipe and transform function from experiments
-from experiments.isoflop_sweep import Marin2025Recipe, parse_isoflop_run_name, transform_levanter_metrics
-
 # --- Run name parsing tests ---
 
 
 def test_parse_isoflop_run_name():
     """Test parsing isoflop run names extracts experiment names."""
+    from experiments.isoflop_sweep import parse_isoflop_run_name
+
     # New format: isoflop-{budget}-N{params}-B{batch}-{experiment_name}
     assert parse_isoflop_run_name("isoflop-1e+18-N1e+08-B128-nemo-wider-depth-adapt") == "nemo-wider-depth-adapt"
     assert parse_isoflop_run_name("isoflop-1e+18-N1e+08-B128-dclm-a1b2c3") == "dclm"  # hash stripped
@@ -53,6 +41,8 @@ def test_parse_isoflop_run_name():
 
 def test_candidate_configs_within_tolerance():
     """Test that generated configs achieve the target FLOP budget within tolerance."""
+    from experiments.isoflop_sweep import Marin2025Recipe
+
     recipe = Marin2025Recipe()
     budget = 1e19
     flop_tolerance = 0.01
@@ -107,6 +97,8 @@ def test_candidates_for_budget_snapshot():
 
     This ensures reproducibility of the config generation algorithm.
     """
+    from experiments.isoflop_sweep import Marin2025Recipe
+
     recipe = Marin2025Recipe()
     result = list(recipe.candidates_for_budget(budget=3e18))
 
@@ -195,6 +187,7 @@ def test_end_to_end_analysis_pipeline():
     pipeline: metrics transformation -> curve fitting -> scaling law extraction.
     """
     from marin.scaling_laws import round_flops_to_bucket
+    from experiments.isoflop_sweep import transform_levanter_metrics
 
     # Transform metrics using the Levanter transform function
     records = transform_levanter_metrics(SAMPLE_METRICS_DATA, "eval/paloma/c4_en/bpb")

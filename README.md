@@ -37,7 +37,6 @@ To get started with Marin:
 - See how to run a much larger [DCLM 1B/1x](docs/tutorials/train-an-lm.md) experiment using Marin.
 - See a [summary of the experiments](docs/reports/index.md) we've run.
 - Participate in the Marin [Speedrun competition](docs/tutorials/submitting-speedrun.md) to try to find the most efficient way to train a language model.
-- Try out the [Marin Datashop](docs/tutorials/datashop.md) to contribute and create data for your use case.
 - Join the [Marin Discord](https://discord.gg/J9CTk7pqcM) to chat with the community.
 
 <!--marin-first-steps-end-->

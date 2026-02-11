@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 This file represents the best practices for each stage of the pipeline.
@@ -25,6 +14,7 @@ from functools import lru_cache
 from typing import Any
 
 import jmp
+from fray.v2 import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -38,19 +28,8 @@ from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
-
-from experiments.anneal_config import AnnealConfig
-from experiments.evals.task_configs import (
-    CORE_TASKS,
-    MMLU_TASKS,
-    convert_to_levanter_task_config,
-)
-from experiments.llama import compute_num_parameters, llama_8b
-from experiments.paloma import paloma_tokenized
-from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.simple_train_config import SimpleTrainConfig
+from levanter.utils.mesh import MeshConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
@@ -61,6 +40,20 @@ from marin.execution.executor import (
     this_output_path,
     unwrap_versioned_value,
 )
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
+from marin.training.training import (
+    TrainLmOnPodConfig,
+    run_levanter_train_lm,
+)
+
+from experiments.evals.task_configs import (
+    CORE_TASKS,
+    convert_to_levanter_task_config,
+)
+from experiments.llama import compute_num_parameters
+from experiments.paloma import paloma_tokenized
+from experiments.simple_sft_config import SimpleSFTConfig
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.processing.tokenize import (
     HfDatasetSpec,
     TokenizeConfig,
@@ -68,11 +61,6 @@ from marin.processing.tokenize import (
     add_validation_sets_to_mixture,
     lm_data_config,
     tokenize,
-)
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
-from marin.training.training import (
-    TrainLmOnPodConfig,
-    run_levanter_train_lm,
 )
 
 logger = logging.getLogger("ray")
@@ -180,6 +168,14 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
+        resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+        pip_dependency_groups=["cpu"],
+        env_vars={
+            "TRANSFORMERS_NO_TORCH": "1",
+            "TRANSFORMERS_NO_TORCHVISION": "1",
+            "USE_TORCH": "0",
+            "TORCH_DISABLE_GLOBAL_DEPS": "1",
+        },
     )
 
 
@@ -251,6 +247,8 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
     override_output_path: str | None = None,
 ) -> ExecutorStep:
     """
@@ -264,6 +262,8 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
+        wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -271,6 +271,9 @@ def default_train(
     vocab_size = _get_vocab_size(pretraining_data)
 
     steps_per_export = train_config.steps_per_export
+
+    if wandb_group is None:
+        wandb_group = os.environ.get("WANDB_GROUP")
 
     # Max length of 64 characters for WANDB run is 64 characters
     # we don't want to use the first 64 because the UID bit goes at the end. instead, grab the trailing -XXX
@@ -331,10 +334,13 @@ def default_train(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
+                name=wandb_name,
                 tags=[*tags],
+                group=wandb_group,
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
+            per_device_parallelism=train_config.per_device_parallelism,
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
@@ -366,6 +372,7 @@ def default_train(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
+        pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,
         train_seq_len=train_length,
         model=model_config,
@@ -458,16 +465,8 @@ def default_sft(
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
-    initialize_from_hf = sft_config.initialize_from_hf
-
-    if initialize_from_hf is None:
-        initialize_from_hf = (
-            sft_config.model_name_or_path is not None and sft_config.initialize_from_checkpoint_path is None
-        )
-    elif initialize_from_hf is True and sft_config.model_name_or_path is None:
-        raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
-    elif initialize_from_hf is False and sft_config.initialize_from_checkpoint_path is None:
-        raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
+    if sft_config.initialize_from_hf is not None and sft_config.initialize_from_checkpoint_path is not None:
+        raise ValueError("Cannot specify both initialize_from_hf and initialize_from_checkpoint_path!")
 
     # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
@@ -476,7 +475,7 @@ def default_sft(
         num_train_steps=sft_config.num_train_steps,
         learning_rate=sft_config.learning_rate,
         lr_schedule=sft_config.lr_schedule,
-        decay=sft_config.cooldown,
+        decay=sft_config.decay,
         weight_decay=sft_config.weight_decay,
         min_lr_ratio=sft_config.min_lr_ratio,
         max_grad_norm=sft_config.max_grad_norm,
@@ -485,10 +484,15 @@ def default_sft(
         steps_per_export=sft_config.steps_per_checkpoint,
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
-        initialize_from_hf=sft_config.model_name_or_path if initialize_from_hf else None,
+        initialize_from_hf=sft_config.initialize_from_hf,
         initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
+        train_seq_len=sft_config.max_seq_len,
         data_seed=sft_config.seed,
         z_loss_weight=sft_config.z_loss_weight,
+        beta1=sft_config.beta1,
+        beta2=sft_config.beta2,
+        pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
+        per_device_parallelism=sft_config.per_device_parallelism,
     )
 
     if sft_config.reinit_tokens:
@@ -504,77 +508,6 @@ def default_sft(
         eval_harness_tasks=[],
         use_default_validation=False,
     )
-
-
-def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
-    """
-
-    Runs an annealing training run. This is a kind of continued pre-training intended
-    to replicate Llama 3-style data ablations (or XXX databricks microannealing)
-
-    Args:
-        name: The name of the training run. Will form the basis of the output path for the executor step.
-              `checkpoints/` will be prepended to the name.
-        anneal_config: Configuration for the annealing run.
-    Returns:
-
-        An ExecutorStep configured for annealing.
-
-    """
-    checkpoint_path = anneal_config.initialize_from_checkpoint_path
-    imputed_checkpoint_step = _impute_checkpoint_step(checkpoint_path)
-
-    num_anneal_steps = anneal_config.num_anneal_training_tokens / (
-        anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
-    )
-    num_train_steps = imputed_checkpoint_step + num_anneal_steps
-
-    # We need to simulate having a learning rate that decays from anneal_config.learning rate to 0
-    # over the course of the training. However, we have already taken anneal_config.checkpoint_step steps,
-    # so we need to calculate what the max lr would've been if we had started training with a linear schedule
-    # and then decayed it to 0 over the course of the training.
-    # The formula for the max lr is:
-    # max_lr = num_train_steps * slope
-    # slope = anneal_config.learning_rate / num_anneal_steps
-
-    learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
-
-    anneal_stage_train_config = SimpleTrainConfig(
-        resources=anneal_config.resources,
-        train_batch_size=anneal_config.train_batch_size,
-        num_train_steps=num_train_steps,
-        learning_rate=learning_rate,
-        weight_decay=anneal_config.weight_decay,
-        min_lr_ratio=anneal_config.min_lr_ratio,
-        steps_per_export=anneal_config.steps_per_export,
-        lr_schedule=anneal_config.lr_schedule,
-        initialize_from_checkpoint_path=checkpoint_path,
-    )
-
-    return default_train(
-        name=name,
-        tokenized=anneal_config.dataset_config,
-        model_config=llama_8b,
-        train_config=anneal_stage_train_config,
-        use_default_validation=anneal_config.use_default_validation,
-        eval_harness_tasks=MMLU_TASKS,
-    )
-
-
-def _impute_checkpoint_step(checkpoint_path: str | InputName) -> int:
-    """
-    Extracts the checkpoint step from a checkpoint path.
-    Args:
-        checkpoint_path:
-
-    Returns:
-
-    """
-    if isinstance(checkpoint_path, InputName):
-        checkpoint_path = checkpoint_path.name
-    imputed_checkpoint_steps = checkpoint_path.index("step-")
-    imputed_checkpoint_step = int(checkpoint_path[imputed_checkpoint_steps + len("step-") :])
-    return imputed_checkpoint_step
 
 
 @lru_cache
@@ -610,7 +543,6 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
-            permutation_type="feistel",
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
