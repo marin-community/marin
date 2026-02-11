@@ -89,7 +89,7 @@ def make_scale_group_config(**kwargs: object) -> config_pb2.ScaleGroupConfig:
         if runtime_version:
             gcp.runtime_version = runtime_version
         if zones:
-            gcp.zones.extend(zones)
+            gcp.zone = zones[0]
     return config
 
 
@@ -321,9 +321,9 @@ class TestAutoscalerScaleUp:
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(3600_000))
         ts = Timestamp.now()
-        p = group.begin_scale_up()
+        group.begin_scale_up()
         handle = group.scale_up(timestamp=ts)
-        group.complete_scale_up(p, handle, ts)
+        group.complete_scale_up(handle, ts)
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -1268,10 +1268,10 @@ class TestAutoscalerQuotaHandling:
         )
 
         ts = Timestamp.from_ms(1000)
-        p = group.begin_scale_up()
+        group.begin_scale_up()
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
-        group.fail_scale_up(p)
+        group.cancel_scale_up()
         group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
 
         assert group.availability(Timestamp.from_ms(1100)).status == GroupAvailability.QUOTA_EXCEEDED
@@ -1423,11 +1423,10 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform)
 
         ts = Timestamp.now()
-        placeholder_id = group.begin_scale_up()
+        group.begin_scale_up()
 
         availability = group.availability(ts)
         assert availability.status == GroupAvailability.REQUESTING
-        assert placeholder_id.startswith("requesting-")
 
     def test_complete_scale_up_clears_requesting_state(self):
         """complete_scale_up() removes REQUESTING state."""
@@ -1438,18 +1437,18 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform)
 
         ts = Timestamp.now()
-        placeholder_id = group.begin_scale_up()
+        group.begin_scale_up()
         assert group.availability(ts).status == GroupAvailability.REQUESTING
 
         handle = make_mock_slice_handle("new-slice-1", all_ready=True)
-        group.complete_scale_up(placeholder_id, handle, ts)
+        group.complete_scale_up(handle, ts)
 
         assert group.availability(ts).status == GroupAvailability.AVAILABLE
         assert group.slice_count() == 1
         assert group.get_slice("new-slice-1") is not None
 
-    def test_fail_scale_up_clears_requesting_state(self):
-        """fail_scale_up() removes REQUESTING state."""
+    def test_cancel_scale_up_clears_requesting_state(self):
+        """cancel_scale_up() removes REQUESTING state."""
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
@@ -1457,16 +1456,16 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform)
 
         ts = Timestamp.now()
-        placeholder_id = group.begin_scale_up()
+        group.begin_scale_up()
         assert group.availability(ts).status == GroupAvailability.REQUESTING
 
-        group.fail_scale_up(placeholder_id)
+        group.cancel_scale_up()
 
         assert group.availability(ts).status == GroupAvailability.AVAILABLE
         assert group.slice_count() == 0
 
-    def test_placeholder_counts_toward_slice_count(self):
-        """REQUESTING placeholder counts toward slice_count and max_slices check."""
+    def test_pending_scale_up_counts_toward_slice_count(self):
+        """Pending scale-up counts toward slice_count and max_slices check."""
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=1)
         platform = make_mock_platform()
         group = ScalingGroup(config, platform)
@@ -1531,7 +1530,7 @@ class TestAutoscalerAsyncScaleUp:
         autoscaler._wait_for_inflight()
 
     def test_group_marked_requesting_during_scale_up(self):
-        """Group has a REQUESTING placeholder immediately after execute(), cleared when done."""
+        """Group shows REQUESTING immediately after execute(), cleared when done."""
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
@@ -1556,13 +1555,13 @@ class TestAutoscalerAsyncScaleUp:
 
         autoscaler.execute([decision], timestamp=Timestamp.from_ms(ts))
 
-        # Placeholder is in _slices, so availability shows REQUESTING
+        # Pending counter is incremented, so availability shows REQUESTING
         availability = group.availability(Timestamp.from_ms(ts))
         assert availability.status == GroupAvailability.REQUESTING
 
         autoscaler._wait_for_inflight()
 
-        # After completion, placeholder is replaced with real slice
+        # After completion, pending counter is decremented and slice is added
         availability = group.availability(Timestamp.from_ms(ts + 300))
         assert availability.status == GroupAvailability.AVAILABLE
         assert group.slice_count() == 1
@@ -1619,13 +1618,12 @@ class TestAutoscalerAsyncScaleUp:
 # --- Bug reproduction tests ---
 
 
-def test_placeholder_prevents_double_scaleup():
-    """Verify that the REQUESTING placeholder prevents double scale-up when
+def test_pending_counter_prevents_double_scaleup():
+    """Verify that the pending scale-up counter prevents double scale-up when
     create_slice takes longer than expected.
 
-    Previously, a timeout-based deadline would expire and allow a second scale-up.
-    Now, the placeholder entry in _slices counts toward slice_count(), so the
-    evaluator sees total=1 and does not trigger another scale-up.
+    The pending counter is included in slice_count(), so the evaluator sees
+    total=1 and does not trigger another scale-up.
     """
     create_barrier = threading.Event()
 
@@ -1663,14 +1661,14 @@ def test_placeholder_prevents_double_scaleup():
     assert len(decisions1) == 1
     assert decisions1[0].action == ScalingAction.SCALE_UP
 
-    # Advance time arbitrarily far — the placeholder prevents double scale-up
+    # Advance time arbitrarily far — the pending counter prevents double scale-up
     # regardless of elapsed time.
     t1 = Timestamp.from_ms(t0.epoch_ms() + 600)
 
-    # Second run_once: placeholder is in _slices, so evaluator sees total=1
-    # which satisfies min_slices=1. No new scale-up decision.
+    # Second run_once: pending counter makes slice_count()=1, so evaluator sees
+    # total=1 which satisfies min_slices=1. No new scale-up decision.
     decisions2 = autoscaler.run_once(demand, {}, t1)
-    assert len(decisions2) == 0, "Placeholder should prevent second scale-up"
+    assert len(decisions2) == 0, "Pending counter should prevent second scale-up"
 
     # Release the barrier so threads complete
     create_barrier.set()

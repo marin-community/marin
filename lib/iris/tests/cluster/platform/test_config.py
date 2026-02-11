@@ -55,7 +55,7 @@ scale_groups:
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
-        zones: [us-central1-a]
+        zone: us-central1-a
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -166,7 +166,7 @@ scale_groups:
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
-        zones: [us-central1-a]
+        zone: us-central1-a
   tpu_group_b:
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
@@ -182,7 +182,7 @@ scale_groups:
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
-        zones: [us-central1-a]
+        zone: us-central1-a
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -292,7 +292,7 @@ scale_groups:
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
-        zones: [us-central1-a]
+        zone: us-central1-a
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -334,7 +334,7 @@ scale_groups:
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
-        zones: [us-central1-a]
+        zone: us-central1-a
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -428,7 +428,7 @@ scale_groups:
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
-        zones: [us-central1-a]
+        zone: us-central1-a
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -478,7 +478,7 @@ class TestSshConfigMerging:
         assert ssh_config.user == "ubuntu"
         assert ssh_config.key_file == "~/.ssh/cluster_key"
         assert ssh_config.port == 22  # DEFAULT_SSH_PORT
-        assert ssh_config.connect_timeout == Duration.from_seconds(60)
+        assert ssh_config.connect_timeout.milliseconds == 60_000
 
     def test_applies_per_group_ssh_overrides(self):
         """get_ssh_config applies per-group SSH overrides for manual slice template."""
@@ -523,20 +523,19 @@ class TestSshConfigMerging:
         assert ssh_config.user == "admin"  # Overridden
         assert ssh_config.key_file == "~/.ssh/cluster_key"  # From default
         assert ssh_config.port == 22  # From default
-        assert ssh_config.connect_timeout.to_seconds() == 30  # From default
+        assert ssh_config.connect_timeout.milliseconds == 30_000  # From default
 
     def test_uses_defaults_when_cluster_ssh_config_empty(self):
         """get_ssh_config uses built-in defaults when cluster config empty."""
-        from iris.time_utils import Duration
 
         config = config_pb2.IrisClusterConfig()
 
         ssh_config = get_ssh_config(config)
 
         assert ssh_config.user == "root"
-        assert ssh_config.key_file is None
+        assert ssh_config.key_file == ""
         assert ssh_config.port == 22
-        assert ssh_config.connect_timeout == Duration.from_seconds(30)
+        assert ssh_config.connect_timeout.milliseconds == 30_000
 
 
 class TestLocalConfigTransformation:
@@ -583,7 +582,7 @@ scale_groups:
     max_slices: 10
     slice_template:
       gcp:
-        zones: [us-central1-a]
+        zone: us-central1-a
 """
         config_path = tmp_path / "gcp_config.yaml"
         config_path.write_text(config_content)
@@ -637,7 +636,7 @@ scale_groups:
     priority: 50
     slice_template:
       gcp:
-        zones: [us-central1-a]
+        zone: us-central1-a
   tpu_group:
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
@@ -653,7 +652,7 @@ scale_groups:
     priority: 100
     slice_template:
       gcp:
-        zones: [us-central1-a]
+        zone: us-central1-a
 """
         config_path = tmp_path / "multi_group.yaml"
         config_path.write_text(config_content)

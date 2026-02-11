@@ -526,22 +526,21 @@ class Autoscaler:
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.
 
-        Inserts a REQUESTING placeholder into the group's slice tracking and
-        spawns a background thread for the actual scale-up work. The placeholder
-        counts toward slice_count(), preventing double scale-up without any
-        timeout-based deadline.
+        Increments the group's pending scale-up counter and spawns a background
+        thread for the actual scale-up work. The counter is included in
+        slice_count(), preventing double scale-up.
         """
-        placeholder_id = group.begin_scale_up()
+        group.begin_scale_up()
 
         def _scale_up_wrapper(stop_event):
-            self._do_scale_up(group, placeholder_id, ts, reason)
+            self._do_scale_up(group, ts, reason)
 
         self._threads.spawn(
             target=_scale_up_wrapper,
             name=f"scale-up-{group.name}",
         )
 
-    def _do_scale_up(self, group: ScalingGroup, placeholder_id: str, ts: Timestamp, reason: str = "") -> bool:
+    def _do_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> bool:
         """Execute the actual blocking scale-up work.
 
         This runs in a background thread and should not be called directly.
@@ -557,7 +556,7 @@ class Autoscaler:
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
             slice_obj = group.scale_up(timestamp=ts)
-            group.complete_scale_up(placeholder_id, slice_obj, ts)
+            group.complete_scale_up(slice_obj, ts)
             completed = True
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id
@@ -565,7 +564,7 @@ class Autoscaler:
             self._bootstrap_slice(slice_obj, group.name)
             return True
         except QuotaExhaustedError as e:
-            group.fail_scale_up(placeholder_id)
+            group.cancel_scale_up()
             group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
             group._quota_reason = str(e)
             logger.warning("Quota exceeded for %s: %s", group.name, e)
@@ -584,7 +583,7 @@ class Autoscaler:
                 group.scale_down(slice_obj.slice_id)
                 self._unregister_slice_vms(slice_obj.slice_id)
             else:
-                group.fail_scale_up(placeholder_id)
+                group.cancel_scale_up()
             logger.error("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
@@ -697,7 +696,7 @@ class Autoscaler:
         if not tracked:
             return None
 
-        from iris.cluster.controller.slice_status import _cloud_vm_state_to_iris
+        from iris.cluster.controller.scaling_group import _cloud_vm_state_to_iris
 
         vm_status = tracked.handle.status()
         iris_state = _cloud_vm_state_to_iris(vm_status.state)

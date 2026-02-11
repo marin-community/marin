@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,10 +22,7 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.platform.bootstrap import WorkerBootstrap
-from iris.cluster.platform.ssh import SshConfig
 from iris.cluster.types import parse_memory_string
-from iris.cluster.worker.port_allocator import PortAllocator
-from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
@@ -479,13 +475,14 @@ def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
 def get_ssh_config(
     cluster_config: config_pb2.IrisClusterConfig,
     group_name: str | None = None,
-) -> SshConfig:
+) -> config_pb2.SshConfig:
     """Get SSH config by merging cluster defaults with per-group overrides.
 
     Uses cluster_config.defaults.ssh for base settings:
     - user: "root"
+    - port: 22
     - connect_timeout: 30s
-    - key_file: None (passwordless/agent auth)
+    - key_file: "" (passwordless/agent auth)
 
     For manual providers, per-group overrides from scale_groups[*].manual take precedence.
 
@@ -495,17 +492,16 @@ def get_ssh_config(
             manual VM type, per-group SSH overrides will be applied.
 
     Returns:
-        SshConfig with all settings populated (using defaults where not specified).
+        config_pb2.SshConfig with all settings populated (using defaults where not specified).
     """
-    from iris.time_utils import Duration
-
     ssh = cluster_config.defaults.ssh
     user = ssh.user or DEFAULT_CONFIG.ssh.user
-    key_file = ssh.key_file or None
+    key_file = ssh.key_file or ""
+    port = ssh.port if ssh.HasField("port") and ssh.port > 0 else DEFAULT_SSH_PORT
     connect_timeout = (
-        Duration.from_proto(ssh.connect_timeout)
+        ssh.connect_timeout
         if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
-        else Duration.from_proto(DEFAULT_CONFIG.ssh.connect_timeout)
+        else DEFAULT_CONFIG.ssh.connect_timeout
     )
 
     # Apply per-group overrides if group uses manual slice_template
@@ -517,12 +513,10 @@ def get_ssh_config(
                 user = manual.ssh_user
             if manual.ssh_key_file:
                 key_file = manual.ssh_key_file
-    return SshConfig(
-        user=user,
-        key_file=key_file,
-        port=DEFAULT_SSH_PORT,
-        connect_timeout=connect_timeout,
-    )
+
+    result = config_pb2.SshConfig(user=user, key_file=key_file, port=port)
+    result.connect_timeout.CopyFrom(connect_timeout)
+    return result
 
 
 @dataclass
@@ -681,73 +675,3 @@ def create_autoscaler(
         platform=platform,
         worker_bootstrap=worker_bootstrap,
     )
-
-
-def create_local_autoscaler(
-    config: config_pb2.IrisClusterConfig,
-    controller_address: str,
-    threads: ThreadContainer | None = None,
-):
-    """Create Autoscaler with LocalPlatform for all scale groups.
-
-    Creates temp directories and a PortAllocator so that LocalPlatform can
-    spawn real Worker threads that register with the controller.
-
-    Args:
-        config: Cluster configuration (with defaults already applied)
-        controller_address: Address for workers to connect to
-        threads: Optional thread container for testing
-
-    Returns:
-        Configured Autoscaler with LocalPlatform. The autoscaler has a _temp_dir
-        attribute for cleanup by the caller.
-    """
-    from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import (
-        ScalingGroup,
-    )
-    from iris.cluster.platform.local import LocalPlatform
-
-    label_prefix = config.platform.label_prefix or "iris"
-
-    temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_autoscaler_")
-    temp_path = Path(temp_dir.name)
-    cache_path = temp_path / "cache"
-    cache_path.mkdir()
-    fake_bundle = temp_path / "fake_bundle"
-    fake_bundle.mkdir()
-    (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'test'\n")
-
-    port_allocator = PortAllocator()
-
-    platform = LocalPlatform(
-        label_prefix=label_prefix,
-        threads=threads,
-        controller_address=controller_address,
-        cache_path=cache_path,
-        fake_bundle=fake_bundle,
-        port_allocator=port_allocator,
-    )
-
-    scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
-    scale_down_delay = Duration.from_proto(config.defaults.autoscaler.scale_down_delay)
-
-    scale_groups: dict[str, ScalingGroup] = {}
-    for name, sg_config in config.scale_groups.items():
-        scale_groups[name] = ScalingGroup(
-            config=sg_config,
-            platform=platform,
-            label_prefix=label_prefix,
-            scale_up_cooldown=scale_up_delay,
-            scale_down_cooldown=scale_down_delay,
-        )
-
-    autoscaler = Autoscaler.from_config(
-        scale_groups=scale_groups,
-        config=config.defaults.autoscaler,
-        platform=platform,
-        threads=threads,
-    )
-    # Attach temp_dir for cleanup by LocalController.stop()
-    autoscaler._temp_dir = temp_dir
-    return autoscaler

@@ -79,9 +79,7 @@ def _extract_gcp_zone_project(config: config_pb2.IrisClusterConfig) -> tuple[str
     for sg in config.scale_groups.values():
         if sg.HasField("slice_template") and sg.slice_template.HasField("gcp"):
             gcp_slice = sg.slice_template.gcp
-            if gcp_slice.zones:
-                zone = gcp_slice.zones[0]
-            elif gcp_slice.zone:
+            if gcp_slice.zone:
                 zone = gcp_slice.zone
             if zone:
                 break

@@ -24,7 +24,7 @@ from iris.cluster.config import IrisConfig, make_local_config
 from iris.cluster.controller.lifecycle import reload_controller, start_controller
 from iris.cluster.controller.local import LocalController
 from iris.cluster.manager import stop_all
-from iris.cluster.controller.slice_status import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.cluster.controller.scaling_group import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp

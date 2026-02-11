@@ -450,7 +450,7 @@ class LocalPlatform:
                 topo = get_tpu_topology(config.accelerator_variant)
                 worker_count = topo.vm_count
             except ValueError:
-                pass
+                logger.debug("Unknown accelerator variant %r; TPU topology not available", config.accelerator_variant)
 
         for tpu_worker_id in range(worker_count):
             bundle_provider = _LocalBundleProvider(self._fake_bundle)

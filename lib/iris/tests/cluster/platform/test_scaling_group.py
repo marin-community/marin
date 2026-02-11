@@ -134,9 +134,9 @@ def _tracked_scale_up(group: ScalingGroup, timestamp: Timestamp | None = None, *
     no longer tracks state internally.
     """
     timestamp = timestamp or Timestamp.from_ms(1000000)
-    placeholder_id = group.begin_scale_up()
+    group.begin_scale_up()
     handle = group.scale_up(timestamp=timestamp, **kwargs)
-    group.complete_scale_up(placeholder_id, handle, timestamp)
+    group.complete_scale_up(handle, timestamp)
     return handle
 
 
@@ -151,7 +151,7 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
         accelerator_variant="v5p-8",
     )
     config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
-    config.slice_template.gcp.zones.extend(["us-central1-a"])
+    config.slice_template.gcp.zone = "us-central1-a"
     return _with_resources(config)
 
 
@@ -166,7 +166,7 @@ def unbounded_config() -> config_pb2.ScaleGroupConfig:
         accelerator_variant="v5p-8",
     )
     config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
-    config.slice_template.gcp.zones.extend(["us-central1-a"])
+    config.slice_template.gcp.zone = "us-central1-a"
     return _with_resources(config)
 
 
@@ -773,10 +773,10 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(60_000))
 
         ts = Timestamp.from_ms(1000)
-        placeholder_id = group.begin_scale_up()
+        group.begin_scale_up()
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
-        group.fail_scale_up(placeholder_id)
+        group.cancel_scale_up()
         group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
 
         # Before timeout: QUOTA_EXCEEDED
@@ -800,18 +800,18 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(300_000))
 
         ts1 = Timestamp.from_ms(1000)
-        p1 = group.begin_scale_up()
+        group.begin_scale_up()
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts1)
-        group.fail_scale_up(p1)
+        group.cancel_scale_up()
         group._quota_exceeded_until = Deadline.after(ts1, group._quota_timeout)
         assert not group.can_accept_demand(timestamp=Timestamp.from_ms(2000))
 
         # Second attempt succeeds via complete_scale_up, which clears quota state
         ts2 = Timestamp.from_ms(3000)
-        p2 = group.begin_scale_up()
+        group.begin_scale_up()
         handle = group.scale_up(timestamp=ts2)
-        group.complete_scale_up(p2, handle, ts2)
+        group.complete_scale_up(handle, ts2)
         assert group.can_accept_demand(timestamp=Timestamp.from_ms(4000))
 
     def test_quota_exceeded_takes_precedence_over_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
@@ -830,10 +830,10 @@ class TestScalingGroupAvailability:
         group.record_failure(timestamp=ts)
 
         # Then trigger quota exceeded via failed scale-up
-        p = group.begin_scale_up()
+        group.begin_scale_up()
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
-        group.fail_scale_up(p)
+        group.cancel_scale_up()
         group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
 
         # Availability should report QUOTA_EXCEEDED, not BACKOFF
@@ -1095,20 +1095,15 @@ class TestSliceLivenessTimeout:
 class TestZonesFromConfig:
     """Tests for _zones_from_config fail-fast behavior."""
 
-    def test_gcp_with_zones_returns_zones(self):
-        config = config_pb2.ScaleGroupConfig(name="g")
-        config.slice_template.gcp.zones.extend(["us-central1-a", "us-central1-b"])
-        assert _zones_from_config(config) == ["us-central1-a", "us-central1-b"]
-
-    def test_gcp_with_single_zone_returns_list(self):
+    def test_gcp_with_zone_returns_list(self):
         config = config_pb2.ScaleGroupConfig(name="g")
         config.slice_template.gcp.zone = "us-central1-a"
         assert _zones_from_config(config) == ["us-central1-a"]
 
-    def test_gcp_with_no_zones_raises(self):
+    def test_gcp_with_no_zone_raises(self):
         config = config_pb2.ScaleGroupConfig(name="g")
         config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
-        with pytest.raises(ValueError, match="no zones configured"):
+        with pytest.raises(ValueError, match="no zone configured"):
             _zones_from_config(config)
 
     def test_non_gcp_returns_empty(self):
@@ -1130,10 +1125,10 @@ class TestCanScaleUpQuotaExhausted:
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(5000))
 
         ts = Timestamp.from_ms(1000000)
-        p = group.begin_scale_up()
+        group.begin_scale_up()
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
-        group.fail_scale_up(p)
+        group.cancel_scale_up()
         group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
 
         # During quota exhaustion window

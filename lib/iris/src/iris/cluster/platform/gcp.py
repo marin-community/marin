@@ -340,16 +340,13 @@ class GcpSliceHandle:
         tpu_data = json.loads(result.stdout)
         endpoints = tpu_data.get("networkEndpoints", [])
 
-        # Determine VM count from topology (static source of truth)
         try:
             vm_count = get_tpu_topology(self._accelerator_variant).vm_count
-        except ValueError:
-            # Unknown topology: fall back to endpoint count (legacy behavior)
-            logger.warning(
-                "Unknown TPU topology %s, falling back to endpoint count",
-                self._accelerator_variant,
-            )
-            vm_count = len(endpoints) if endpoints else 1
+        except ValueError as e:
+            raise PlatformError(
+                f"Unknown TPU topology '{self._accelerator_variant}' for slice {self._slice_id}. "
+                f"Cannot determine VM count without a known topology."
+            ) from e
 
         # Create handles for all VMs (based on topology count)
         vms: list[GcpVmHandle] = []

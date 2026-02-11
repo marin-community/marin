@@ -19,6 +19,10 @@
 
 This module provides LocalController which runs the controller and autoscaler
 in the current process for local testing. Workers are threads, not VMs.
+
+Provides:
+- create_local_autoscaler: Factory for creating autoscaler with LocalPlatform
+- LocalController: In-process controller implementation for testing
 """
 
 from __future__ import annotations
@@ -27,7 +31,6 @@ import tempfile
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.config import create_local_autoscaler
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
@@ -35,10 +38,76 @@ from iris.cluster.controller.controller import (
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller.lifecycle import ControllerStatus
-from iris.cluster.platform.local import find_free_port
+from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.platform.local import LocalPlatform, find_free_port
+from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
+
+
+def create_local_autoscaler(
+    config: config_pb2.IrisClusterConfig,
+    controller_address: str,
+    threads: ThreadContainer | None = None,
+):
+    """Create Autoscaler with LocalPlatform for all scale groups.
+
+    Creates temp directories and a PortAllocator so that LocalPlatform can
+    spawn real Worker threads that register with the controller.
+
+    Args:
+        config: Cluster configuration (with defaults already applied)
+        controller_address: Address for workers to connect to
+        threads: Optional thread container for testing
+
+    Returns:
+        Configured Autoscaler with LocalPlatform. The autoscaler has a _temp_dir
+        attribute for cleanup by the caller.
+    """
+    label_prefix = config.platform.label_prefix or "iris"
+
+    temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_autoscaler_")
+    temp_path = Path(temp_dir.name)
+    cache_path = temp_path / "cache"
+    cache_path.mkdir()
+    fake_bundle = temp_path / "fake_bundle"
+    fake_bundle.mkdir()
+    (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'test'\n")
+
+    port_allocator = PortAllocator()
+
+    platform = LocalPlatform(
+        label_prefix=label_prefix,
+        threads=threads,
+        controller_address=controller_address,
+        cache_path=cache_path,
+        fake_bundle=fake_bundle,
+        port_allocator=port_allocator,
+    )
+
+    scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
+    scale_down_delay = Duration.from_proto(config.defaults.autoscaler.scale_down_delay)
+
+    scale_groups: dict[str, ScalingGroup] = {}
+    for name, sg_config in config.scale_groups.items():
+        scale_groups[name] = ScalingGroup(
+            config=sg_config,
+            platform=platform,
+            label_prefix=label_prefix,
+            scale_up_cooldown=scale_up_delay,
+            scale_down_cooldown=scale_down_delay,
+        )
+
+    autoscaler = Autoscaler.from_config(
+        scale_groups=scale_groups,
+        config=config.defaults.autoscaler,
+        platform=platform,
+        threads=threads,
+    )
+    # Attach temp_dir for cleanup by LocalController.stop()
+    autoscaler._temp_dir = temp_dir
+    return autoscaler
 
 
 class _InProcessController(Protocol):

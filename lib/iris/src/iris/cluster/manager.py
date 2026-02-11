@@ -70,9 +70,7 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
         if group_config.HasField("slice_template"):
             template = group_config.slice_template
             if template.HasField("gcp"):
-                if template.gcp.zones:
-                    zones = list(template.gcp.zones)
-                elif template.gcp.zone:
+                if template.gcp.zone:
                     zones = [template.gcp.zone]
         if not zones:
             zones = ["local"]

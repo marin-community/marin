@@ -55,7 +55,6 @@ scale_groups:
       preemptible: true
       gcp:
         zone: europe-west4-b
-        zones: [europe-west4-b]
         runtime_version: v2-alpha-tpuv5-lite
 
   # Scale group with some capacity but lower limits
@@ -75,7 +74,6 @@ scale_groups:
       preemptible: true
       gcp:
         zone: europe-west4-b
-        zones: [europe-west4-b]
         runtime_version: v2-alpha-tpuv5-lite
 
   # Zero quota group - simulates quota exhaustion
@@ -95,7 +93,6 @@ scale_groups:
       preemptible: true
       gcp:
         zone: europe-west4-b
-        zones: [europe-west4-b]
         runtime_version: v2-alpha-tpuv6e
 
   # Disabled group - min and max both zero
@@ -115,11 +112,10 @@ scale_groups:
       preemptible: false
       gcp:
         zone: europe-west4-b
-        zones: [europe-west4-b]
         runtime_version: v2-alpha-tpuv5-lite
 
-  # Group with multi-zone configuration
-  tpu_v5e_8_multizone:
+  # Multi-zone is achieved by creating separate scaling groups per zone.
+  tpu_v5e_8_zone_a:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     slice_size: 8
@@ -130,9 +126,45 @@ scale_groups:
       tpu_count: 4
       gpu_count: 0
     min_slices: 0
-    max_slices: 3
+    max_slices: 1
     slice_template:
       preemptible: true
       gcp:
-        zones: [europe-west4-a, europe-west4-b, europe-west4-c]
+        zone: europe-west4-a
+        runtime_version: v2-alpha-tpuv5-lite
+
+  tpu_v5e_8_zone_b:
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
+    slice_size: 8
+    resources:
+      cpu: 96
+      ram: 96GB
+      disk: 1TB
+      tpu_count: 4
+      gpu_count: 0
+    min_slices: 0
+    max_slices: 1
+    slice_template:
+      preemptible: true
+      gcp:
+        zone: europe-west4-b
+        runtime_version: v2-alpha-tpuv5-lite
+
+  tpu_v5e_8_zone_c:
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
+    slice_size: 8
+    resources:
+      cpu: 96
+      ram: 96GB
+      disk: 1TB
+      tpu_count: 4
+      gpu_count: 0
+    min_slices: 0
+    max_slices: 1
+    slice_template:
+      preemptible: true
+      gcp:
+        zone: europe-west4-c
         runtime_version: v2-alpha-tpuv5-lite

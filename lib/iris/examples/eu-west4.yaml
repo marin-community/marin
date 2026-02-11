@@ -53,5 +53,4 @@ scale_groups:
       preemptible: true
       gcp:
         zone: europe-west4-b
-        zones: [europe-west4-b]
         runtime_version: v2-alpha-tpuv5-lite

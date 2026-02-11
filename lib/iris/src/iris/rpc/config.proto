@@ -96,7 +96,7 @@ message GcpSliceConfig {
   string runtime_version = 2;
   reserved 3;  // was: preemptible (moved to SliceConfig)
   string topology = 4;
-  repeated string zones = 5;  // Multiple zones for zone rotation (overrides zone if set)
+  reserved 5;  // was: zones (each slice/scaling group operates in a single zone)
 }
 
 message CoreweaveSliceConfig {
@@ -204,6 +204,7 @@ message TimeoutConfig {
 message SshConfig {
   string user = 1;                        // Default: "root"
   string key_file = 2;                    // Path to SSH private key
+  int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
 }
 

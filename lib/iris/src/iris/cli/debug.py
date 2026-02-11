@@ -110,9 +110,7 @@ def _get_zone_project(ctx: click.Context) -> tuple[str, str]:
     for sg in config.scale_groups.values():
         if sg.HasField("slice_template") and sg.slice_template.HasField("gcp"):
             gcp_slice = sg.slice_template.gcp
-            if gcp_slice.zones:
-                zone = gcp_slice.zones[0]
-            elif gcp_slice.zone:
+            if gcp_slice.zone:
                 zone = gcp_slice.zone
             if zone:
                 break

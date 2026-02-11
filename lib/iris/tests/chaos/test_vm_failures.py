@@ -14,7 +14,7 @@ infrastructure layer, not requiring the full cluster fixture.
 
 import pytest
 
-from iris.cluster.controller.slice_status import slice_handle_status
+from iris.cluster.controller.scaling_group import slice_handle_status
 from iris.cluster.platform.base import QuotaExhaustedError
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Timestamp

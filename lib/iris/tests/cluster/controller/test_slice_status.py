@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from iris.cluster.controller.slice_status import slice_handle_status
+from iris.cluster.controller.scaling_group import slice_handle_status
 from iris.cluster.platform.base import CloudSliceState, CloudVmState, SliceStatus, VmStatus
 from iris.rpc import vm_pb2
 
