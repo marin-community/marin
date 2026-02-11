@@ -772,7 +772,7 @@ def cleanup(ctx, dry_run: bool):
 @debug.command()
 @click.argument("task_id")
 @click.option("--duration", default=10, help="Profiling duration in seconds")
-@click.option("--format", "fmt", type=click.Choice(["flamegraph", "speedscope", "raw"]), default="flamegraph")
+@click.option("--format", "fmt", type=click.Choice(["flamegraph", "speedscope", "raw"]), default="speedscope")
 @click.option("--rate", default=100, help="Sample rate in Hz")
 @click.option("--output", "-o", type=click.Path(), help="Output file path")
 @click.pass_context
