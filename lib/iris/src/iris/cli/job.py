@@ -381,10 +381,6 @@ def run(
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
-    from iris.logging import configure_logging
-
-    configure_logging(level=logging.INFO)
-
     controller_url = require_controller_url(ctx)
 
     command = list(cmd)

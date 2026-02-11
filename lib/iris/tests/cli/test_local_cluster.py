@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from iris.cli import iris
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.manager import ClusterManager
+from iris.cluster.controller.local import LocalController
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -32,8 +32,6 @@ def cluster_config_file(tmp_path: Path) -> Path:
                 "platform": {
                     "gcp": {
                         "project_id": "test-project",
-                        "region": "us-central1",
-                        "zone": "us-central1-a",
                     }
                 },
                 "defaults": {
@@ -50,11 +48,9 @@ def cluster_config_file(tmp_path: Path) -> Path:
                 },
                 "scale_groups": {
                     "local-cpu": {
-                        "vm_type": "gce_vm",
                         "accelerator_type": "ACCELERATOR_TYPE_CPU",
                         "min_slices": 1,
                         "max_slices": 1,
-                        "zones": ["us-central1-a"],
                         "slice_size": 1,
                         "resources": {
                             "cpu": 1,
@@ -62,6 +58,11 @@ def cluster_config_file(tmp_path: Path) -> Path:
                             "disk": 0,
                             "gpu_count": 0,
                             "tpu_count": 0,
+                        },
+                        "slice_template": {
+                            "accelerator_type": "ACCELERATOR_TYPE_CPU",
+                            "slice_size": 1,
+                            "local": {},
                         },
                     },
                 },
@@ -90,15 +91,15 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
     """Start a local cluster via CLI, submit a job via IrisClient, verify completion."""
     runner = CliRunner()
 
-    # Capture the ClusterManager instance so we can get the address and stop it
-    captured_manager: list[ClusterManager] = []
-    original_start = ClusterManager.start
+    # Capture the LocalController instance so we can get the address and stop it
+    captured_controller: list[LocalController] = []
+    original_start = LocalController.start
 
     def patched_start(self):
-        captured_manager.append(self)
+        captured_controller.append(self)
         return original_start(self)
 
-    with patch.object(ClusterManager, "start", patched_start):
+    with patch.object(LocalController, "start", patched_start):
         result = runner.invoke(
             iris,
             ["--config", str(cluster_config_file), "cluster", "start", "--local"],
@@ -106,9 +107,9 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
 
     assert result.exit_code == 0, f"CLI failed: {result.output}"
     assert "Controller started at" in result.output
-    assert len(captured_manager) == 1
+    assert len(captured_controller) == 1
 
-    manager = captured_manager[0]
+    controller = captured_controller[0]
     try:
         # Extract the address from the CLI output
         address = None
@@ -137,4 +138,4 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
         status = job.wait(timeout=30, raise_on_failure=True)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     finally:
-        manager.stop()
+        controller.stop()

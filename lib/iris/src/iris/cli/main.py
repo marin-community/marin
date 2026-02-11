@@ -11,7 +11,7 @@ import sys
 
 import click
 
-from iris.logging import configure_logging as _configure_logging
+from iris.logging import configure_logging
 
 logger = _logging_module.getLogger(__name__)
 
@@ -47,16 +47,19 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     ctx.obj["traceback"] = show_traceback
 
     if verbose:
-        _configure_logging(level=_logging_module.DEBUG)
+        configure_logging(level=_logging_module.DEBUG)
     else:
-        _configure_logging(level=_logging_module.INFO)
+        configure_logging(level=_logging_module.INFO)
 
     # Validate mutually exclusive options
     if controller_url and config_file:
         raise click.UsageError("Cannot specify both --controller-url and --config")
 
-    # Skip expensive operations when showing help or doing shell completion
-    if ctx.resilient_parsing or "--help" in sys.argv or "-h" in sys.argv:
+    # Skip expensive operations when showing help or doing shell completion.
+    # Only check for help flags before "--" to avoid matching help flags
+    # intended for the user's command (e.g., "job run -- python script.py --help").
+    argv_before_separator = sys.argv[: sys.argv.index("--")] if "--" in sys.argv else sys.argv
+    if ctx.resilient_parsing or "--help" in argv_before_separator or "-h" in argv_before_separator:
         return
 
     # Load config if provided
@@ -76,22 +79,18 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
         platform = iris_config.platform()
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.manager import ClusterManager
+            from iris.cluster.controller.local import LocalController
 
-            manager = ClusterManager(iris_config.proto)
-            controller_address = manager.start()
-            ctx.call_on_close(manager.stop)
+            controller = LocalController(iris_config.proto)
+            controller_address = controller.start()
+            ctx.call_on_close(controller.stop)
         else:
             controller_address = iris_config.controller_address()
 
-        # Establish tunnel with 5-second timeout and keep it alive for command duration
+        # Establish tunnel and keep it alive for command duration
         try:
             logger.info("Establishing tunnel to controller...")
-            tunnel_cm = platform.tunnel(
-                controller_address=controller_address,
-                timeout=5.0,
-                tunnel_logger=logger,
-            )
+            tunnel_cm = platform.tunnel(address=controller_address)
             tunnel_url = tunnel_cm.__enter__()
             ctx.obj["controller_url"] = tunnel_url
             # Clean up tunnel when context closes
@@ -106,8 +105,8 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
 # always available when the ``iris`` group is used.
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
-from iris.cli.rpc import register_rpc_commands  # noqa: E402
 from iris.cli.job import job  # noqa: E402
+from iris.cli.rpc import register_rpc_commands  # noqa: E402
 
 iris.add_command(cluster)
 iris.add_command(build)

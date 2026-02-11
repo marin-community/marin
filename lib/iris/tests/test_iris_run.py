@@ -10,8 +10,8 @@ import pytest
 import yaml
 
 from iris.client import IrisClient
-from iris.cluster.manager import ClusterManager
 from iris.cluster.config import IrisConfig, make_local_config, load_config
+from iris.cluster.manager import connect_cluster
 from iris.cli.job import (
     build_resources,
     load_env_vars,
@@ -65,8 +65,7 @@ def local_cluster_and_config(tmp_path):
     config = load_config(demo_config_path)
     config = make_local_config(config)
 
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         # Create a test config file with controller_address for local access
         # Uses the local platform with controller_address set
         test_config = tmp_path / "cluster.yaml"

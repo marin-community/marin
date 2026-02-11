@@ -5,9 +5,9 @@ import time
 import pytest
 from pathlib import Path
 from iris.chaos import reset_chaos
-from iris.cluster.manager import ClusterManager
-from iris.cluster.config import make_local_config
-from iris.cluster.config import load_config
+from iris.cluster.config import load_config, make_local_config
+from iris.cluster.manager import connect_cluster
+from iris.rpc import config_pb2
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec, is_job_finished
 
@@ -51,13 +51,36 @@ def chronos(monkeypatch):
     return clock
 
 
+def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
+    """Add a scale group with slice_size=2 so coscheduling tests can find a match.
+
+    v5litepod-16 has vm_count=2, so the local platform creates 2 workers per slice
+    sharing the same tpu-name. Setting slice_size=2 lets the demand router match
+    coscheduled jobs with replicas=2.
+    """
+    sg = config.scale_groups["tpu_cosched_2"]
+    sg.name = "tpu_cosched_2"
+    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.accelerator_variant = "v5litepod-16"
+    sg.slice_size = 2
+    sg.min_slices = 1
+    sg.max_slices = 2
+    sg.resources.cpu = 128
+    sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
+    sg.resources.disk_bytes = 1024 * 1024 * 1024 * 1024
+    sg.slice_template.preemptible = True
+    sg.slice_template.slice_size = 2
+    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.slice_template.accelerator_variant = "v5litepod-16"
+
+
 @pytest.fixture
 def cluster():
-    """Boots a local cluster via ClusterManager, yields (url, client)."""
+    """Boots a local cluster, yields (url, client)."""
     config = load_config(DEFAULT_CONFIG)
+    _add_coscheduling_group(config)
     config = make_local_config(config)
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         yield url, client
 
