@@ -90,31 +90,32 @@ def list_parquet_files(data_path: str) -> List[str]:
         return paths
 
 
-def count_image_refs_in_messages(messages: List[Dict]) -> int:
-    """Count the number of image references in a messages list.
+def count_image_refs_in_messages(messages: List[Dict]) -> tuple[int, int, int]:
+    """Count image references in a messages list, broken down by source.
 
-    Checks for:
-    1. {"type": "image"} content items (standard format)
-    2. "<image>" literal text inside {"type": "text"} content items (corrupt data)
-    3. "<image>" in plain string content
+    Returns:
+        (image_dict_count, text_placeholder_count, string_content_count):
+        - image_dict_count: number of {"type": "image"} content items
+        - text_placeholder_count: number of "<image>" in {"type": "text"} content items
+        - string_content_count: number of "<image>" in plain string content
     """
-    count = 0
+    image_dict_count = 0
+    text_placeholder_count = 0
+    string_content_count = 0
     if not messages:
-        return 0
+        return 0, 0, 0
     for msg in messages:
         content = msg.get("content", [])
         if isinstance(content, list):
             for item in content:
                 if isinstance(item, dict):
                     if item.get("type") == "image":
-                        count += 1
+                        image_dict_count += 1
                     elif item.get("type") == "text":
-                        # Also check for <image> embedded in text content
-                        count += item.get("text", "").count("<image>")
+                        text_placeholder_count += item.get("text", "").count("<image>")
         elif isinstance(content, str):
-            # Some formats use <image> in text
-            count += content.count("<image>")
-    return count
+            string_content_count += content.count("<image>")
+    return image_dict_count, text_placeholder_count, string_content_count
 
 
 def try_load_image(image_data: Any) -> tuple[Optional[Image.Image], Optional[str]]:
@@ -186,8 +187,12 @@ def check_row(
     messages = row.get(messages_key)
     images = row.get(images_key)
 
-    # Count image references in messages
-    num_image_refs = count_image_refs_in_messages(messages) if messages else 0
+    # Count image references in messages, broken down by source
+    if messages:
+        image_dict_count, text_placeholder_count, string_content_count = count_image_refs_in_messages(messages)
+    else:
+        image_dict_count, text_placeholder_count, string_content_count = 0, 0, 0
+    num_image_refs = image_dict_count + text_placeholder_count + string_content_count
 
     # Check images field
     if images is None:
@@ -205,12 +210,30 @@ def check_row(
             "detail": f"Messages reference {num_image_refs} image(s) but images list is empty/null",
         })
 
-    # Issue A2: Image count mismatch
+    # Issue A2: Image placeholder count mismatch
     if num_image_refs > 0 and num_images > 0 and num_image_refs != num_images:
         issues.append({
             **base_info,
             "issue": "image_count_mismatch",
-            "detail": f"Messages reference {num_image_refs} image(s) but images has {num_images} entries",
+            "detail": (
+                f"Messages produce {num_image_refs} <image> placeholder(s) "
+                f"(image_dicts={image_dict_count}, text_placeholders={text_placeholder_count}, "
+                f"string_content={string_content_count}) but images has {num_images} entries"
+            ),
+        })
+
+    # Issue A3: <image> in text content alongside {"type": "image"} dicts
+    # This is the root cause of the "Image token count mismatch" ValueError:
+    # chat template converts each {"type": "image"} dict to <image>, AND passes through
+    # any <image> already in text content, causing double-counting.
+    if image_dict_count > 0 and text_placeholder_count > 0:
+        issues.append({
+            **base_info,
+            "issue": "image_placeholder_in_text",
+            "detail": (
+                f"{image_dict_count} image dict(s) + {text_placeholder_count} <image> in text "
+                f"= {image_dict_count + text_placeholder_count} placeholders for {num_images} image(s)"
+            ),
         })
 
     # Issue D: Null entries in images list
@@ -246,18 +269,37 @@ def check_row(
 
 
 def is_row_clean(row: Dict[str, Any], messages_key: str = "messages", images_key: str = "images") -> bool:
-    """Check if a row is clean (no image_ref_but_no_images issue)."""
+    """Check if a row is clean (no image reference issues).
+
+    Rejects rows with:
+    - image_ref_but_no_images: messages reference images but images list is empty/null
+    - image_count_mismatch: <image> placeholder count != actual images count
+    - image_placeholder_in_text: {"type": "image"} dicts AND <image> in text content coexist
+    """
     messages = row.get(messages_key)
     images = row.get(images_key)
-    num_image_refs = count_image_refs_in_messages(messages) if messages else 0
+
+    if messages:
+        image_dict_count, text_placeholder_count, string_content_count = count_image_refs_in_messages(messages)
+    else:
+        image_dict_count, text_placeholder_count, string_content_count = 0, 0, 0
+    num_image_refs = image_dict_count + text_placeholder_count + string_content_count
+
     if images is None:
         num_images = 0
     elif isinstance(images, (list, tuple)):
         num_images = len(images)
     else:
         num_images = 1
-    # Dirty: messages reference images but images list is empty/null
+
+    # Reject: messages reference images but images list is empty/null
     if num_image_refs > 0 and num_images == 0:
+        return False
+    # Reject: placeholder count doesn't match actual images count
+    if num_image_refs > 0 and num_images > 0 and num_image_refs != num_images:
+        return False
+    # Reject: both {"type": "image"} dicts and <image> in text (double-counting)
+    if image_dict_count > 0 and text_placeholder_count > 0:
         return False
     return True
 
@@ -365,7 +407,7 @@ def main():
     if args.clean:
         mode_str = "DRY RUN" if args.dry_run else "CLEANING"
         print(f"\n{'=' * 70}")
-        print(f"  {mode_str}: Removing image_ref_but_no_images rows from {len(parquet_files)} shards")
+        print(f"  {mode_str}: Removing bad rows (missing images, count mismatch, placeholder in text) from {len(parquet_files)} shards")
         print(f"{'=' * 70}\n", flush=True)
 
         total_original = 0
@@ -419,6 +461,7 @@ def main():
     issue_counts = {
         "image_ref_but_no_images": 0,
         "image_count_mismatch": 0,
+        "image_placeholder_in_text": 0,
         "null_image_entry": 0,
         "image_load_failed": 0,
         "unusual_dimensions": 0,

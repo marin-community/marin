@@ -1778,22 +1778,10 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             # input_ids has N*features_per_patch image tokens but vision encoder only
             # produces M*features_per_patch features (N != M).
             template_image_count = template_text.count("<image>")
-            if template_image_count > num_images and num_images > 0:
-                logger.warning(
-                    f"batch_item_idx={item_idx}: chat template produced {template_image_count} "
-                    f"<image> placeholder(s) but only {num_images} image(s) provided. "
-                    f"Removing {template_image_count - num_images} extra placeholder(s). "
-                    f"messages={json.dumps(messages, ensure_ascii=False, default=str)[:500]}"
-                )
-                # Keep only the first num_images <image> placeholders, remove the rest
-                parts = template_text.split("<image>")
-                # parts has (template_image_count + 1) elements
-                # Rejoin first (num_images + 1) parts with <image>, append remaining without
-                template_text = "<image>".join(parts[: num_images + 1]) + "".join(parts[num_images + 1 :])
-            elif template_image_count > 0 and num_images == 0:
+            if template_image_count != num_images:
                 raise ValueError(
-                    f"Data inconsistency: apply_chat_template produced {template_image_count} "
-                    f"<image> placeholder(s) but images list is empty! "
+                    f"Image placeholder count mismatch: apply_chat_template produced "
+                    f"{template_image_count} <image> placeholder(s) but {num_images} image(s) provided. "
                     f"batch_item_idx={item_idx}, "
                     f"template_text={template_text[:500]!r}, "
                     f"messages={json.dumps(messages, ensure_ascii=False, default=str)[:500]}"
@@ -3264,12 +3252,27 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
             else:
                 grid_mask = None
 
+            # Extract unpad_indices, combined_mask, position_ids from preprocessing
+            unpad_arr = inputs.get("unpad_indices")
+            if unpad_arr is not None:
+                NumImageTokens = Axis("num_image_tokens", unpad_arr.shape[0])
+                unpad_indices = NamedArray(unpad_arr, (NumImageTokens,))
+            else:
+                unpad_indices = None
+
+            cm_arr = inputs.get("combined_mask")
+            combined_mask = NamedArray(cm_arr, (self.Position,)) if cm_arr is not None else None
+
+            pid_arr = inputs.get("position_ids")
+            position_ids = NamedArray(pid_arr, (self.Position,)) if pid_arr is not None else None
+
             out = ImageTextExample.init(
                 pixel_values,
                 input_ids,
                 loss_mask=loss_mask,
                 grid_mask=grid_mask,
             )
+            out = dataclasses.replace(out, unpad_indices=unpad_indices, combined_mask=combined_mask, position_ids=position_ids)
             return out
 
         super().__init__(self.dataset, _convert_example)

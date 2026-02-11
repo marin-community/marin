@@ -426,6 +426,9 @@ def compute_vlm_loss(
     if example.loss_mask is not None:
         # Shift loss mask to align with targets
         loss_weight = hax.roll(example.loss_mask, -1, Pos)
+        # Zero out last position (roll wraps first element to last, but there's no valid target there)
+        not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
+        loss_weight = loss_weight * not_last_mask.astype(loss_weight.dtype)
     else:
         # Create a mask that excludes the last token
         not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
