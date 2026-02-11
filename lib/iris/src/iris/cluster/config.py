@@ -117,6 +117,35 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid tpu_count={resources.tpu_count}.")
 
 
+def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate that slice templates have required platform-specific fields.
+
+    Scale groups without a slice_template are allowed (legacy flat fields).
+    When a slice_template is present, the platform oneof must be set with
+    valid fields — otherwise scale_up() will fail at runtime.
+    """
+    for name, sg_config in config.scale_groups.items():
+        if not sg_config.HasField("slice_template"):
+            continue
+
+        template = sg_config.slice_template
+        platform = template.WhichOneof("platform")
+        if platform is None:
+            continue
+
+        if platform == "gcp":
+            if not template.gcp.zone:
+                raise ValueError(f"Scale group '{name}': slice_template.gcp.zone must be non-empty.")
+            if not template.gcp.runtime_version:
+                raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
+        elif platform == "manual":
+            if not template.manual.hosts:
+                raise ValueError(f"Scale group '{name}': slice_template.manual.hosts must be non-empty.")
+        elif platform == "coreweave":
+            if not template.coreweave.region:
+                raise ValueError(f"Scale group '{name}': slice_template.coreweave.region must be non-empty.")
+
+
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """Validate cluster config.
 
@@ -124,12 +153,14 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     - Required fields (name, resources, slice_size)
     - Enum fields are not UNSPECIFIED (accelerator_type)
     - Resource values are non-negative
+    - Slice templates have required platform-specific fields
 
     Raises:
         ValueError: If any validation constraint is violated
     """
     _validate_accelerator_types(config)
     _validate_scale_group_resources(config)
+    _validate_slice_templates(config)
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -615,7 +646,7 @@ def create_autoscaler(
     platform,
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
-    label_prefix: str = "iris",
+    label_prefix: str,
     worker_bootstrap: WorkerBootstrap | None = None,
 ):
     """Create autoscaler from Platform and explicit config.

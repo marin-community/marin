@@ -1259,8 +1259,6 @@ class TestAutoscalerQuotaHandling:
         """QUOTA_EXCEEDED state expires after timeout."""
         from iris.cluster.controller.scaling_group import GroupAvailability
 
-        from iris.time_utils import Deadline
-
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded")
         group = ScalingGroup(
@@ -1272,7 +1270,7 @@ class TestAutoscalerQuotaHandling:
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
-        group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
+        group.record_quota_exceeded("quota exceeded", ts)
 
         assert group.availability(Timestamp.from_ms(1100)).status == GroupAvailability.QUOTA_EXCEEDED
 

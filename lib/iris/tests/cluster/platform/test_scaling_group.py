@@ -768,7 +768,6 @@ class TestScalingGroupAvailability:
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
         from iris.cluster.controller.scaling_group import GroupAvailability
-        from iris.time_utils import Deadline
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("TPU quota exhausted")
@@ -780,7 +779,7 @@ class TestScalingGroupAvailability:
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
-        group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
+        group.record_quota_exceeded("quota exceeded", ts)
 
         # Before timeout: QUOTA_EXCEEDED
         assert not group.can_accept_demand(timestamp=Timestamp.from_ms(30_000))
@@ -792,7 +791,6 @@ class TestScalingGroupAvailability:
 
     def test_successful_scale_up_clears_quota_state(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Successful scale-up via complete_scale_up clears any quota exceeded state."""
-        from iris.time_utils import Deadline
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = [
@@ -807,7 +805,7 @@ class TestScalingGroupAvailability:
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts1)
         group.cancel_scale_up()
-        group._quota_exceeded_until = Deadline.after(ts1, group._quota_timeout)
+        group.record_quota_exceeded("quota exceeded", ts1)
         assert not group.can_accept_demand(timestamp=Timestamp.from_ms(2000))
 
         # Second attempt succeeds via complete_scale_up, which clears quota state
@@ -820,7 +818,6 @@ class TestScalingGroupAvailability:
     def test_quota_exceeded_takes_precedence_over_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded has higher precedence than backoff."""
         from iris.cluster.controller.scaling_group import GroupAvailability
-        from iris.time_utils import Deadline
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exhausted")
@@ -836,7 +833,7 @@ class TestScalingGroupAvailability:
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
-        group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
+        group.record_quota_exceeded("quota exceeded", ts)
 
         # Availability should report QUOTA_EXCEEDED, not BACKOFF
         state = group.availability(timestamp=Timestamp.from_ms(2000))
@@ -1118,7 +1115,6 @@ class TestCanScaleUpQuotaExhausted:
 
     def test_cannot_scale_up_during_quota_exhaustion(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """can_scale_up() returns False while quota_exceeded deadline is active."""
-        from iris.time_utils import Deadline
 
         platform = MagicMock()
         platform.list_slices.return_value = []
@@ -1131,7 +1127,7 @@ class TestCanScaleUpQuotaExhausted:
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
-        group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
+        group.record_quota_exceeded("quota exceeded", ts)
 
         # During quota exhaustion window
         assert not group.can_scale_up(timestamp=Timestamp.from_ms(1003000))

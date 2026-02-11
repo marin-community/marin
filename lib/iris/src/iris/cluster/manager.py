@@ -58,28 +58,46 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
 
 
 def stop_all(config: config_pb2.IrisClusterConfig) -> None:
-    """Stop controller and all worker slices."""
+    """Stop controller and all worker slices.
+
+    Best-effort cleanup: attempts every stop/terminate operation even if earlier
+    ones fail, and always calls platform.shutdown(). Failures are logged but do
+    not prevent subsequent cleanup steps from running.
+    """
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
     label_prefix = config.platform.label_prefix or "iris"
+    errors: list[str] = []
 
-    stop_controller(platform, config)
+    try:
+        try:
+            stop_controller(platform, config)
+        except Exception:
+            logger.exception("Failed to stop controller")
+            errors.append("stop_controller")
 
-    for group_config in config.scale_groups.values():
-        zones: list[str] = []
-        if group_config.HasField("slice_template"):
-            template = group_config.slice_template
-            if template.HasField("gcp"):
-                if template.gcp.zone:
-                    zones = [template.gcp.zone]
-        if not zones:
-            zones = ["local"]
+        for group_config in config.scale_groups.values():
+            zones: list[str] = []
+            if group_config.HasField("slice_template"):
+                template = group_config.slice_template
+                if template.HasField("gcp"):
+                    if template.gcp.zone:
+                        zones = [template.gcp.zone]
+            if not zones:
+                zones = ["local"]
 
-        for slice_handle in platform.list_slices(
-            zones=zones,
-            labels={f"{label_prefix}-scale-group": group_config.name},
-        ):
-            logger.info("Terminating slice %s", slice_handle.slice_id)
-            slice_handle.terminate()
+            for slice_handle in platform.list_slices(
+                zones=zones,
+                labels={f"{label_prefix}-scale-group": group_config.name},
+            ):
+                try:
+                    logger.info("Terminating slice %s", slice_handle.slice_id)
+                    slice_handle.terminate()
+                except Exception:
+                    logger.exception("Failed to terminate slice %s", slice_handle.slice_id)
+                    errors.append(f"terminate:{slice_handle.slice_id}")
+    finally:
+        platform.shutdown()
 
-    platform.shutdown()
+    if errors:
+        logger.error("stop_all completed with %d error(s): %s", len(errors), ", ".join(errors))

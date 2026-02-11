@@ -348,6 +348,7 @@ scale_groups:
             platform=platform,
             autoscaler_config=config.defaults.autoscaler,
             scale_groups=config.scale_groups,
+            label_prefix=config.platform.label_prefix or "iris",
         )
 
         assert autoscaler is not None
@@ -394,6 +395,7 @@ scale_groups:
             platform=platform,
             autoscaler_config=config.defaults.autoscaler,
             scale_groups=config.scale_groups,
+            label_prefix=config.platform.label_prefix or "iris",
         )
 
         assert autoscaler is not None
@@ -451,6 +453,7 @@ scale_groups:
             platform=platform,
             autoscaler_config=loaded_config.defaults.autoscaler,
             scale_groups=loaded_config.scale_groups,
+            label_prefix=loaded_config.platform.label_prefix or "iris",
         )
 
         assert autoscaler is not None
@@ -583,6 +586,7 @@ scale_groups:
     slice_template:
       gcp:
         zone: us-central1-a
+        runtime_version: tpu-ubuntu2204-base
 """
         config_path = tmp_path / "gcp_config.yaml"
         config_path.write_text(config_content)
@@ -637,6 +641,7 @@ scale_groups:
     slice_template:
       gcp:
         zone: us-central1-a
+        runtime_version: cos-stable
   tpu_group:
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
@@ -653,6 +658,7 @@ scale_groups:
     slice_template:
       gcp:
         zone: us-central1-a
+        runtime_version: tpu-ubuntu2204-base
 """
         config_path = tmp_path / "multi_group.yaml"
         config_path.write_text(config_content)

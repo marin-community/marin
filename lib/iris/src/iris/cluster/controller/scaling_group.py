@@ -775,6 +775,12 @@ class ScalingGroup:
             return False
         return True
 
+    def record_quota_exceeded(self, reason: str, timestamp: Timestamp | None = None) -> None:
+        """Record a quota exhaustion event, blocking scale-up until the quota timeout elapses."""
+        timestamp = timestamp or Timestamp.now()
+        self._quota_exceeded_until = Deadline.after(timestamp, self._quota_timeout)
+        self._quota_reason = reason
+
     def record_failure(self, timestamp: Timestamp | None = None) -> None:
         """Record a scale-up failure and apply exponential backoff.
 

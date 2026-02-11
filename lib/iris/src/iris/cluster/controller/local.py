@@ -50,7 +50,7 @@ def create_local_autoscaler(
     config: config_pb2.IrisClusterConfig,
     controller_address: str,
     threads: ThreadContainer | None = None,
-):
+) -> tuple[Autoscaler, tempfile.TemporaryDirectory]:
     """Create Autoscaler with LocalPlatform for all scale groups.
 
     Creates temp directories and a PortAllocator so that LocalPlatform can
@@ -62,8 +62,8 @@ def create_local_autoscaler(
         threads: Optional thread container for testing
 
     Returns:
-        Configured Autoscaler with LocalPlatform. The autoscaler has a _temp_dir
-        attribute for cleanup by the caller.
+        Tuple of (autoscaler, temp_dir). The caller owns the temp_dir and
+        must call cleanup() when done.
     """
     label_prefix = config.platform.label_prefix or "iris"
 
@@ -105,9 +105,7 @@ def create_local_autoscaler(
         platform=platform,
         threads=threads,
     )
-    # Attach temp_dir for cleanup by LocalController.stop()
-    autoscaler._temp_dir = temp_dir
-    return autoscaler
+    return autoscaler, temp_dir
 
 
 class _InProcessController(Protocol):
@@ -141,6 +139,7 @@ class LocalController:
         self._controller: _InProcessController | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
+        self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
 
     def start(self) -> str:
         # Create temp dir for controller's bundle storage
@@ -155,7 +154,7 @@ class LocalController:
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
         # Autoscaler creates its own temp dirs for worker resources
-        self._autoscaler = create_local_autoscaler(
+        self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
             self._config,
             address,
             threads=autoscaler_threads,
@@ -185,11 +184,10 @@ class LocalController:
             self._controller.stop()
             self._controller = None
         if self._autoscaler is not None:
-            # _temp_dir is set by create_local_autoscaler for cleanup
-            temp_dir = getattr(self._autoscaler, "_temp_dir", None)
-            if temp_dir is not None:
-                temp_dir.cleanup()
             self._autoscaler = None
+        if self._autoscaler_temp_dir is not None:
+            self._autoscaler_temp_dir.cleanup()
+            self._autoscaler_temp_dir = None
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None

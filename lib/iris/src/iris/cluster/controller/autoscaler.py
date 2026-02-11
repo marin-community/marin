@@ -31,7 +31,7 @@ from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -565,8 +565,7 @@ class Autoscaler:
             return True
         except QuotaExhaustedError as e:
             group.cancel_scale_up()
-            group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
-            group._quota_reason = str(e)
+            group.record_quota_exceeded(str(e), ts)
             logger.warning("Quota exceeded for %s: %s", group.name, e)
             action.action_type = "quota_exceeded"
             action.status = "failed"

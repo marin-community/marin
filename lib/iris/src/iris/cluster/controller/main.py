@@ -88,6 +88,7 @@ def serve(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
+                label_prefix=cluster_config.platform.label_prefix or "iris",
                 worker_bootstrap=worker_bootstrap,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
