@@ -180,10 +180,21 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
         format = _sniff_format_for_dataset(url)
         if format == ".parquet":
             # Handle parquet files
+            import pyarrow as pa
             import pyarrow.parquet as pq
 
             with fsspec.open(url, "rb") as f:
-                table = pq.read_table(f)
+                # Read row groups individually and concat to avoid
+                # ArrowNotImplementedError: "Nested data conversions not
+                # implemented for chunked array outputs" when a parquet file
+                # has multiple row groups with nested columns (e.g. messages).
+                pf = pq.ParquetFile(f)
+                if pf.metadata.num_row_groups == 1:
+                    table = pf.read_row_group(0)
+                else:
+                    table = pa.concat_tables(
+                        [pf.read_row_group(i) for i in range(pf.metadata.num_row_groups)]
+                    )
                 data = table.to_pydict()
                 num_rows = table.num_rows
                 for idx in range(row, num_rows):

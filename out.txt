@@ -1,760 +1,661 @@
-(<lambda> pid=4077, ip=10.164.0.183) E0211 02:47:18.732853    4951 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 5.06M. That was not possible. There are 3.16M free. The largest contiguous region of free memory is 1.57M due to fragmentation.; (3x15x0_HBM0)
-(<lambda> pid=4077, ip=10.164.0.183) === Source Location Trace: ===
-(<lambda> pid=4077, ip=10.164.0.183) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.183) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.183) [OOM Summary: Reason: Not enough free memory. Allocator stats:
-(<lambda> pid=4077, ip=10.164.0.183) Limit:                     16909271040
-(<lambda> pid=4077, ip=10.164.0.183) InUse:                     12798652928
-(<lambda> pid=4077, ip=10.164.0.183) MaxInUse:                  12798652928
-(<lambda> pid=4077, ip=10.164.0.183) NumAllocs:                        2245
-(<lambda> pid=4077, ip=10.164.0.183) MaxAllocSize:               1244659712
-(<lambda> pid=4077, ip=10.164.0.183) Reserved:                   4107304960
-(<lambda> pid=4077, ip=10.164.0.183) PeakReserved:               4107304960
-(<lambda> pid=4077, ip=10.164.0.183) LargestFreeBlock:                    0
-(<lambda> pid=4077, ip=10.164.0.183) ]
-(<lambda> pid=4077, ip=10.164.0.183) E0211 02:47:18.732853    4950 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 5.06M. That was not possible. There are 3.16M free. The largest contiguous region of free memory is 1.57M due to fragmentation.; (2x15x0_HBM0)
-(<lambda> pid=4077, ip=10.164.0.183) === Source Location Trace: ===
-(<lambda> pid=4077, ip=10.164.0.183) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.183) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.183) [OOM Summary: Reason: Not enough free memory. Allocator stats:
-(<lambda> pid=4077, ip=10.164.0.183) Limit:                     16909271040
-(<lambda> pid=4077, ip=10.164.0.183) InUse:                     12798652928
-(<lambda> pid=4077, ip=10.164.0.183) MaxInUse:                  12798652928
-(<lambda> pid=4077, ip=10.164.0.183) NumAllocs:                        2245
-(<lambda> pid=4077, ip=10.164.0.183) MaxAllocSize:               1244659712
-(<lambda> pid=4077, ip=10.164.0.183) Reserved:                   4107304960
-(<lambda> pid=4077, ip=10.164.0.183) PeakReserved:               4107304960
-(<lambda> pid=4077, ip=10.164.0.183) LargestFreeBlock:                    0
-(<lambda> pid=4077, ip=10.164.0.183) ]
-(<lambda> pid=4041, ip=10.164.0.180) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.180) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.180) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.180) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.180) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.180) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.180) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.180) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.179) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.179) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.179) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.179) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.179) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.179) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.179) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.179) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.168) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.168) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.168) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.168) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.168) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.168) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.168) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.168) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.165) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.165) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.165) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.165) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.165) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.165) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.165) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.165) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.157) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.157) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.157) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.157) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.157) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.157) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.157) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.157) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.182) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.182) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.182) [OOM Summary: Reason: Fragmentation. Allocator stats:
-(<lambda> pid=4076, ip=10.164.0.182) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.182) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.182) [OOM Summary: Reason: Fragmentation. Allocator stats:
-(<lambda> pid=4076, ip=10.164.0.182) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.182) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.182) [OOM Summary: Reason: Fragmentation. Allocator stats:
-(<lambda> pid=4076, ip=10.164.0.182) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.182) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.182) [OOM Summary: Reason: Fragmentation. Allocator stats:
-(<lambda> pid=4075, ip=10.164.0.167) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.167) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.167) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.167) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.167) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.167) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.167) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.167) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.161) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.161) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.161) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.161) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.161) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.161) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.161) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.161) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.170) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.170) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.170) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.170) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.170) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.170) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.170) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4075, ip=10.164.0.170) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4078, ip=10.164.0.160) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4078, ip=10.164.0.160) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4078, ip=10.164.0.160) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4078, ip=10.164.0.160) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4078, ip=10.164.0.160) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4078, ip=10.164.0.160) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4078, ip=10.164.0.160) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4078, ip=10.164.0.160) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4042, ip=10.164.0.155) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4042, ip=10.164.0.155) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4042, ip=10.164.0.155) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4042, ip=10.164.0.155) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4042, ip=10.164.0.155) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4042, ip=10.164.0.155) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4042, ip=10.164.0.155) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4042, ip=10.164.0.155) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4040, ip=10.164.0.181) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4040, ip=10.164.0.181) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4040, ip=10.164.0.181) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4040, ip=10.164.0.181) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4040, ip=10.164.0.181) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4040, ip=10.164.0.181) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4040, ip=10.164.0.181) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4040, ip=10.164.0.181) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.164) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.164) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.164) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.164) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.164) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.164) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.164) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.164) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.162) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.162) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.162) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.162) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.162) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.162) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.162) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.162) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.152) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.152) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.152) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.152) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.152) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.152) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.152) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.152) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4042, ip=10.164.0.163) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4042, ip=10.164.0.163) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4042, ip=10.164.0.163) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4042, ip=10.164.0.163) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4042, ip=10.164.0.163) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4042, ip=10.164.0.163) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4042, ip=10.164.0.163) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4042, ip=10.164.0.163) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4040, ip=10.164.0.171) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4040, ip=10.164.0.171) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4040, ip=10.164.0.171) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4040, ip=10.164.0.171) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4040, ip=10.164.0.171) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4040, ip=10.164.0.171) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4040, ip=10.164.0.171) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4040, ip=10.164.0.171) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.175) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.175) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.175) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.175) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.175) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.175) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.175) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.175) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4078, ip=10.164.0.166) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4078, ip=10.164.0.166) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4078, ip=10.164.0.166) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4078, ip=10.164.0.166) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4078, ip=10.164.0.166) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4078, ip=10.164.0.166) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4078, ip=10.164.0.166) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4078, ip=10.164.0.166) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.156) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.156) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.156) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.156) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.156) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.156) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.156) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.156) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.172) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.172) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.172) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.172) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.172) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.172) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.172) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.172) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.174) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.174) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.174) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.174) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.174) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.174) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4079, ip=10.164.0.174) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4079, ip=10.164.0.174) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4312, ip=10.164.0.154) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4312, ip=10.164.0.154) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4312, ip=10.164.0.154) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4312, ip=10.164.0.154) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4312, ip=10.164.0.154) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4312, ip=10.164.0.154) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4312, ip=10.164.0.154) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4312, ip=10.164.0.154) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.173) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.173) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.173) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.173) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.173) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.173) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.173) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.173) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4292, ip=10.164.0.177) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4292, ip=10.164.0.177) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4292, ip=10.164.0.177) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4292, ip=10.164.0.177) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4292, ip=10.164.0.177) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4292, ip=10.164.0.177) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4292, ip=10.164.0.177) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4292, ip=10.164.0.177) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.153) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.153) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.153) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.153) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.153) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.153) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.153) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.153) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.169) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.169) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.169) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.169) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.169) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.169) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.169) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.169) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.178) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.178) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.178) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.178) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.178) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.178) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.178) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.178) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.159) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.159) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.159) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.159) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.159) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.159) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4077, ip=10.164.0.159) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4077, ip=10.164.0.159) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.158) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.158) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.158) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.158) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.158) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.158) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4041, ip=10.164.0.158) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4041, ip=10.164.0.158) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.176) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.176) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.176) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.176) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.176) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.176) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4076, ip=10.164.0.176) third_party/tensorflow/compiler/xla/util.h:288
-(<lambda> pid=4076, ip=10.164.0.176) learning/45eac/research/pjrt/tpu_pjrt_client.cc:1857
-(<lambda> pid=4075, ip=10.164.0.170) 2026-02-11T02:47:20 - 12 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00002-of-00002.safetensors (3.59 GB, 41.95% of model)
-(autoscaler +38m37s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +38m37s) Resized to 15960 CPUs, 532 TPUs.
-(<lambda> pid=4077, ip=10.164.0.156) 2026-02-11T02:47:24 - 24 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (5000 rows) in 101.82s [repeated 2x across cluster]
-(<lambda> pid=4042, ip=10.164.0.163) 2026-02-11T02:47:20 - 26 - levanter.data.image - image.py:2622 - INFO :: Loading shard 3: 0122_cleaned_parquet
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:47:18 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:915 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 via temp path /tmp/tmprp58atus [repeated 28x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) E0211 02:47:19.598256    4953 tpu_pjrt_client.cc:1889] TpuClient::AllocateBuffer returning error after 1 attempt(s): RESOURCE_EXHAUSTED: Error allocating device buffer: Attempting to allocate 5.06M. That was not possible. There are 2.90M free. The largest contiguous region of free memory is 1.57M due to fragmentation.; (0x0x0_HBM0) [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) === Source Location Trace: ===  [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) [OOM Summary: Reason: Not enough free memory. Allocator stats: [repeated 112x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) Limit:                     16909271040 [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) InUse:                     12798926336 [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) MaxInUse:                  12798926336 [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) NumAllocs:                        2253 [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) MaxAllocSize:               1244659712 [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) Reserved:                   4107304960 [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) PeakReserved:               4107304960 [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) LargestFreeBlock:                    0 [repeated 124x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) ] [repeated 124x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153) [OOM Summary: Reason: Fragmentation. Allocator stats: [repeated 8x across cluster]
-(<lambda> pid=4077, ip=10.164.0.156) 2026-02-11T02:47:24 - 24 - levanter.data.image - image.py:2622 - INFO :: Loading shard 3: 0120_cleaned_parquet
-(<lambda> pid=4042, ip=10.164.0.163) 2026-02-11T02:47:21 - 26 - levanter.compat.hf_checkpoints - hf_checkpoints.py:927 - INFO :: Saving shard model-00002-of-00002.safetensors (3.59 GB, 41.95% of model) [repeated 31x across cluster]
-(<lambda> pid=4078, ip=10.164.0.160) 2026-02-11T02:47:26 - 28 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.56GB/8.56GB rate:104,535,164.1B/s remaining:00:00 elapsed:01:12 postfix:-
-(<lambda> pid=4078, ip=10.164.0.160) 2026-02-11T02:47:26 - 28 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:47:26 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:47:28 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-1000 for step 1000
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:47:28 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-849 after saving new checkpoint.
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:47:28 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-849
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:47:28 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-849
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:47:28 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-849 in 0.20 seconds
-(<lambda> pid=4041, ip=10.164.0.162) 2026-02-11T02:47:34 - 10 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (5000 rows) in 112.65s [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170) 2026-02-11T02:47:26 - 12 - levanter.data.image - image.py:2622 - INFO :: Loading shard 3: 0108_cleaned_parquet [repeated 3x across cluster]
-(<lambda> pid=4077, ip=10.164.0.161) 2026-02-11T02:47:26 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.56GB/8.56GB rate:104,117,640.0B/s remaining:00:00 elapsed:01:12 postfix:- [repeated 31x across cluster]
-(<lambda> pid=4077, ip=10.164.0.161) 2026-02-11T02:47:26 - 30 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 [repeated 30x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172) 2026-02-11T02:47:39 - 9 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (5000 rows) in 117.08s [repeated 4x across cluster]
-(<lambda> pid=4079, ip=10.164.0.174) 2026-02-11T02:47:39 - 11 - levanter.data.image - image.py:2622 - INFO :: Loading shard 3: 0107_cleaned_parquet [repeated 4x across cluster]
-(<lambda> pid=4076, ip=10.164.0.152) 2026-02-11T02:47:45 - 22 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (4985 rows) in 122.97s [repeated 7x across cluster]
-(<lambda> pid=4076, ip=10.164.0.152) 2026-02-11T02:47:45 - 22 - levanter.data.image - image.py:2622 - INFO :: Loading shard 3: 0118_cleaned_parquet [repeated 8x across cluster]
-(<lambda> pid=4077, ip=10.164.0.161) 2026-02-11T02:47:54 - 30 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (4998 rows) in 151.85s [repeated 8x across cluster]
-(<lambda> pid=4075, ip=10.164.0.167) 2026-02-11T02:47:49 - 16 - levanter.data.image - image.py:2622 - INFO :: Loading shard 3: 0112_cleaned_parquet [repeated 7x across cluster]
-(<lambda> pid=4079, ip=10.164.0.174) 2026-02-11T02:48:04 - 11 - levanter.compat.hf_checkpoints - hf_checkpoints.py:944 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.97 GB
-(<lambda> pid=4079, ip=10.164.0.174) 2026-02-11T02:48:04 - 11 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 via temp path /tmp/tmpgeplcusb
-(<lambda> pid=4079, ip=10.164.0.174) 2026-02-11T02:48:04 - 11 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer
-(<lambda> pid=4076, ip=10.164.0.169) 2026-02-11T02:47:56 - 13 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (4998 rows) in 134.33s
-(<lambda> pid=4076, ip=10.164.0.169) 2026-02-11T02:47:56 - 13 - levanter.data.image - image.py:2622 - INFO :: Loading shard 3: 0109_cleaned_parquet [repeated 2x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157) 2026-02-11T02:48:04 - 4 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 via temp path /tmp/tmpqq2iga0h
-(<lambda> pid=4041, ip=10.164.0.162) 2026-02-11T02:48:04 - 10 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 via temp path /tmp/tmpqoeydvip
-(<lambda> pid=4040, ip=10.164.0.181) 2026-02-11T02:48:04 - 14 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 via temp path /tmp/tmpaxovkqjv
-(<lambda> pid=4077, ip=10.164.0.178) 2026-02-11T02:48:04 - 27 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 via temp path /tmp/tmpimmwbydb
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:48:04 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000
-(<lambda> pid=4040, ip=10.164.0.171) 2026-02-11T02:48:04 - 19 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:48:05 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000
-(<lambda> pid=4078, ip=10.164.0.166) 2026-02-11T02:48:05 - 6 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000
-(<lambda> pid=4078, ip=10.164.0.166) 2026-02-11T02:48:05 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.56GB/8.56GB rate:104,596,240.3B/s remaining:00:00 elapsed:01:51 postfix:-
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:48:05 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000
-(<lambda> pid=4077, ip=10.164.0.159) 2026-02-11T02:48:07 - 20 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00kit/39.1kit rate:35.5s/it remaining:375:23:53 elapsed:34:59 postfix:loss=1.09
-(<lambda> pid=4040, ip=10.164.0.181) Exception in thread Thread-22 (prefetch):
-(<lambda> pid=4040, ip=10.164.0.181) Traceback (most recent call last):
-(<lambda> pid=4040, ip=10.164.0.181)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:48:05 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:944 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.97 GB [repeated 31x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:48:05 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:961 - INFO :: Saving tokenizer [repeated 31x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:48:05 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:950 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 via temp path /tmp/tmp1sby1t9e [repeated 27x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170) 2026-02-11T02:48:04 - 12 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 [repeated 30x across cluster]
-(<lambda> pid=4042, ip=10.164.0.163) 2026-02-11T02:48:05 - 26 - levanter.compat.hf_checkpoints - hf_checkpoints.py:985 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/step-1000 [repeated 31x across cluster]
-(<lambda> pid=4042, ip=10.164.0.163) 2026-02-11T02:48:05 - 26 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 8.56GB/8.56GB rate:104,104,110.3B/s remaining:00:00 elapsed:01:51 postfix:- [repeated 31x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154) 2026-02-11T02:48:07 - 31 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00kit/39.1kit rate:35.5s/it remaining:375:23:53 elapsed:34:59 postfix:loss=1.09 [repeated 31x across cluster]
-(<lambda> pid=4040, ip=10.164.0.181)     self.run()
-(<lambda> pid=4040, ip=10.164.0.181)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run
-(<lambda> pid=4040, ip=10.164.0.181)     self._target(*self._args, **self._kwargs)
-(<lambda> pid=4040, ip=10.164.0.181)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2693, in prefetch
-(<lambda> pid=4040, ip=10.164.0.181)     self._load_shard(shard_idx)
-(<lambda> pid=4040, ip=10.164.0.181)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2625, in _load_shard
-(<lambda> pid=4040, ip=10.164.0.181)     shard_data = list(self.source.open_shard(shard_name))
-(<lambda> pid=4040, ip=10.164.0.181)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4040, ip=10.164.0.181)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row
-(<lambda> pid=4040, ip=10.164.0.181)     table = pq.read_table(f)
-(<lambda> pid=4040, ip=10.164.0.181)             ^^^^^^^^^^^^^^^^
-(<lambda> pid=4040, ip=10.164.0.181)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table
-(<lambda> pid=4040, ip=10.164.0.181)     return dataset.read(columns=columns, use_threads=use_threads,
-(<lambda> pid=4040, ip=10.164.0.181)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4040, ip=10.164.0.181)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read
-(<lambda> pid=4040, ip=10.164.0.181)     table = self._dataset.to_table(
-(<lambda> pid=4040, ip=10.164.0.181)             ^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4040, ip=10.164.0.181)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table
-(<lambda> pid=4040, ip=10.164.0.181)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table
-(<lambda> pid=4040, ip=10.164.0.181)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status
-(<lambda> pid=4040, ip=10.164.0.181)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
-(<lambda> pid=4040, ip=10.164.0.181) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
-(<lambda> pid=4077, ip=10.164.0.179)      
-(<lambda> pid=4077, ip=10.164.0.179)       ^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.179) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.179) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.179) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.179) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.179) ^^
-(<lambda> pid=4077, ip=10.164.0.179)           
-(<lambda> pid=4077, ip=10.164.0.179)   ^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.179) ^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.179) ^^^^
-(<lambda> pid=4041, ip=10.164.0.153)     
-(<lambda> pid=4041, ip=10.164.0.153) Exception in thread Thread-22 (prefetch): [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153) Traceback (most recent call last): [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)     self.run() [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)     self._target(*self._args, **self._kwargs) [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2693, in prefetch [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)     self._load_shard(shard_idx) [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2625, in _load_shard [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)     shard_data = list(self.source.open_shard(shard_name)) [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)     table = pq.read_table(f) [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)             ^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)     return dataset.read(columns=columns, use_threads=use_threads, [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read [repeated 3x across cluster]
-(<lambda> pid=4041, ip=10.164.0.153)     table = self._dataset.to_table( [repeated 3x across cluster]
-(<lambda> pid=4077, ip=10.164.0.168)             ^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.168)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table [repeated 2x across cluster]
-(<lambda> pid=4077, ip=10.164.0.168)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table [repeated 2x across cluster]
-(<lambda> pid=4077, ip=10.164.0.168)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status [repeated 2x across cluster]
-(<lambda> pid=4077, ip=10.164.0.168)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 2x across cluster]
-(<lambda> pid=4077, ip=10.164.0.168) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 2x across cluster]
-(<lambda> pid=4042, ip=10.164.0.163)            ^^^^^^^^
-(<lambda> pid=4042, ip=10.164.0.163) ^^^^^^^^^^^^^^
-(<lambda> pid=4042, ip=10.164.0.163) ^^^^^^^^^^
-(<lambda> pid=4042, ip=10.164.0.163) ^^^^^^^^^^
-(<lambda> pid=4042, ip=10.164.0.163) ^
-(<lambda> pid=4042, ip=10.164.0.163) ^^^^^^^^^^
-(<lambda> pid=4042, ip=10.164.0.163) ^
-(<lambda> pid=4042, ip=10.164.0.163)   
-(<lambda> pid=4041, ip=10.164.0.153)         ^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) Exception in thread Thread-22 (prefetch): [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170) Traceback (most recent call last): [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170)     self.run() [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170)     self._target(*self._args, **self._kwargs) [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2693, in prefetch [repeated 4x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)     self._load_shard(shard_idx) [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2625, in _load_shard [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)     shard_data = list(self.source.open_shard(shard_name)) [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)     table = pq.read_table(f) [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)             ^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)     return dataset.read(columns=columns, use_threads=use_threads, [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=4077, ip=10.164.0.178)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)     table = self._dataset.to_table( [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table [repeated 4x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table [repeated 4x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status [repeated 4x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 4x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 4x across cluster]
-(<lambda> pid=4079, ip=10.164.0.164)             ^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4075, ip=10.164.0.170)  
-(<lambda> pid=4075, ip=10.164.0.170)       
-(<lambda> pid=4075, ip=10.164.0.170)      
-(<lambda> pid=4075, ip=10.164.0.170)      ^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^^^
-(<lambda> pid=4075, ip=10.164.0.170)       
-(<lambda> pid=4075, ip=10.164.0.170)      
-(<lambda> pid=4075, ip=10.164.0.170)  ^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^
-(<lambda> pid=4075, ip=10.164.0.170)  
-(<lambda> pid=4075, ip=10.164.0.170)           ^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^
-(<lambda> pid=4075, ip=10.164.0.170) 
-(<lambda> pid=4075, ip=10.164.0.170)     
-(<lambda> pid=4075, ip=10.164.0.170)       
-(<lambda> pid=4075, ip=10.164.0.170)   ^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) ^^^^^
-(<lambda> pid=4075, ip=10.164.0.170) 
-(<lambda> pid=4075, ip=10.164.0.170) 
-(<lambda> pid=4077, ip=10.164.0.156)             ^^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) Exception in thread 
-(<lambda> pid=4312, ip=10.164.0.154) Exception in thread Thread-22 (prefetch): [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154) Traceback (most recent call last): [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)     self.run() [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)     self._target(*self._args, **self._kwargs) [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2693, in prefetch [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)     self._load_shard(shard_idx) [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2625, in _load_shard [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)     shard_data = list(self.source.open_shard(shard_name)) [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)     table = pq.read_table(f) [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)     return dataset.read(columns=columns, use_threads=use_threads, [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)     table = self._dataset.to_table( [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 3x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)             ^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154) ^^^^ [repeated 2x across cluster]
-(<lambda> pid=4312, ip=10.164.0.154)             ^^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) Thread-22 (prefetch):
-(<lambda> pid=4041, ip=10.164.0.162)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^
-(<lambda> pid=4041, ip=10.164.0.162)    
-(<lambda> pid=4041, ip=10.164.0.162)          ^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^
-(<lambda> pid=4041, ip=10.164.0.162)     
-(<lambda> pid=4041, ip=10.164.0.162)         
-(<lambda> pid=4041, ip=10.164.0.162)    ^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^
-(<lambda> pid=4041, ip=10.164.0.162) 
-(<lambda> pid=4041, ip=10.164.0.162)         
-(<lambda> pid=4041, ip=10.164.0.162)     ^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.162) ^
-(<lambda> pid=4041, ip=10.164.0.162) ^^^^^
-(<lambda> pid=4079, ip=10.164.0.174)                  ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4079, ip=10.164.0.174) ^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4079, ip=10.164.0.174)             ^^^^^^^^^^^^^^^^
-(<lambda> pid=4042, ip=10.164.0.155)          
-(<lambda> pid=4042, ip=10.164.0.155)         ^^
-(<lambda> pid=4077, ip=10.164.0.173)                  ^^^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.158) ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.173) ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159) Exception in thread Thread-22 (prefetch): [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159) Traceback (most recent call last): [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159)     self.run() [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159)     self._target(*self._args, **self._kwargs) [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2693, in prefetch [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159)     self._load_shard(shard_idx) [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2625, in _load_shard [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159)     shard_data = list(self.source.open_shard(shard_name)) [repeated 6x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)     table = pq.read_table(f) [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)     return dataset.read(columns=columns, use_threads=use_threads, [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)     table = self._dataset.to_table( [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.173)             ^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.159) ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159)            ^^^^^^^^^^^^^^^
-(<lambda> pid=4041, ip=10.164.0.158)                  ^^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159)                  ^^^
-(<lambda> pid=4042, ip=10.164.0.155) ^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159) ^^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159) ^^^^^
-(<lambda> pid=4077, ip=10.164.0.159)     
-(<lambda> pid=4077, ip=10.164.0.159)         
-(<lambda> pid=4077, ip=10.164.0.159)     ^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.159) ^^^^^
-(<lambda> pid=4078, ip=10.164.0.160)          
-(<lambda> pid=4078, ip=10.164.0.160)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4078, ip=10.164.0.160)             ^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(<lambda> pid=4042, ip=10.164.0.155) ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4078, ip=10.164.0.166) ^
-(<lambda> pid=4078, ip=10.164.0.166)     
-(<lambda> pid=4078, ip=10.164.0.166)      
-(<lambda> pid=4078, ip=10.164.0.166)       
-(<lambda> pid=4078, ip=10.164.0.166) ^^^^^^
-(<lambda> pid=4078, ip=10.164.0.166) ^
-(<lambda> pid=4078, ip=10.164.0.166)       
-(<lambda> pid=4078, ip=10.164.0.166)       ^^
-(<lambda> pid=4078, ip=10.164.0.166) ^^^^^^
-(<lambda> pid=4078, ip=10.164.0.166) ^^^^^^
-(<lambda> pid=4078, ip=10.164.0.166) ^^
-(<lambda> pid=4075, ip=10.164.0.157)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4292, ip=10.164.0.177) Exception in thread Thread-22 (prefetch): [repeated 4x across cluster]
-(<lambda> pid=4292, ip=10.164.0.177) Traceback (most recent call last): [repeated 4x across cluster]
-(<lambda> pid=4292, ip=10.164.0.177)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 4x across cluster]
-(<lambda> pid=4292, ip=10.164.0.177)     self.run() [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 3x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)     self._target(*self._args, **self._kwargs) [repeated 3x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2693, in prefetch [repeated 3x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)     self._load_shard(shard_idx) [repeated 3x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2625, in _load_shard [repeated 3x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)     shard_data = list(self.source.open_shard(shard_name)) [repeated 3x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)     table = pq.read_table(f) [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table [repeated 4x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)     return dataset.read(columns=columns, use_threads=use_threads, [repeated 4x across cluster]
-(<lambda> pid=4078, ip=10.164.0.160)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4078, ip=10.164.0.166)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read [repeated 3x across cluster]
-(<lambda> pid=4078, ip=10.164.0.166)     table = self._dataset.to_table( [repeated 3x across cluster]
-(<lambda> pid=4078, ip=10.164.0.166)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table [repeated 3x across cluster]
-(<lambda> pid=4078, ip=10.164.0.166)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table [repeated 3x across cluster]
-(<lambda> pid=4078, ip=10.164.0.166)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status [repeated 3x across cluster]
-(<lambda> pid=4078, ip=10.164.0.166)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 3x across cluster]
-(<lambda> pid=4078, ip=10.164.0.166) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 3x across cluster]
-(<lambda> pid=4078, ip=10.164.0.160)             ^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4075, ip=10.164.0.157) ^^^^^^^^
-(<lambda> pid=4075, ip=10.164.0.157) 
-(<lambda> pid=4075, ip=10.164.0.157)     
-(<lambda> pid=4075, ip=10.164.0.157)    
-(<lambda> pid=4075, ip=10.164.0.157)      
-(<lambda> pid=4075, ip=10.164.0.157) ^^^
-(<lambda> pid=4075, ip=10.164.0.157) 
-(<lambda> pid=4078, ip=10.164.0.166)             ^^^^^^^^^^^^^^^
-(<lambda> pid=4078, ip=10.164.0.166) ^^^^^
-(<lambda> pid=4078, ip=10.164.0.166) ^^^^^^^ [repeated 7x across cluster]
-(<lambda> pid=4292, ip=10.164.0.177)          
-(<lambda> pid=4292, ip=10.164.0.177) ^^^^^^^^^^^^
-(<lambda> pid=4292, ip=10.164.0.177) pyarrow.lib.ArrowNotImplementedError: 
-(<lambda> pid=4292, ip=10.164.0.177) Nested data conversions not implemented for chunked array outputs
-(<lambda> pid=4076, ip=10.164.0.152)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4076, ip=10.164.0.152)             ^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4076, ip=10.164.0.152)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(<lambda> pid=4040, ip=10.164.0.171) Exception in thread Thread-22 (prefetch)
-(<lambda> pid=4040, ip=10.164.0.171) :
-(<lambda> pid=4077, ip=10.164.0.183)             ^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157) ^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4075, ip=10.164.0.157)     ^^
-(<lambda> pid=4292, ip=10.164.0.177)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.183) Exception in thread Thread-22 (prefetch): [repeated 2x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183) Traceback (most recent call last): [repeated 3x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 3x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)     self.run() [repeated 3x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)     self._target(*self._args, **self._kwargs) [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2693, in prefetch [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)     self._load_shard(shard_idx) [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2625, in _load_shard [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)     shard_data = list(self.source.open_shard(shard_name)) [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)     table = pq.read_table(f) [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)     return dataset.read(columns=columns, use_threads=use_threads, [repeated 4x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)     table = self._dataset.to_table( [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.183) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 4x across cluster]
-(<lambda> pid=4292, ip=10.164.0.177)    ^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=4292, ip=10.164.0.177) ^^^
-(<lambda> pid=4076, ip=10.164.0.175)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4076, ip=10.164.0.175)             ^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4076, ip=10.164.0.175)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4077, ip=10.164.0.161)          
-(<lambda> pid=4077, ip=10.164.0.161)  
-(<lambda> pid=4077, ip=10.164.0.161)        ^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^
-(<lambda> pid=4077, ip=10.164.0.161) 
-(<lambda> pid=4077, ip=10.164.0.161)          
-(<lambda> pid=4077, ip=10.164.0.161)    ^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161)      
-(<lambda> pid=4077, ip=10.164.0.161)       ^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161)        
-(<lambda> pid=4077, ip=10.164.0.161)      ^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^
-(<lambda> pid=4077, ip=10.164.0.161) pyarrow.lib.
-(<lambda> pid=4077, ip=10.164.0.161) ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
-(<lambda> pid=4076, ip=10.164.0.169) Exception in thread 
-(<lambda> pid=4076, ip=10.164.0.169) Thread-22 (prefetch):
-(<lambda> pid=4079, ip=10.164.0.172)             ^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(<lambda> pid=4077, ip=10.164.0.161) ^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172) Exception in thread Thread-22 (prefetch): [repeated 4x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172) Traceback (most recent call last): [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 1045, in _bootstrap_inner [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)     self.run() [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)   File "/home/ray/anaconda3/lib/python3.11/threading.py", line 982, in run [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)     self._target(*self._args, **self._kwargs) [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2693, in prefetch [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)     self._load_shard(shard_idx) [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 2625, in _load_shard [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)     shard_data = list(self.source.open_shard(shard_name)) [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_1fbb6ce6e622ba34/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)     table = pq.read_table(f) [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)     return dataset.read(columns=columns, use_threads=use_threads, [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read [repeated 5x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)     table = self._dataset.to_table( [repeated 5x across cluster]
-(<lambda> pid=4076, ip=10.164.0.169)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table [repeated 4x across cluster]
-(<lambda> pid=4076, ip=10.164.0.169)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table [repeated 4x across cluster]
-(<lambda> pid=4076, ip=10.164.0.169)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status [repeated 4x across cluster]
-(<lambda> pid=4076, ip=10.164.0.169)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 4x across cluster]
-(<lambda> pid=4076, ip=10.164.0.169) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4076, ip=10.164.0.169)             ^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=4079, ip=10.164.0.172) ^^^^^^^
-(<lambda> pid=4076, ip=10.164.0.182) 2026-02-11T02:49:08 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.04kit/39.1kit rate:1.7s/it remaining:18:00:09 elapsed:36:01 postfix:loss=1.1
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:49:34 - 0 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 3 (5026 rows) in 141.35s
-(<lambda> pid=4079, ip=10.164.0.172)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table
-(<lambda> pid=4079, ip=10.164.0.172)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table
-(<lambda> pid=4079, ip=10.164.0.172)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status
-(<lambda> pid=4079, ip=10.164.0.172)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
-(<lambda> pid=4079, ip=10.164.0.172) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
-(<lambda> pid=4075, ip=10.164.0.167) 2026-02-11T02:49:08 - 16 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.04kit/39.1kit rate:1.7s/it remaining:18:00:08 elapsed:36:01 postfix:loss=1.1 [repeated 31x across cluster]
-(<lambda> pid=4041, ip=10.164.0.180) 2026-02-11T02:49:41 - 3 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 3 (5017 rows) in 148.79s
-(autoscaler +41m10s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +41m10s) Resized to 15840 CPUs, 528 TPUs.
-(<lambda> pid=4077, ip=10.164.0.159) 2026-02-11T02:50:09 - 20 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.09kit/39.1kit rate:1.2s/it remaining:12:11:56 elapsed:37:01 postfix:loss=1.1
-(<lambda> pid=4079, ip=10.164.0.165) 2026-02-11T02:50:09 - 2 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 3 (4876 rows) in 147.49s
-(<lambda> pid=4079, ip=10.164.0.165) 2026-02-11T02:50:09 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.09kit/39.1kit rate:1.2s/it remaining:12:18:46 elapsed:37:01 postfix:loss=1.1 [repeated 31x across cluster]
-(<lambda> pid=4076, ip=10.164.0.182) 2026-02-11T02:50:15 - 1 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 3 (5000 rows) in 154.05s
-(autoscaler +41m50s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +41m50s) Resized to 15840 CPUs, 528 TPUs.
-(autoscaler +42m10s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +42m10s) Resized to 15840 CPUs, 528 TPUs.
-(<lambda> pid=4078, ip=10.164.0.166) 2026-02-11T02:51:09 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.13kit/39.1kit rate:1.4s/it remaining:14:47:52 elapsed:38:02 postfix:loss=1.1
-(<lambda> pid=4076, ip=10.164.0.175) 2026-02-11T02:51:09 - 15 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.13kit/39.1kit rate:1.4s/it remaining:14:47:51 elapsed:38:02 postfix:loss=1.1
-(<lambda> pid=4077, ip=10.164.0.179) 2026-02-11T02:52:10 - 8 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.18kit/39.1kit rate:1.2s/it remaining:12:15:10 elapsed:39:02 postfix:loss=1.06 [repeated 31x across cluster]
-(<lambda> pid=4077, ip=10.164.0.168) 2026-02-11T02:53:10 - 21 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.22kit/39.1kit rate:1.2s/it remaining:12:33:46 elapsed:40:03 postfix:loss=1.08 [repeated 32x across cluster]
-(autoscaler +44m40s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +44m40s) Resized to 15960 CPUs, 532 TPUs.
-(<lambda> pid=4077, ip=10.164.0.156) 2026-02-11T02:54:10 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.27kit/39.1kit rate:1.5s/it remaining:16:16:01 elapsed:41:03 postfix:loss=1.08 [repeated 32x across cluster]
-(<lambda> pid=4042, ip=10.164.0.163) 2026-02-11T02:55:11 - 26 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.32kit/39.1kit rate:1.4s/it remaining:14:46:26 elapsed:42:04 postfix:loss=1.06 [repeated 32x across cluster]
-(autoscaler +46m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +46m53s) Resized to 15960 CPUs, 532 TPUs.
-(<lambda> pid=4042, ip=10.164.0.155) 2026-02-11T02:56:12 - 18 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.36kit/39.1kit rate:1.3s/it remaining:13:10:26 elapsed:43:04 postfix:loss=1.07 [repeated 32x across cluster]
-(<lambda> pid=4077, ip=10.164.0.179) 2026-02-11T02:56:20 - 8 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 1368.
-(<lambda> pid=4077, ip=10.164.0.179) 2026-02-11T02:56:20 - 8 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 1368 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-1368
-(<lambda> pid=4075, ip=10.164.0.170) 2026-02-11T02:56:12 - 12 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.36kit/39.1kit rate:1.3s/it remaining:13:10:28 elapsed:43:04 postfix:loss=1.07 [repeated 31x across cluster]
-(<lambda> pid=4042, ip=10.164.0.163) 2026-02-11T02:56:20 - 26 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-1368 for step 1368
-(<lambda> pid=4077, ip=10.164.0.156) 2026-02-11T02:56:20 - 24 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 1368. [repeated 31x across cluster]
-(<lambda> pid=4077, ip=10.164.0.156) 2026-02-11T02:56:20 - 24 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 1368 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-1368 [repeated 31x across cluster]
-(<lambda> pid=4077, ip=10.164.0.179) 2026-02-11T02:57:13 - 8 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.40kit/39.1kit rate:1.6s/it remaining:17:15:10 elapsed:44:05 postfix:loss=1.07
-(<lambda> pid=4079, ip=10.164.0.164) 2026-02-11T02:56:20 - 5 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-1368 for step 1368 [repeated 31x across cluster]
-(<lambda> pid=4042, ip=10.164.0.163) 2026-02-11T02:57:13 - 26 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.40kit/39.1kit rate:1.6s/it remaining:17:15:11 elapsed:44:05 postfix:loss=1.07
-(autoscaler +48m44s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +48m44s) Resized to 15960 CPUs, 532 TPUs.
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T02:57:38 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-0-12eab1/checkpoints/step-1368 for step 1368
-(<lambda> pid=4077, ip=10.164.0.156) 2026-02-11T02:57:13 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.40kit/39.1kit rate:1.6s/it remaining:17:15:10 elapsed:44:05 postfix:loss=1.07 [repeated 30x across cluster]
-(<lambda> pid=4040, ip=10.164.0.181) 2026-02-11T02:58:13 - 14 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.45kit/39.1kit rate:1.2s/it remaining:12:05:53 elapsed:45:05 postfix:loss=1.07
-(<lambda> pid=4042, ip=10.164.0.163) 2026-02-11T02:58:13 - 26 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.45kit/39.1kit rate:1.2s/it remaining:12:05:52 elapsed:45:05 postfix:loss=1.07
-(<lambda> pid=4041, ip=10.164.0.158) 2026-02-11T02:59:13 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.49kit/39.1kit rate:1.3s/it remaining:13:06:49 elapsed:46:06 postfix:loss=1.05 [repeated 31x across cluster]
-(autoscaler +50m40s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +50m40s) Resized to 15960 CPUs, 532 TPUs.
-(<lambda> pid=4077, ip=10.164.0.161) 2026-02-11T03:00:15 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.54kit/39.1kit rate:1.5s/it remaining:15:39:36 elapsed:47:07 postfix:loss=1.05 [repeated 32x across cluster]
-(<lambda> pid=4076, ip=10.164.0.176) 2026-02-11T03:00:58 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0096_parquet
-(<lambda> pid=4075, ip=10.164.0.167) 2026-02-11T03:00:15 - 16 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.54kit/39.1kit rate:1.5s/it remaining:15:39:36 elapsed:47:07 postfix:loss=1.05 [repeated 31x across cluster]
+(<lambda> pid=12398, ip=10.164.0.46) 2026-02-11T04:37:42 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.49kit/39.1kit rate:8.4it/s remaining:1:10:10 elapsed:06:53 postfix:- [repeated 63x across cluster]
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:38:23 - 1 - levanter.data.image - image.py:2648 - INFO :: Loading shard 2: 0129_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:38:30 - 0 - levanter.data.image - image.py:2774 - WARNING :: Prefetch failed (transient, attempt 1/5), rolling back iterator to shard 2 row 4974: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:38:30 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 2: 0128_parquet
+(<lambda> pid=12396, ip=10.164.0.125) 2026-02-11T04:38:47 - 43 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (4999 rows) in 106.77s
+(<lambda> pid=12396, ip=10.164.0.125) 2026-02-11T04:38:47 - 43 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0299_parquet
+(<lambda> pid=12355, ip=10.164.0.102) 2026-02-11T04:38:48 - 46 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0302_parquet
+(<lambda> pid=12423, ip=10.164.0.145) 2026-02-11T04:38:54 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.49kit/39.1kit rate:6.8it/s remaining:1:27:30 elapsed:08:04 postfix:loss=0.932
+(<lambda> pid=12355, ip=10.164.0.102) 2026-02-11T04:38:48 - 46 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5001 rows) in 112.93s
+(<lambda> pid=12557, ip=10.164.0.13) 2026-02-11T04:38:54 - 36 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5026 rows) in 107.80s
+(<lambda> pid=12557, ip=10.164.0.13) 2026-02-11T04:38:54 - 36 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0292_parquet
+(autoscaler +1h27m12s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h27m12s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12322, ip=10.164.0.100) 2026-02-11T04:38:54 - 21 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.49kit/39.1kit rate:6.8it/s remaining:1:27:30 elapsed:08:04 postfix:loss=0.932 [repeated 63x across cluster]
+(<lambda> pid=12505, ip=10.164.0.141) 2026-02-11T04:39:00 - 42 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5026 rows) in 133.86s
+(<lambda> pid=12505, ip=10.164.0.141) 2026-02-11T04:39:00 - 42 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0298_parquet
+(<lambda> pid=12466, ip=10.164.0.70) 2026-02-11T04:39:01 - 51 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5017 rows) in 125.40s
+(<lambda> pid=12466, ip=10.164.0.70) 2026-02-11T04:39:01 - 51 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0307_parquet
+(<lambda> pid=12337, ip=10.164.0.115) 2026-02-11T04:39:09 - 34 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5000 rows) in 133.79s [repeated 8x across cluster]
+(<lambda> pid=12337, ip=10.164.0.115) 2026-02-11T04:39:09 - 34 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0290_parquet [repeated 8x across cluster]
+(<lambda> pid=12479, ip=10.164.0.128) 2026-02-11T04:39:14 - 18 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5026 rows) in 109.35s [repeated 5x across cluster]
+(<lambda> pid=12479, ip=10.164.0.128) 2026-02-11T04:39:14 - 18 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0274_parquet [repeated 5x across cluster]
+(<lambda> pid=12300, ip=10.164.0.77) 2026-02-11T04:39:21 - 55 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5000 rows) in 121.43s [repeated 7x across cluster]
+(<lambda> pid=12300, ip=10.164.0.77) 2026-02-11T04:39:21 - 55 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0311_parquet [repeated 7x across cluster]
+(<lambda> pid=12434, ip=10.164.0.135) 2026-02-11T04:39:27 - 11 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5001 rows) in 137.55s [repeated 9x across cluster]
+(<lambda> pid=12371, ip=10.164.0.114) 2026-02-11T04:39:26 - 52 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0308_parquet [repeated 8x across cluster]
+(<lambda> pid=12446, ip=10.164.0.60) 2026-02-11T04:39:32 - 19 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5000 rows) in 130.15s [repeated 8x across cluster]
+(<lambda> pid=12446, ip=10.164.0.60) 2026-02-11T04:39:32 - 19 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0275_parquet [repeated 9x across cluster]
+(<lambda> pid=12340, ip=10.164.0.137) 2026-02-11T04:39:37 - 53 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5000 rows) in 128.07s [repeated 7x across cluster]
+(<lambda> pid=12340, ip=10.164.0.137) 2026-02-11T04:39:37 - 53 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0309_parquet [repeated 7x across cluster]
+(autoscaler +1h27m56s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h27m56s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12375, ip=10.164.0.96) 2026-02-11T04:39:43 - 56 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5000 rows) in 139.47s [repeated 7x across cluster]
+(<lambda> pid=12375, ip=10.164.0.96) 2026-02-11T04:39:43 - 56 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0312_parquet [repeated 7x across cluster]
+(<lambda> pid=12445, ip=10.164.0.66) 2026-02-11T04:39:54 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.54kit/39.1kit rate:1.3it/s remaining:7:36:48 elapsed:09:04 postfix:loss=0.923
+(<lambda> pid=12371, ip=10.164.0.27) 2026-02-11T04:39:48 - 63 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5017 rows) in 132.82s [repeated 5x across cluster]
+(<lambda> pid=12371, ip=10.164.0.27) 2026-02-11T04:39:48 - 63 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0319_parquet [repeated 5x across cluster]
+(<lambda> pid=12365, ip=10.164.0.58) 2026-02-11T04:39:54 - 8 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.54kit/39.1kit rate:1.3it/s remaining:7:44:17 elapsed:09:04 postfix:loss=0.923 [repeated 63x across cluster]
+(<lambda> pid=12331, ip=10.164.0.81) 2026-02-11T04:40:00 - 28 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 3 (5000 rows) in 137.89s
+(<lambda> pid=12331, ip=10.164.0.81) 2026-02-11T04:40:00 - 28 - levanter.data.image - image.py:2622 - INFO :: Loading shard 4: 0284_parquet
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:40:08 - 1 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (5002 rows) in 105.06s
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:40:08 - 1 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0193_cleaned_parquet
+(autoscaler +1h28m35s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h28m35s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:40:27 - 0 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (4999 rows) in 116.48s
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:40:27 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0192_cleaned_parquet
+(<lambda> pid=12396, ip=10.164.0.125) 2026-02-11T04:40:29 - 43 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4973 rows) in 102.17s
+(<lambda> pid=12299, ip=10.164.0.127) 2026-02-11T04:40:35 - 50 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4981 rows) in 81.82s
+(<lambda> pid=12557, ip=10.164.0.13) 2026-02-11T04:40:39 - 36 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4996 rows) in 105.36s
+(<lambda> pid=12396, ip=10.164.0.109) 2026-02-11T04:40:44 - 54 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4981 rows) in 100.94s [repeated 3x across cluster]
+(<lambda> pid=12360, ip=10.164.0.144) 2026-02-11T04:40:50 - 24 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 3593.
+(<lambda> pid=12360, ip=10.164.0.144) 2026-02-11T04:40:50 - 24 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 3593 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3593
+(<lambda> pid=12355, ip=10.164.0.102) 2026-02-11T04:40:47 - 46 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4981 rows) in 118.32s [repeated 2x across cluster]
+(<lambda> pid=12379, ip=10.164.0.84) 2026-02-11T04:40:50 - 26 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3593 for step 3593
+(<lambda> pid=12304, ip=10.164.0.99) 2026-02-11T04:40:50 - 29 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 3593. [repeated 63x across cluster]
+(<lambda> pid=12304, ip=10.164.0.99) 2026-02-11T04:40:50 - 29 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 3593 to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3593 [repeated 63x across cluster]
+(<lambda> pid=12434, ip=10.164.0.135) 2026-02-11T04:40:55 - 11 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4973 rows) in 88.13s [repeated 2x across cluster]
+(<lambda> pid=12357, ip=10.164.0.120) 2026-02-11T04:40:50 - 57 - levanter.checkpoint - checkpoint.py:375 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3593 for step 3593 [repeated 63x across cluster]
+(<lambda> pid=12357, ip=10.164.0.120) 2026-02-11T04:40:56 - 57 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.60kit/39.1kit rate:2.4s/it remaining:23:52:59 elapsed:10:06 postfix:loss=0.936
+(autoscaler +1h29m14s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h29m14s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12469, ip=10.164.0.10) 2026-02-11T04:41:01 - 5 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4982 rows) in 104.60s [repeated 8x across cluster]
+(<lambda> pid=12469, ip=10.164.0.143) 2026-02-11T04:40:56 - 48 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.60kit/39.1kit rate:2.4s/it remaining:23:56:44 elapsed:10:06 postfix:loss=0.936 [repeated 63x across cluster]
+(<lambda> pid=12376, ip=10.164.0.74) 2026-02-11T04:41:06 - 30 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (5006 rows) in 112.74s [repeated 5x across cluster]
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:41:08 - 1 - levanter.data.image - image.py:2774 - WARNING :: Prefetch failed (transient, attempt 2/5), rolling back iterator to shard 2 row 4981: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:41:08 - 1 - levanter.data.image - image.py:2648 - INFO :: Loading shard 2: 0129_parquet
+(<lambda> pid=12478, ip=10.164.0.148) 2026-02-11T04:41:11 - 16 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4996 rows) in 114.08s [repeated 6x across cluster]
+(<lambda> pid=12398, ip=10.164.0.46) 2026-02-11T04:41:18 - 17 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4982 rows) in 115.53s [repeated 5x across cluster]
+(<lambda> pid=12300, ip=10.164.0.77) 2026-02-11T04:41:24 - 55 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4996 rows) in 122.52s [repeated 6x across cluster]
+(autoscaler +1h29m39s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h29m39s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12386, ip=10.164.0.31) 2026-02-11T04:41:29 - 2 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (5027 rows) in 109.17s [repeated 6x across cluster]
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:41:30 - 0 - levanter.data.image - image.py:2774 - WARNING :: Prefetch failed (transient, attempt 2/5), rolling back iterator to shard 2 row 4974: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:41:30 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 2: 0128_parquet
+(<lambda> pid=12315, ip=10.164.0.41) 2026-02-11T04:41:37 - 60 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4983 rows) in 122.13s [repeated 2x across cluster]
+(autoscaler +1h29m58s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h29m58s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12304, ip=10.164.0.99) 2026-02-11T04:41:43 - 29 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4983 rows) in 116.73s [repeated 10x across cluster]
+(<lambda> pid=12561, ip=10.164.0.24) 2026-02-11T04:41:50 - 12 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4995 rows) in 126.01s [repeated 3x across cluster]
+(<lambda> pid=12375, ip=10.164.0.96) 2026-02-11T04:41:56 - 56 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.64kit/39.1kit rate:1.2it/s remaining:8:32:22 elapsed:11:06 postfix:loss=0.932
+(<lambda> pid=12371, ip=10.164.0.27) 2026-02-11T04:41:55 - 63 - levanter.data.image - image.py:2627 - INFO :: Loaded shard 4 (4996 rows) in 127.61s
+(autoscaler +1h30m23s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h30m23s) Resized to 12120 CPUs, 404 TPUs.
+(autoscaler +1h30m42s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h30m42s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:42:36 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 10.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12406, ip=10.164.0.149) 2026-02-11T04:41:56 - 33 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 3.64kit/39.1kit rate:1.2it/s remaining:8:32:22 elapsed:11:06 postfix:loss=0.932 [repeated 63x across cluster]
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:42:38 - 1 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (5002 rows) in 90.09s
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:42:38 - 1 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0193_cleaned_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:42:46 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 20.0 seconds. Waiting for 32 image items.
+(autoscaler +1h31m8s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h31m8s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:42:56 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 30.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:06 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 40.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:09 - 0 - levanter.checkpoint - checkpoint.py:383 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3593 for step 3593
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:09 - 0 - levanter.checkpoint - checkpoint.py:231 - INFO :: Deleting old temporary checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3488 after saving new checkpoint.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:09 - 0 - levanter.checkpoint - checkpoint.py:263 - INFO :: Removing checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3488
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:09 - 0 - levanter.checkpoint - checkpoint.py:271 - INFO :: Deleting old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3488
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:09 - 0 - levanter.checkpoint - checkpoint.py:275 - INFO :: Deleted old checkpoint from gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/checkpoints/step-3488 in 0.24 seconds
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:16 - 0 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (4999 rows) in 105.83s
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:16 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0192_cleaned_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:16 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 50.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:26 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 60.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:43:32 - 1 - levanter.data.image - image.py:2774 - WARNING :: Prefetch failed (transient, attempt 3/5), rolling back iterator to shard 2 row 4981: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:43:32 - 1 - levanter.data.image - image.py:2648 - INFO :: Loading shard 2: 0129_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:36 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 70.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:46 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 80.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:43:56 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 90.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:44:06 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 100.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:44:12 - 0 - levanter.data.image - image.py:2774 - WARNING :: Prefetch failed (transient, attempt 3/5), rolling back iterator to shard 2 row 4974: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:44:13 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 2: 0128_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:44:16 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 110.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:44:27 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 120.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:44:37 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 130.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:44:47 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 140.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:44:54 - 1 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (5002 rows) in 81.86s
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:44:55 - 1 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0193_cleaned_parquet
+(autoscaler +1h33m11s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h33m11s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h33m11s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:44:57 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 150.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:45:07 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 160.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:45:17 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 170.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:45:27 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 180.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:45:37 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 190.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:45:38 - 0 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (4999 rows) in 85.99s
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:45:39 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0192_cleaned_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:45:47 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 200.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:45:49 - 1 - levanter.data.image - image.py:2774 - WARNING :: Prefetch failed (transient, attempt 4/5), rolling back iterator to shard 2 row 4981: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:45:49 - 1 - levanter.data.image - image.py:2648 - INFO :: Loading shard 2: 0129_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:45:57 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 210.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:46:07 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 220.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:46:17 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 230.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:46:27 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 240.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:46:35 - 0 - levanter.data.image - image.py:2774 - WARNING :: Prefetch failed (transient, attempt 4/5), rolling back iterator to shard 2 row 4974: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:46:35 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 2: 0128_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:46:37 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 250.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:46:47 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 260.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:46:57 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 270.0 seconds. Waiting for 32 image items.
+(autoscaler +1h35m14s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h35m14s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:47:02 - 1 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (5002 rows) in 73.46s
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:47:02 - 1 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0193_cleaned_parquet
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:47:07 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 280.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:47:17 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 290.0 seconds. Waiting for 32 image items.
+(autoscaler +1h35m37s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h35m37s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:47:27 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 300.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:47:37 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 310.0 seconds. Waiting for 32 image items.
+(autoscaler +1h35m57s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h35m57s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:47:47 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 320.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:47:56 - 0 - levanter.data.image - image.py:2652 - INFO :: Loaded shard 2 (4999 rows) in 80.49s
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:47:56 - 0 - levanter.data.image - image.py:2648 - INFO :: Loading shard 3: 0192_cleaned_parquet
+(<lambda> pid=12360, ip=10.164.0.7) 2026-02-11T04:47:56 - 1 - levanter.data.image - image.py:2768 - ERROR :: Prefetch failed 5 times consecutively on same batch: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:47:58 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 330.0 seconds. Waiting for 32 image items.
+(autoscaler +1h36m23s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h36m23s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:48:08 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 340.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:48:18 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 350.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:48:28 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 360.0 seconds. Waiting for 32 image items.
+(autoscaler +1h36m47s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h36m47s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:48:38 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 370.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:48:48 - 0 - root - loader.py:498 - WARNING :: Data loading is taking a long time: 380.0 seconds. Waiting for 32 image items.
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:48:52 - 0 - levanter.data.image - image.py:2768 - ERROR :: Prefetch failed 5 times consecutively on same batch: Nested data conversions not implemented for chunked array outputs
+(<lambda> pid=12508, ip=10.164.0.78) 2026-02-11T04:48:52 - 0 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
+(<lambda> pid=12508, ip=10.164.0.78) wandb: updating run metadata
+(<lambda> pid=12508, ip=10.164.0.78) wandb: uploading wandb-summary.json; uploading config.yaml
+(autoscaler +1h37m8s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h37m8s) Resized to 12120 CPUs, 404 TPUs.
+(<lambda> pid=12508, ip=10.164.0.78) wandb: uploading summary, console lines 138-140
+(<lambda> pid=12508, ip=10.164.0.78) wandb: 
+(<lambda> pid=12508, ip=10.164.0.78) wandb: Run summary:
+(<lambda> pid=12508, ip=10.164.0.78) wandb:                                                                       backend tpu
+(<lambda> pid=12508, ip=10.164.0.78) wandb:                                                                   global_step 3703
+(<lambda> pid=12508, ip=10.164.0.78) wandb:                   grad/norm/language_model.embeddings.token_embeddings.weight 0.30098
+(<lambda> pid=12508, ip=10.164.0.78) wandb:          grad/norm/language_model.transformer.layers.0.input_layernorm.weight 0.01811
+(<lambda> pid=12508, ip=10.164.0.78) wandb:            grad/norm/language_model.transformer.layers.0.mlp.down_proj.weight 0.03362
+(<lambda> pid=12508, ip=10.164.0.78) wandb:            grad/norm/language_model.transformer.layers.0.mlp.gate_proj.weight 0.01963
+(<lambda> pid=12508, ip=10.164.0.78) wandb:              grad/norm/language_model.transformer.layers.0.mlp.up_proj.weight 0.02612
+(<lambda> pid=12508, ip=10.164.0.78) wandb: grad/norm/language_model.transformer.layers.0.post_attention_layernorm.weight 0.00529
+(<lambda> pid=12508, ip=10.164.0.78) wandb:         grad/norm/language_model.transformer.layers.0.self_attn.k_norm.weight 0.00091
+(<lambda> pid=12508, ip=10.164.0.78) wandb:         grad/norm/language_model.transformer.layers.0.self_attn.k_proj.weight 0.01472
+(<lambda> pid=12508, ip=10.164.0.78) wandb:                                                                        +1,511 ...
+(<lambda> pid=12508, ip=10.164.0.78) wandb: 
+(<lambda> pid=12508, ip=10.164.0.78) wandb: 🚀 View run vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3 at: https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3
+(<lambda> pid=12508, ip=10.164.0.78) wandb: ⭐️ View project at: https://wandb.ai/rui_li/marin-vlm
+(<lambda> pid=12508, ip=10.164.0.78) wandb: Synced 5 W&B file(s), 0 media file(s), 6 artifact file(s) and 0 other file(s)
+(<lambda> pid=12508, ip=10.164.0.78) wandb: Find logs at: ./wandb/run-20260211_043045-vlm-official-qwen3-1.7b-round2-correct-mixed-1-b57cb3/logs
+(SliceActor pid=14865, ip=10.164.0.129) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(SliceActor pid=14865, ip=10.164.0.129)                      ^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2676, in _get_next_item
+(SliceActor pid=14865, ip=10.164.0.129)     self._load_current_shard()
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2651, in _load_current_shard
+(SliceActor pid=14865, ip=10.164.0.129)     self._current_shard_data = list(self.source.open_shard(shard_name))
+(SliceActor pid=14865, ip=10.164.0.129)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row
+(SliceActor pid=14865, ip=10.164.0.129)     table = pq.read_table(f)
+(SliceActor pid=14865, ip=10.164.0.129)             ^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table
+(SliceActor pid=14865, ip=10.164.0.129)     return dataset.read(columns=columns, use_threads=use_threads,
+(SliceActor pid=14865, ip=10.164.0.129)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read
+(SliceActor pid=14865, ip=10.164.0.129)     table = self._dataset.to_table(
+(SliceActor pid=14865, ip=10.164.0.129)             ^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table
+(SliceActor pid=14865, ip=10.164.0.129)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table
+(SliceActor pid=14865, ip=10.164.0.129)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status
+(SliceActor pid=14865, ip=10.164.0.129)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
+(SliceActor pid=14865, ip=10.164.0.129) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
+(SliceActor pid=14865, ip=10.164.0.129) 
+(SliceActor pid=14865, ip=10.164.0.129) The above exception was the direct cause of the following exception:
+(SliceActor pid=14865, ip=10.164.0.129) 
+(SliceActor pid=14865, ip=10.164.0.129) ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=14865, ip=10.164.0.129)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=14865, ip=10.164.0.129)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/main/train_vlm.py", line 902, in main
+(SliceActor pid=14865, ip=10.164.0.129)     trainer.train(state, train_loader)
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 538, in train
+(SliceActor pid=14865, ip=10.164.0.129)     for info in self.training_steps(state, train_loader):
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 522, in training_steps
+(SliceActor pid=14865, ip=10.164.0.129)     example = next(iter_data)
+(SliceActor pid=14865, ip=10.164.0.129)               ^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 258, in __next__
+(SliceActor pid=14865, ip=10.164.0.129)     batch = next(self._batches)
+(SliceActor pid=14865, ip=10.164.0.129)             ^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 76, in __next__
+(SliceActor pid=14865, ip=10.164.0.129)     batch.reraise()
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 172, in reraise
+(SliceActor pid=14865, ip=10.164.0.129)     raise self.exc.with_traceback(self.tb.as_traceback())
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 133, in _produce_batches_async
+(SliceActor pid=14865, ip=10.164.0.129)     async for batch in iterator:
+(SliceActor pid=14865, ip=10.164.0.129)     ^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 311, in _produce_batches
+(SliceActor pid=14865, ip=10.164.0.129)     batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
+(SliceActor pid=14865, ip=10.164.0.129)     ^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 4691, in _do_retrieve_batch_of_batches
+(SliceActor pid=14865, ip=10.164.0.129)     individual_datums = await self.run_and_report_slowness(
+(SliceActor pid=14865, ip=10.164.0.129)     ^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 503, in run_and_report_slowness
+(SliceActor pid=14865, ip=10.164.0.129)     result = await task
+(SliceActor pid=14865, ip=10.164.0.129)     ^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/mixture.py", line 264, in get_batch
+(SliceActor pid=14865, ip=10.164.0.129)     batches = await asyncio.gather(*batch_futures)
+(SliceActor pid=14865, ip=10.164.0.129)     ^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2853, in get_batch
+(SliceActor pid=14865, ip=10.164.0.129)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+(SliceActor pid=14865, ip=10.164.0.129)     ^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+(SliceActor pid=14865, ip=10.164.0.129)     result = self.fn(*self.args, **self.kwargs)
+(SliceActor pid=14865, ip=10.164.0.129)     ^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2816, in _get_from_cache_or_process
+(SliceActor pid=14865, ip=10.164.0.129)     raise RuntimeError(
+(SliceActor pid=14865, ip=10.164.0.129)     ^^^^^^^^^^^^^^^^^
+(SliceActor pid=14865, ip=10.164.0.129) RuntimeError: Prefetch thread died with error: Nested data conversions not implemented for chunked array outputs
+(run_on_pod_ray pid=12241, ip=10.164.0.10) Task error ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(run_on_pod_ray pid=12241, ip=10.164.0.10) 
+(run_on_pod_ray pid=12241, ip=10.164.0.10) 
+(run_on_pod_ray pid=12241, ip=10.164.0.10) ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(run_on_pod_ray pid=12241, ip=10.164.0.10) Traceback (most recent call last):
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=12241, ip=10.164.0.10)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=12241, ip=10.164.0.10) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(run_on_pod_ray pid=12241, ip=10.164.0.10) 
+(run_on_pod_ray pid=12241, ip=10.164.0.10) 
+(run_on_pod_ray pid=12241, ip=10.164.0.10) ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(<lambda> pid=12508, ip=10.164.0.78) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f95a1bee020>
+(<lambda> pid=12508, ip=10.164.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=12508, ip=10.164.0.78)     conn.teardown(hooks.exit_code)
+(<lambda> pid=12508, ip=10.164.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=12508, ip=10.164.0.78)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=12508, ip=10.164.0.78)     return future.result()
+(<lambda> pid=12508, ip=10.164.0.78)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=12508, ip=10.164.0.78)     return self.__get_result()
+(<lambda> pid=12508, ip=10.164.0.78)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=12508, ip=10.164.0.78)     raise self._exception
+(<lambda> pid=12508, ip=10.164.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=12508, ip=10.164.0.78)     return await fn()
+(<lambda> pid=12508, ip=10.164.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=12508, ip=10.164.0.78)     await self._client.close()
+(<lambda> pid=12508, ip=10.164.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=12508, ip=10.164.0.78)     await self._writer.wait_closed()
+(<lambda> pid=12508, ip=10.164.0.78)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=12508, ip=10.164.0.78)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=12508, ip=10.164.0.78) BrokenPipeError: [Errno 32] Broken pipe
+(<lambda> pid=12508, ip=10.164.0.78) E0211 04:48:56.183527   16729 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=12508, ip=10.164.0.78) F0211 04:48:56.183638   16729 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=12508, ip=10.164.0.78) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=12508, ip=10.164.0.78) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
+(run_on_pod_ray pid=12241, ip=10.164.0.10) Failed 2 times. Continuing to retry.
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=12241, ip=10.164.0.10) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(run_on_pod_ray pid=12241, ip=10.164.0.10) 
+(run_on_pod_ray pid=12241, ip=10.164.0.10) 
+(run_on_pod_ray pid=12241, ip=10.164.0.10) ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(run_levanter_train_vlm pid=12240, ip=10.164.0.10) Job 140563658726192 failed with message: ray::run_on_pod_ray() (pid=12241, ip=10.164.0.10)
+(run_levanter_train_vlm pid=12240, ip=10.164.0.10)     raise problem or RuntimeError("TPU job failed too many times")
+(run_levanter_train_vlm pid=12240, ip=10.164.0.10) 
+(run_levanter_train_vlm pid=12240, ip=10.164.0.10) 
+(run_levanter_train_vlm pid=12240, ip=10.164.0.10) ray::<lambda>() (pid=12508, ip=10.164.0.78)
+(run_on_pod_ray pid=12241, ip=10.164.0.10) Failed too many times
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=12241, ip=10.164.0.10) 
+(run_on_pod_ray pid=12241, ip=10.164.0.10) 
+(run_on_pod_ray pid=12241, ip=10.164.0.10) ray::<lambda>() (pid=12508, ip=10.164.0.78)
+2026-02-11 04:48:57,224 WARNING cluster.py:350 -- Job 137233138626512 failed with message: ray::run_levanter_train_vlm() (pid=12240, ip=10.164.0.10)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
+    cluster.wait(job_id, raise_on_failure=True)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/base.py", line 631, in wait
+    return self._wait_single(job_id, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
+RuntimeError: Job 140563658726192 failed with status failed and error: ray::run_on_pod_ray() (pid=12241, ip=10.164.0.10)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=12508, ip=10.164.0.78)
+                     ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2676, in _get_next_item
+    self._load_current_shard()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2651, in _load_current_shard
+    self._current_shard_data = list(self.source.open_shard(shard_name))
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row
+    table = pq.read_table(f)
+            ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table
+    return dataset.read(columns=columns, use_threads=use_threads,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read
+    table = self._dataset.to_table(
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table
+  File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table
+  File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status
+  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
+pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
+
+The above exception was the direct cause of the following exception:
+
+ray::<lambda>() (pid=12508, ip=10.164.0.78)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/main/train_vlm.py", line 902, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 538, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 522, in training_steps
+    example = next(iter_data)
+              ^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 258, in __next__
+    batch = next(self._batches)
+            ^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 76, in __next__
+    batch.reraise()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 172, in reraise
+    raise self.exc.with_traceback(self.tb.as_traceback())
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 133, in _produce_batches_async
+    async for batch in iterator:
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 311, in _produce_batches
+    batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 4691, in _do_retrieve_batch_of_batches
+    individual_datums = await self.run_and_report_slowness(
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 503, in run_and_report_slowness
+    result = await task
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/mixture.py", line 264, in get_batch
+    batches = await asyncio.gather(*batch_futures)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2853, in get_batch
+    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+    ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2816, in _get_from_cache_or_process
+    raise RuntimeError(
+    ^^^^^^^^^^^^^^^^^
+RuntimeError: Prefetch thread died with error: Nested data conversions not implemented for chunked array outputs
+2026-02-11 04:48:57,224 INFO executor.py:796 -- Waiting for 137233138626512 to finish for step checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-1
+2026-02-11 04:48:57,224 - INFO - Starting wait for job 137233138626512
+2026-02-11 04:48:57,225 WARNING cluster.py:350 -- Job 137233138626512 failed with message: ray::run_levanter_train_vlm() (pid=12240, ip=10.164.0.10)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
+    cluster.wait(job_id, raise_on_failure=True)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/base.py", line 631, in wait
+    return self._wait_single(job_id, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
+RuntimeError: Job 140563658726192 failed with status failed and error: ray::run_on_pod_ray() (pid=12241, ip=10.164.0.10)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=12508, ip=10.164.0.78)
+                     ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2676, in _get_next_item
+    self._load_current_shard()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2651, in _load_current_shard
+    self._current_shard_data = list(self.source.open_shard(shard_name))
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row
+    table = pq.read_table(f)
+            ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table
+    return dataset.read(columns=columns, use_threads=use_threads,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read
+    table = self._dataset.to_table(
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table
+  File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table
+  File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status
+  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
+pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
+
+The above exception was the direct cause of the following exception:
+
+ray::<lambda>() (pid=12508, ip=10.164.0.78)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/main/train_vlm.py", line 902, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 538, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 522, in training_steps
+    example = next(iter_data)
+              ^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 258, in __next__
+    batch = next(self._batches)
+            ^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 76, in __next__
+    batch.reraise()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 172, in reraise
+    raise self.exc.with_traceback(self.tb.as_traceback())
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 133, in _produce_batches_async
+    async for batch in iterator:
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 311, in _produce_batches
+    batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 4691, in _do_retrieve_batch_of_batches
+    individual_datums = await self.run_and_report_slowness(
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 503, in run_and_report_slowness
+    result = await task
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/mixture.py", line 264, in get_batch
+    batches = await asyncio.gather(*batch_futures)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2853, in get_batch
+    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+    ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2816, in _get_from_cache_or_process
+    raise RuntimeError(
+    ^^^^^^^^^^^^^^^^^
+RuntimeError: Prefetch thread died with error: Nested data conversions not implemented for chunked array outputs
+2026-02-11 04:48:57,225 - INFO - Job 137233138626512 completed with status failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/experiments/VLM/demo_vlm_train_round2_eu_west4.py", line 259, in <module>
+    executor_main(steps=[vlm_training])
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
+    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/marin/src/marin/execution/executor.py", line 743, in run
+    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/marin/src/marin/execution/executor.py", line 207, in wait
+    raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
+RuntimeError: Job 137233138626512 failed: ray::run_levanter_train_vlm() (pid=12240, ip=10.164.0.10)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
+    cluster.wait(job_id, raise_on_failure=True)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/base.py", line 631, in wait
+    return self._wait_single(job_id, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
+RuntimeError: Job 140563658726192 failed with status failed and error: ray::run_on_pod_ray() (pid=12241, ip=10.164.0.10)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=12508, ip=10.164.0.78)
+                     ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2676, in _get_next_item
+    self._load_current_shard()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2651, in _load_current_shard
+    self._current_shard_data = list(self.source.open_shard(shard_name))
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row
+    table = pq.read_table(f)
+            ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table
+    return dataset.read(columns=columns, use_threads=use_threads,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read
+    table = self._dataset.to_table(
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table
+  File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table
+  File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status
+  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
+pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
+
+The above exception was the direct cause of the following exception:
+
+ray::<lambda>() (pid=12508, ip=10.164.0.78)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/main/train_vlm.py", line 902, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 538, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 522, in training_steps
+    example = next(iter_data)
+              ^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 258, in __next__
+    batch = next(self._batches)
+            ^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 76, in __next__
+    batch.reraise()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 172, in reraise
+    raise self.exc.with_traceback(self.tb.as_traceback())
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 133, in _produce_batches_async
+    async for batch in iterator:
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 311, in _produce_batches
+    batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 4691, in _do_retrieve_batch_of_batches
+    individual_datums = await self.run_and_report_slowness(
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 503, in run_and_report_slowness
+    result = await task
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/mixture.py", line 264, in get_batch
+    batches = await asyncio.gather(*batch_futures)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2853, in get_batch
+    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+    ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+    ^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2816, in _get_from_cache_or_process
+    raise RuntimeError(
+    ^^^^^^^^^^^^^^^^^
+RuntimeError: Prefetch thread died with error: Nested data conversions not implemented for chunked array outputs
+(run_on_pod_ray pid=12241, ip=10.164.0.10)                      ^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2676, in _get_next_item [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     self._load_current_shard() [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2651, in _load_current_shard [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     self._current_shard_data = list(self.source.open_shard(shard_name)) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 186, in open_shard_at_row [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     table = pq.read_table(f) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1926, in read_table [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     return dataset.read(columns=columns, use_threads=use_threads, [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1552, in read [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     table = self._dataset.to_table( [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "pyarrow/_dataset.pyx", line 589, in pyarrow._dataset.Dataset.to_table [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "pyarrow/_dataset.pyx", line 3969, in pyarrow._dataset.Scanner.to_table [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10) The above exception was the direct cause of the following exception: [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/main/train_vlm.py", line 902, in main [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     trainer.train(state, train_loader) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 538, in train [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     for info in self.training_steps(state, train_loader): [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/trainer.py", line 522, in training_steps [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     example = next(iter_data) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)               ^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 76, in __next__ [repeated 10x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     batch = next(self._batches) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^ [repeated 14x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     batch.reraise() [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 172, in reraise [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     raise self.exc.with_traceback(self.tb.as_traceback()) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/utils/background_iterable.py", line 133, in _produce_batches_async [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     async for batch in iterator: [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     ^^^^^^^^^^^^^^^^^ [repeated 40x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 311, in _produce_batches [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 4691, in _do_retrieve_batch_of_batches [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     individual_datums = await self.run_and_report_slowness( [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/loader.py", line 503, in run_and_report_slowness [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     result = await task [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2853, in get_batch [repeated 10x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     batches = await asyncio.gather(*batch_futures) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run [repeated 6x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     result = self.fn(*self.args, **self.kwargs) [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/levanter/src/levanter/data/image.py", line 2816, in _get_from_cache_or_process [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     raise RuntimeError( [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10) RuntimeError: Prefetch thread died with error: Nested data conversions not implemented for chunked array outputs [repeated 5x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10) Traceback (most recent call last): [repeated 3x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_7a8f30c90963b7d1/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray [repeated 3x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f)) [repeated 2x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10)                                                  ^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=12241, ip=10.164.0.10) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=12508, ip=10.164.0.78) [repeated 2x across cluster]
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 
