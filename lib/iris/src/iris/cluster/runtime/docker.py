@@ -364,12 +364,12 @@ exec {quoted_cmd}
 
         logger.info("Profiling container %s for %ds (format=%s)", container_id, duration_seconds, output_format)
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
 
             read_cmd = ["docker", "exec", container_id, "cat", output_path]
-            read_result = subprocess.run(read_cmd, capture_output=True, timeout=30)
+            read_result = subprocess.run(read_cmd, capture_output=True, timeout=5)
             if read_result.returncode != 0:
                 raise RuntimeError(f"Failed to read profile: {read_result.stderr}")
 
