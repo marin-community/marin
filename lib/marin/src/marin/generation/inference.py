@@ -74,6 +74,13 @@ class TextGenerationInferenceConfig:
     # This is used for deduplicating work in the case when we are resuming from a checkpoint.
     checkpoint_id_column: str | None = None
 
+    # Output file sizing - cap the number of rows per output parquet file to checkpoint progress
+    # more frequently (useful when TPU nodes are preemptible and get preempted often)
+    max_rows_per_file: int | None = None
+
+    # Column filtering - drop these columns early to avoid Arrow conversion issues with nested objects
+    drop_columns: list[str] | None = None
+
 
 class OneToOneFilenameProvider(FilenameProvider):
     def __init__(self, files: list[str], input_path: str):
@@ -118,25 +125,38 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
-    # Clear JAX_PLATFORMS so TPU devices are detected correctly
-    runtime_env = {"env_vars": {"JAX_PLATFORMS": "tpu"}}
+    # Enable both TPU and CPU backends so TPU devices are detected correctly
+    # and weight loading (which uses jax.devices("cpu")) also works.
+    runtime_env = {"env_vars": {"JAX_PLATFORMS": "tpu,cpu"}}
 
-    # Request TPU resources - use the tensor_parallel_size from config
-    # which should match the number of TPU chips needed
-    resources: dict[str, float] = {"TPU": config.tensor_parallel_size}
-
-    # Also request the specific TPU type resource to ensure scheduling on the correct node type.
+    # Request the specific TPU type to ensure scheduling on the correct node type.
     # The cluster config defines resources like "TPU-v5p-8-head: 1" for each TPU type.
+    # We set the resource to 0.99 here to leave room for CPU-only jobs to get scheduled
+    # on the same node.
+    resources: dict[str, float] = {}
     if config.resource_config and config.resource_config.device:
         tpu_variant = config.resource_config.device.variant
         tpu_head_resource = f"TPU-{tpu_variant}-head"
-        resources[tpu_head_resource] = 1
+        resources[tpu_head_resource] = 0.99
 
     return {
         "resources": resources,
         "max_restarts": -1,
         "runtime_env": runtime_env,
     }
+
+
+def get_lightweight_task_ray_remote_args(config: TextGenerationInferenceConfig) -> dict[str, Any]:
+    """Get ray_remote_args for lightweight tasks (read/write/filter) to pin them to the same node type as inference.
+
+    This prevents the autoscaler from spinning up different (potentially larger) TPU nodes
+    just to run lightweight tasks that only need CPU.
+    """
+    if config.resource_config and config.resource_config.device and isinstance(config.resource_config.device, TpuConfig):
+        tpu_variant = config.resource_config.device.variant
+        tpu_head_resource = f"TPU-{tpu_variant}-head"
+        return {"resources": {tpu_head_resource: 0.0001}}
+    return {}
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
@@ -150,6 +170,10 @@ def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
         files = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
         ray_data_read_kwargs["override_num_blocks"] = len(files)
 
+    lightweight_args = get_lightweight_task_ray_remote_args(config)
+    if lightweight_args:
+        ray_data_read_kwargs["ray_remote_args"] = lightweight_args
+
     return ray_data_read_kwargs
 
 
@@ -162,6 +186,13 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
         ray_data_write_kwargs["filename_provider"] = OverwriteOutputFiletypeFilenameProvider(
             config.output_filetype_override
         )
+
+    if config.max_rows_per_file is not None:
+        ray_data_write_kwargs["max_rows_per_file"] = config.max_rows_per_file
+
+    lightweight_args = get_lightweight_task_ray_remote_args(config)
+    if lightweight_args:
+        ray_data_write_kwargs["ray_remote_args"] = lightweight_args
 
     return ray_data_write_kwargs
 
@@ -216,7 +247,6 @@ def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[
 
 
 def find_all_finished_ids(checkpoint_path: str, filetype: str, id_column: str | dict[str, str]):
-    import sys
 
     files = fsspec_glob(os.path.join(checkpoint_path, f"**/*.{filetype}"))
     print(f"[CHECKPOINT] Found {len(files)} checkpoint files to scan", flush=True)
@@ -230,7 +260,7 @@ def find_all_finished_ids(checkpoint_path: str, filetype: str, id_column: str | 
     # Process files in smaller batches to avoid overwhelming the scheduler
     batch_size = 20
     for i in range(0, len(files), batch_size):
-        batch_files = files[i:i + batch_size]
+        batch_files = files[i : i + batch_size]
         batch_num = i // batch_size + 1
         total_batches = (len(files) + batch_size - 1) // batch_size
         print(f"[CHECKPOINT] Processing batch {batch_num}/{total_batches}", flush=True)
@@ -284,15 +314,19 @@ def run_inference(config: TextGenerationInferenceConfig):
     else:
         ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
 
+    # Drop columns early to avoid Arrow conversion issues with nested objects
+    if config.drop_columns:
+        ds = ds.drop_columns(config.drop_columns)
+
     # Capture column types from input schema to ensure consistent types when writing.
     # This prevents schema unification errors when batches have all-null columns
     # (which PyArrow may infer as float instead of their correct type).
     input_schema = ds.schema()
     column_types = _get_column_types_from_schema(input_schema) if input_schema else {}
 
-    assert (config.template_path or config.template) and not (config.template_path and config.template), (
-        "Must provide either a template or a template path, but not both"
-    )
+    assert (config.template_path or config.template) and not (
+        config.template_path and config.template
+    ), "Must provide either a template or a template path, but not both"
 
     if config.template_path:
         with fsspec.open(config.template_path, "r", compression="infer") as f:
@@ -314,12 +348,19 @@ def run_inference(config: TextGenerationInferenceConfig):
             finished_ids = find_all_finished_ids(config.output_path, output_filetype, config.checkpoint_id_column)
             logger.info(f"Found {len(finished_ids)} already-processed IDs to filter out")
             if len(finished_ids) > 0:
+                filter_ray_remote_args = get_lightweight_task_ray_remote_args(config)
                 if isinstance(config.checkpoint_id_column, dict):
                     dataset_column = next(iter(config.checkpoint_id_column.keys()))
                     metadata_key_column = next(iter(config.checkpoint_id_column.values()))
-                    ds = ds.filter(lambda x: x[dataset_column][metadata_key_column] not in finished_ids)
+                    ds = ds.filter(
+                        lambda x: x[dataset_column][metadata_key_column] not in finished_ids,
+                        **filter_ray_remote_args,
+                    )
                 else:
-                    ds = ds.filter(lambda x: x[config.checkpoint_id_column] not in finished_ids)
+                    ds = ds.filter(
+                        lambda x: x[config.checkpoint_id_column] not in finished_ids,
+                        **filter_ray_remote_args,
+                    )
                 # Note: Removed ds.count() call here - it was blocking and causing jobs to hang
                 # The filter will still work lazily during inference
         else:

@@ -43,7 +43,7 @@ open_thoughts_4_math_32768 = ExecutorStep(
 generation_steps = []
 prev_step = open_thoughts_4_math_32768
 
-for i in range(2, 9):
+for i in range(6, 7):  # TODO (moojink): Change back to (2, 9)
     step = ExecutorStep(
         name=f"documents/open-thoughts-4-30k-math-qwen3-32b-annotated-o32768-n{i}",
         fn=run_generation_inference,
@@ -51,7 +51,6 @@ for i in range(2, 9):
             # IO specific
             input_path=prev_step,
             output_path=this_output_path(),
-
             # Model specific — stream weights directly from GCS to avoid local disk space issues
             model_name="gs://marin-us-central1/gcsfuse_mount/models/Qwen--Qwen3-32B--9216db5781bf21249d130ec9da846c4624c16137",
             engine_kwargs={
@@ -64,32 +63,28 @@ for i in range(2, 9):
                 "temperature": 0.8,
                 "max_tokens": 32768,
             },
-
             # Prompting specific
             template="{example}",
             prompt_column="instruction_seed",
             apply_chat_template=True,
             save_templated_prompt=False,
             max_doc_tokens=32768,
-
             # Ray data specific
             num_instances=(2, 32),
             batch_size=64,
             tensor_parallel_size=4,
             preserve_order=False,
-
             # File specific
             filetype="parquet",
             output_filetype_override="parquet",
-
             # Hardware specific
-            resource_config=ResourceConfig.with_tpu("v5p-8"),
-
+            resource_config=ResourceConfig.with_tpu("v6e-8"),
             # Output column
             generated_text_column_name=f"generated_text{i}",
-
             # Checkpointing for resumption
             checkpoint_id_column="ms_id",
+            # Drop columns that cause Arrow conversion issues
+            drop_columns=["conversations"],
         ),
         pip_dependency_groups=["vllm"],
     )

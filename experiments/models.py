@@ -274,6 +274,13 @@ qwen3_32b = download_model_step(
     )
 )
 
+qwq_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/QwQ-32B",
+        hf_revision="976055f",
+    )
+)
+
 apertus_8b = download_model_step(
     ModelConfig(
         hf_repo_id="swiss-ai/Apertus-8B-2509",

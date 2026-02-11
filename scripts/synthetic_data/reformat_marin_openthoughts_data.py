@@ -16,6 +16,7 @@ Examples:
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens --force_overwrite
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated-32768-tokens --force_overwrite
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated --force_overwrite
+    python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-math-qwq-32b-annotated-32768-tokens --force_overwrite
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/another-dataset
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/another-dataset --response_column my_response_column
 """

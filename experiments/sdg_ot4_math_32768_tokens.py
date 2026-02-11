@@ -85,6 +85,9 @@ qwen_32B_annotated_open_thoughts_4_math = ExecutorStep(
 
         # Checkpointing for resumption
         checkpoint_id_column="ms_id",
+
+        # Drop columns that cause Arrow conversion issues
+        drop_columns=["conversations"],
     ),
     pip_dependency_groups=["vllm"],
 )
