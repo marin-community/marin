@@ -189,8 +189,7 @@ train_config = SimpleVlmTrainConfig(
     min_lr_ratio=0.1,  # Final LR = 1% of peak LR
 
     # Full bfloat16: params and compute both in bfloat16 (saves memory)
-    mp="bfloat16",
-
+    mp="p=f32,c=bfloat16",
     # Streaming mode: double the default prefetch for better throughput
     streaming_max_buffered_batches=16,
     streaming_prefetch_size=8,
