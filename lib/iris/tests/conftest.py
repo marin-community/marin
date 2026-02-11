@@ -49,11 +49,6 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
-# httpx logs every HTTP request at INFO level, which floods test output
-# during polling loops (status checks, log fetching).
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
-
 @pytest.fixture(autouse=True, scope="function")
 def _ensure_logging_health():
     """Ensure logging handlers are healthy before and after each test.

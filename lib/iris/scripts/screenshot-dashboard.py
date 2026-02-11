@@ -32,7 +32,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     ResourceSpec,
 )
-from iris.cluster.manager import ClusterManager
+from iris.cluster.manager import connect_cluster
 from iris.cluster.config import load_config, make_local_config
 from iris.rpc import cluster_pb2
 
@@ -724,9 +724,7 @@ def main(config: Path, output_dir: Path, stay_open: bool):
     cluster_config = load_config(config)
     cluster_config = make_local_config(cluster_config)
 
-    manager = ClusterManager(cluster_config)
-
-    with manager.connect() as url:
+    with connect_cluster(cluster_config) as url:
         logger.info("Cluster running at %s", url)
 
         client = IrisClient.remote(url, workspace=IRIS_ROOT)

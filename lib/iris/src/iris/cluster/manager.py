@@ -1,129 +1,133 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cluster lifecycle manager.
+"""Cluster lifecycle management.
 
-Provides a uniform interface for starting/stopping/connecting to an Iris
-cluster regardless of backend (GCP, manual, local). Callers get a URL;
-ClusterManager handles tunnel setup, mode detection, and cleanup.
+Provides free functions for cluster lifecycle operations:
+- connect_cluster(): context manager that starts controller, opens tunnel, yields address
+- stop_all(): stops controller and all worker slices
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from iris.cluster.config import IrisConfig, validate_config
-from iris.cluster.controller.lifecycle import create_controller_vm
-from iris.cluster.vm.controller_vm import ControllerProtocol
-from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.cluster.controller.lifecycle import (
+    start_controller,
+    stop_controller,
+)
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
+TERMINATE_TIMEOUT_SECONDS = 60
 
-class ClusterManager:
-    """Manages the full cluster lifecycle: controller + connectivity.
 
-    Provides explicit start/stop methods and a connect() context manager
-    that handles tunnel setup for GCP or direct connection for local mode.
+@contextmanager
+def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
+    """Start controller, open tunnel, yield address, stop on exit.
 
-    Example (smoke test / demo):
-        manager = ClusterManager(config)
-        with manager.connect() as url:
-            client = IrisClient.remote(url)
-            client.submit(...)
-
-    Example (CLI - long-running):
-        manager = ClusterManager(config)
-        url = manager.start()
-        # ... use cluster ...
-        manager.stop()
+    For local mode, starts an in-process controller.
+    For GCP/Manual, creates Platform, starts controller VM, opens tunnel.
     """
+    validate_config(config)
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
 
-    def __init__(
-        self,
-        config: config_pb2.IrisClusterConfig,
-        threads: ThreadContainer | None = None,
-    ):
-        validate_config(config)
-        self._config = config
-        self._threads = threads if threads is not None else get_thread_container()
-        self._controller: ControllerProtocol | None = None
+    which = config.controller.WhichOneof("controller")
+    if which == "local":
+        from iris.cluster.controller.local import LocalController
 
-    @property
-    def is_local(self) -> bool:
-        return self._config.controller.WhichOneof("controller") == "local"
-
-    def start(self) -> str:
-        """Start the controller. Returns the controller address.
-
-        For GCP: creates a GCE VM, bootstraps, returns internal IP.
-        For local: starts in-process Controller, returns localhost URL.
-        """
-        self._controller = create_controller_vm(self._config, threads=self._threads)
-        address = self._controller.start()
-        logger.info("Controller started at %s (local=%s)", address, self.is_local)
-        return address
-
-    def stop(self) -> None:
-        """Stop the controller and clean up resources.
-
-        Shutdown ordering:
-        1. Stop the controller (which stops its threads and autoscaler)
-        2. Wait on the root ThreadContainer to verify all threads have exited
-        """
-        if self._controller:
-            self._controller.stop()
-            self._controller = None
-            logger.info("Controller stopped")
-
-        self._threads.wait()
-
-    def reload(self) -> str:
-        """Reload cluster by reloading the controller.
-
-        The controller will re-bootstrap all worker VMs when it starts,
-        ensuring they run the latest worker image. This is faster than
-        a full stop/start cycle and ensures consistent image versions.
-
-        For GCP: Reloads controller VM, which then re-bootstraps workers.
-        For local: Equivalent to restart (no VMs to preserve).
-
-        Returns:
-            Controller address
-
-        Raises:
-            RuntimeError: If controller VM doesn't exist
-        """
-        # Reload controller - it will re-bootstrap workers on startup
-        self._controller = create_controller_vm(self._config, threads=self._threads)
-        address = self._controller.reload()
-        logger.info("Controller reloaded at %s", address)
-
-        return address
-
-    @contextmanager
-    def connect(self) -> Iterator[str]:
-        """Start controller, yield a usable URL, stop on exit.
-
-        For GCP: establishes SSH tunnel, yields tunnel URL.
-        For local: yields direct localhost URL (no tunnel).
-        """
-        address = self.start()
+        controller = LocalController(config)
+        address = controller.start()
         try:
-            # Use Platform.tunnel() for consistent connection handling
-            iris_config = IrisConfig(self._config)
-            platform = iris_config.platform()
             with platform.tunnel(address) as tunnel_url:
                 yield tunnel_url
         finally:
-            self.stop()
+            controller.stop()
+            platform.shutdown()
+    else:
+        address, _vm = start_controller(platform, config)
+        try:
+            with platform.tunnel(address) as tunnel_url:
+                yield tunnel_url
+        finally:
+            stop_controller(platform, config)
+            platform.shutdown()
 
-    @property
-    def controller(self) -> ControllerProtocol:
-        """Access the underlying controller (must call start() first)."""
-        if self._controller is None:
-            raise RuntimeError("ClusterManager.start() not called")
-        return self._controller
+
+def _collect_terminate_targets(
+    platform,
+    config: config_pb2.IrisClusterConfig,
+) -> list[tuple[str, Callable[[], None]]]:
+    """Enumerate all resources that need terminating: controller + slices.
+
+    Returns a list of (name, terminate_fn) pairs. Discovery (list_all_slices) is
+    a single pass across all zones; the actual deletes happen later in parallel.
+    """
+    label_prefix = config.platform.label_prefix or "iris"
+    targets: list[tuple[str, Callable[[], None]]] = []
+
+    targets.append(("controller", lambda: stop_controller(platform, config)))
+
+    all_slices = platform.list_all_slices(
+        labels={f"{label_prefix}-managed": "true"},
+    )
+    for slice_handle in all_slices:
+        logger.info("Queued termination for slice %s", slice_handle.slice_id)
+        targets.append((f"slice:{slice_handle.slice_id}", slice_handle.terminate))
+
+    return targets
+
+
+def stop_all(config: config_pb2.IrisClusterConfig) -> None:
+    """Stop controller and all worker slices in parallel.
+
+    First enumerates all terminate targets (controller VM + TPU slices), then
+    runs all gcloud delete calls concurrently via a thread pool. Applies a hard
+    timeout of TERMINATE_TIMEOUT_SECONDS — any operation still running after
+    that is logged at WARNING and abandoned.
+    """
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+    errors: list[str] = []
+
+    try:
+        targets = _collect_terminate_targets(platform, config)
+        if not targets:
+            logger.info("No resources to terminate")
+            return
+
+        logger.info("Terminating %d resource(s) in parallel", len(targets))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as executor:
+            future_to_name: dict[concurrent.futures.Future, str] = {executor.submit(fn): name for name, fn in targets}
+
+            done, not_done = concurrent.futures.wait(future_to_name, timeout=TERMINATE_TIMEOUT_SECONDS)
+
+            for future in done:
+                name = future_to_name[future]
+                try:
+                    future.result()
+                except Exception:
+                    logger.exception("Failed to terminate %s", name)
+                    errors.append(name)
+
+            for future in not_done:
+                name = future_to_name[future]
+                logger.warning(
+                    "Termination of %s still running after %ds, giving up",
+                    name,
+                    TERMINATE_TIMEOUT_SECONDS,
+                )
+                future.cancel()
+                errors.append(f"timeout:{name}")
+    finally:
+        platform.shutdown()
+
+    if errors:
+        raise RuntimeError(f"stop_all completed with {len(errors)} error(s): {', '.join(errors)}")

@@ -12,9 +12,9 @@ import time
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.manager import ClusterManager
 from iris.cluster.config import make_local_config
+from iris.cluster.controller.local import LocalController
+from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration
@@ -63,8 +63,8 @@ class LocalClusterClient:
         client.shutdown()
     """
 
-    def __init__(self, manager: ClusterManager, remote_client: RemoteClusterClient):
-        self._manager = manager
+    def __init__(self, controller: LocalController, remote_client: RemoteClusterClient):
+        self._controller = controller
         self._remote_client = remote_client
 
     @classmethod
@@ -78,11 +78,11 @@ class LocalClusterClient:
             A fully initialized LocalClusterClient ready for use
         """
         config = _make_local_cluster_config(max_workers)
-        manager = ClusterManager(config)
-        address = manager.start()
+        controller = LocalController(config)
+        address = controller.start()
         cls._wait_for_worker_registration(address)
         remote_client = RemoteClusterClient(controller_address=address, timeout_ms=30000)
-        return cls(manager, remote_client)
+        return cls(controller, remote_client)
 
     @staticmethod
     def _wait_for_worker_registration(controller_address: str, timeout: float = 10.0) -> None:
@@ -104,7 +104,7 @@ class LocalClusterClient:
     def shutdown(self, wait: bool = True) -> None:
         del wait
         self._remote_client.shutdown()
-        self._manager.stop()
+        self._controller.stop()
 
     def submit_job(
         self,

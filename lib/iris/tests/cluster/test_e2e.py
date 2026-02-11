@@ -22,7 +22,7 @@ from iris.client import IrisClient
 from iris.cluster.client import get_job_info
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.cluster.manager import ClusterManager
+from iris.cluster.controller.local import LocalController
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -62,7 +62,6 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     # Configure scale group with local provider
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
-        vm_type=config_pb2.VM_TYPE_LOCAL_VM,
         min_slices=num_workers,
         max_slices=num_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
@@ -118,7 +117,7 @@ class E2ECluster:
         self._use_docker = use_docker
         self._uv_cache_dir = uv_cache_dir
         self._env_provider_factory = env_provider_factory
-        self._manager: ClusterManager | None = None
+        self._controller: LocalController | None = None
         self._controller_port: int | None = None
         # Docker-specific fields
         self._temp_dir: tempfile.TemporaryDirectory | None = None
@@ -132,10 +131,9 @@ class E2ECluster:
 
     def __enter__(self):
         if not self._use_docker:
-            # Use ClusterManager for non-Docker path
             config = _make_e2e_config(self._num_workers)
-            self._manager = ClusterManager(config)
-            address = self._manager.start()
+            self._controller = LocalController(config)
+            address = self._controller.start()
             # Extract port from address for controller_client
             self._controller_port = int(address.rsplit(":", 1)[1])
             self._controller_client = ControllerServiceClientSync(
@@ -232,8 +230,8 @@ class E2ECluster:
             self._rpc_client = None
         if self._controller_client:
             self._controller_client.close()
-        if self._manager:
-            self._manager.stop()
+        if self._controller:
+            self._controller.stop()
         else:
             # Docker path cleanup
             for worker in self._workers:
