@@ -147,6 +147,7 @@ def build_iris_env(
     env["IRIS_BIND_HOST"] = "0.0.0.0"
     env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
     env["IRIS_WORKDIR"] = "/app"
+    env["IRIS_PYTHON"] = "python"
 
     # Propagate extras and pip_packages so child jobs can inherit them
     extras = list(task.request.environment.extras)

@@ -11,7 +11,6 @@ from pathlib import PurePath
 import draccus
 import levanter.infra.cli_helpers
 from fray.v2 import (
-    Client,
     CpuConfig,
     Entrypoint,
     GpuConfig,
@@ -60,10 +59,6 @@ class TrainLmOnPodConfig:
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
-
-
-def _get_client() -> Client:
-    return current_client()
 
 
 def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
@@ -220,7 +215,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
-    client = _get_client()
+    client = current_client()
 
     extras = []
     if isinstance(config.resources.device, TpuConfig):
