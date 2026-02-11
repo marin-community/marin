@@ -23,6 +23,7 @@ from iris.cluster.controller.autoscaler import (
 from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.cluster.platform.base import CloudSliceState, CloudVmState, QuotaExhaustedError, SliceStatus, VmStatus
 from iris.cluster.types import DeviceType, VmWorkerStatus
+from iris.managed_thread import get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
@@ -197,7 +198,9 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
 def empty_autoscaler(scale_group_config):
     """Empty autoscaler ready for scale-up tests."""
     platform = make_mock_platform()
-    group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0))
+    group = ScalingGroup(
+        scale_group_config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0)
+    )
     autoscaler = make_autoscaler({"test-group": group})
     yield autoscaler
     autoscaler.shutdown()
@@ -212,7 +215,11 @@ def autoscaler_with_ready_slices(scale_group_config):
     ]
     platform = make_mock_platform(slices_to_discover=discovered)
     group = ScalingGroup(
-        scale_group_config, platform, scale_down_cooldown=Duration.from_ms(0), idle_threshold=Duration.from_ms(0)
+        scale_group_config,
+        platform,
+        threads=get_thread_container(),
+        scale_down_cooldown=Duration.from_ms(0),
+        idle_threshold=Duration.from_ms(0),
     )
     group.reconcile()
     autoscaler = make_autoscaler({"test-group": group})
@@ -289,7 +296,9 @@ class TestAutoscalerScaleUp:
     ):
         """Does not scale up when various conditions are met."""
         platform = make_mock_platform(slices_to_discover=discovered)
-        group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(
+            scale_group_config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0)
+        )
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -304,6 +313,7 @@ class TestAutoscalerScaleUp:
         group = ScalingGroup(
             scale_group_config,
             platform,
+            threads=get_thread_container(),
             scale_up_cooldown=Duration.from_ms(0),
             backoff_initial=Duration.from_hours(1),
         )
@@ -318,7 +328,9 @@ class TestAutoscalerScaleUp:
     def test_no_scale_up_during_cooldown(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Does not scale up during cooldown period."""
         platform = make_mock_platform()
-        group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(3600_000))
+        group = ScalingGroup(
+            scale_group_config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(3600_000)
+        )
         ts = Timestamp.now()
         group.begin_scale_up()
         handle = group.scale_up(timestamp=ts)
@@ -342,7 +354,7 @@ class TestAutoscalerScaleUp:
             zones=["us-central1-a"],
         )
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
 
         decisions = autoscaler.evaluate([])
@@ -368,7 +380,7 @@ class TestAutoscalerScaleUp:
             make_mock_slice_handle("slice-002", all_ready=True),
         ]
         platform = make_mock_platform(slices_to_discover=discovered)
-        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0))
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -390,6 +402,7 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             scale_group_config,
             platform,
+            threads=get_thread_container(),
             scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(1000),
         )
@@ -430,7 +443,11 @@ class TestAutoscalerScaleDown:
         ]
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(
-            config, platform, scale_down_cooldown=Duration.from_ms(0), idle_threshold=Duration.from_ms(0)
+            config,
+            platform,
+            threads=get_thread_container(),
+            scale_down_cooldown=Duration.from_ms(0),
+            idle_threshold=Duration.from_ms(0),
         )
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
@@ -459,6 +476,7 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             scale_group_config,
             platform,
+            threads=get_thread_container(),
             scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(300_000),
         )
@@ -497,6 +515,7 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             scale_group_config,
             platform,
+            threads=get_thread_container(),
             scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(0),
         )
@@ -523,6 +542,7 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             scale_group_config,
             platform,
+            threads=get_thread_container(),
             scale_down_cooldown=Duration.from_ms(3600_000),
             idle_threshold=Duration.from_ms(0),
         )
@@ -566,7 +586,9 @@ class TestAutoscalerExecution:
         """run_once() terminates failed slices via ScalingGroup.cleanup_failed_slices()."""
         mock_handle = make_mock_slice_handle("slice-001", any_failed=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform, scale_down_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(
+            scale_group_config, platform, threads=get_thread_container(), scale_down_cooldown=Duration.from_ms(0)
+        )
         group.reconcile()
         group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
@@ -581,7 +603,11 @@ class TestAutoscalerExecution:
         platform.create_slice.side_effect = RuntimeError("TPU unavailable")
         backoff = Duration.from_seconds(5.0)
         group = ScalingGroup(
-            scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0), backoff_initial=backoff
+            scale_group_config,
+            platform,
+            threads=get_thread_container(),
+            scale_up_cooldown=Duration.from_ms(0),
+            backoff_initial=backoff,
         )
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -613,7 +639,7 @@ class TestAutoscalerExecution:
         """execute() skips decisions for unknown scale groups."""
         config = make_scale_group_config(name="known-group", min_slices=0, max_slices=5)
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
+        group = ScalingGroup(config, platform, threads=get_thread_container())
 
         autoscaler = make_autoscaler({"known-group": group})
 
@@ -645,8 +671,8 @@ class TestAutoscalerReconcile:
             slices_to_discover=[make_mock_slice_handle("slice-2", scale_group="group-2", all_ready=True)]
         )
 
-        group1 = ScalingGroup(config1, platform1)
-        group2 = ScalingGroup(config2, platform2)
+        group1 = ScalingGroup(config1, platform1, threads=get_thread_container())
+        group2 = ScalingGroup(config2, platform2, threads=get_thread_container())
 
         autoscaler = make_autoscaler({"group-1": group1, "group-2": group2})
         autoscaler.reconcile()
@@ -662,7 +688,7 @@ class TestAutoscalerWorkerFailure:
         """notify_worker_failed() terminates the slice containing the worker."""
         mock_handle = make_mock_slice_handle("slice-001")
         platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform)
+        group = ScalingGroup(scale_group_config, platform, threads=get_thread_container())
         group.reconcile()
         group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
@@ -678,7 +704,7 @@ class TestAutoscalerWorkerFailure:
         """notify_worker_failed() does nothing for unknown workers."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform)
+        group = ScalingGroup(scale_group_config, platform, threads=get_thread_container())
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -697,6 +723,7 @@ class TestAutoscalerIdleVerification:
         group = ScalingGroup(
             scale_group_config,
             platform,
+            threads=get_thread_container(),
             scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(0),
         )
@@ -734,8 +761,8 @@ class TestAutoscalerStatusReporting:
         platform1 = make_mock_platform()
         platform2 = make_mock_platform()
 
-        group1 = ScalingGroup(config1, platform1)
-        group2 = ScalingGroup(config2, platform2)
+        group1 = ScalingGroup(config1, platform1, threads=get_thread_container())
+        group2 = ScalingGroup(config2, platform2, threads=get_thread_container())
 
         group1.update_demand(5)
         group2.update_demand(3)
@@ -772,7 +799,9 @@ class TestAutoscalerFailedSliceCleanup:
         """run_once() cleans up failed slices before evaluating scale-up."""
         discovered = [make_mock_slice_handle("failed-slice", any_failed=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
-        group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(
+            scale_group_config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0)
+        )
         group.reconcile()
         group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
@@ -808,7 +837,9 @@ class TestAutoscalerFailedSliceCleanup:
             make_mock_slice_handle("failed-slice", any_failed=True),
         ]
         platform = make_mock_platform(slices_to_discover=discovered)
-        group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(
+            scale_group_config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0)
+        )
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -822,7 +853,7 @@ class TestAutoscalerFailedSliceCleanup:
         """Failed slice cleanup does not require idle verification."""
         mock_handle = make_mock_slice_handle("failed-slice", any_failed=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform)
+        group = ScalingGroup(scale_group_config, platform, threads=get_thread_container())
         group.reconcile()
         group.refresh_all_slices()
 
@@ -1298,7 +1329,11 @@ class TestAutoscalerQuotaHandling:
 
         backoff = Duration.from_seconds(5.0)
         group = ScalingGroup(
-            scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0), backoff_initial=backoff
+            scale_group_config,
+            platform,
+            threads=get_thread_container(),
+            scale_up_cooldown=Duration.from_ms(0),
+            backoff_initial=backoff,
         )
         config = config_pb2.AutoscalerConfig()
         config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
@@ -1334,7 +1369,9 @@ class TestAutoscalerActionLogging:
         """Verify failed slice cleanup actions are logged."""
         mock_handle = make_mock_slice_handle("slice-001", any_failed=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform, scale_down_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(
+            scale_group_config, platform, threads=get_thread_container(), scale_down_cooldown=Duration.from_ms(0)
+        )
         group.reconcile()
         group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
@@ -1353,7 +1390,9 @@ class TestAutoscalerActionLogging:
         """Verify quota exceeded events are logged."""
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded in zone")
-        group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(
+            scale_group_config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0)
+        )
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -1371,7 +1410,7 @@ class TestAutoscalerActionLogging:
         """Verify worker failure events are logged."""
         mock_handle = make_mock_slice_handle("slice-001")
         platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform)
+        group = ScalingGroup(scale_group_config, platform, threads=get_thread_container())
         group.reconcile()
         group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
@@ -1434,7 +1473,7 @@ class TestScalingGroupRequestingState:
 
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
+        group = ScalingGroup(config, platform, threads=get_thread_container())
 
         ts = Timestamp.now()
         group.begin_scale_up()
@@ -1448,7 +1487,7 @@ class TestScalingGroupRequestingState:
 
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
+        group = ScalingGroup(config, platform, threads=get_thread_container())
 
         ts = Timestamp.now()
         group.begin_scale_up()
@@ -1467,7 +1506,7 @@ class TestScalingGroupRequestingState:
 
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
+        group = ScalingGroup(config, platform, threads=get_thread_container())
 
         ts = Timestamp.now()
         group.begin_scale_up()
@@ -1482,7 +1521,7 @@ class TestScalingGroupRequestingState:
         """Pending scale-up counts toward slice_count and max_slices check."""
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=1)
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
+        group = ScalingGroup(config, platform, threads=get_thread_container())
 
         group.begin_scale_up()
         assert group.slice_count() == 1
@@ -1495,8 +1534,8 @@ class TestScalingGroupRequestingState:
 
         platform1 = make_mock_platform()
         platform2 = make_mock_platform()
-        group1 = ScalingGroup(config1, platform1)
-        group2 = ScalingGroup(config2, platform2)
+        group1 = ScalingGroup(config1, platform1, threads=get_thread_container())
+        group2 = ScalingGroup(config2, platform2, threads=get_thread_container())
 
         ts = Timestamp.now()
         group1.begin_scale_up()
@@ -1526,7 +1565,7 @@ class TestAutoscalerAsyncScaleUp:
 
         platform.create_slice.side_effect = slow_create
 
-        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
 
         decision = ScalingDecision(
@@ -1557,7 +1596,7 @@ class TestAutoscalerAsyncScaleUp:
 
         platform.create_slice.side_effect = slow_create
 
-        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
 
         ts = Timestamp.now().epoch_ms()
@@ -1596,7 +1635,7 @@ class TestAutoscalerAsyncScaleUp:
 
         platform.create_slice.side_effect = slow_create
 
-        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(config, platform, threads=get_thread_container(), scale_up_cooldown=Duration.from_ms(0))
         autoscaler = make_autoscaler({"test-group": group})
 
         decision = ScalingDecision(
@@ -1618,7 +1657,7 @@ class TestAutoscalerAsyncScaleUp:
         discovered_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[discovered_handle])
 
-        group = ScalingGroup(config, platform)
+        group = ScalingGroup(config, platform, threads=get_thread_container())
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 

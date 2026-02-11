@@ -770,3 +770,42 @@ class TestConfigValidation:
     def test_rejects_negative_cpu(self):
         with pytest.raises(ValueError, match="invalid cpu"):
             validate_config(_config_with(resources=config_pb2.ScaleGroupResources(cpu=-1, memory_bytes=16 * 1024**3)))
+
+    def test_rejects_gcp_zone_not_in_platform_zones(self):
+        """Validation fails when scale group zone is not in platform.gcp.zones."""
+        config = config_pb2.IrisClusterConfig()
+        config.platform.gcp.project_id = "test"
+        config.platform.gcp.zones.append("zone-a")
+
+        sg = config_pb2.ScaleGroupConfig(
+            name="tpu",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-8",
+            slice_size=8,
+            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
+        )
+        sg.slice_template.gcp.zone = "zone-b"
+        sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
+        config.scale_groups["tpu"].CopyFrom(sg)
+
+        with pytest.raises(ValueError, match=r"not in platform\.gcp\.zones"):
+            validate_config(config)
+
+    def test_accepts_gcp_zone_in_platform_zones(self):
+        """Validation passes when scale group zone is in platform.gcp.zones."""
+        config = config_pb2.IrisClusterConfig()
+        config.platform.gcp.project_id = "test"
+        config.platform.gcp.zones.append("zone-a")
+
+        sg = config_pb2.ScaleGroupConfig(
+            name="tpu",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-8",
+            slice_size=8,
+            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
+        )
+        sg.slice_template.gcp.zone = "zone-a"
+        sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
+        config.scale_groups["tpu"].CopyFrom(sg)
+
+        validate_config(config)  # Should not raise

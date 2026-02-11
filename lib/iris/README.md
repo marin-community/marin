@@ -19,7 +19,7 @@ uv run iris cluster --config=examples/eu-west4.yaml status
 # Validate cluster with test jobs (establishes SSH tunnel automatically)
 uv run iris cluster --config=examples/eu-west4.yaml debug validate
 
-# Stop cluster (controller + all worker slices)
+# Stop cluster (controller + all worker slices, terminated in parallel; 60s timeout)
 uv run iris cluster --config=examples/eu-west4.yaml stop
 ```
 

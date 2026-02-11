@@ -360,7 +360,10 @@ class Controller:
             stop_event.wait(timeout=self._config.scheduler_interval_seconds)
             if stop_event.is_set():
                 break
-            self._run_autoscaler_once()
+            try:
+                self._run_autoscaler_once()
+            except Exception:
+                logger.exception("Autoscaler loop iteration failed")
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""

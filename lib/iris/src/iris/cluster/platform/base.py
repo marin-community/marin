@@ -293,6 +293,16 @@ class Platform(Protocol):
         """
         ...
 
+    def list_all_slices(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[SliceHandle]:
+        """List all slices across all configured zones, filtered by labels.
+
+        Use list_slices() when the zone is already known for a more targeted query.
+        """
+        ...
+
     def list_vms(
         self,
         zones: list[str],

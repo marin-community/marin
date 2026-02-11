@@ -20,10 +20,12 @@ ACCELERATOR_TYPE_GPU: AcceleratorType
 ACCELERATOR_TYPE_TPU: AcceleratorType
 
 class GcpPlatformConfig(_message.Message):
-    __slots__ = ("project_id",)
+    __slots__ = ("project_id", "zones")
     PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
+    ZONES_FIELD_NUMBER: _ClassVar[int]
     project_id: str
-    def __init__(self, project_id: _Optional[str] = ...) -> None: ...
+    zones: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, project_id: _Optional[str] = ..., zones: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ManualPlatformConfig(_message.Message):
     __slots__ = ()

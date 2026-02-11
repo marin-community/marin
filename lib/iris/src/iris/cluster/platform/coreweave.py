@@ -54,6 +54,9 @@ class CoreweavePlatform:
     ) -> list[SliceHandle]:
         raise NotImplementedError("CoreWeave platform is not yet implemented")
 
+    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[SliceHandle]:
+        raise NotImplementedError("CoreWeave platform is not yet implemented")
+
     def list_vms(
         self,
         zones: list[str],

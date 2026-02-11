@@ -295,6 +295,9 @@ class FakePlatform:
             slices = [s for s in slices if all(s.labels.get(k) == v for k, v in labels.items())]
         return slices
 
+    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[FakeSliceHandle]:
+        return self.list_slices(zones=[], labels=labels)
+
     def list_vms(self, zones: list[str], labels: dict[str, str] | None = None) -> list:
         return []
 

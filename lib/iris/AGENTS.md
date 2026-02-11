@@ -77,6 +77,14 @@ the dashboard, rather than creating a scheduler and running it manually.
 
 ## Architecture Notes
 
+### Concurrency Model
+
+Platform operations (`terminate`, `create_slice`, etc.) shell out to `gcloud`
+via `subprocess.run` and are thread-safe. When multiple independent platform
+operations need to run (e.g. tearing down N slices), use
+`concurrent.futures.ThreadPoolExecutor` — not asyncio. Always apply a hard
+timeout so the CLI doesn't hang on a stuck gcloud call.
+
 ## Planning
 
 Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
@@ -157,6 +165,8 @@ Iris follows a clean layering architecture:
 
 **Cluster layer** (`cluster/`): High-level orchestration
 - `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
+- `stop_all()` terminates controller + all slices in parallel via ThreadPoolExecutor
+  with a 60s hard timeout. Timed-out operations are logged at WARNING and abandoned.
 - Configuration and platform abstractions
 
 Key files:

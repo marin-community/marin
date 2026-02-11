@@ -527,6 +527,9 @@ class LocalPlatform:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results
 
+    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
+        return self.list_slices(zones=[], labels=labels)
+
     def list_vms(
         self,
         zones: list[str],

@@ -142,8 +142,15 @@ def _validate_vm_config(config: config_pb2.VmConfig) -> None:
         raise ValueError(f"VmConfig is missing required fields: {', '.join(missing)}")
 
 
-def _wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
-    """Wait for a port to become available."""
+def _find_free_port(host: str = "127.0.0.1") -> int:
+    """Find a free port on the given host by binding to port 0."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
+def _wait_for_port(port: int, host: str = "127.0.0.1", timeout: float = 30.0) -> bool:
+    """Wait for a port to become available on the given host."""
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -407,7 +414,9 @@ class GcpSliceHandle:
         logger.info("gcloud command: %s", cmd)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            logger.error("Failed to delete TPU %s: %s", self._slice_id, result.stderr.strip())
+            error = result.stderr.strip()
+            if "not found" not in error.lower():
+                raise RuntimeError(f"Failed to delete TPU {self._slice_id}: {error}")
 
 
 # ============================================================================
@@ -422,7 +431,8 @@ class GcpPlatform:
     """Platform implementation for Google Cloud Platform.
 
     Manages GCE instances (standalone VMs) and TPU slices via gcloud CLI.
-    Zone is not stored on the platform — it comes from VmConfig/SliceConfig.
+    Zones are stored from GcpPlatformConfig for list_all_slices(); per-slice
+    zones come from SliceConfig.
     """
 
     def __init__(
@@ -434,6 +444,7 @@ class GcpPlatform:
         self._project_id = gcp_config.project_id
         self._label_prefix = label_prefix
         self._ssh_config = ssh_config
+        self._zones = list(gcp_config.zones)
 
     def create_vm(self, config: config_pb2.VmConfig) -> GcpStandaloneVmHandle:
         """Create a GCE instance. Returns a handle with SSH and label/metadata support."""
@@ -574,6 +585,14 @@ class GcpPlatform:
 
         return results
 
+    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[GcpSliceHandle]:
+        if not self._zones:
+            raise ValueError(
+                "GcpPlatform.list_all_slices() called but no zones configured. "
+                "Set platform.gcp.zones in your cluster config."
+            )
+        return self.list_slices(zones=self._zones, labels=labels)
+
     def list_vms(
         self,
         zones: list[str],
@@ -619,7 +638,7 @@ class GcpPlatform:
         return _gcp_tunnel(
             project=self._project_id,
             label_prefix=self._label_prefix,
-            local_port=local_port or 10000,
+            local_port=local_port,
         )
 
     def shutdown(self) -> None:
@@ -734,10 +753,18 @@ class GcpPlatform:
 def _gcp_tunnel(
     project: str,
     label_prefix: str,
-    local_port: int = 10000,
+    local_port: int | None = None,
     timeout: float = 60.0,
 ) -> Iterator[str]:
-    """SSH tunnel to the controller VM, yielding the local URL."""
+    """SSH tunnel to the controller VM, yielding the local URL.
+
+    Binds explicitly to 127.0.0.1 to avoid conflicts with other processes
+    that may be listening on the same port on a different address family (IPv6).
+    Picks a free port automatically if none is specified.
+    """
+    if local_port is None:
+        local_port = _find_free_port()
+
     label_filter = f"labels.{label_prefix}-controller=true AND status=RUNNING"
     cmd = [
         "gcloud",
@@ -770,7 +797,7 @@ def _gcp_tunnel(
             f"--zone={zone}",
             "--",
             "-L",
-            f"{local_port}:localhost:10000",
+            f"127.0.0.1:{local_port}:localhost:10000",
             "-N",
             "-o",
             "StrictHostKeyChecking=no",
@@ -789,14 +816,14 @@ def _gcp_tunnel(
     )
 
     try:
-        if not _wait_for_port(local_port, timeout=timeout):
+        if not _wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
             stderr = proc.stderr.read().decode() if proc.stderr else ""
             proc.terminate()
             proc.wait()
             raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
 
-        logger.info("Tunnel ready: localhost:%d -> %s:10000", local_port, vm_name)
-        yield f"http://localhost:{local_port}"
+        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:10000", local_port, vm_name)
+        yield f"http://127.0.0.1:{local_port}"
     finally:
         proc.terminate()
         try:

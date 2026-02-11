@@ -23,6 +23,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.platform.bootstrap import WorkerBootstrap
 from iris.cluster.types import parse_memory_string
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
@@ -152,6 +153,18 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
                 raise ValueError(f"Scale group '{name}': slice_template.coreweave.region must be non-empty.")
         elif platform == "local":
             pass
+
+    if config.platform.HasField("gcp") and config.platform.gcp.zones:
+        platform_zones = set(config.platform.gcp.zones)
+        for name, sg_config in config.scale_groups.items():
+            template = sg_config.slice_template
+            if template.WhichOneof("platform") == "gcp" and template.gcp.zone:
+                if template.gcp.zone not in platform_zones:
+                    raise ValueError(
+                        f"Scale group '{name}': zone '{template.gcp.zone}' is not in "
+                        f"platform.gcp.zones {sorted(platform_zones)}. "
+                        f"Add it to platform.gcp.zones."
+                    )
 
 
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
@@ -668,6 +681,7 @@ def create_autoscaler(
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
     worker_bootstrap: WorkerBootstrap | None = None,
+    threads: ThreadContainer | None = None,
 ):
     """Create autoscaler from Platform and explicit config.
 
@@ -677,6 +691,7 @@ def create_autoscaler(
         scale_groups: Map of scale group name to config
         label_prefix: Prefix for labels on managed resources
         worker_bootstrap: WorkerBootstrap for initializing new VMs (None disables bootstrap)
+        threads: Thread container for monitor threads. Uses global default if not provided.
 
     Returns:
         Configured Autoscaler instance
@@ -690,6 +705,8 @@ def create_autoscaler(
         DEFAULT_STARTUP_GRACE,
         ScalingGroup,
     )
+
+    threads = threads or get_thread_container()
 
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
@@ -717,6 +734,7 @@ def create_autoscaler(
             scale_down_cooldown=scale_down_delay,
             startup_grace_period=startup_grace,
             heartbeat_grace_period=heartbeat_grace,
+            threads=threads,
         )
         logger.info("Created scale group %s", name)
 

@@ -27,9 +27,7 @@ option features.field_presence = EXPLICIT;
 
 message GcpPlatformConfig {
   string project_id = 1;
-  reserved 2;  // was: region (now per-slice in SliceConfig)
-  reserved 3;  // was: zone (now per-slice in SliceConfig)
-  reserved 4;  // was: default_zones (now per-slice in SliceConfig)
+  repeated string zones = 5;  // All zones this platform operates in (for list_all_slices)
 }
 
 message ManualPlatformConfig {}

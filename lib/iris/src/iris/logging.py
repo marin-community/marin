@@ -70,7 +70,7 @@ def get_global_buffer() -> LogRingBuffer:
 _configured = False
 
 
-def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
+def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
     """Configure iris logging: stderr handler + ring buffer. Idempotent."""
     global _configured
     if _configured:
@@ -99,7 +99,8 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     root.addHandler(ring_handler)
 
     # Suppress noisy HTTP client logging (httpx and httpcore)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    if level <= logging.INFO:
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     return _global_buffer

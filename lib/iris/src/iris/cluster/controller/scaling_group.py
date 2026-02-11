@@ -20,7 +20,7 @@ from enum import Enum, StrEnum
 
 from iris.cluster.platform.base import CloudSliceState, CloudVmState, Platform, SliceHandle
 from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.managed_thread import ManagedThread, ThreadContainer
+from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
 from iris.time_utils import Deadline, Duration, RateLimiter, Timestamp
 
@@ -237,9 +237,13 @@ def slice_handle_status(handle: SliceHandle) -> VmGroupStatus:
 
 
 def slice_handle_to_proto(handle: SliceHandle, status: VmGroupStatus | None = None) -> vm_pb2.SliceInfo:
-    """Convert a SliceHandle to a SliceInfo proto for RPC APIs."""
+    """Convert a SliceHandle to a SliceInfo proto for RPC APIs.
+
+    When status is None (no cached status available yet), returns a SliceInfo
+    with an empty vms list rather than doing live I/O via slice_handle_status().
+    """
     created_at = handle.created_at
-    status = status or slice_handle_status(handle)
+    vms = status.vms if status is not None else []
     return vm_pb2.SliceInfo(
         slice_id=handle.slice_id,
         scale_group=handle.scale_group,
@@ -254,7 +258,7 @@ def slice_handle_to_proto(handle: SliceHandle, status: VmGroupStatus | None = No
                 created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
                 state_changed_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
             )
-            for s in status.vms
+            for s in vms
         ],
     )
 
@@ -389,7 +393,7 @@ class ScalingGroup:
         self._startup_grace = startup_grace_period
         self._heartbeat_grace = heartbeat_grace_period
 
-        self._threads = threads
+        self._threads = threads if threads is not None else get_thread_container()
         self._monitor_interval = monitor_interval
         self._monitor_thread: ManagedThread | None = None
 
@@ -522,9 +526,11 @@ class ScalingGroup:
         """
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
-            state = self._slices.pop(slice_id, None)
+            state = self._slices.get(slice_id)
         if state:
             state.handle.terminate()
+            with self._slices_lock:
+                self._slices.pop(slice_id, None)
             self._last_scale_down = timestamp
 
     def cleanup_failed_slices(self, timestamp: Timestamp | None = None) -> list[SliceHandle]:
@@ -537,14 +543,18 @@ class ScalingGroup:
 
         with self._slices_lock:
             snapshot = list(self._slices.items())
-        failed_slice_ids = [sid for sid, state in snapshot if self._get_slice_status(state).any_failed]
+        failed_slice_ids = [
+            sid for sid, state in snapshot if (status := self._get_slice_status(state)) is not None and status.any_failed
+        ]
 
         for slice_id in failed_slice_ids:
             with self._slices_lock:
-                state = self._slices.pop(slice_id, None)
+                state = self._slices.get(slice_id)
             if state:
                 logger.info("Cleaning up failed slice %s in group %s", slice_id, self.name)
                 state.handle.terminate()
+                with self._slices_lock:
+                    self._slices.pop(slice_id, None)
                 cleaned.append(state.handle)
 
         if cleaned:
@@ -567,7 +577,7 @@ class ScalingGroup:
         """Count of slices where all VMs are ready."""
         with self._slices_lock:
             snapshot = list(self._slices.values())
-        return sum(1 for state in snapshot if self._get_slice_status(state).all_ready)
+        return sum(1 for state in snapshot if (status := self._get_slice_status(state)) is not None and status.all_ready)
 
     def get_slice(self, slice_id: str) -> SliceHandle | None:
         """Get a specific slice handle by ID."""
@@ -647,7 +657,8 @@ class ScalingGroup:
             snapshot = list(self._slices.items())
         eligible = []
         for slice_id, state in snapshot:
-            if self._get_slice_status(state).all_ready and self.is_slice_eligible_for_scaledown(slice_id, timestamp):
+            status = self._get_slice_status(state)
+            if status is not None and status.all_ready and self.is_slice_eligible_for_scaledown(slice_id, timestamp):
                 eligible.append((state, state.last_active.epoch_ms()))
         eligible.sort(key=lambda x: x[1])
         return [s[0] for s in eligible]
@@ -812,6 +823,11 @@ class ScalingGroup:
             counts[SliceLifecycleState.REQUESTING] = self._pending_scale_ups
         for state in snapshot:
             status = self._get_slice_status(state)
+            if status is None:
+                # Slice exists but monitor hasn't refreshed yet — count as booting
+                counts[SliceLifecycleState.BOOTING] += 1
+                continue
+
             vms = status.vms
 
             # Skip terminated VM groups
@@ -943,8 +959,6 @@ class ScalingGroup:
 
     def start_monitor(self) -> None:
         """Start the background monitor thread that refreshes all slice statuses."""
-        if not self._threads:
-            return
 
         def monitor(stop_event: threading.Event) -> None:
             limiter = RateLimiter(self._monitor_interval)
@@ -970,31 +984,20 @@ class ScalingGroup:
             except Exception as e:
                 logger.warning("Failed to refresh slice %s: %s", state.handle.slice_id, e)
 
-    def _get_slice_status(self, state: SliceState) -> VmGroupStatus:
-        """Get slice status from cache. Returns BOOTING placeholder if not yet observed.
+    def _get_slice_status(self, state: SliceState) -> VmGroupStatus | None:
+        """Get slice status from cache. Returns None if not yet observed.
 
         Only the monitor thread does I/O (via refresh_status). The autoscaler
-        thread is always non-blocking. A slice with no cached status is treated
-        as booting — it won't be counted as ready, failed, or idle.
+        thread is always non-blocking. Callers must handle None — a slice with
+        no cached status has unknown VM count and state.
         """
-        cached = state.cached_status
-        if cached is not None:
-            return cached
-        return VmGroupStatus(
-            vms=[
-                VmSnapshot(
-                    vm_id=f"{state.handle.slice_id}-pending",
-                    state=vm_pb2.VM_STATE_BOOTING,
-                    address="",
-                    init_phase="",
-                    init_error="",
-                )
-            ]
-        )
+        return state.cached_status
 
     def _get_slice_vm_addresses(self, state: SliceState) -> list[str]:
-        """Get VM addresses from cached status."""
+        """Get VM addresses from cached status. Returns [] if status not yet cached."""
         status = self._get_slice_status(state)
+        if status is None:
+            return []
         return [vm.address for vm in status.vms if vm.address]
 
     def find_slice_for_vm(self, vm_address: str) -> str | None:

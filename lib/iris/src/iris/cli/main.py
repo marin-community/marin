@@ -11,7 +11,7 @@ import sys
 
 import click
 
-from iris.logging import configure_logging as _configure_logging
+from iris.logging import configure_logging
 
 logger = _logging_module.getLogger(__name__)
 
@@ -47,9 +47,9 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     ctx.obj["traceback"] = show_traceback
 
     if verbose:
-        _configure_logging(level=_logging_module.DEBUG)
+        configure_logging(level=_logging_module.DEBUG)
     else:
-        _configure_logging(level=_logging_module.INFO)
+        configure_logging(level=_logging_module.INFO)
 
     # Validate mutually exclusive options
     if controller_url and config_file:

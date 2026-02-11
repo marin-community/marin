@@ -90,7 +90,7 @@ def platform_env(request) -> Iterator[PlatformEnv]:
 
     if name == "gcp":
         fake = FakeGcloud()
-        gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+        gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
         platform = GcpPlatform(gcp_config, label_prefix="iris")
         with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
             yield PlatformEnv(platform=platform, zone="us-central2-b", name="gcp", label_prefix="iris")
@@ -395,3 +395,76 @@ def test_local_shutdown_stops_thread_container():
     platform.shutdown()
     assert not threads.is_alive
     assert len(platform.list_slices(zones=["local"])) == 0
+
+
+# =============================================================================
+# Section 5: list_all_slices Tests
+# =============================================================================
+
+
+def test_list_all_slices_returns_created_slices(platform_env: PlatformEnv):
+    """list_all_slices discovers slices without caller specifying zones."""
+    cfg = _make_slice_config(platform_env, "group-a")
+    handle = platform_env.platform.create_slice(cfg)
+    all_slices = platform_env.platform.list_all_slices()
+    assert handle.slice_id in {s.slice_id for s in all_slices}
+
+
+def test_list_all_slices_filters_by_labels(platform_env: PlatformEnv):
+    """list_all_slices respects label filter."""
+    cfg_a = _make_slice_config(platform_env, "group-a")
+    cfg_b = _make_slice_config(platform_env, "group-b")
+    platform_env.platform.create_slice(cfg_a)
+    platform_env.platform.create_slice(cfg_b)
+
+    label_key = f"{platform_env.label_prefix}-scale-group"
+    filtered = platform_env.platform.list_all_slices(labels={label_key: "group-a"})
+    assert all(s.scale_group == "group-a" for s in filtered)
+    assert len(filtered) == 1
+
+
+def test_gcp_list_all_slices_raises_without_zones():
+    """GcpPlatform.list_all_slices raises when no zones configured."""
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+    with pytest.raises(ValueError, match="no zones configured"):
+        platform.list_all_slices()
+
+
+def test_gcp_list_all_slices_multi_zone():
+    """GcpPlatform.list_all_slices returns slices across multiple zones."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(
+        project_id="test-project",
+        zones=["zone-a", "zone-b"],
+    )
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        cfg_a = config_pb2.SliceConfig(
+            name_prefix="iris-tpu",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-16",
+        )
+        cfg_a.gcp.zone = "zone-a"
+        cfg_a.gcp.runtime_version = "tpu-ubuntu2204-base"
+        cfg_a.labels["iris-managed"] = "true"
+
+        cfg_b = config_pb2.SliceConfig(
+            name_prefix="iris-tpu",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-16",
+        )
+        cfg_b.gcp.zone = "zone-b"
+        cfg_b.gcp.runtime_version = "tpu-ubuntu2204-base"
+        cfg_b.labels["iris-managed"] = "true"
+
+        handle_a = platform.create_slice(cfg_a)
+        handle_b = platform.create_slice(cfg_b)
+
+        all_slices = platform.list_all_slices()
+        slice_ids = {s.slice_id for s in all_slices}
+        assert handle_a.slice_id in slice_ids
+        assert handle_b.slice_id in slice_ids
+        assert handle_a.slice_id in slice_ids
+        assert handle_b.slice_id in slice_ids

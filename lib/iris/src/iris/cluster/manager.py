@@ -10,8 +10,9 @@ Provides free functions for cluster lifecycle operations:
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from iris.cluster.config import IrisConfig, validate_config
@@ -22,6 +23,8 @@ from iris.cluster.controller.lifecycle import (
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
+
+TERMINATE_TIMEOUT_SECONDS = 60
 
 
 @contextmanager
@@ -57,46 +60,72 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
             platform.shutdown()
 
 
-def stop_all(config: config_pb2.IrisClusterConfig) -> None:
-    """Stop controller and all worker slices.
+def _collect_terminate_targets(
+    platform,
+    config: config_pb2.IrisClusterConfig,
+) -> list[tuple[str, Callable[[], None]]]:
+    """Enumerate all resources that need terminating: controller + slices.
 
-    Best-effort cleanup: attempts every stop/terminate operation even if earlier
-    ones fail, and always calls platform.shutdown(). Failures are logged but do
-    not prevent subsequent cleanup steps from running.
+    Returns a list of (name, terminate_fn) pairs. Discovery (list_all_slices) is
+    a single pass across all zones; the actual deletes happen later in parallel.
+    """
+    label_prefix = config.platform.label_prefix or "iris"
+    targets: list[tuple[str, Callable[[], None]]] = []
+
+    targets.append(("controller", lambda: stop_controller(platform, config)))
+
+    all_slices = platform.list_all_slices(
+        labels={f"{label_prefix}-managed": "true"},
+    )
+    for slice_handle in all_slices:
+        logger.info("Queued termination for slice %s", slice_handle.slice_id)
+        targets.append((f"slice:{slice_handle.slice_id}", slice_handle.terminate))
+
+    return targets
+
+
+def stop_all(config: config_pb2.IrisClusterConfig) -> None:
+    """Stop controller and all worker slices in parallel.
+
+    First enumerates all terminate targets (controller VM + TPU slices), then
+    runs all gcloud delete calls concurrently via a thread pool. Applies a hard
+    timeout of TERMINATE_TIMEOUT_SECONDS — any operation still running after
+    that is logged at WARNING and abandoned.
     """
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
-    label_prefix = config.platform.label_prefix or "iris"
     errors: list[str] = []
 
     try:
-        try:
-            stop_controller(platform, config)
-        except Exception:
-            logger.exception("Failed to stop controller")
-            errors.append("stop_controller")
+        targets = _collect_terminate_targets(platform, config)
+        if not targets:
+            logger.info("No resources to terminate")
+            return
 
-        for group_config in config.scale_groups.values():
-            try:
-                template = group_config.slice_template
-                if template.HasField("gcp") and template.gcp.zone:
-                    zones = [template.gcp.zone]
-                else:
-                    zones = ["local"]
+        logger.info("Terminating %d resource(s) in parallel", len(targets))
 
-                for slice_handle in platform.list_slices(
-                    zones=zones,
-                    labels={f"{label_prefix}-scale-group": group_config.name},
-                ):
-                    try:
-                        logger.info("Terminating slice %s", slice_handle.slice_id)
-                        slice_handle.terminate()
-                    except Exception:
-                        logger.exception("Failed to terminate slice %s", slice_handle.slice_id)
-                        errors.append(f"terminate:{slice_handle.slice_id}")
-            except Exception:
-                logger.exception("Failed to list/terminate slices for group %s", group_config.name)
-                errors.append(f"list_slices:{group_config.name}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as executor:
+            future_to_name: dict[concurrent.futures.Future, str] = {executor.submit(fn): name for name, fn in targets}
+
+            done, not_done = concurrent.futures.wait(future_to_name, timeout=TERMINATE_TIMEOUT_SECONDS)
+
+            for future in done:
+                name = future_to_name[future]
+                try:
+                    future.result()
+                except Exception:
+                    logger.exception("Failed to terminate %s", name)
+                    errors.append(name)
+
+            for future in not_done:
+                name = future_to_name[future]
+                logger.warning(
+                    "Termination of %s still running after %ds, giving up",
+                    name,
+                    TERMINATE_TIMEOUT_SECONDS,
+                )
+                future.cancel()
+                errors.append(f"timeout:{name}")
     finally:
         platform.shutdown()
 

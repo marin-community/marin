@@ -5,6 +5,7 @@ platform:
   label_prefix: iris
   gcp:
     project_id: hai-gcp-models
+    zones: [europe-west4-b]
 
 defaults:
   timeouts:

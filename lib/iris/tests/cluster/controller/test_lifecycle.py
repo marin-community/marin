@@ -142,6 +142,9 @@ class FakePlatform:
     ) -> list[SliceHandle]:
         return []
 
+    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[SliceHandle]:
+        return []
+
     def list_vms(
         self,
         zones: list[str],
