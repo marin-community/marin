@@ -154,6 +154,14 @@ class ContainerHandle(Protocol):
         """Get resource usage statistics."""
         ...
 
+    def profile(self, duration_seconds: int = 10, rate_hz: int = 100, output_format: str = "flamegraph") -> bytes:
+        """Profile the running process using py-spy.
+
+        Returns raw profile output (SVG for flamegraph, JSON for speedscope, text for raw).
+        Raises RuntimeError if profiling fails or container is not running.
+        """
+        ...
+
     def cleanup(self) -> None:
         """Remove the container and clean up resources."""
         ...

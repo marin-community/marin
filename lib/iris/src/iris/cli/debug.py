@@ -767,3 +767,36 @@ def cleanup(ctx, dry_run: bool):
     if failed > 0:
         click.echo(f"Failed to delete {failed} resource(s).", err=True)
         sys.exit(1)
+
+
+@debug.command()
+@click.argument("task_id")
+@click.option("--duration", default=10, help="Profiling duration in seconds")
+@click.option("--format", "fmt", type=click.Choice(["flamegraph", "speedscope", "raw"]), default="speedscope")
+@click.option("--rate", default=100, help="Sample rate in Hz")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.pass_context
+def profile(ctx, task_id: str, duration: int, fmt: str, rate: int, output: str | None):
+    """Profile a running task with py-spy and download the result."""
+    controller_url = require_controller_url(ctx)
+    client = ControllerServiceClientSync(controller_url, timeout_ms=(duration + 30) * 1000)
+    try:
+        click.echo(f"Profiling {task_id} for {duration}s (format={fmt}, rate={rate}Hz)...")
+        resp = client.profile_task(
+            cluster_pb2.ProfileTaskRequest(
+                task_id=task_id,
+                duration_seconds=duration,
+                rate_hz=rate,
+                format=fmt,
+            )
+        )
+        if resp.error:
+            click.echo(f"Error: {resp.error}", err=True)
+            sys.exit(1)
+        ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
+        ext = ext_map.get(fmt, "bin")
+        out_path = output or f"profile-{task_id.replace('/', '_')}.{ext}"
+        Path(out_path).write_bytes(resp.profile_data)
+        click.echo(f"Profile saved to {out_path} ({len(resp.profile_data)} bytes)")
+    finally:
+        client.close()
