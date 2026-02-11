@@ -10,10 +10,14 @@ VM group management, and state tracking - not on implementation details.
 from unittest.mock import MagicMock
 
 import pytest
-
+from iris.cluster.controller.scaling_group import (
+    ScalingGroup,
+    SliceLifecycleState,
+    _zones_from_config,
+    slice_handle_status,
+)
 from iris.cluster.platform.base import CloudSliceState, CloudVmState, QuotaExhaustedError, SliceStatus, VmStatus
 from iris.cluster.types import VmWorkerStatus
-from iris.cluster.controller.scaling_group import ScalingGroup, SliceLifecycleState, _zones_from_config
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -764,7 +768,6 @@ class TestScalingGroupAvailability:
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
         from iris.cluster.controller.scaling_group import GroupAvailability
-
         from iris.time_utils import Deadline
 
         platform = make_mock_platform()
@@ -817,7 +820,6 @@ class TestScalingGroupAvailability:
     def test_quota_exceeded_takes_precedence_over_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded has higher precedence than backoff."""
         from iris.cluster.controller.scaling_group import GroupAvailability
-
         from iris.time_utils import Deadline
 
         platform = make_mock_platform()
@@ -1168,3 +1170,76 @@ class TestPrepareSliceConfigPreemptible:
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
         assert result.preemptible is False
+
+
+def _make_vm_handle(vm_id: str, cloud_state: CloudVmState, address: str = "10.0.0.1") -> MagicMock:
+    handle = MagicMock()
+    handle.vm_id = vm_id
+    handle.internal_address = address
+    handle.status.return_value = VmStatus(state=cloud_state)
+    return handle
+
+
+def _make_slice_handle(
+    slice_id: str,
+    slice_state: CloudSliceState,
+    vm_handles: list[MagicMock],
+) -> MagicMock:
+    handle = MagicMock()
+    handle.slice_id = slice_id
+    handle.status.return_value = SliceStatus(state=slice_state, vm_count=len(vm_handles))
+    handle.list_vms.return_value = vm_handles
+    return handle
+
+
+class TestSliceHandleStatusReadinessGating:
+    """VMs in a CREATING or REPAIRING slice must not appear READY."""
+
+    @pytest.mark.parametrize("slice_state", [CloudSliceState.CREATING, CloudSliceState.REPAIRING])
+    def test_running_vms_clamped_to_booting_when_slice_not_ready(self, slice_state: CloudSliceState):
+        """A VM reporting RUNNING should show as BOOTING when the slice is still being set up."""
+        vm = _make_vm_handle("vm-0", CloudVmState.RUNNING)
+        handle = _make_slice_handle("slice-1", slice_state, [vm])
+
+        status = slice_handle_status(handle)
+
+        assert len(status.vms) == 1
+        assert status.vms[0].state == vm_pb2.VM_STATE_BOOTING
+        assert not status.all_ready
+
+    def test_running_vms_report_ready_when_slice_ready(self):
+        """A VM reporting RUNNING should show as READY when the slice itself is READY."""
+        vm = _make_vm_handle("vm-0", CloudVmState.RUNNING)
+        handle = _make_slice_handle("slice-1", CloudSliceState.READY, [vm])
+
+        status = slice_handle_status(handle)
+
+        assert len(status.vms) == 1
+        assert status.vms[0].state == vm_pb2.VM_STATE_READY
+        assert status.all_ready
+
+    def test_non_running_vm_states_unaffected_by_clamping(self):
+        """STOPPED/TERMINATED VMs keep their mapped state regardless of slice state."""
+        vms = [
+            _make_vm_handle("vm-0", CloudVmState.STOPPED),
+            _make_vm_handle("vm-1", CloudVmState.TERMINATED, address="10.0.0.2"),
+        ]
+        handle = _make_slice_handle("slice-1", CloudSliceState.CREATING, vms)
+
+        status = slice_handle_status(handle)
+
+        assert status.vms[0].state == vm_pb2.VM_STATE_FAILED
+        assert status.vms[1].state == vm_pb2.VM_STATE_TERMINATED
+
+    def test_mixed_vms_in_creating_slice(self):
+        """In a CREATING slice, only RUNNING VMs get clamped; others keep their state."""
+        vms = [
+            _make_vm_handle("vm-0", CloudVmState.RUNNING, address="10.0.0.1"),
+            _make_vm_handle("vm-1", CloudVmState.UNKNOWN, address="10.0.0.2"),
+        ]
+        handle = _make_slice_handle("slice-1", CloudSliceState.CREATING, vms)
+
+        status = slice_handle_status(handle)
+
+        assert status.vms[0].state == vm_pb2.VM_STATE_BOOTING  # clamped
+        assert status.vms[1].state == vm_pb2.VM_STATE_BOOTING  # already BOOTING from UNKNOWN
