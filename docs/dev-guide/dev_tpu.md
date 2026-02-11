@@ -34,6 +34,12 @@ make dev_setup
 
 ### For humans
 
+Set a TPU name once for your session:
+
+```bash
+export TPU_NAME="${USER}-dev"
+```
+
 Allocate:
 
 ```bash
@@ -61,8 +67,8 @@ RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   execute -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
 ```
 
-`dev_tpu.py` creates an alias for a TPU VM monitored by Ray. By default, it uses your username and the region
-of the cluster config to create a name like `dev-<cluster_name>-<user>`.
+`dev_tpu.py` creates an alias for a TPU VM monitored by Ray. By default, it uses your username together with the
+`cluster_name` from the config to create a name like `dev-<cluster_name>-<user>`.
 You can also pass an explicit `--tpu-name` if you want to manage multiple TPUs or prefer a different naming scheme.
 
 You can also connect directly to `dev-tpu-<tpu-name>` from your terminal or VSCode/Cursor Remote-SSH.
