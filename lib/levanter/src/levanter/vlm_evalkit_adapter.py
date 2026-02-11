@@ -345,14 +345,14 @@ class LevanterVLM(BaseModel):
         Returns:
             The generated text response.
         """
-        # Parse messages into prompt and images
-        prompt, images = self._parse_messages(msgs)
+        # Parse messages into content items and images
+        content_items, images = self._parse_messages(msgs)
 
         if not images:
             logger.warning("No images found in messages, using text-only prompt")
 
         # Create VLM request
-        vlm_request = self._create_vlm_request(prompt, images)
+        vlm_request = self._create_vlm_request(content_items, images)
 
         # Generate
         result = self._engine.generate([vlm_request])

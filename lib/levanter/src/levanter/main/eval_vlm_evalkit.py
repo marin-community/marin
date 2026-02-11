@@ -135,14 +135,27 @@ def _save_eval_checkpoint(
     results: dict,
     processed_indices: list,
     total_samples: int,
+    detailed_results: Optional[dict] = None,
 ):
-    """Save evaluation checkpoint to support resume."""
+    """Save evaluation checkpoint to support resume.
+
+    Args:
+        checkpoint_path: Path to save the checkpoint file.
+        benchmark: Benchmark name.
+        results: Dict mapping index → prediction text (for EVAL compatibility).
+        processed_indices: List of processed sample indices.
+        total_samples: Total number of samples in the benchmark.
+        detailed_results: Optional dict mapping index → per-sample detail dict with
+            keys: index, question, answer, prediction, parsed_answer, correct, score.
+    """
     checkpoint_data = {
         "benchmark": benchmark,
         "results": {str(k): v for k, v in results.items()},  # Convert keys to strings for JSON
         "processed_indices": list(processed_indices),  # Keep original type (int or str)
         "total_samples": total_samples,
     }
+    if detailed_results is not None:
+        checkpoint_data["detailed_results"] = {str(k): v for k, v in detailed_results.items()}
 
     fs, plain_path = fsspec.core.url_to_fs(checkpoint_path)
     # Ensure parent directory exists
@@ -151,7 +164,7 @@ def _save_eval_checkpoint(
         fs.makedirs(parent_dir, exist_ok=True)
 
     with fs.open(plain_path, "w") as f:
-        json.dump(checkpoint_data, f, indent=2)
+        json.dump(checkpoint_data, f, indent=2, default=_json_default)
 
     logger.info(f"Checkpoint saved: {checkpoint_path} ({len(processed_indices)}/{total_samples} samples)")
 
@@ -175,6 +188,10 @@ def _load_eval_checkpoint(checkpoint_path: str) -> Optional[dict]:
 
         checkpoint_data["results"] = {_try_parse_key(k): v for k, v in checkpoint_data["results"].items()}
         checkpoint_data["processed_indices"] = set(checkpoint_data["processed_indices"])
+        if "detailed_results" in checkpoint_data:
+            checkpoint_data["detailed_results"] = {
+                _try_parse_key(k): v for k, v in checkpoint_data["detailed_results"].items()
+            }
 
         logger.info(f"Loaded checkpoint: {checkpoint_path} ({len(checkpoint_data['processed_indices'])}/{checkpoint_data['total_samples']} samples)")
         return checkpoint_data
@@ -222,6 +239,103 @@ def _compute_per_sample_results(dataset, dataset_name, pred_data):
         import traceback
         traceback.print_exc()
         return None
+
+
+def _parse_single_sample(dataset_type: str, dataset_name: str, row_dict: dict) -> dict:
+    """Incrementally parse a single sample's prediction and compute correctness.
+
+    This is called per-sample during inference so that checkpoints contain
+    parsed_answer, correct, and score alongside the raw prediction.
+
+    Args:
+        dataset_type: The VLMEvalKit dataset TYPE (e.g. 'VQA', 'MCQ', 'Y/N').
+        dataset_name: The dataset name string (e.g. 'ChartQA_TEST').
+        row_dict: A dict with at least 'prediction' and 'answer' keys.  For MCQ,
+            should also contain any columns that prefetch_answer needs (e.g.
+            'A', 'B', 'C', 'D', 'prediction').
+
+    Returns:
+        Dict with 'parsed_answer', 'correct', 'score'.
+    """
+    prediction = str(row_dict.get('prediction', ''))
+    answer = str(row_dict.get('answer', ''))
+
+    try:
+        if dataset_type == 'VQA':
+            return _parse_single_vqa(dataset_name, row_dict)
+        elif dataset_type in ('MCQ', 'MCQ_MMMU_Pro'):
+            return _parse_single_mcq(row_dict)
+        elif dataset_type == 'Y/N':
+            return _parse_single_yn(prediction, answer)
+        else:
+            return {'parsed_answer': prediction, 'correct': False, 'score': 0.0}
+    except Exception as e:
+        logger.debug(f"Failed to parse single sample: {e}")
+        return {'parsed_answer': prediction, 'correct': False, 'score': 0.0}
+
+
+def _parse_single_vqa(dataset_name: str, row_dict: dict) -> dict:
+    """Parse a single VQA sample."""
+    from vlmeval.dataset.utils.vqa_eval import process_line, hit_calculate
+    from vlmeval.smp import listinstr
+
+    if listinstr(['ChartQA'], dataset_name):
+        method = 'relaxed_accuracy'
+    elif listinstr(['OCRVQA', 'GQA'], dataset_name):
+        method = 'accuracy'
+    elif listinstr(['DocVQA', 'InfoVQA'], dataset_name):
+        method = 'anls'
+    elif listinstr(['TextVQA'], dataset_name):
+        method = 'vqa_score'
+    else:
+        method = 'vqa_score'
+
+    # process_line expects a pandas-like object; convert dict to Series
+    line = pd.Series(row_dict)
+    result = process_line(line, method=method)
+    hits = hit_calculate([result], dataset_name)
+    hit_score = hits[0] if hits else 0.0
+
+    return {
+        'parsed_answer': str(result.get('pred', '')),
+        'correct': bool(hit_score > 0),
+        'score': round(float(hit_score), 4),
+    }
+
+
+def _parse_single_mcq(row_dict: dict) -> dict:
+    """Parse a single MCQ sample."""
+    from vlmeval.dataset.utils.multiple_choice import prefetch_answer
+
+    prediction = str(row_dict.get('prediction', ''))
+    answer = str(row_dict.get('answer', '')).strip().upper()
+
+    line = pd.Series(row_dict)
+    extracted = prefetch_answer(line)
+    if extracted:
+        parsed = str(extracted).strip().upper()
+    else:
+        parsed = prediction.strip()
+
+    correct = (parsed == answer)
+    return {
+        'parsed_answer': parsed,
+        'correct': correct,
+        'score': 1.0 if correct else 0.0,
+    }
+
+
+def _parse_single_yn(prediction: str, answer: str) -> dict:
+    """Parse a single Y/N sample."""
+    from vlmeval.dataset.utils.yorn import YOrN_Extraction
+
+    extracted = YOrN_Extraction(prediction)
+    correct = (extracted.lower() == answer.strip().lower()) if extracted != 'Unknown' else False
+    return {
+        'parsed_answer': extracted,
+        'correct': correct,
+        'score': 1.0 if correct else 0.0,
+    }
 
 
 def _compute_vqa_per_sample(dataset_name, pred_data):
@@ -638,10 +752,18 @@ def main(config: EvalVLMEvalKitConfig):
 
                 # Run inference in batches (similar to vlm_eval_harness.py:600-705)
                 results = {}
+                detailed_results = {}  # idx → {index, question, answer, prediction, parsed_answer, correct, score}
                 processed_indices = set()
                 batch_size = max(1, config.vlm_batch_size)
                 num_batches = (len(data) + batch_size - 1) // batch_size
                 results_since_last_checkpoint = 0
+
+                # Dataset type for incremental per-sample parsing
+                dataset_type = getattr(dataset, 'TYPE', '')
+
+                # Build index→row lookup for enriching results with question/answer
+                # Convert each row to a plain dict so _parse_single_sample can work on it
+                data_by_index = {row['index']: row.to_dict() for _, row in data.iterrows()}
 
                 # Try to load checkpoint for resume
                 checkpoint_path = _get_checkpoint_path(output_dir, eval_checkpoint_name, benchmark)
@@ -650,6 +772,7 @@ def main(config: EvalVLMEvalKitConfig):
                     if checkpoint_data is not None:
                         results = checkpoint_data["results"]
                         processed_indices = checkpoint_data["processed_indices"]
+                        detailed_results = checkpoint_data.get("detailed_results", {})
                         logger.info(f"Resuming {benchmark} from checkpoint: {len(processed_indices)}/{len(data)} samples already processed")
 
                 for batch_idx in tqdm(range(num_batches), desc=f"Evaluating {benchmark} (batch_size={batch_size})"):
@@ -676,14 +799,24 @@ def main(config: EvalVLMEvalKitConfig):
 
                         try:
                             # Parse messages and create VLM request
-                            prompt, images = vlm_model._parse_messages(struct)
-                            vlm_request = vlm_model._create_vlm_request(prompt, images, request_id=i)
+                            content_items, images = vlm_model._parse_messages(struct)
+                            vlm_request = vlm_model._create_vlm_request(content_items, images, request_id=i)
                             vlm_requests.append(vlm_request)
                             batch_indices.append(idx)
                         except Exception as e:
                             logger.error(f"Error creating request for index {idx}: {e}")
                             results[idx] = ""
                             processed_indices.add(idx)
+                            row_dict = data_by_index.get(idx, {})
+                            detailed_results[idx] = {
+                                "index": idx,
+                                "question": str(row_dict.get('question', '')),
+                                "answer": str(row_dict.get('answer', '')),
+                                "prediction": "",
+                                "parsed_answer": "",
+                                "correct": False,
+                                "score": 0.0,
+                            }
 
                     # Generate for batch
                     if vlm_requests:
@@ -708,6 +841,21 @@ def main(config: EvalVLMEvalKitConfig):
                                     logger.warning(f"No tokens for index {idx}: result.tokens={result.tokens is not None}, i={i}, num_tokens={num_tokens}")
                                     results[idx] = ""
                                     processed_indices.add(idx)
+
+                                # Build detailed entry with incremental parsed_answer
+                                row_dict = data_by_index.get(idx, {})
+                                row_for_parse = dict(row_dict)
+                                row_for_parse['prediction'] = results[idx]
+                                scoring = _parse_single_sample(dataset_type, dataset_name, row_for_parse)
+                                detailed_results[idx] = {
+                                    "index": idx,
+                                    "question": str(row_dict.get('question', '')),
+                                    "answer": str(row_dict.get('answer', '')),
+                                    "prediction": results[idx],
+                                    "parsed_answer": scoring['parsed_answer'],
+                                    "correct": scoring['correct'],
+                                    "score": scoring['score'],
+                                }
                         except Exception as e:
                             logger.error(f"Error during batch generation: {e}")
                             import traceback
@@ -716,6 +864,17 @@ def main(config: EvalVLMEvalKitConfig):
                                 if idx not in results:
                                     results[idx] = ""
                                 processed_indices.add(idx)
+                                if idx not in detailed_results:
+                                    row_dict = data_by_index.get(idx, {})
+                                    detailed_results[idx] = {
+                                        "index": idx,
+                                        "question": str(row_dict.get('question', '')),
+                                        "answer": str(row_dict.get('answer', '')),
+                                        "prediction": results[idx],
+                                        "parsed_answer": "",
+                                        "correct": False,
+                                        "score": 0.0,
+                                    }
                     else:
                         logger.warning(f"Batch {batch_idx}: No valid VLM requests created")
 
@@ -732,6 +891,7 @@ def main(config: EvalVLMEvalKitConfig):
                             results=results,
                             processed_indices=list(processed_indices),
                             total_samples=len(data),
+                            detailed_results=detailed_results,
                         )
                         results_since_last_checkpoint = 0
 
@@ -801,6 +961,7 @@ def main(config: EvalVLMEvalKitConfig):
                             results=results,
                             processed_indices=list(processed_indices),
                             total_samples=len(data),
+                            detailed_results=detailed_results,
                         )
                 except NameError:
                     pass  # Variables not defined yet
