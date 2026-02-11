@@ -321,7 +321,7 @@ class TestAutoscalerScaleUp:
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(3600_000))
         ts = Timestamp.now()
-        p = group.begin_scale_up(ts)
+        p = group.begin_scale_up()
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(p, handle, ts)
         autoscaler = make_autoscaler({"test-group": group})
@@ -1268,7 +1268,7 @@ class TestAutoscalerQuotaHandling:
         )
 
         ts = Timestamp.from_ms(1000)
-        p = group.begin_scale_up(ts)
+        p = group.begin_scale_up()
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.fail_scale_up(p)
@@ -1423,7 +1423,7 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform)
 
         ts = Timestamp.now()
-        placeholder_id = group.begin_scale_up(ts)
+        placeholder_id = group.begin_scale_up()
 
         availability = group.availability(ts)
         assert availability.status == GroupAvailability.REQUESTING
@@ -1438,7 +1438,7 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform)
 
         ts = Timestamp.now()
-        placeholder_id = group.begin_scale_up(ts)
+        placeholder_id = group.begin_scale_up()
         assert group.availability(ts).status == GroupAvailability.REQUESTING
 
         handle = make_mock_slice_handle("new-slice-1", all_ready=True)
@@ -1457,7 +1457,7 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform)
 
         ts = Timestamp.now()
-        placeholder_id = group.begin_scale_up(ts)
+        placeholder_id = group.begin_scale_up()
         assert group.availability(ts).status == GroupAvailability.REQUESTING
 
         group.fail_scale_up(placeholder_id)
@@ -1486,7 +1486,7 @@ class TestScalingGroupRequestingState:
         group2 = ScalingGroup(config2, platform2)
 
         ts = Timestamp.now()
-        group1.begin_scale_up(ts)
+        group1.begin_scale_up()
 
         demand_entries = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
 

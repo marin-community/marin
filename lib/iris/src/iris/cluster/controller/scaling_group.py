@@ -244,14 +244,13 @@ class ScalingGroup:
         """Number of consecutive scale-up failures."""
         return self._consecutive_failures
 
-    def begin_scale_up(self, timestamp: Timestamp | None = None) -> str:
+    def begin_scale_up(self) -> str:
         """Insert a REQUESTING placeholder into _slices and return its ID.
 
         The placeholder has handle=None and counts toward slice_count() and
         slice_state_counts(REQUESTING), preventing double scale-up without
         any timeout-based deadline.
         """
-        timestamp = timestamp or Timestamp.now()
         placeholder_id = f"requesting-{uuid.uuid4().hex[:12]}"
         with self._slices_lock:
             self._slices[placeholder_id] = SliceState(handle=None)

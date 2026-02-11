@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Bootstrap script generation for worker and controller VMs.
 
@@ -21,14 +10,18 @@ startup. Controller bootstrap is simpler — Docker setup plus container start.
 
 from __future__ import annotations
 
+import logging
 import shlex
+import time
 
 import yaml
 
-from iris.cluster.config import config_to_dict
-from iris.cluster.platform.base import PlatformError
+from iris.cluster.platform.base import PlatformError, SliceHandle
+from iris.cluster.types import get_tpu_topology
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Worker Bootstrap
@@ -47,7 +40,7 @@ class WorkerBootstrap:
     def __init__(self, cluster_config: config_pb2.IrisClusterConfig):
         self._cluster_config = cluster_config
 
-    def bootstrap_slice(self, handle) -> dict[str, str]:
+    def bootstrap_slice(self, handle: SliceHandle) -> dict[str, str]:
         """Bootstrap all VMs in a newly created slice.
 
         Args:
@@ -57,11 +50,20 @@ class WorkerBootstrap:
             Mapping of vm_id to bootstrap log text captured during bootstrap.
 
         Raises:
-            PlatformError: If any VM has no internal address after becoming reachable.
+            PlatformError: If any VM has no internal address after becoming reachable,
+                or if wait_for_connection times out, or if not all expected VMs are present.
         """
+        # Wait for all expected VMs to be present before bootstrapping.
+        # TPU slices can return partial VM lists during provisioning (e.g., 3 of 4 VMs).
+        self._wait_for_all_vms(handle)
+
         logs: dict[str, str] = {}
         for vm in handle.list_vms():
-            vm.wait_for_connection(timeout=Duration.from_seconds(300))
+            if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
+                raise PlatformError(
+                    f"VM {vm.vm_id} in slice {handle.slice_id} failed to become reachable "
+                    f"within timeout. The VM may be stuck in a boot loop or networking may be misconfigured."
+                )
             if not vm.internal_address:
                 raise PlatformError(
                     f"VM {vm.vm_id} in slice {handle.slice_id} has no internal address. "
@@ -71,6 +73,68 @@ class WorkerBootstrap:
             vm.bootstrap(script)
             logs[vm.vm_id] = vm.bootstrap_log
         return logs
+
+    def _wait_for_all_vms(self, handle: SliceHandle) -> None:
+        """Wait for all expected VMs to be present in the slice.
+
+        During TPU provisioning, list_vms() may return partial results as network
+        endpoints are gradually created. This polls until the expected VM count
+        (from TPU topology) is reached or times out.
+
+        Raises:
+            PlatformError: If the expected VM count is not reached within timeout.
+        """
+        # Derive expected VM count from accelerator_variant label if present.
+        # For slices created by the autoscaler, this label is always set.
+        # For manually created slices or other platforms (manual, local), skip the check.
+        accelerator_variant = handle.labels.get("iris-accelerator-variant", "")
+        if not accelerator_variant:
+            logger.debug(
+                "Slice %s has no iris-accelerator-variant label; skipping VM count check",
+                handle.slice_id,
+            )
+            return
+
+        try:
+            topology = get_tpu_topology(accelerator_variant)
+            expected_vm_count = topology.vm_count
+        except ValueError:
+            logger.warning(
+                "Unknown accelerator variant %s for slice %s; skipping VM count check",
+                accelerator_variant,
+                handle.slice_id,
+            )
+            return
+
+        # Poll for up to 60 seconds
+        timeout = 60.0
+        poll_interval = 2.0
+        start = time.time()
+
+        while time.time() - start < timeout:
+            vms = handle.list_vms()
+            if len(vms) >= expected_vm_count:
+                logger.info(
+                    "Slice %s has all %d expected VMs ready for bootstrap",
+                    handle.slice_id,
+                    expected_vm_count,
+                )
+                return
+            logger.debug(
+                "Slice %s has %d/%d VMs ready; waiting for remaining VMs...",
+                handle.slice_id,
+                len(vms),
+                expected_vm_count,
+            )
+            time.sleep(poll_interval)
+
+        # Final check after timeout
+        vms = handle.list_vms()
+        if len(vms) < expected_vm_count:
+            raise PlatformError(
+                f"Slice {handle.slice_id} has only {len(vms)}/{expected_vm_count} VMs "
+                f"ready after {timeout}s. The slice may be stuck in provisioning."
+            )
 
     def _build_script(self, vm_address: str) -> str:
         """Build the full bootstrap script for a single VM."""
@@ -279,6 +343,9 @@ def build_worker_bootstrap_script(
         cluster_config: Full cluster configuration
         vm_address: VM IP address for autoscaler tracking
     """
+    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
+    from iris.cluster.config import config_to_dict
+
     bootstrap_config = cluster_config.defaults.bootstrap
 
     # Serialize cluster config to YAML and embed it
@@ -470,6 +537,9 @@ def build_controller_bootstrap_script_from_config(
 
     Serializes the config to YAML and embeds it in the bootstrap script.
     """
+    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
+    from iris.cluster.config import config_to_dict
+
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     port = config.controller.gcp.port or config.controller.manual.port or 10000
     return build_controller_bootstrap_script(config.controller.image, port, config_yaml)

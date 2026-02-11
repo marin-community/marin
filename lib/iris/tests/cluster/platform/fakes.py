@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Fake implementations for testing the autoscaler.
 
@@ -98,6 +87,8 @@ class FakeVmHandle:
         self._iris_state_ready = False
         self._bootstrap_count = 0
         self._bootstrap_log_lines: list[str] = []
+        # Test control flag for wait_for_connection behavior
+        self._wait_for_connection_succeeds = True
 
     @property
     def vm_id(self) -> str:
@@ -115,7 +106,7 @@ class FakeVmHandle:
         return VmStatus(state=self._state)
 
     def wait_for_connection(self, timeout: Duration, poll_interval: Duration = Duration.from_seconds(5)) -> bool:
-        return True
+        return self._wait_for_connection_succeeds
 
     def run_command(self, command: str, timeout: Duration | None = None, on_line=None) -> CommandResult:
         return CommandResult(returncode=0, stdout="", stderr="")

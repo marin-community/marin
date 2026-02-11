@@ -18,37 +18,19 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
-from iris.cluster.types import parse_memory_string
+from iris.cluster.platform.bootstrap import WorkerBootstrap
 from iris.cluster.platform.ssh import SshConfig
+from iris.cluster.types import parse_memory_string
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
-
-
-class WorkerBootstrapProtocol(Protocol):
-    """Protocol for worker bootstrap functionality.
-
-    This protocol allows type checking without creating a circular import between
-    config.py and bootstrap.py. The actual WorkerBootstrap class in bootstrap.py
-    satisfies this protocol.
-    """
-
-    def bootstrap_slice(self, handle) -> dict[str, str]:
-        """Bootstrap all VMs in a newly created slice.
-
-        Returns:
-            Mapping of vm_id to bootstrap log text.
-        """
-        ...
-
 
 DEFAULT_SSH_PORT = 22
 
@@ -640,7 +622,7 @@ def create_autoscaler(
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str = "iris",
-    worker_bootstrap: WorkerBootstrapProtocol | None = None,
+    worker_bootstrap: WorkerBootstrap | None = None,
 ):
     """Create autoscaler from Platform and explicit config.
 

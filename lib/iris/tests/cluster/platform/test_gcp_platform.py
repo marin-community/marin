@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -445,11 +448,16 @@ def test_standalone_handle_status(mock_run: MagicMock):
 
 @patch("iris.cluster.platform.gcp.subprocess.run")
 def test_slice_handle_list_vms_returns_vm_handles(mock_run: MagicMock):
-    """list_vms() queries gcloud tpu describe and returns GcpVmHandle instances."""
+    """list_vms() queries gcloud tpu describe and returns GcpVmHandle instances.
+
+    Returns vm_count handles based on topology. v5litepod-16 has 4 VMs.
+    """
     tpu_data = {
         "networkEndpoints": [
             {"ipAddress": "10.0.0.1"},
             {"ipAddress": "10.0.0.2"},
+            {"ipAddress": "10.0.0.3"},
+            {"ipAddress": "10.0.0.4"},
         ]
     }
     mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(tpu_data), stderr="")
@@ -466,12 +474,109 @@ def test_slice_handle_list_vms_returns_vm_handles(mock_run: MagicMock):
 
     vms = handle.list_vms()
 
-    assert len(vms) == 2
+    assert len(vms) == 4
     assert all(isinstance(v, GcpVmHandle) for v in vms)
     assert vms[0].internal_address == "10.0.0.1"
     assert vms[1].internal_address == "10.0.0.2"
+    assert vms[2].internal_address == "10.0.0.3"
+    assert vms[3].internal_address == "10.0.0.4"
     assert vms[0].vm_id == "my-tpu-worker-0"
     assert vms[1].vm_id == "my-tpu-worker-1"
+    assert vms[2].vm_id == "my-tpu-worker-2"
+    assert vms[3].vm_id == "my-tpu-worker-3"
+
+
+@patch("iris.cluster.platform.gcp.subprocess.run")
+def test_slice_handle_list_vms_partial_endpoints(mock_run: MagicMock):
+    """list_vms() returns all VMs even when endpoints are incomplete.
+
+    This is the Task 11 bug fix: if a v5litepod-16 (4 VMs) has only 3 endpoints
+    provisioned, we must return 4 handles (with the 4th having empty address).
+    Otherwise bootstrap will skip the 4th VM.
+    """
+    tpu_data = {
+        "networkEndpoints": [
+            {"ipAddress": "10.0.0.1"},
+            {"ipAddress": "10.0.0.2"},
+            {"ipAddress": "10.0.0.3"},
+            # Missing 4th endpoint - VM still provisioning
+        ]
+    }
+    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(tpu_data), stderr="")
+
+    handle = GcpSliceHandle(
+        _slice_id="my-tpu",
+        _zone="zone-a",
+        _project_id="proj",
+        _labels={"iris-scale-group": "g1"},
+        _created_at=MagicMock(epoch_ms=lambda: 123),
+        _label_prefix="iris",
+        _accelerator_variant="v5litepod-16",
+    )
+
+    vms = handle.list_vms()
+
+    # Must return 4 VMs (topology count), not 3 (endpoint count)
+    assert len(vms) == 4
+    assert all(isinstance(v, GcpVmHandle) for v in vms)
+    assert vms[0].internal_address == "10.0.0.1"
+    assert vms[1].internal_address == "10.0.0.2"
+    assert vms[2].internal_address == "10.0.0.3"
+    assert vms[3].internal_address == ""  # Empty address - not yet provisioned
+    assert vms[3].vm_id == "my-tpu-worker-3"
+
+
+@patch("iris.cluster.platform.gcp.subprocess.run")
+def test_slice_handle_list_vms_no_endpoints(mock_run: MagicMock):
+    """list_vms() returns all VMs even when no endpoints are provisioned yet."""
+    tpu_data = {"networkEndpoints": []}
+    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(tpu_data), stderr="")
+
+    handle = GcpSliceHandle(
+        _slice_id="my-tpu",
+        _zone="zone-a",
+        _project_id="proj",
+        _labels={"iris-scale-group": "g1"},
+        _created_at=MagicMock(epoch_ms=lambda: 123),
+        _label_prefix="iris",
+        _accelerator_variant="v5litepod-16",
+    )
+
+    vms = handle.list_vms()
+
+    # Must return 4 VMs (topology count), all with empty addresses
+    assert len(vms) == 4
+    assert all(isinstance(v, GcpVmHandle) for v in vms)
+    assert all(v.internal_address == "" for v in vms)
+
+
+@patch("iris.cluster.platform.gcp.subprocess.run")
+def test_slice_handle_list_vms_unknown_topology(mock_run: MagicMock):
+    """list_vms() falls back to endpoint count for unknown topologies."""
+    tpu_data = {
+        "networkEndpoints": [
+            {"ipAddress": "10.0.0.1"},
+            {"ipAddress": "10.0.0.2"},
+        ]
+    }
+    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(tpu_data), stderr="")
+
+    handle = GcpSliceHandle(
+        _slice_id="my-tpu",
+        _zone="zone-a",
+        _project_id="proj",
+        _labels={"iris-scale-group": "g1"},
+        _created_at=MagicMock(epoch_ms=lambda: 123),
+        _label_prefix="iris",
+        _accelerator_variant="unknown-tpu-type",
+    )
+
+    vms = handle.list_vms()
+
+    # Unknown topology: fall back to endpoint count
+    assert len(vms) == 2
+    assert vms[0].internal_address == "10.0.0.1"
+    assert vms[1].internal_address == "10.0.0.2"
 
 
 @patch("iris.cluster.platform.gcp.subprocess.run")

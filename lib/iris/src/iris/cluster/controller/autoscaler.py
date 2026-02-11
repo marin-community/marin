@@ -24,9 +24,9 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
 
 from iris.cluster.platform.base import Platform, QuotaExhaustedError, SliceHandle, VmHandle
+from iris.cluster.platform.bootstrap import WorkerBootstrap
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -34,22 +34,6 @@ from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
-
-
-class WorkerBootstrapProtocol(Protocol):
-    """Protocol for worker bootstrap functionality.
-
-    This protocol allows type checking without creating a circular import between
-    config.py, autoscaler.py, and bootstrap.py.
-    """
-
-    def bootstrap_slice(self, handle) -> dict[str, str]:
-        """Bootstrap all VMs in a newly created slice.
-
-        Returns:
-            Mapping of vm_id to bootstrap log text.
-        """
-        ...
 
 
 @dataclass
@@ -283,7 +267,7 @@ class Autoscaler:
         evaluation_interval: Duration,
         platform: Platform,
         threads: ThreadContainer | None = None,
-        worker_bootstrap: WorkerBootstrapProtocol | None = None,
+        worker_bootstrap: WorkerBootstrap | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -318,7 +302,7 @@ class Autoscaler:
         config: config_pb2.AutoscalerConfig,
         platform: Platform,
         threads: ThreadContainer | None = None,
-        worker_bootstrap: WorkerBootstrapProtocol | None = None,
+        worker_bootstrap: WorkerBootstrap | None = None,
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -547,7 +531,7 @@ class Autoscaler:
         counts toward slice_count(), preventing double scale-up without any
         timeout-based deadline.
         """
-        placeholder_id = group.begin_scale_up(ts)
+        placeholder_id = group.begin_scale_up()
 
         def _scale_up_wrapper(stop_event):
             self._do_scale_up(group, placeholder_id, ts, reason)
@@ -568,10 +552,13 @@ class Autoscaler:
         """
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
+        completed = False
+        slice_obj: SliceHandle | None = None
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
             slice_obj = group.scale_up(timestamp=ts)
             group.complete_scale_up(placeholder_id, slice_obj, ts)
+            completed = True
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id
             action.status = "completed"
@@ -587,7 +574,17 @@ class Autoscaler:
             action.reason = str(e)
             return False
         except Exception as e:
-            group.fail_scale_up(placeholder_id)
+            if completed and slice_obj is not None:
+                logger.error(
+                    "Bootstrap failed for slice %s in %s, cleaning up: %s",
+                    slice_obj.slice_id,
+                    group.name,
+                    e,
+                )
+                group.scale_down(slice_obj.slice_id)
+                self._unregister_slice_vms(slice_obj.slice_id)
+            else:
+                group.fail_scale_up(placeholder_id)
             logger.error("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"

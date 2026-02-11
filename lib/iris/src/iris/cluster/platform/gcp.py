@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -313,7 +316,11 @@ class GcpSliceHandle:
         return self._created_at
 
     def list_vms(self) -> list[GcpVmHandle]:
-        """Live query for VMs in this TPU slice."""
+        """Live query for VMs in this TPU slice.
+
+        Returns vm_count handles based on topology (source of truth for VM count).
+        Endpoint data provides IP addresses; VMs still provisioning have empty addresses.
+        """
         cmd = [
             "gcloud",
             "compute",
@@ -333,17 +340,32 @@ class GcpSliceHandle:
         tpu_data = json.loads(result.stdout)
         endpoints = tpu_data.get("networkEndpoints", [])
 
+        # Determine VM count from topology (static source of truth)
+        try:
+            vm_count = get_tpu_topology(self._accelerator_variant).vm_count
+        except ValueError:
+            # Unknown topology: fall back to endpoint count (legacy behavior)
+            logger.warning(
+                "Unknown TPU topology %s, falling back to endpoint count",
+                self._accelerator_variant,
+            )
+            vm_count = len(endpoints) if endpoints else 1
+
+        # Create handles for all VMs (based on topology count)
         vms: list[GcpVmHandle] = []
-        for i, ep in enumerate(endpoints):
+        for i in range(vm_count):
+            # Get IP addresses from endpoints if available
+            ep = endpoints[i] if i < len(endpoints) else {}
             internal_ip = ep.get("ipAddress", "")
-            if not internal_ip:
+            external_ip = ep.get("accessConfig", {}).get("externalIp") if "accessConfig" in ep else None
+
+            if not internal_ip and i < len(endpoints):
                 logger.warning(
-                    "TPU %s endpoint %d has no IP address; slice may still be provisioning",
+                    "TPU %s endpoint %d has no IP address; VM may still be provisioning",
                     self._slice_id,
                     i,
                 )
-                continue
-            external_ip = ep.get("accessConfig", {}).get("externalIp") if "accessConfig" in ep else None
+
             ssh = GcloudSshConnection(
                 project_id=self._project_id,
                 _zone=self._zone,
@@ -359,28 +381,6 @@ class GcpSliceHandle:
                     _ssh=ssh,
                 )
             )
-
-        # If no endpoints returned (e.g. still CREATING), fall back to topology-based count
-        if not vms:
-            try:
-                vm_count = get_tpu_topology(self._accelerator_variant).vm_count
-            except ValueError:
-                vm_count = 1
-            for i in range(vm_count):
-                ssh = GcloudSshConnection(
-                    project_id=self._project_id,
-                    _zone=self._zone,
-                    vm_id=self._slice_id,
-                    worker_index=i,
-                )
-                vms.append(
-                    GcpVmHandle(
-                        _vm_id=f"{self._slice_id}-worker-{i}",
-                        _internal_address="",
-                        _external_address=None,
-                        _ssh=ssh,
-                    )
-                )
 
         return vms
 
