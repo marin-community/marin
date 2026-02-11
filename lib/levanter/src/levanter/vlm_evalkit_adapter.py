@@ -176,8 +176,8 @@ class LevanterVLM(BaseModel):
         else:
             raise ValueError(f"Unsupported image type: {type(image_source)}")
 
-    def _parse_messages(self, msgs: List[dict]) -> tuple[str, List[Image.Image]]:
-        """Parse VLMEvalKit message format into prompt and images.
+    def _parse_messages(self, msgs: List[dict]) -> tuple[List[dict], List[Image.Image]]:
+        """Parse VLMEvalKit message format into chat content items and images.
 
         VLMEvalKit message format:
             [
@@ -185,14 +185,17 @@ class LevanterVLM(BaseModel):
                 {"type": "text", "value": "What is in this image?"},
             ]
 
+        Returns content items in the same format as training data ({"type": "image"} and
+        {"type": "text", "text": "..."}) to ensure chat template produces identical output.
+
         Args:
             msgs: List of message dictionaries with 'type' and 'value' keys.
 
         Returns:
-            Tuple of (prompt_text, list_of_images).
+            Tuple of (content_items, list_of_images).
         """
         images = []
-        text_parts = []
+        content_items = []
 
         for msg in msgs:
             msg_type = msg.get("type", "")
@@ -200,41 +203,36 @@ class LevanterVLM(BaseModel):
 
             if msg_type == "image":
                 images.append(self._load_image(value))
-                # Add image placeholder to text
-                text_parts.append("<image>")
+                content_items.append({"type": "image"})
             elif msg_type == "text":
-                text_parts.append(value)
+                content_items.append({"type": "text", "text": value})
 
-        prompt = "\n".join(text_parts)
+        logger.info(f"_parse_messages: {len(images)} images, {len(content_items)} content items")
 
-        # Debug: log prompt and image count
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"_parse_messages: {len(images)} images, prompt preview: {prompt[:200]}...")
-
-        return prompt, images
+        return content_items, images
 
     def _create_vlm_request(
         self,
-        prompt: str,
+        content_items: List[dict],
         images: List[Image.Image],
         request_id: int = 0,
     ) -> VLMRequest:
-        """Create a VLMRequest from prompt and images.
+        """Create a VLMRequest from content items and images.
 
         Args:
-            prompt: The text prompt with <image> placeholders.
+            content_items: List of content dicts ({"type": "image"} or {"type": "text", "text": "..."}).
             images: List of PIL images.
             request_id: Request identifier.
 
         Returns:
             VLMRequest object for inference.
         """
-        # Create messages in the format expected by image_processor
+        # Build messages matching the training data format exactly so that
+        # apply_chat_template produces identical prompt structure.
         messages = [
             {
                 "role": "user",
-                "content": [{"type": "text", "text": prompt}]
+                "content": content_items,
             }
         ]
 
@@ -360,13 +358,11 @@ class LevanterVLM(BaseModel):
         result = self._engine.generate([vlm_request])
 
         # Decode generated tokens
+        # Note: result.tokens already contains only newly generated tokens (not prompt + generation),
+        # so we decode them directly without stripping prompt tokens.
         if result.tokens and len(result.tokens) > 0:
             generated_tokens = result.tokens[0]
-            # Remove prompt tokens
-            prompt_len = len(vlm_request.prompt_tokens)
-            new_tokens = generated_tokens[prompt_len:]
-            # Decode
-            text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+            text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
             return text.strip()
         else:
             logger.warning("No tokens generated")

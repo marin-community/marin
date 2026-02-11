@@ -194,6 +194,111 @@ def _delete_eval_checkpoint(checkpoint_path: str):
         logger.warning(f"Failed to delete checkpoint {checkpoint_path}: {e}")
 
 
+def _compute_per_sample_results(dataset, dataset_name, pred_data):
+    """Compute per-sample parsed answers and correctness using VLMEvalKit's scoring logic.
+
+    Handles three dataset types:
+    - VQA (ChartQA, GQA, TextVQA, DocVQA, etc.): Uses process_line + hit_calculate
+    - MCQ (MMMU, MMStar, AI2D, etc.): Uses prefetch_answer for rule-based extraction
+    - Y/N (MME, POPE, etc.): Uses YOrN_Extraction
+
+    Returns a list of dicts with 'parsed_answer', 'correct', and 'score' per sample,
+    or None if parsing is not supported or fails.
+    """
+    try:
+        dataset_type = getattr(dataset, 'TYPE', '')
+
+        if dataset_type == 'VQA':
+            return _compute_vqa_per_sample(dataset_name, pred_data)
+        elif dataset_type in ('MCQ', 'MCQ_MMMU_Pro'):
+            return _compute_mcq_per_sample(pred_data)
+        elif dataset_type == 'Y/N':
+            return _compute_yn_per_sample(pred_data)
+        else:
+            logger.info(f"Per-sample scoring not implemented for dataset type '{dataset_type}'")
+            return None
+    except Exception as e:
+        logger.warning(f"Failed to compute per-sample results for {dataset_name}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def _compute_vqa_per_sample(dataset_name, pred_data):
+    """Compute per-sample results for VQA-type benchmarks."""
+    from vlmeval.dataset.utils.vqa_eval import process_line, hit_calculate
+    from vlmeval.smp import listinstr
+
+    lines = [pred_data.iloc[i] for i in range(len(pred_data))]
+
+    if listinstr(['ChartQA'], dataset_name):
+        method = 'relaxed_accuracy'
+    elif listinstr(['OCRVQA', 'GQA'], dataset_name):
+        method = 'accuracy'
+    elif listinstr(['DocVQA', 'InfoVQA'], dataset_name):
+        method = 'anls'
+    elif listinstr(['TextVQA'], dataset_name):
+        method = 'vqa_score'
+    else:
+        method = 'vqa_score'
+
+    results = [process_line(line, method=method) for line in lines]
+    hits = hit_calculate(results, dataset_name)
+
+    per_sample = []
+    for res, hit_score in zip(results, hits):
+        per_sample.append({
+            'parsed_answer': str(res.get('pred', '')),
+            'correct': bool(hit_score > 0),
+            'score': round(float(hit_score), 4),
+        })
+    return per_sample
+
+
+def _compute_mcq_per_sample(pred_data):
+    """Compute per-sample results for MCQ-type benchmarks using rule-based extraction."""
+    from vlmeval.dataset.utils.multiple_choice import prefetch_answer
+
+    per_sample = []
+    for _, row in pred_data.iterrows():
+        prediction = str(row.get('prediction', ''))
+        answer = str(row.get('answer', '')).strip().upper()
+
+        # prefetch_answer uses can_infer() for rule-based letter extraction (no GPT needed)
+        extracted = prefetch_answer(row)
+        if extracted:
+            parsed = str(extracted).strip().upper()
+        else:
+            parsed = prediction.strip()
+
+        correct = (parsed == answer)
+        per_sample.append({
+            'parsed_answer': parsed,
+            'correct': correct,
+            'score': 1.0 if correct else 0.0,
+        })
+    return per_sample
+
+
+def _compute_yn_per_sample(pred_data):
+    """Compute per-sample results for Y/N-type benchmarks."""
+    from vlmeval.dataset.utils.yorn import YOrN_Extraction
+
+    per_sample = []
+    for _, row in pred_data.iterrows():
+        prediction = str(row.get('prediction', ''))
+        answer = str(row.get('answer', '')).strip()
+
+        extracted = YOrN_Extraction(prediction)
+        correct = (extracted.lower() == answer.lower()) if extracted != 'Unknown' else False
+        per_sample.append({
+            'parsed_answer': extracted,
+            'correct': correct,
+            'score': 1.0 if correct else 0.0,
+        })
+    return per_sample
+
+
 # ============================================================================
 # DEFAULT MODEL CONFIGURATION (matches demo_vlm_train.py)
 # ============================================================================
@@ -474,6 +579,7 @@ def main(config: EvalVLMEvalKitConfig):
             tokenizer=tokenizer,
             max_length=config.max_eval_length,
             padding=False,
+            add_generation_prompt=True,
             disable_anyres=config.disable_anyres,
             grid_pinpoints=grid_pinpoints,
             patch_size=config.patch_size,
@@ -638,19 +744,27 @@ def main(config: EvalVLMEvalKitConfig):
                 pred_data.to_excel(result_file, index=False)
                 logger.info(f"Predictions saved to: {result_file}")
 
-                # Collect predictions for JSON output
-                all_predictions[benchmark] = [
-                    {
+                # Run evaluation
+                eval_result = EVAL(dataset_name, result_file)
+
+                # Compute per-sample parsed answers and correctness
+                per_sample_results = _compute_per_sample_results(dataset, dataset_name, pred_data)
+
+                # Collect predictions for JSON output, enriched with parsed answers and correctness
+                predictions_list = []
+                for i, (_, row) in enumerate(pred_data.iterrows()):
+                    entry = {
                         "index": row['index'],  # Keep original type (int or str)
                         "question": str(row.get('question', '')),
                         "answer": str(row.get('answer', '')),
                         "prediction": str(row.get('prediction', '')),
                     }
-                    for _, row in pred_data.iterrows()
-                ]
-
-                # Run evaluation
-                eval_result = EVAL(dataset_name, result_file)
+                    if per_sample_results is not None and i < len(per_sample_results):
+                        entry["parsed_answer"] = per_sample_results[i]["parsed_answer"]
+                        entry["correct"] = per_sample_results[i]["correct"]
+                        entry["score"] = per_sample_results[i]["score"]
+                    predictions_list.append(entry)
+                all_predictions[benchmark] = predictions_list
                 # Convert DataFrame to dict for proper JSON serialization
                 # VLMEvalKit's EVAL() often returns pandas DataFrames which get
                 # truncated with "..." when serialized via str()/repr()
