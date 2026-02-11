@@ -89,11 +89,11 @@ DISCOVER_LATEST_CHECKPOINT = False
 
 # Tasks with per-task seed counts.
 # Each entry is (task, num_seeds). Tasks are evaluated independently per checkpoint.
-MULTI_SEED_TASKS = [AIME24, AIME25, AMC23]  # 5 seeds each
-SINGLE_SEED_TASKS = [MATH500]                # 1 seed each
+MULTI_SEED_TASKS = [AIME24, AIME25, AMC23]  # N seeds each
+SINGLE_SEED_TASKS = [MATH500]  # 1 seed each
 
-MULTI_SEED_SEEDS = [42, 43, 44, 45, 46]  # 5 seeds
-SINGLE_SEED_SEEDS = [42]                  # 1 seed
+MULTI_SEED_SEEDS = [42, 43, 44, 45, 46]
+SINGLE_SEED_SEEDS = [42]
 
 # =============================================================================
 # Generation Parameters
@@ -117,7 +117,7 @@ BASE_GENERATION_PARAMS = {
 # tensor_parallel_size: Number of TPU chips to use for tensor parallelism
 # v5p-8 has 4 chips, so we use tensor_parallel_size=4 to utilize all chips
 # max_num_seqs: Batch size for parallel generation (default is very low!)
-BATCH_SIZE = 30
+BATCH_SIZE = 192
 ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
     "max_num_seqs": BATCH_SIZE,  # For vLLM: Enable batched generation for better throughput
@@ -130,7 +130,7 @@ ENGINE_KWARGS = {
 # Maximum number of eval jobs to run in parallel. Eval steps are split into
 # batches of this size, with each batch submitted as a separate executor_main
 # call. Set to None to run all eval steps in a single executor_main call.
-MAX_PARALLEL_JOBS = 10
+MAX_PARALLEL_JOBS = 3
 
 # =============================================================================
 # Main Execution
@@ -142,8 +142,12 @@ if __name__ == "__main__":
     # Create one evaluation step per (checkpoint, task, seed) combination.
     # Each combination runs as an independent parallel step.
     for checkpoint in CHECKPOINTS:
-        for task, seeds in [(t, MULTI_SEED_SEEDS) for t in MULTI_SEED_TASKS] + \
-                           [(t, SINGLE_SEED_SEEDS) for t in SINGLE_SEED_TASKS]:
+        task_seed_pairs = []
+        if MULTI_SEED_TASKS:
+            task_seed_pairs += [(t, MULTI_SEED_SEEDS) for t in MULTI_SEED_TASKS]
+        if SINGLE_SEED_TASKS:
+            task_seed_pairs += [(t, SINGLE_SEED_SEEDS) for t in SINGLE_SEED_TASKS]
+        for task, seeds in task_seed_pairs:
             task_steps = []
             for seed in seeds:
                 generation_params = {**BASE_GENERATION_PARAMS, "seed": seed}

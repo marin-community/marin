@@ -93,14 +93,20 @@ class _TeeWriter(io.TextIOBase):
 
     def write(self, s):
         if s:
-            self._log_file.write(s)
-            self._log_file.flush()
+            try:
+                self._log_file.write(s)
+                self._log_file.flush()
+            except (OSError, ValueError):
+                pass  # Log file may be closed during teardown
             self._original_stdout.write(s)
             self._original_stdout.flush()
         return len(s) if s else 0
 
     def flush(self):
-        self._log_file.flush()
+        try:
+            self._log_file.flush()
+        except (OSError, ValueError):
+            pass
         self._original_stdout.flush()
 
     def fileno(self):
@@ -253,17 +259,30 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
             if "results" in results:
                 wandb.log({"results_summary": results["results"]})
 
-            wandb.finish()
+            # Suppress wandb BrokenPipeError traceback during teardown
+            _saved_stderr = sys.stderr
+            sys.stderr = io.StringIO()
+            try:
+                wandb.finish()
+            finally:
+                _captured = sys.stderr.getvalue()
+                sys.stderr = _saved_stderr
+                if _captured and "BrokenPipeError" not in _captured:
+                    logger.warning(f"wandb.finish() stderr: {_captured.strip()}")
             logger.info(f"Logged results to wandb run: {run_name}")
 
         except Exception as e:
             logger.warning(f"Failed to log results to wandb: {e}")
             # Only try to finish wandb if it was successfully initialized
             if wandb_initialized:
+                _saved_stderr = sys.stderr
+                sys.stderr = io.StringIO()
                 try:
                     wandb.finish(exit_code=1)
                 except Exception:
                     pass
+                finally:
+                    sys.stderr = _saved_stderr
 
     def _setup_evalchemy(self) -> str:
         """Clone evalchemy and apply necessary patches. Returns path to repo."""
