@@ -350,6 +350,8 @@ class IrisActorGroup:
         allowing the caller to start work immediately and discover more
         workers later via discover_new().
         """
+        from iris.cluster.types import is_job_finished
+
         target = count if count is not None else self._count
         start = time.monotonic()
         sleep_secs = 0.5
@@ -359,6 +361,19 @@ class IrisActorGroup:
 
             if len(self._discovered_names) >= target:
                 return list(self._handles[:target])
+
+            # Fail fast if the underlying job has terminated (e.g. crash, OOM,
+            # missing interpreter). Without this check we'd spin for the full
+            # timeout waiting for endpoints that will never appear.
+            client = self._get_client()
+            job_status = client.status(self._job_id)
+            if is_job_finished(job_status.state):
+                error = job_status.error or "unknown error"
+                raise RuntimeError(
+                    f"Actor job {self._job_id} finished before all actors registered "
+                    f"({len(self._discovered_names)}/{target} ready). "
+                    f"Job state={job_status.state}, error={error}"
+                )
 
             elapsed = time.monotonic() - start
             if elapsed >= timeout:

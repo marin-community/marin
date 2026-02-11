@@ -463,7 +463,7 @@ def consolidate_shard_caches(
     ) as ctx:
         ctx.execute(
             Dataset.from_list(shard_info).map(_copy_shard),
-            verbose=True,
+            verbose=False,
         )
 
     # do metadata serially b/c of write amplification concerns

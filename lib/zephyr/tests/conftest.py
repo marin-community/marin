@@ -39,14 +39,11 @@ def iris_cluster():
     from iris.cluster.manager import ClusterManager
     from iris.cluster.config import load_config, make_local_config
 
-    try:
-        config = load_config(IRIS_CONFIG)
-        config = make_local_config(config)
-        manager = ClusterManager(config)
-        with manager.connect() as url:
-            yield url
-    except Exception as e:
-        pytest.skip(f"Failed to start local Iris cluster: {e}")
+    config = load_config(IRIS_CONFIG)
+    config = make_local_config(config)
+    manager = ClusterManager(config)
+    with manager.connect() as url:
+        yield url
 
 
 @pytest.fixture(scope="session")
