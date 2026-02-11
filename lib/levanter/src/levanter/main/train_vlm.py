@@ -831,7 +831,7 @@ def main(config: TrainVLMConfig):
 
         trainer.add_hook(callbacks.log_performance_stats(Pos.size, trainer.config.train_batch_size), every=1)
 
-        if config.hf_save_path is not None:
+        if config.hf_save_path is not None and config.hf_save_steps is not None:
             assert converter is not None, "converter must be set when saving HF checkpoints"
             full_save_path = os.path.join(config.hf_save_path, trainer.run_id)
 

@@ -358,12 +358,12 @@ def clean_shard(
         gfs = gcsfs.GCSFileSystem()
         gcs_cleaned_path = cleaned_path.replace("gs://", "")
         with gfs.open(gcs_cleaned_path, "wb") as f:
-            pq.write_table(cleaned_table, f)
+            pq.write_table(cleaned_table, f, row_group_size=len(cleaned_table))
         # Delete original
         gcs_original_path = shard_path.replace("gs://", "")
         gfs.rm(gcs_original_path)
     else:
-        pq.write_table(cleaned_table, cleaned_path)
+        pq.write_table(cleaned_table, cleaned_path, row_group_size=len(cleaned_table))
         import os
         os.remove(shard_path)
 
