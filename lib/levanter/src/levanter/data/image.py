@@ -1738,6 +1738,21 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             if images_data is None:
                 images_data = []
 
+            # Sanitize: remove <image> from text content when {"type": "image"} dicts exist
+            # This prevents double-counting when both formats coexist in the same message
+            if messages:
+                for msg in messages:
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        has_image_dicts = any(
+                            isinstance(c, dict) and c.get("type") == "image" for c in content
+                        )
+                        if has_image_dicts:
+                            for c in content:
+                                if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str):
+                                    if "<image>" in c["text"]:
+                                        c["text"] = c["text"].replace("<image>", "")
+
             # Validate messages/images consistency before processing
             # Count image references in messages
             num_image_refs = 0
