@@ -2704,8 +2704,12 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             """Background worker that prefetches data sequentially (step-based mode).
 
             Uses _get_next_item() for sequential iteration through shards.
+            On transient errors, rolls back the shard iterator so items are re-read
+            on the next attempt. This ensures step * batch_size always matches the
+            actual iterator position, which is critical for correct checkpoint resume.
             """
             batch_size = 32
+            consecutive_failures = 0
 
             while not self._stop_prefetch.is_set():
                 if not self._initialized:
@@ -2718,6 +2722,12 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
                     # Cache is full, wait
                     self._stop_prefetch.wait(0.05)
                     continue
+
+                # Save iterator position before consuming items so we can
+                # rollback on transient errors (e.g. image load timeout)
+                with self._iteration_lock:
+                    saved_shard_idx = self._current_shard_idx
+                    saved_local_idx = self._current_local_idx
 
                 # Process batch using sequential iteration
                 try:
@@ -2739,6 +2749,8 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
                         # Evict oldest entries if over limit
                         while len(self._processed_cache) > self.cache_size:
                             self._processed_cache.popitem(last=False)
+
+                    consecutive_failures = 0
                 except ValueError as e:
                     # Store exception for main thread to detect, then exit cleanly
                     logger.error(f"Prefetch hit data error: {e}")
@@ -2746,7 +2758,23 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
                     self._stop_prefetch.set()
                     return
                 except Exception as e:
-                    logger.warning(f"Prefetch failed (transient): {e}")
+                    consecutive_failures += 1
+                    # Rollback iterator so items will be re-read on next attempt
+                    with self._iteration_lock:
+                        self._current_shard_idx = saved_shard_idx
+                        self._current_local_idx = saved_local_idx
+                        self._current_shard_data = None  # force shard reload
+                    if consecutive_failures >= 5:
+                        logger.error(
+                            f"Prefetch failed {consecutive_failures} times consecutively on same batch: {e}"
+                        )
+                        self._prefetch_error = e
+                        self._stop_prefetch.set()
+                        return
+                    logger.warning(
+                        f"Prefetch failed (transient, attempt {consecutive_failures}/5), "
+                        f"rolling back iterator to shard {saved_shard_idx} row {saved_local_idx}: {e}"
+                    )
                     self._stop_prefetch.wait(0.1)
 
         self._prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
