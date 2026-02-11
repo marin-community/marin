@@ -134,8 +134,10 @@ class ManualSliceHandle:
     def created_at(self) -> Timestamp:
         return self._created_at
 
-    def list_vms(self) -> list[ManualVmHandle]:
-        return [
+    def describe(self) -> SliceStatus:
+        if self._terminated:
+            return SliceStatus(state=CloudSliceState.DELETING, vm_count=0)
+        vms = [
             ManualVmHandle(
                 _vm_id=f"{self._slice_id}-{host.replace('.', '-').replace(':', '-')}",
                 _internal_address=host,
@@ -143,6 +145,7 @@ class ManualSliceHandle:
             )
             for host, ssh in zip(self._hosts, self._ssh_connections, strict=True)
         ]
+        return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._hosts), vms=vms)
 
     def terminate(self) -> None:
         if self._terminated:
@@ -151,11 +154,6 @@ class ManualSliceHandle:
         if self._on_terminate:
             self._on_terminate(list(self._hosts))
         logger.info("Terminated manual slice %s (%d hosts)", self._slice_id, len(self._hosts))
-
-    def status(self) -> SliceStatus:
-        if self._terminated:
-            return SliceStatus(state=CloudSliceState.DELETING, vm_count=0)
-        return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._hosts))
 
 
 # ============================================================================

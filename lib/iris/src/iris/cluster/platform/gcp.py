@@ -277,23 +277,35 @@ class GcpStandaloneVmHandle(SshVmBase):
             logger.warning("Failed to set metadata on %s: %s", self._vm_id, result.stderr.strip())
 
 
-@dataclass
 class GcpSliceHandle:
     """Handle to a GCP TPU slice (pod).
 
-    list_vms() performs a live query via `gcloud compute tpus describe` to get
-    current network endpoints. The slice is the atomic unit for termination.
+    describe() queries TPU state and VM endpoints via `gcloud compute tpus describe`.
+    The slice is the atomic unit for termination.
     """
 
-    _slice_id: str
-    _zone: str
-    _project_id: str
-    _labels: dict[str, str]
-    _created_at: Timestamp
-    _label_prefix: str
-    _accelerator_variant: str
-    _ssh_config: config_pb2.SshConfig | None = None
-    _state: str = "READY"
+    def __init__(
+        self,
+        *,
+        _slice_id: str,
+        _zone: str,
+        _project_id: str,
+        _labels: dict[str, str],
+        _created_at: Timestamp,
+        _label_prefix: str,
+        _accelerator_variant: str,
+        _ssh_config: config_pb2.SshConfig | None = None,
+        _state: str = "READY",
+    ):
+        self._slice_id = _slice_id
+        self._zone = _zone
+        self._project_id = _project_id
+        self._labels = _labels
+        self._created_at = _created_at
+        self._label_prefix = _label_prefix
+        self._accelerator_variant = _accelerator_variant
+        self._ssh_config = _ssh_config
+        self._state = _state
 
     @property
     def slice_id(self) -> str:
@@ -315,11 +327,11 @@ class GcpSliceHandle:
     def created_at(self) -> Timestamp:
         return self._created_at
 
-    def list_vms(self) -> list[GcpVmHandle]:
-        """Live query for VMs in this TPU slice.
+    def describe(self) -> SliceStatus:
+        """Query TPU state and VM endpoints.
 
-        Returns vm_count handles based on topology (source of truth for VM count).
-        Endpoint data provides IP addresses; VMs still provisioning have empty addresses.
+        A single `gcloud compute tpus tpu-vm describe` call populates both
+        the slice state and the VM handles.
         """
         cmd = [
             "gcloud",
@@ -335,9 +347,10 @@ class GcpSliceHandle:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.warning("Failed to describe TPU %s: %s", self._slice_id, result.stderr.strip())
-            return []
+            return SliceStatus(state=CloudSliceState.UNKNOWN, vm_count=0)
 
         tpu_data = json.loads(result.stdout)
+        state = _TPU_STATE_MAP.get(tpu_data.get("state", "UNKNOWN"), CloudSliceState.UNKNOWN)
         endpoints = tpu_data.get("networkEndpoints", [])
 
         try:
@@ -348,10 +361,8 @@ class GcpSliceHandle:
                 f"Cannot determine VM count without a known topology."
             ) from e
 
-        # Create handles for all VMs (based on topology count)
         vms: list[GcpVmHandle] = []
         for i in range(vm_count):
-            # Get IP addresses from endpoints if available
             ep = endpoints[i] if i < len(endpoints) else {}
             internal_ip = ep.get("ipAddress", "")
             external_ip = ep.get("accessConfig", {}).get("externalIp") if "accessConfig" in ep else None
@@ -379,7 +390,7 @@ class GcpSliceHandle:
                 )
             )
 
-        return vms
+        return SliceStatus(state=state, vm_count=vm_count, vms=vms)
 
     def terminate(self) -> None:
         cmd = [
@@ -398,28 +409,6 @@ class GcpSliceHandle:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error("Failed to delete TPU %s: %s", self._slice_id, result.stderr.strip())
-
-    def status(self) -> SliceStatus:
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "describe",
-            self._slice_id,
-            f"--zone={self._zone}",
-            f"--project={self._project_id}",
-            "--format=json",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            return SliceStatus(state=CloudSliceState.UNKNOWN, vm_count=0)
-
-        tpu_data = json.loads(result.stdout)
-        state_str = tpu_data.get("state", "UNKNOWN")
-        state = _TPU_STATE_MAP.get(state_str, CloudSliceState.UNKNOWN)
-        vm_count = len(tpu_data.get("networkEndpoints", []))
-        return SliceStatus(state=state, vm_count=vm_count)
 
 
 # ============================================================================

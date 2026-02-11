@@ -187,21 +187,17 @@ class FakeSliceHandle:
     def created_at(self) -> Timestamp:
         return self._created_at
 
-    def list_vms(self) -> list[FakeVmHandle]:
-        return list(self._vms)
+    def describe(self) -> SliceStatus:
+        if self._terminated:
+            return SliceStatus(state=CloudSliceState.DELETING, vm_count=len(self._vms), vms=list(self._vms))
+        all_running = all(vm._state == CloudVmState.RUNNING for vm in self._vms)
+        state = CloudSliceState.READY if all_running else CloudSliceState.CREATING
+        return SliceStatus(state=state, vm_count=len(self._vms), vms=list(self._vms))
 
     def terminate(self) -> None:
         for vm in self._vms:
             vm.set_terminated()
         self._terminated = True
-
-    def status(self) -> SliceStatus:
-        if self._terminated:
-            return SliceStatus(state=CloudSliceState.DELETING, vm_count=len(self._vms))
-        all_running = all(vm._state == CloudVmState.RUNNING for vm in self._vms)
-        if all_running:
-            return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._vms))
-        return SliceStatus(state=CloudSliceState.CREATING, vm_count=len(self._vms))
 
     def tick(self, ts: int) -> None:
         """Advance VM state transitions."""

@@ -58,7 +58,7 @@ class WorkerBootstrap:
         self._wait_for_all_vms(handle)
 
         logs: dict[str, str] = {}
-        for vm in handle.list_vms():
+        for vm in handle.describe().vms:
             if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
                 raise PlatformError(
                     f"VM {vm.vm_id} in slice {handle.slice_id} failed to become reachable "
@@ -106,14 +106,14 @@ class WorkerBootstrap:
             )
             return
 
-        # Poll for up to 60 seconds
-        timeout = 60.0
-        poll_interval = 2.0
+        # Poll for up to 600 seconds
+        timeout = 600.0
+        poll_interval = 10.0
         start = time.time()
 
         while time.time() - start < timeout:
-            vms = handle.list_vms()
-            if len(vms) >= expected_vm_count:
+            desc = handle.describe()
+            if len(desc.vms) >= expected_vm_count:
                 logger.info(
                     "Slice %s has all %d expected VMs ready for bootstrap",
                     handle.slice_id,
@@ -123,16 +123,16 @@ class WorkerBootstrap:
             logger.debug(
                 "Slice %s has %d/%d VMs ready; waiting for remaining VMs...",
                 handle.slice_id,
-                len(vms),
+                len(desc.vms),
                 expected_vm_count,
             )
             time.sleep(poll_interval)
 
         # Final check after timeout
-        vms = handle.list_vms()
-        if len(vms) < expected_vm_count:
+        desc = handle.describe()
+        if len(desc.vms) < expected_vm_count:
             raise PlatformError(
-                f"Slice {handle.slice_id} has only {len(vms)}/{expected_vm_count} VMs "
+                f"Slice {handle.slice_id} has only {len(desc.vms)}/{expected_vm_count} VMs "
                 f"ready after {timeout}s. The slice may be stuck in provisioning."
             )
 

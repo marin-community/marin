@@ -11,11 +11,12 @@ Key design principles:
 - Scale-up decisions come from Autoscaler, scale-down is delegated to ScalingGroup
 - ScalingGroup owns per-slice idle tracking and decides which slices to scale down
 
-The run_once() flow is: cleanup -> evaluate -> execute -> idle scale-down
-1. cleanup_failed_slices(): Clean up failed slices first (triggers backoff)
-2. evaluate(): Compute scale-up decisions based on demand
-3. execute(): Execute scale-up decisions
-4. scale_down_if_idle(): Scale down idle slices based on per-slice idle tracking
+The run_once() flow splits into two phases:
+- refresh(): I/O phase — cleanup failed/dead slices, scale down idle
+- update(): CPU phase — evaluate demand and execute scale-up decisions
+
+Status queries use cached VmGroupStatus from ScalingGroup monitor threads.
+The remaining blocking operations are terminate() calls for failed/dead/idle slices.
 """
 
 from __future__ import annotations
@@ -332,18 +333,31 @@ class Autoscaler:
         # Wait for all threads in the container to finish
         self._threads.wait()
 
+    def start_monitors(self) -> None:
+        """Start per-group monitor threads that periodically refresh slice status."""
+        for group in self._groups.values():
+            group.start_monitor()
+
+    def stop_monitors(self) -> None:
+        """Stop per-group monitor threads."""
+        for group in self._groups.values():
+            group.stop_monitor()
+
     def shutdown(self) -> None:
         """Shutdown the autoscaler, terminate all VM groups, and clean up platform.
 
         Shutdown ordering:
-        1. Stop all threads in the autoscaler's ThreadContainer. This signals
+        1. Stop monitor threads so no new status refreshes occur.
+        2. Stop all threads in the autoscaler's ThreadContainer. This signals
            stop_events for both in-flight scale-up threads AND worker lifecycle
            threads (via child containers), then joins with timeout.
-        2. Terminate all VM groups — calls Worker.stop() for final cleanup
-           of any workers that didn't exit in step 1.
-        3. Shutdown platform — clears local tracking state.
+        3. Terminate all VM groups — calls Worker.stop() for final cleanup
+           of any workers that didn't exit in step 2.
+        4. Shutdown platform — clears local tracking state.
         """
-        # Step 1: Stop all threads (scale-ups + workers) via ThreadContainer.
+        self.stop_monitors()
+
+        # Stop all threads (scale-ups + workers) via ThreadContainer.
         # Using stop() rather than wait() because wait() doesn't signal
         # stop_events and would block forever on worker-lifecycle threads.
         self._threads.stop()
@@ -609,7 +623,7 @@ class Autoscaler:
     ) -> None:
         """Register all VMs from a slice handle into the VM registry."""
         logs = bootstrap_logs or {}
-        for vm in handle.list_vms():
+        for vm in handle.describe().vms:
             self._vms[vm.vm_id] = TrackedVm(
                 vm_id=vm.vm_id,
                 slice_id=handle.slice_id,
@@ -624,25 +638,14 @@ class Autoscaler:
         for vm_id in to_remove:
             del self._vms[vm_id]
 
-    def run_once(
-        self,
-        demand_entries: list[DemandEntry],
-        vm_status_map: VmWorkerStatusMap,
-        timestamp: Timestamp | None = None,
-    ) -> list[ScalingDecision]:
-        """Run one evaluation cycle: cleanup -> evaluate -> execute -> idle scale-down.
+    def refresh(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp | None = None) -> None:
+        """I/O phase: cleanup failed/dead slices, scale down idle.
 
-        Args:
-            demand_entries: List of demand entries with requirements and counts.
-            vm_status_map: Map of VM address to worker status (required for scale-down).
-            timestamp: Optional timestamp for testing.
-
-        Returns the decisions that were made (for testing/logging).
+        Status queries use cached VmGroupStatus from monitor threads.
+        The remaining blocking operations are terminate() calls.
         """
         timestamp = timestamp or Timestamp.now()
-        logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
 
-        # Step 1: Clean up failed slices FIRST
         for group in self._groups.values():
             cleaned = group.cleanup_failed_slices(timestamp)
             for slice_obj in cleaned:
@@ -654,7 +657,6 @@ class Autoscaler:
                     reason="cleaning up failed slice",
                 )
 
-            # Update liveness from worker status, then reap dead slices
             group.update_slice_liveness(vm_status_map, timestamp)
             dead = group.cleanup_dead_slices(timestamp)
             for slice_obj in dead:
@@ -666,15 +668,6 @@ class Autoscaler:
                     reason="slice missed liveness deadline",
                 )
 
-        # Step 2: Evaluate (scale-up only)
-        decisions = self.evaluate(demand_entries, timestamp)
-        if decisions:
-            logger.info("Autoscaler decisions: %s", [(d.scale_group, d.action.value, d.reason) for d in decisions])
-
-        # Step 3: Execute scale-up
-        self.execute(decisions, timestamp)
-
-        # Step 4: Idle scale-down
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
             scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
@@ -687,7 +680,31 @@ class Autoscaler:
                     reason=f"idle slice (target={target_capacity}, ready={group.ready_slice_count() + 1})",
                 )
 
+    def update(
+        self,
+        demand_entries: list[DemandEntry],
+        timestamp: Timestamp | None = None,
+    ) -> list[ScalingDecision]:
+        """CPU phase: evaluate demand and execute scale-up decisions."""
+        timestamp = timestamp or Timestamp.now()
+
+        decisions = self.evaluate(demand_entries, timestamp)
+        if decisions:
+            logger.info("Autoscaler decisions: %s", [(d.scale_group, d.action.value, d.reason) for d in decisions])
+        self.execute(decisions, timestamp)
         return decisions
+
+    def run_once(
+        self,
+        demand_entries: list[DemandEntry],
+        vm_status_map: VmWorkerStatusMap,
+        timestamp: Timestamp | None = None,
+    ) -> list[ScalingDecision]:
+        """Full cycle: refresh + update. Preserved for tests."""
+        timestamp = timestamp or Timestamp.now()
+        logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
+        self.refresh(vm_status_map, timestamp)
+        return self.update(demand_entries, timestamp)
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get VM info by ID from the centralized VM registry."""
@@ -828,10 +845,9 @@ class Autoscaler:
     def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
         """Find the slice and group containing a worker by VM address."""
         for group in self._groups.values():
-            for slice_obj in group.slice_handles():
-                for vm in slice_obj.list_vms():
-                    if vm.internal_address == vm_address:
-                        return slice_obj.slice_id, group
+            slice_id = group.find_slice_for_vm(vm_address)
+            if slice_id is not None:
+                return slice_id, group
         return None, None
 
     def _record_slice_failure(self, slice_id: str, group: ScalingGroup) -> None:

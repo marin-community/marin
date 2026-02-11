@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -84,10 +84,11 @@ class CloudVmState(StrEnum):
 
 @dataclass
 class SliceStatus:
-    """Cloud-level slice status."""
+    """Cloud-level slice status, including VM handles from the same query."""
 
     state: CloudSliceState
     vm_count: int
+    vms: list[VmHandle] = field(default_factory=list)
 
 
 @dataclass
@@ -182,7 +183,7 @@ class StandaloneVmHandle(VmHandle, Protocol):
     - set_labels(): Tag for discovery (controller discovery uses labels)
     - set_metadata(): Pass data to the VM (controller address)
 
-    Slice member VMs (from SliceHandle.list_vms()) are plain VmHandle —
+    Slice member VMs (from SliceHandle.describe().vms) are plain VmHandle —
     they can't be individually terminated, and their labels/metadata are
     set on the slice at creation time.
     """
@@ -242,20 +243,16 @@ class SliceHandle(Protocol):
         """When this slice was created. Used for age-based scaling decisions."""
         ...
 
-    def list_vms(self) -> list[VmHandle]:
-        """Live query: individual VMs in this slice.
+    def describe(self) -> SliceStatus:
+        """Query cloud state, returning status and VM handles.
 
-        Always queries the cloud for current state. If the cloud has
-        repaired/replaced a worker, this reflects it.
+        Implementations may cache the result for a short TTL to avoid
+        redundant cloud API calls within a single autoscaler cycle.
         """
         ...
 
     def terminate(self) -> None:
         """Destroy the slice and all its VMs."""
-        ...
-
-    def status(self) -> SliceStatus:
-        """Cloud-level status of the slice (e.g., CREATING, READY, DELETING)."""
         ...
 
 

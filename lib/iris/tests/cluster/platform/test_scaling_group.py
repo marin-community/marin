@@ -13,6 +13,7 @@ import pytest
 from iris.cluster.controller.scaling_group import (
     ScalingGroup,
     SliceLifecycleState,
+    SliceState,
     _zones_from_config,
     slice_handle_status,
 )
@@ -93,8 +94,6 @@ def make_mock_slice_handle(
     else:
         slice_state = CloudSliceState.CREATING
 
-    handle.status.return_value = SliceStatus(state=slice_state, vm_count=len(vm_states))
-
     # Generate unique addresses by hashing slice_id
     slice_hash = abs(hash(slice_id)) % 256
     vm_handles = []
@@ -105,7 +104,8 @@ def make_mock_slice_handle(
             state=state,
         )
         vm_handles.append(vm_handle)
-    handle.list_vms.return_value = vm_handles
+
+    handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_states), vms=vm_handles)
 
     return handle
 
@@ -128,7 +128,13 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
 
 def _get_vm_address(handle: MagicMock) -> str:
     """Get the first VM's internal_address from a SliceHandle."""
-    return handle.list_vms()[0].internal_address
+    return handle.describe().vms[0].internal_address
+
+
+def _get_slice_state(group: ScalingGroup, handle: MagicMock) -> SliceState:
+    """Get the SliceState for a handle from its group."""
+    with group._slices_lock:
+        return group._slices[handle.slice_id]
 
 
 def _tracked_scale_up(group: ScalingGroup, timestamp: Timestamp | None = None, **kwargs) -> MagicMock:
@@ -250,6 +256,7 @@ class TestScalingGroupVmGroupOwnership:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
 
         assert group.slice_count() == 3
         assert group.ready_slice_count() == 2
@@ -454,6 +461,7 @@ class TestScalingGroupIdleTracking:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000))
         group.reconcile()
+        group.refresh_all_slices()
 
         # Get the VM address from the SliceHandle
         handle = group.get_slice("slice-001")
@@ -496,6 +504,7 @@ class TestScalingGroupIdleTracking:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
         group.reconcile()
+        group.refresh_all_slices()
 
         # Get VM addresses from the handles
         slice_001 = group.get_slice("slice-001")
@@ -518,7 +527,7 @@ class TestScalingGroupIdleTracking:
         # At timestamp 10000, slice-001 has been idle longer (9s vs 5s)
         idle_slices = group.get_idle_slices(Timestamp.from_ms(10_000))
         assert len(idle_slices) == 2
-        assert idle_slices[0].slice_id == "slice-001"  # Longest idle first
+        assert idle_slices[0].handle.slice_id == "slice-001"  # Longest idle first
 
     def test_update_slice_activity_tracks_active_slices(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """update_slice_activity updates timestamp only for slices with active workers."""
@@ -529,6 +538,7 @@ class TestScalingGroupIdleTracking:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
 
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
@@ -559,6 +569,7 @@ class TestScalingGroupIdleTracking:
             unbounded_config, platform, idle_threshold=Duration.from_ms(1000), scale_down_cooldown=Duration.from_ms(0)
         )
         group.reconcile()
+        group.refresh_all_slices()
 
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
@@ -651,6 +662,7 @@ class TestScalingGroupVmGroupStateCounts:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
 
         counts = group.slice_state_counts()
 
@@ -670,6 +682,7 @@ class TestScalingGroupVmGroupStateCounts:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
 
         counts = group.slice_state_counts()
 
@@ -684,6 +697,7 @@ class TestScalingGroupVmGroupStateCounts:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
 
         counts = group.slice_state_counts()
 
@@ -873,6 +887,7 @@ class TestScalingGroupFailedSliceCleanup:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
 
         cleaned = group.cleanup_failed_slices(timestamp=Timestamp.from_ms(1000))
 
@@ -892,6 +907,7 @@ class TestScalingGroupFailedSliceCleanup:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform, backoff_initial=Duration.from_seconds(5.0))
         group.reconcile()
+        group.refresh_all_slices()
 
         group.cleanup_failed_slices(timestamp=Timestamp.from_ms(1000))
 
@@ -922,6 +938,7 @@ class TestScalingGroupFailedSliceCleanup:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
 
         handle = group.get_slice("slice-001")
         vm_address = _get_vm_address(handle)
@@ -941,6 +958,7 @@ class TestScalingGroupFailedSliceCleanup:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform, scale_down_cooldown=Duration.from_ms(60_000))
         group.reconcile()
+        group.refresh_all_slices()
 
         # Set last scale-down to trigger cooldown for normal scale_down
         group._last_scale_down = Timestamp.from_ms(1000)
@@ -961,9 +979,10 @@ class TestVerifySliceIdle:
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
+        state = _get_slice_state(group, handle)
 
         # Empty status map -- no workers known
-        assert not group._verify_slice_idle(handle, {})
+        assert not group._verify_slice_idle(state, {})
 
     def test_known_idle_workers_are_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """A slice where all known workers are idle IS idle."""
@@ -971,11 +990,13 @@ class TestVerifySliceIdle:
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
+        group.refresh_all_slices()
+        state = _get_slice_state(group, handle)
 
         # Get VM addresses from mock
         vm_address = _get_vm_address(handle)
         status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset())}
-        assert group._verify_slice_idle(handle, status_map)
+        assert group._verify_slice_idle(state, status_map)
 
     def test_known_busy_worker_blocks_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """A slice with a known busy worker is NOT idle."""
@@ -983,10 +1004,11 @@ class TestVerifySliceIdle:
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
+        state = _get_slice_state(group, handle)
 
         vm_address = _get_vm_address(handle)
         status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset({"task-1"}))}
-        assert not group._verify_slice_idle(handle, status_map)
+        assert not group._verify_slice_idle(state, status_map)
 
 
 class TestSliceLivenessTimeout:
@@ -1022,6 +1044,7 @@ class TestSliceLivenessTimeout:
 
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
+        group.refresh_all_slices()
         vm_address = _get_vm_address(handle)
 
         # At t=8s, worker shows up -- extends deadline by heartbeat_grace (5s from now)
@@ -1183,8 +1206,7 @@ def _make_slice_handle(
 ) -> MagicMock:
     handle = MagicMock()
     handle.slice_id = slice_id
-    handle.status.return_value = SliceStatus(state=slice_state, vm_count=len(vm_handles))
-    handle.list_vms.return_value = vm_handles
+    handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_handles), vms=vm_handles)
     return handle
 
 

@@ -195,14 +195,14 @@ class ControllerConfig:
 class Controller:
     """Unified controller managing all components and lifecycle.
 
-    Runs two background loops:
-    - Scheduling loop: finds task assignments, checks worker timeouts, runs autoscaler
+    Runs three background loops:
+    - Scheduling loop: finds task assignments, checks worker timeouts
     - Heartbeat loop: sends heartbeat RPCs to workers, delivering buffered dispatches/kills
+    - Autoscaler loop: evaluates scaling decisions, manages slice lifecycle
 
-    Separating these ensures slow heartbeat RPCs don't block scheduling and vice versa.
-
-    When an autoscaler is provided, manages it in a background thread that
-    provisions/terminates VM slices based on demand.
+    Each loop runs on its own thread so blocking operations in one don't
+    stall the others. Per-ScalingGroup monitor threads refresh VM status
+    in the background so the autoscaler reads cached status.
 
     Example:
         ```python
@@ -263,6 +263,7 @@ class Controller:
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
         self._heartbeat_thread: ManagedThread | None = None
+        self._autoscaler_thread: ManagedThread | None = None
 
         # Thread pool for parallel heartbeat dispatch, owned by the ThreadContainer
         # so it is shut down automatically during stop().
@@ -303,9 +304,10 @@ class Controller:
         self._server = uvicorn.Server(server_config)
         self._threads.spawn_server(self._server, name="controller-server")
 
-        # Log autoscaler configuration if provided (runs from scheduling loop, not separate thread)
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
+            self._autoscaler.start_monitors()
+            self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
@@ -316,14 +318,11 @@ class Controller:
     def stop(self) -> None:
         """Stop all background components gracefully.
 
-        Shutdown ordering is critical to avoid thread leaks:
-        1. Stop scheduling/heartbeat loops first so no new autoscaler
-           work (scale-ups, worker creation) can be triggered.
-        2. Shut down the autoscaler, which terminates all VMs/workers.
+        Shutdown ordering:
+        1. Stop scheduling/heartbeat/autoscaler loops so no new work is triggered.
+        2. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
         3. Stop remaining threads (server) and executors.
         """
-        # Step 1: Stop scheduling and heartbeat loops so no new workers
-        # can be created during autoscaler shutdown.
         self._wake_event.set()
         self._heartbeat_event.set()
         join_timeout = Duration.from_seconds(5.0)
@@ -333,16 +332,17 @@ class Controller:
         if self._heartbeat_thread:
             self._heartbeat_thread.stop()
             self._heartbeat_thread.join(timeout=join_timeout)
+        if self._autoscaler_thread:
+            self._autoscaler_thread.stop()
+            self._autoscaler_thread.join(timeout=join_timeout)
 
-        # Step 2: Shutdown autoscaler (terminates VMs, stops workers, stops platform)
         if self._autoscaler:
             self._autoscaler.shutdown()
 
-        # Step 3: Stop remaining threads (server) and executors
         self._threads.stop()
 
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
-        """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
+        """Scheduling loop: task assignment and worker timeout checks only."""
         while not stop_event.is_set():
             self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
             self._wake_event.clear()
@@ -353,8 +353,14 @@ class Controller:
             self._run_scheduling()
             self._check_worker_timeouts()
 
-            if self._autoscaler:
-                self._run_autoscaler_once()
+    def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
+        """Autoscaler loop: runs on its own thread so blocking cloud API calls
+        don't stall scheduling or heartbeats."""
+        while not stop_event.is_set():
+            stop_event.wait(timeout=self._config.scheduler_interval_seconds)
+            if stop_event.is_set():
+                break
+            self._run_autoscaler_once()
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
@@ -580,19 +586,20 @@ class Controller:
                 self._autoscaler.notify_worker_failed(vm_address)
 
     def _run_autoscaler_once(self) -> None:
-        """Run one autoscaler evaluation cycle.
+        """Run one autoscaler cycle: refresh (I/O) then update (CPU).
 
-        Called from the scheduling loop every cycle. Computes demand from pending
-        tasks and worker idle state, then runs the autoscaler.
+        Called from the autoscaler loop thread. Status reads use cached
+        VmGroupStatus from monitor threads.
         """
         if not self._autoscaler or not self._autoscaler_limiter:
             return
         if not self._autoscaler_limiter.should_run():
             return
 
-        demand_entries = compute_demand_entries(self._state)
         vm_status_map = self._build_vm_status_map()
-        self._autoscaler.run_once(demand_entries, vm_status_map=vm_status_map)
+        self._autoscaler.refresh(vm_status_map)
+        demand_entries = compute_demand_entries(self._state)
+        self._autoscaler.update(demand_entries)
 
     def _build_vm_status_map(self) -> VmWorkerStatusMap:
         """Build a map of VM address to worker status for autoscaler.

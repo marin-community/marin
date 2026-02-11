@@ -333,11 +333,14 @@ class LocalSliceHandle:
     def created_at(self) -> Timestamp:
         return self._created_at
 
-    def list_vms(self) -> list[_LocalVmHandle]:
-        return [
+    def describe(self) -> SliceStatus:
+        if self._terminated:
+            return SliceStatus(state=CloudSliceState.DELETING, vm_count=0)
+        vms = [
             _LocalVmHandle(_vm_id=vm_id, _internal_address=addr)
             for vm_id, addr in zip(self._vm_ids, self._addresses, strict=True)
         ]
+        return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._vm_ids), vms=vms)
 
     def terminate(self) -> None:
         if self._terminated:
@@ -345,11 +348,6 @@ class LocalSliceHandle:
         self._terminated = True
         for worker in self._workers:
             worker.stop()
-
-    def status(self) -> SliceStatus:
-        if self._terminated:
-            return SliceStatus(state=CloudSliceState.DELETING, vm_count=0)
-        return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._vm_ids))
 
 
 # ============================================================================

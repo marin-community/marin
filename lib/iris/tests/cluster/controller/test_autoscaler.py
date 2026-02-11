@@ -148,8 +148,6 @@ def make_mock_slice_handle(
     else:
         slice_state = CloudSliceState.CREATING
 
-    handle.status.return_value = SliceStatus(state=slice_state, vm_count=len(vm_states))
-
     slice_hash = abs(hash(slice_id)) % 256
     vm_handles = []
     for i, state in enumerate(vm_states):
@@ -159,7 +157,8 @@ def make_mock_slice_handle(
             state=state,
         )
         vm_handles.append(vm_handle)
-    handle.list_vms.return_value = vm_handles
+
+    handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_states), vms=vm_handles)
 
     return handle
 
@@ -395,6 +394,7 @@ class TestAutoscalerScaleDown:
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()
+        group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -402,8 +402,8 @@ class TestAutoscalerScaleDown:
         # Get VM addresses from the adapter
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.list_vms()[0].internal_address
-        slice_002_addr = slice_002.list_vms()[0].internal_address
+        slice_001_addr = slice_001.describe().vms[0].internal_address
+        slice_002_addr = slice_002.describe().vms[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
@@ -438,8 +438,8 @@ class TestAutoscalerScaleDown:
         demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.list_vms()[0].internal_address
-        slice_002_addr = slice_002.list_vms()[0].internal_address
+        slice_001_addr = slice_001.describe().vms[0].internal_address
+        slice_002_addr = slice_002.describe().vms[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
@@ -467,8 +467,8 @@ class TestAutoscalerScaleDown:
 
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.list_vms()[0].internal_address
-        slice_002_addr = slice_002.list_vms()[0].internal_address
+        slice_001_addr = slice_001.describe().vms[0].internal_address
+        slice_002_addr = slice_002.describe().vms[0].internal_address
 
         vm_status_map_active = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
@@ -501,6 +501,7 @@ class TestAutoscalerScaleDown:
             idle_threshold=Duration.from_ms(0),
         )
         group.reconcile()
+        group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -532,8 +533,8 @@ class TestAutoscalerScaleDown:
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.list_vms()[0].internal_address
-        slice_002_addr = slice_002.list_vms()[0].internal_address
+        slice_001_addr = slice_001.describe().vms[0].internal_address
+        slice_002_addr = slice_002.describe().vms[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
@@ -567,6 +568,7 @@ class TestAutoscalerExecution:
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform, scale_down_cooldown=Duration.from_ms(0))
         group.reconcile()
+        group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
 
         autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1000))
@@ -662,10 +664,12 @@ class TestAutoscalerWorkerFailure:
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
         autoscaler.reconcile()
 
         vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        group.refresh_all_slices()
         autoscaler.notify_worker_failed(vm_address)
 
         assert group.slice_count() == 0
@@ -705,7 +709,7 @@ class TestAutoscalerIdleVerification:
         demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         slice_001 = group.get_slice("slice-001")
-        slice_001_addr = slice_001.list_vms()[0].internal_address
+        slice_001_addr = slice_001.describe().vms[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(
                 vm_address=slice_001_addr,
@@ -770,6 +774,7 @@ class TestAutoscalerFailedSliceCleanup:
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0))
         group.reconcile()
+        group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -788,6 +793,7 @@ class TestAutoscalerFailedSliceCleanup:
             backoff_initial=Duration.from_seconds(60.0),
         )
         group.reconcile()
+        group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
 
         autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1000))
@@ -818,6 +824,7 @@ class TestAutoscalerFailedSliceCleanup:
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
 
         autoscaler = make_autoscaler(
             scale_groups={"test-group": group},
@@ -1171,16 +1178,22 @@ class TestAutoscalerWaterfallEndToEnd:
         demand = make_demand_entries(4, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         autoscaler.run_once(demand, {})
-        time.sleep(0.1)
+        autoscaler._wait_for_inflight()
+        group_primary.refresh_all_slices()
+        group_fallback.refresh_all_slices()
         assert group_primary.slice_count() == 1
         assert group_fallback.slice_count() == 1
 
         ts = Timestamp.now().epoch_ms()
         platform_primary.tick(ts)
         platform_fallback.tick(ts)
+        group_primary.refresh_all_slices()
+        group_fallback.refresh_all_slices()
 
         autoscaler.run_once(demand, {})
-        time.sleep(0.1)
+        autoscaler._wait_for_inflight()
+        group_primary.refresh_all_slices()
+        group_fallback.refresh_all_slices()
         assert group_primary.slice_count() == 1
         assert group_fallback.slice_count() == 2
 
@@ -1323,6 +1336,7 @@ class TestAutoscalerActionLogging:
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform, scale_down_cooldown=Duration.from_ms(0))
         group.reconcile()
+        group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
 
         autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1000))
@@ -1359,10 +1373,12 @@ class TestAutoscalerActionLogging:
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
+        group.refresh_all_slices()
         autoscaler = make_autoscaler({"test-group": group})
         autoscaler.reconcile()
 
         vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        group.refresh_all_slices()
         autoscaler.notify_worker_failed(vm_address)
 
         status = autoscaler.get_status()
@@ -1721,7 +1737,7 @@ def test_bootstrap_called_after_scaleup():
     assert group.slice_count() == 1
 
     slice_handle = group.slice_handles()[0]
-    for vm in slice_handle.list_vms():
+    for vm in slice_handle.describe().vms:
         assert vm._bootstrap_count == 1, "bootstrap() should be called once per VM after scale-up"
 
     autoscaler.shutdown()
@@ -1756,7 +1772,7 @@ def test_bootstrap_skipped_without_config():
     assert group.slice_count() == 1
 
     slice_handle = group.slice_handles()[0]
-    for vm in slice_handle.list_vms():
+    for vm in slice_handle.describe().vms:
         assert vm._bootstrap_count == 0, "No bootstrap without config"
 
     autoscaler.shutdown()
