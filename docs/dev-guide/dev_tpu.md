@@ -3,16 +3,15 @@
 Using `ray_run` is great for long-running jobs, but if you are trying to debug a TPU test or memory issue, it's often faster to allocate your own TPU.
 You can use the `scripts/ray/dev_tpu.py` to allocate a temporary TPU for yourself to SSH into as well as sync your local changes and automatically run commands.
 You will need to setup your SSH key in `gcloud` to get started.
-It is usually faster than wiring a full Ray job when you want quick iteration.
+It is usually faster than wiring a full Ray job when you want quick iteration. It is less good if you want to run many different commands in parallel,
+or if you want to run a long experiment and not worry about the TPU going away.
 
 ## What it does
 
-- `allocate`: reserves a TPU VM and keeps it alive while the command runs.
+- `allocate`: reserves a TPU VM and keeps it alive while the command runs. It also creates an SSH alias for the TPU and writes config to `~/.ssh/config` so you can connect easily.
 - `connect`: opens an interactive shell on the TPU.
 - `execute`: rsyncs local files to remote `~/marin/`, then runs one command.
 - `watch`: rsync + restart on local file changes.
-
-The SSH alias created is `dev-tpu-<tpu-name>`.
 
 ## Prerequisites
 
@@ -28,24 +27,16 @@ make dev_setup
 2. Ensure your SSH public key is in project metadata:
    https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys&project=hai-gcp-models&scopeTab=projectMetadata
 
-3. The script uses your local username by default (`getpass.getuser()`) and writes SSH config for that user.
-
 ## Quick start
 
 ### For humans
 
 Set a TPU name once for your session:
-
-```bash
-export TPU_NAME="${USER}-dev"
-```
-
 Allocate:
 
 ```bash
 RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/marin-us-east5-a.yaml \
-  --tpu-name "$TPU_NAME" \
   allocate
 ```
 
@@ -54,7 +45,6 @@ Connect interactively:
 ```bash
 RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/marin-us-east5-a.yaml \
-  --tpu-name "$TPU_NAME" \
   connect
 ```
 
@@ -63,7 +53,6 @@ Run one command (with sync):
 ```bash
 RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/marin-us-east5-a.yaml \
-  --tpu-name "$TPU_NAME" \
   execute -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
 ```
 
