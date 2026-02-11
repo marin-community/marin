@@ -131,7 +131,9 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
         template = sg_config.slice_template
         platform = template.WhichOneof("platform")
         if platform is None:
-            continue
+            raise ValueError(
+                f"Scale group '{name}': slice_template is set but no platform " "(gcp, manual, coreweave) is configured."
+            )
 
         if platform == "gcp":
             if not template.gcp.zone:

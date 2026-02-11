@@ -77,27 +77,31 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
             errors.append("stop_controller")
 
         for group_config in config.scale_groups.values():
-            zones: list[str] = []
-            if group_config.HasField("slice_template"):
-                template = group_config.slice_template
-                if template.HasField("gcp"):
-                    if template.gcp.zone:
-                        zones = [template.gcp.zone]
-            if not zones:
-                zones = ["local"]
+            try:
+                zones: list[str] = []
+                if group_config.HasField("slice_template"):
+                    template = group_config.slice_template
+                    if template.HasField("gcp"):
+                        if template.gcp.zone:
+                            zones = [template.gcp.zone]
+                if not zones:
+                    zones = ["local"]
 
-            for slice_handle in platform.list_slices(
-                zones=zones,
-                labels={f"{label_prefix}-scale-group": group_config.name},
-            ):
-                try:
-                    logger.info("Terminating slice %s", slice_handle.slice_id)
-                    slice_handle.terminate()
-                except Exception:
-                    logger.exception("Failed to terminate slice %s", slice_handle.slice_id)
-                    errors.append(f"terminate:{slice_handle.slice_id}")
+                for slice_handle in platform.list_slices(
+                    zones=zones,
+                    labels={f"{label_prefix}-scale-group": group_config.name},
+                ):
+                    try:
+                        logger.info("Terminating slice %s", slice_handle.slice_id)
+                        slice_handle.terminate()
+                    except Exception:
+                        logger.exception("Failed to terminate slice %s", slice_handle.slice_id)
+                        errors.append(f"terminate:{slice_handle.slice_id}")
+            except Exception:
+                logger.exception("Failed to list/terminate slices for group %s", group_config.name)
+                errors.append(f"list_slices:{group_config.name}")
     finally:
         platform.shutdown()
 
     if errors:
-        logger.error("stop_all completed with %d error(s): %s", len(errors), ", ".join(errors))
+        raise RuntimeError(f"stop_all completed with {len(errors)} error(s): {', '.join(errors)}")
