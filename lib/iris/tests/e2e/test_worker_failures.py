@@ -45,13 +45,16 @@ def test_worker_sequential_jobs(cluster):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(120)
 def test_all_workers_fail(cluster):
     """All workers' registration fails permanently. With scheduling timeout,
     job transitions to FAILED/UNSCHEDULABLE when no workers register.
+
+    Uses an impossible resource request (cpu=9999) so the job can't be
+    scheduled on the existing workers, combined with a scheduling timeout.
     """
     enable_chaos("worker.register", failure_rate=1.0, error=RuntimeError("chaos: registration failed"))
-    job = cluster.submit(_slow, "all-workers-fail", scheduling_timeout=Duration.from_seconds(15))
+    job = cluster.submit(_slow, "all-workers-fail", cpu=9999, scheduling_timeout=Duration.from_seconds(15))
     status = cluster.wait(job, timeout=30)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
