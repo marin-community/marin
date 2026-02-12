@@ -315,7 +315,10 @@ def clean_shard(
     Returns dict with stats: original_rows, cleaned_rows, removed_rows, cleaned_path.
     """
     import gcsfs
-    import pyarrow as pa
+    import os
+    import tempfile
+
+    from datasets import Dataset
 
     shard_name = Path(shard_path).stem
     t0 = time.time()
@@ -346,33 +349,46 @@ def clean_shard(
             "elapsed": time.time() - t0,
         }
 
-    # Build cleaned table from Python dicts instead of table.filter().
-    # table.filter() creates chunked zero-copy views; pq.write_table() then
-    # writes nested types (list<struct>) with a different encoding that triggers
-    # "ArrowNotImplementedError: Nested data conversions not implemented for
-    # chunked array outputs" on read. combine_chunks() can't fix this either
-    # because large binary columns (images) overflow 32-bit offsets.
-    # Building a fresh table from Python dicts produces clean single-chunk
-    # arrays with encoding identical to the original files.
-    clean_data = {k: [v[i] for i, m in enumerate(mask) if m] for k, v in rows_dict.items()}
-    cleaned_table = pa.table(clean_data)
+    # Build cleaned rows as list of dicts for Dataset.from_list()
+    clean_rows = [
+        {k: rows_dict[k][i] for k in rows_dict}
+        for i, m in enumerate(mask) if m
+    ]
 
-    # Generate cleaned path: train-00900.parquet -> train-00900_cleaned.parquet
-    cleaned_path = shard_path.replace(".parquet", "_cleaned.parquet")
+    # Use HuggingFace Dataset.to_parquet() instead of pq.write_table().
+    # pq.write_table() produces nested type encoding that training workers'
+    # PyArrow version can't read. Dataset.to_parquet() uses the same encoding
+    # as the original data pipeline (convert_llava_onevision_to_levanter.py).
+    dataset = Dataset.from_list(clean_rows)
 
-    # Write cleaned parquet to GCS
-    if shard_path.startswith("gs://"):
-        gfs = gcsfs.GCSFileSystem()
-        gcs_cleaned_path = cleaned_path.replace("gs://", "")
-        with gfs.open(gcs_cleaned_path, "wb") as f:
-            pq.write_table(cleaned_table, f)
-        # Delete original
-        gcs_original_path = shard_path.replace("gs://", "")
-        gfs.rm(gcs_original_path)
-    else:
-        pq.write_table(cleaned_table, cleaned_path)
-        import os
-        os.remove(shard_path)
+    # Write to temp file, then upload to GCS (same pattern as convert script)
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        dataset.to_parquet(tmp_path)
+
+        if shard_path.startswith("gs://"):
+            gfs = gcsfs.GCSFileSystem()
+            # Write cleaned file with _cleaned suffix
+            cleaned_path = shard_path.replace(".parquet", "_cleaned.parquet")
+            gcs_cleaned_path = cleaned_path.replace("gs://", "")
+            gfs.put(tmp_path, gcs_cleaned_path)
+            # Delete original
+            gcs_original_path = shard_path.replace("gs://", "")
+            gfs.rm(gcs_original_path)
+        else:
+            cleaned_path = shard_path.replace(".parquet", "_cleaned.parquet")
+            import shutil
+            shutil.move(tmp_path, cleaned_path)
+            os.remove(shard_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    del dataset, clean_rows
+    import gc
+    gc.collect()
 
     return {
         "shard_name": shard_name,
