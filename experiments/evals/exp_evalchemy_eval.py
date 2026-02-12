@@ -61,24 +61,34 @@ from marin.execution.executor import executor_main
 # =============================================================================
 # Model Configuration
 # =============================================================================
-# List of checkpoint paths to evaluate. Each checkpoint is evaluated on all tasks below.
-CHECKPOINTS = [
-    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-234/",
-    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-468/",
-    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-702/",
-    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-936/",
-    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1170/",
-    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1404/",
-    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1638/",
-    "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1872/",
-]
-
-# Custom base name for wandb runs. When set, wandb runs will be named:
-#   Per-seed:  evalchemy-{BASE_EVAL_RUN_NAME}[-step{N}]-{task}-seed{S}
-#   Aggregate: evalchemy-{BASE_EVAL_RUN_NAME}[-step{N}]-{task}-avg{X}seeds
+# Dict mapping a base eval run name to a list of checkpoint paths.
+# Each checkpoint is evaluated on all tasks below.
+# The base eval run name is used for output paths and wandb run names:
+#   Per-seed:  evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}
+#   Aggregate: evalchemy-{base_eval_run_name}[-step{N}]-{task}-avg{X}seeds
 # Step suffix is auto-extracted from each checkpoint path if it contains step-NNNN.
-# Set to None to use the default auto-generated wandb run names.
-BASE_EVAL_RUN_NAME = "exp2262pt2a-qwen2.5-7b-instruct-finetuned-ot4-30k-math-qwen3-32b-32768tokens"
+CHECKPOINTS: dict[str, list[str]] = {
+    # "exp2262pt2-qwen2.5-7b-instruct-finetuned-ot4-30k-math-qwq-32b-32768tokens": [
+    #     "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-234/",
+    #     "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-468/",
+    #     "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-702/",
+    #     "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-936/",
+    #     "gs://marin-us-central1/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-1170/",
+    #     "gs://marin-us-central1/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-1404/",
+    #     "gs://marin-us-central1/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-1638/",
+    #     "gs://marin-us-central1/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-1872/",
+    # ],
+    "exp2262pt2a-qwen2.5-7b-instruct-finetuned-ot4-30k-math-qwen3-32b-32768tokens": [
+        "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-234/",
+        "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-468/",
+        "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-702/",
+        "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-936/",
+        "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1170/",
+        "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1404/",
+        "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1638/",
+        "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1872/",
+    ],
+}
 
 # Whether to auto-discover the latest checkpoint in a training run directory.
 DISCOVER_LATEST_CHECKPOINT = False
@@ -87,13 +97,16 @@ DISCOVER_LATEST_CHECKPOINT = False
 # Evaluation Configuration
 # =============================================================================
 
-# Tasks with per-task seed counts.
-# Each entry is (task, num_seeds). Tasks are evaluated independently per checkpoint.
-MULTI_SEED_TASKS = [AIME24, AIME25, AMC23]  # N seeds each
-SINGLE_SEED_TASKS = [MATH500]  # 1 seed each
+# Pool of seeds (first N are used per group).
+SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 
-MULTI_SEED_SEEDS = [42, 43, 44, 45, 46]
-SINGLE_SEED_SEEDS = [42]
+# Each entry: (list of tasks, list of seeds).
+# Tasks in the same group share the same set of seeds.
+# Compile steps are automatically created for groups with >1 seed.
+TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([AIME24, AIME25, AMC23, HMMT], SEEDS[:5]),                                        # 5 seeds
+    ([MATH500], SEEDS[:1]),                                                              # 1 seed
+]
 
 # =============================================================================
 # Generation Parameters
@@ -117,7 +130,7 @@ BASE_GENERATION_PARAMS = {
 # tensor_parallel_size: Number of TPU chips to use for tensor parallelism
 # v5p-8 has 4 chips, so we use tensor_parallel_size=4 to utilize all chips
 # max_num_seqs: Batch size for parallel generation (default is very low!)
-BATCH_SIZE = 192
+BATCH_SIZE = 256
 ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
     "max_num_seqs": BATCH_SIZE,  # For vLLM: Enable batched generation for better throughput
@@ -130,6 +143,8 @@ ENGINE_KWARGS = {
 # Maximum number of eval jobs to run in parallel. Eval steps are split into
 # batches of this size, with each batch submitted as a separate executor_main
 # call. Set to None to run all eval steps in a single executor_main call.
+# WARNING: Setting this value higher will cause many jobs to be launched in parallel.
+#          Please be mindful of other users sharing the cluster.
 MAX_PARALLEL_JOBS = 3
 
 # =============================================================================
@@ -141,36 +156,36 @@ if __name__ == "__main__":
 
     # Create one evaluation step per (checkpoint, task, seed) combination.
     # Each combination runs as an independent parallel step.
-    for checkpoint in CHECKPOINTS:
-        task_seed_pairs = []
-        if MULTI_SEED_TASKS:
-            task_seed_pairs += [(t, MULTI_SEED_SEEDS) for t in MULTI_SEED_TASKS]
-        if SINGLE_SEED_TASKS:
-            task_seed_pairs += [(t, SINGLE_SEED_SEEDS) for t in SINGLE_SEED_TASKS]
-        for task, seeds in task_seed_pairs:
-            task_steps = []
-            for seed in seeds:
-                generation_params = {**BASE_GENERATION_PARAMS, "seed": seed}
-                step = default_evalchemy_eval(
-                    step=checkpoint,
-                    resource_config=ResourceConfig.with_tpu("v5p-8"),
-                    evals=[task],
-                    engine_kwargs=ENGINE_KWARGS,
-                    generation_params=generation_params,
-                    apply_chat_template=True,
-                    discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
-                    base_eval_run_name=BASE_EVAL_RUN_NAME,
-                )
-                task_steps.append(step)
-                eval_steps.append(step)
+    for base_eval_run_name, checkpoints in CHECKPOINTS.items():
+        for checkpoint in checkpoints:
+            task_seed_pairs = []
+            for tasks, seeds in TASK_SEED_GROUPS:
+                task_seed_pairs += [(t, seeds) for t in tasks]
+            for task, seeds in task_seed_pairs:
+                task_steps = []
+                for seed in seeds:
+                    generation_params = {**BASE_GENERATION_PARAMS, "seed": seed}
+                    step = default_evalchemy_eval(
+                        step=checkpoint,
+                        resource_config=ResourceConfig.with_tpu("v5p-8"),
+                        evals=[task],
+                        engine_kwargs=ENGINE_KWARGS,
+                        generation_params=generation_params,
+                        apply_chat_template=True,
+                        discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
+                        base_eval_run_name=base_eval_run_name,
+                    )
+                    task_steps.append(step)
+                    eval_steps.append(step)
 
-            # Add compile step to aggregate results across seeds for this checkpoint+task
-            if len(seeds) > 1:
-                compile_step = compile_evalchemy_results(
-                    task_steps, seeds=seeds,
-                    base_eval_run_name=BASE_EVAL_RUN_NAME, model_path=checkpoint,
-                )
-                compile_steps.append(compile_step)
+                # Add compile step to aggregate results across seeds for this checkpoint+task
+                if len(seeds) > 1:
+                    compile_step = compile_evalchemy_results(
+                        task_steps, seeds=seeds,
+                        base_eval_run_name=base_eval_run_name, model_path=checkpoint,
+                        task_name=task.name,
+                    )
+                    compile_steps.append(compile_step)
 
     # Run eval steps in batches to limit parallelism.
     # Each executor_main call runs up to MAX_PARALLEL_JOBS eval steps concurrently.

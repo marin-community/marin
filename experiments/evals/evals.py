@@ -6,6 +6,7 @@ Canonical set of evals.
 """
 
 import logging
+import re
 from typing import Sequence
 
 from fray.cluster import ResourceConfig
@@ -459,6 +460,13 @@ def default_evalchemy_eval(
     """
     name, model_step_path = extract_model_name_and_path(step)
 
+    # If base_eval_run_name is provided, use it for the output path name
+    if base_eval_run_name:
+        path_str = step if isinstance(step, str) else name
+        step_match = re.search(r"step-(\d+)", path_str)
+        step_suffix = f"-step{step_match.group(1)}" if step_match else ""
+        name = f"{base_eval_run_name}{step_suffix}"
+
     logger.info(f"Creating Evalchemy evaluation step for {name}")
 
     if evals is None:
@@ -485,6 +493,7 @@ def compile_evalchemy_results(
     seeds: list[int] | None = None,
     base_eval_run_name: str | None = None,
     model_path: str | None = None,
+    task_name: str | None = None,
 ) -> ExecutorStep:
     """
     Compile results from multiple Evalchemy evaluation steps into aggregated metrics.
@@ -583,7 +592,8 @@ def compile_evalchemy_results(
 
                 for task_name, task_data in data.get("results", {}).items():
                     for example in task_data.get("examples", []):
-                        expected = str(example.get("answer", "")).strip()
+                        # Some tasks (e.g. AIME24) use "expected_answer", some (e.g. AIME25/AMC23) use "answer"
+                        expected = str(example.get("answer", example.get("expected_answer", ""))).strip()
                         model_answers = example.get("model_answers", [])
                         model_answer = str(model_answers[0]).strip() if model_answers else ""
                         correct = 1 if (model_answer == expected and expected) else 0
@@ -686,17 +696,35 @@ def compile_evalchemy_results(
                 for base_model in avg_df['base_model_name'].unique():
                     model_df = avg_df[avg_df['base_model_name'] == base_model]
 
+                    config_task_name = config.get("task_name")
+
                     if base_eval_run_name:
                         # Build per-dataset aggregate run names
                         # e.g., evalchemy-{name}-step7022-AIME25-avg10seeds
-                        datasets = model_df['dataset_name'].unique()
-                        dataset_suffix = "-".join(sorted(datasets))
+                        if config_task_name:
+                            dataset_suffix = config_task_name
+                        else:
+                            datasets = model_df['dataset_name'].unique()
+                            dataset_suffix = "-".join(sorted(datasets))
                         wandb_run_name = (
                             f"evalchemy-{base_eval_run_name}{step_suffix}"
                             f"-{dataset_suffix}-avg{num_seeds}seeds"
                         )
                     else:
-                        wandb_run_name = f"evalchemy-{base_model.lower()}-averaged-{num_seeds}seeds"
+                        # Derive model name from model_path
+                        if config_model_path:
+                            model_id = config_model_path.rstrip("/").split("/")[-1]
+                        else:
+                            model_id = base_model.lower()
+                        if config_task_name:
+                            dataset_suffix = config_task_name
+                        else:
+                            datasets = model_df['dataset_name'].unique()
+                            dataset_suffix = "-".join(sorted(datasets))
+                        wandb_run_name = (
+                            f"evalchemy-{model_id}{step_suffix}"
+                            f"-{dataset_suffix}-avg{num_seeds}seeds"
+                        )
 
                     wandb.init(
                         project=WANDB_PROJECT,
@@ -737,8 +765,24 @@ def compile_evalchemy_results(
     input_paths = [step.cd("results.json") for step in steps]
     output_path = OutputName("compiled_results")
 
+    # Build compile step name matching the individual run hierarchy:
+    #   individual: evaluation/evalchemy/{model_id}/AIME24_seed42
+    #   compiled:   evaluation/evalchemy/{model_id}/compile_AIME24_avg5seeds
+    if base_eval_run_name:
+        step_match = re.search(r"step-(\d+)", model_path or "")
+        step_suffix = f"-step{step_match.group(1)}" if step_match else ""
+        model_id = f"{base_eval_run_name}{step_suffix}"
+    elif model_path:
+        model_id = _infer_model_name_for_path(model_path)
+    else:
+        model_id = "unknown"
+
+    num_seeds = len(seeds) if seeds else len(steps)
+    task_suffix = f"_{task_name}" if task_name else ""
+    compile_step_name = f"evaluation/evalchemy/{model_id}/compile{task_suffix}_avg{num_seeds}seeds"
+
     return ExecutorStep(
-        name="evaluation/evalchemy/compile_results",
+        name=compile_step_name,
         fn=_compile_results_fn,
         config={
             "input_paths": input_paths,
@@ -746,6 +790,7 @@ def compile_evalchemy_results(
             "seeds": seeds or [],
             "base_eval_run_name": base_eval_run_name,
             "model_path": model_path,
+            "task_name": task_name,
         },
         description="Compile results from multiple evalchemy evaluation steps",
     )
