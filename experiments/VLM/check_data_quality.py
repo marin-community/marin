@@ -346,16 +346,16 @@ def clean_shard(
             "elapsed": time.time() - t0,
         }
 
-    # Filter table using pyarrow boolean mask
-    pa_mask = pa.array(mask, type=pa.bool_())
-    cleaned_table = table.filter(pa_mask)
-
-    # CRITICAL: combine_chunks() after filter() to avoid chunked arrays.
-    # filter() can produce multi-chunk arrays. When pq.write_table() writes
-    # nested types (list<struct>) with multiple chunks, the resulting parquet
-    # file triggers "ArrowNotImplementedError: Nested data conversions not
-    # implemented for chunked array outputs" on read.
-    cleaned_table = cleaned_table.combine_chunks()
+    # Build cleaned table from Python dicts instead of table.filter().
+    # table.filter() creates chunked zero-copy views; pq.write_table() then
+    # writes nested types (list<struct>) with a different encoding that triggers
+    # "ArrowNotImplementedError: Nested data conversions not implemented for
+    # chunked array outputs" on read. combine_chunks() can't fix this either
+    # because large binary columns (images) overflow 32-bit offsets.
+    # Building a fresh table from Python dicts produces clean single-chunk
+    # arrays with encoding identical to the original files.
+    clean_data = {k: [v[i] for i, m in enumerate(mask) if m] for k, v in rows_dict.items()}
+    cleaned_table = pa.table(clean_data)
 
     # Generate cleaned path: train-00900.parquet -> train-00900_cleaned.parquet
     cleaned_path = shard_path.replace(".parquet", "_cleaned.parquet")
@@ -365,12 +365,12 @@ def clean_shard(
         gfs = gcsfs.GCSFileSystem()
         gcs_cleaned_path = cleaned_path.replace("gs://", "")
         with gfs.open(gcs_cleaned_path, "wb") as f:
-            pq.write_table(cleaned_table, f, row_group_size=len(cleaned_table))
+            pq.write_table(cleaned_table, f)
         # Delete original
         gcs_original_path = shard_path.replace("gs://", "")
         gfs.rm(gcs_original_path)
     else:
-        pq.write_table(cleaned_table, cleaned_path, row_group_size=len(cleaned_table))
+        pq.write_table(cleaned_table, cleaned_path)
         import os
         os.remove(shard_path)
 
@@ -396,6 +396,7 @@ def main():
     parser.add_argument("--max_issues_per_shard", type=int, default=100, help="Max issues to report per shard")
     parser.add_argument("--clean", action="store_true", help="Clean mode: remove bad rows and re-upload parquet files")
     parser.add_argument("--dry_run", action="store_true", help="With --clean: only report what would be removed, don't modify files")
+    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for processing shards")
     args = parser.parse_args()
 
     # List parquet files
@@ -421,34 +422,52 @@ def main():
         total_removed = 0
         total_cleaned = 0
 
-        for shard_idx, shard_path in enumerate(parquet_files):
-            global_shard_idx = args.start_shard + shard_idx
-            shard_name = Path(shard_path).stem
-            print(f"[{shard_idx+1}/{len(parquet_files)}] {mode_str} shard {global_shard_idx} ({shard_name})...", end=" ", flush=True)
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            try:
-                stats = clean_shard(
-                    shard_path,
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {}
+            for shard_idx, shard_path in enumerate(parquet_files):
+                future = executor.submit(
+                    clean_shard, shard_path,
                     messages_key=args.messages_key,
                     images_key=args.images_key,
                     dry_run=args.dry_run,
                 )
-                total_original += stats["original_rows"]
-                total_removed += stats["removed_rows"]
-                total_cleaned += stats["cleaned_rows"]
+                futures[future] = (shard_idx, shard_path)
 
-                if stats["removed_rows"] > 0:
+            done_count = 0
+            for future in as_completed(futures):
+                done_count += 1
+                shard_idx, shard_path = futures[future]
+                global_shard_idx = args.start_shard + shard_idx
+                shard_name = Path(shard_path).stem
+
+                try:
+                    stats = future.result()
+                    total_original += stats["original_rows"]
+                    total_removed += stats["removed_rows"]
+                    total_cleaned += stats["cleaned_rows"]
+
+                    if stats["removed_rows"] > 0:
+                        print(
+                            f"[{done_count}/{len(parquet_files)}] {mode_str} shard {global_shard_idx} ({shard_name}): "
+                            f"{stats['original_rows']} -> {stats['cleaned_rows']} rows "
+                            f"(removed {stats['removed_rows']}) in {stats['elapsed']:.1f}s",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"[{done_count}/{len(parquet_files)}] {mode_str} shard {global_shard_idx} ({shard_name}): "
+                            f"{stats['original_rows']} rows, no issues ({stats['elapsed']:.1f}s)",
+                            flush=True,
+                        )
+
+                except Exception as e:
                     print(
-                        f"{stats['original_rows']} -> {stats['cleaned_rows']} rows "
-                        f"(removed {stats['removed_rows']}) in {stats['elapsed']:.1f}s",
+                        f"[{done_count}/{len(parquet_files)}] {mode_str} shard {global_shard_idx} ({shard_name}): FAILED: {e}",
                         flush=True,
                     )
-                else:
-                    print(f"{stats['original_rows']} rows, no issues ({stats['elapsed']:.1f}s)", flush=True)
-
-            except Exception as e:
-                print(f"FAILED: {e}", flush=True)
-                logger.error(f"Failed to clean shard {shard_path}: {e}")
+                    logger.error(f"Failed to clean shard {shard_path}: {e}")
 
         print(f"\n{'=' * 70}")
         print(f"{'DRY RUN ' if args.dry_run else ''}CLEAN SUMMARY")
@@ -476,66 +495,97 @@ def main():
     total_rows = 0
     total_with_images = 0
 
-    for shard_idx, shard_path in enumerate(parquet_files):
+    def check_shard(shard_path: str, messages_key: str, images_key: str,
+                    skip_image_load: bool, max_issues: int) -> Dict[str, Any]:
+        """Check a single shard for data quality issues. Returns results dict."""
         shard_name = Path(shard_path).stem
-        global_shard_idx = args.start_shard + shard_idx
         t0 = time.time()
-        print(f"[{shard_idx+1}/{len(parquet_files)}] Reading shard {global_shard_idx} ({shard_name})...", end=" ", flush=True)
+        with fsspec.open(shard_path, "rb") as f:
+            table = pq.read_table(f)
+        rows = table.to_pydict()
+        num_rows = len(rows.get(messages_key, []))
 
-        try:
-            # Read parquet file
-            with fsspec.open(shard_path, "rb") as f:
-                table = pq.read_table(f)
-            rows = table.to_pydict()
-            num_rows = len(rows.get(args.messages_key, []))
+        shard_issues = []
+        with_images = 0
+        for row_idx in range(num_rows):
+            row = {k: v[row_idx] for k, v in rows.items()}
+            row_issues = check_row(
+                row, shard_name=shard_name, row_idx=row_idx,
+                messages_key=messages_key, images_key=images_key,
+                skip_image_load=skip_image_load,
+            )
+            shard_issues.extend(row_issues)
+            images = row.get(images_key)
+            if images and len(images) > 0:
+                with_images += 1
+            if len(shard_issues) >= max_issues:
+                break
 
-            shard_issues = []
-            for row_idx in range(num_rows):
-                row = {k: v[row_idx] for k, v in rows.items()}
-                row_issues = check_row(
-                    row,
-                    shard_name=shard_name,
-                    row_idx=row_idx,
-                    messages_key=args.messages_key,
-                    images_key=args.images_key,
-                    skip_image_load=args.skip_image_load,
+        return {
+            "shard_name": shard_name,
+            "num_rows": num_rows,
+            "with_images": with_images,
+            "issues": shard_issues,
+            "elapsed": time.time() - t0,
+        }
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {}
+        for shard_idx, shard_path in enumerate(parquet_files):
+            future = executor.submit(
+                check_shard, shard_path,
+                messages_key=args.messages_key,
+                images_key=args.images_key,
+                skip_image_load=args.skip_image_load,
+                max_issues=args.max_issues_per_shard,
+            )
+            futures[future] = (shard_idx, shard_path)
+
+        done_count = 0
+        for future in as_completed(futures):
+            done_count += 1
+            shard_idx, shard_path = futures[future]
+            global_shard_idx = args.start_shard + shard_idx
+            shard_name = Path(shard_path).stem
+
+            try:
+                result = future.result()
+                total_rows += result["num_rows"]
+                total_with_images += result["with_images"]
+                shard_issues = result["issues"]
+
+                for issue in shard_issues:
+                    issue_type = issue["issue"]
+                    if issue_type in issue_counts:
+                        issue_counts[issue_type] += 1
+                all_issues.extend(shard_issues)
+
+                if shard_issues:
+                    print(
+                        f"[{done_count}/{len(parquet_files)}] shard {global_shard_idx} ({shard_name}): "
+                        f"{result['num_rows']} rows, {len(shard_issues)} ISSUES in {result['elapsed']:.1f}s",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[{done_count}/{len(parquet_files)}] shard {global_shard_idx} ({shard_name}): "
+                        f"{result['num_rows']} rows, OK ({result['elapsed']:.1f}s)",
+                        flush=True,
+                    )
+
+            except Exception as e:
+                print(
+                    f"[{done_count}/{len(parquet_files)}] shard {global_shard_idx} ({shard_name}): FAILED: {e}",
+                    flush=True,
                 )
-                shard_issues.extend(row_issues)
-
-                # Count images
-                images = row.get(args.images_key)
-                if images and len(images) > 0:
-                    total_with_images += 1
-
-                # Early stop per shard
-                if len(shard_issues) >= args.max_issues_per_shard:
-                    logger.warning(f"Shard {global_shard_idx} ({shard_name}): hit max issues limit ({args.max_issues_per_shard}), stopping early")
-                    break
-
-            total_rows += num_rows
-
-            # Count issues by type
-            for issue in shard_issues:
-                issue_type = issue["issue"]
-                if issue_type in issue_counts:
-                    issue_counts[issue_type] += 1
-
-            all_issues.extend(shard_issues)
-
-            elapsed = time.time() - t0
-            if shard_issues:
-                print(f"{num_rows} rows, {len(shard_issues)} ISSUES in {elapsed:.1f}s", flush=True)
-            else:
-                print(f"{num_rows} rows, OK ({elapsed:.1f}s)", flush=True)
-
-        except Exception as e:
-            print(f"FAILED: {e}", flush=True)
-            all_issues.append({
-                "shard": shard_name,
-                "row": -1,
-                "issue": "shard_read_failed",
-                "detail": str(e)[:500],
-            })
+                all_issues.append({
+                    "shard": shard_name,
+                    "row": -1,
+                    "issue": "shard_read_failed",
+                    "detail": str(e)[:500],
+                })
 
     # Print summary
     print("\n" + "=" * 70)
