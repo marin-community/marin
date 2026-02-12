@@ -12,6 +12,7 @@ import pytest
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import cluster_pb2
 
+from .conftest import wait_for_dashboard_ready
 from .helpers import _block, _failing, _quick
 
 pytestmark = pytest.mark.e2e
@@ -86,3 +87,32 @@ def test_command_parent_callable_child(cluster):
         environment=EnvironmentSpec(),
     )
     job.wait(timeout=90, raise_on_failure=True, stream_logs=True)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard assertions (require Playwright via the `page` fixture)
+# ---------------------------------------------------------------------------
+
+
+def test_succeeded_job_visible_in_dashboard(cluster, page):
+    """After smoke tests run, the dashboard Jobs tab should show a SUCCEEDED job."""
+    job = cluster.submit(_quick, "dash-smoke-ok")
+    cluster.wait(job, timeout=30)
+
+    page.goto(f"{cluster.url}/")
+    wait_for_dashboard_ready(page)
+
+    assert page.locator("text=dash-smoke-ok").first.is_visible(timeout=5000)
+    assert page.locator("text=SUCCEEDED").first.is_visible(timeout=5000)
+
+
+def test_failed_job_visible_in_dashboard(cluster, page):
+    """After smoke tests run, the dashboard Jobs tab should show a FAILED job."""
+    job = cluster.submit(_failing, "dash-smoke-fail")
+    cluster.wait(job, timeout=30)
+
+    page.goto(f"{cluster.url}/")
+    wait_for_dashboard_ready(page)
+
+    assert page.locator("text=dash-smoke-fail").first.is_visible(timeout=5000)
+    assert page.locator("text=FAILED").first.is_visible(timeout=5000)

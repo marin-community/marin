@@ -19,6 +19,8 @@ from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
+from .conftest import wait_for_dashboard_ready
+
 pytestmark = pytest.mark.e2e
 
 
@@ -207,3 +209,44 @@ def test_job_info_task_context(cluster):
     job = cluster.submit(_job_info_task_context_fn, job_name, job_name)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+# ---------------------------------------------------------------------------
+# Dashboard assertions (require Playwright via the `page` fixture)
+# ---------------------------------------------------------------------------
+
+
+def _register_and_hold(prefix):
+    """Registers an endpoint and holds the job running so the dashboard can observe it."""
+    info = get_job_info()
+    if info is None:
+        raise ValueError("JobInfo not available")
+
+    client = ControllerServiceClientSync(address=info.controller_address, timeout_ms=5000)
+    try:
+        request = cluster_pb2.Controller.RegisterEndpointRequest(
+            name=f"{prefix}/dashboard-check",
+            address="localhost:9999",
+            job_id=info.job_id.to_wire(),
+            metadata={"purpose": "dashboard-test"},
+        )
+        client.register_endpoint(request)
+        time.sleep(30)
+    finally:
+        client.close()
+
+
+def test_endpoints_visible_in_dashboard(cluster, page):
+    """Endpoints tab shows a registered endpoint while the job is running."""
+    prefix = f"dash-ep-{uuid.uuid4().hex[:8]}"
+    job = cluster.submit(_register_and_hold, "dash-endpoint", prefix)
+    cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
+    time.sleep(2)
+
+    page.goto(f"{cluster.url}/")
+    wait_for_dashboard_ready(page)
+    page.click('button.tab-btn:has-text("Endpoints")')
+
+    assert page.locator(f"text={prefix}/dashboard-check").first.is_visible(timeout=5000)
+
+    cluster.kill(job)

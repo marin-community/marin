@@ -11,20 +11,12 @@ rendering via screenshots.
 import pytest
 from iris.rpc import cluster_pb2
 
+from .conftest import wait_for_dashboard_ready
 from .helpers import _failing, _quick, _slow
 
 pytest.importorskip("playwright")
 
 pytestmark = pytest.mark.e2e
-
-
-def _wait_for_dashboard_ready(page):
-    """Wait for Preact to render the dashboard root."""
-    page.wait_for_function(
-        "() => document.getElementById('root').children.length > 0"
-        " && !document.getElementById('root').textContent.includes('Loading...')",
-        timeout=30000,
-    )
 
 
 def test_jobs_tab_shows_all_states(cluster, page, screenshot):
@@ -38,7 +30,7 @@ def test_jobs_tab_shows_all_states(cluster, page, screenshot):
     cluster.wait_for_state(running_job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
 
     page.goto(f"{cluster.url}/")
-    _wait_for_dashboard_ready(page)
+    wait_for_dashboard_ready(page)
 
     for name in ["dash-succeeded", "dash-failed", "dash-running"]:
         assert page.locator(f"text={name}").first.is_visible(timeout=5000)
@@ -52,7 +44,7 @@ def test_job_detail_page(cluster, page, screenshot):
     cluster.wait(job, timeout=30)
 
     page.goto(f"{cluster.url}/job/{job.job_id.to_wire()}")
-    _wait_for_dashboard_ready(page)
+    wait_for_dashboard_ready(page)
 
     assert page.locator("text=SUCCEEDED").first.is_visible(timeout=5000)
     screenshot("job-detail-succeeded")
@@ -60,7 +52,7 @@ def test_job_detail_page(cluster, page, screenshot):
 
 def test_workers_tab(cluster, page, screenshot):
     """Workers tab shows healthy workers."""
-    _wait_for_dashboard_ready(page)
+    wait_for_dashboard_ready(page)
     page.click('button.tab-btn:has-text("Workers")')
 
     assert page.locator("text=healthy").first.is_visible(timeout=5000)
@@ -69,7 +61,7 @@ def test_workers_tab(cluster, page, screenshot):
 
 def test_autoscaler_tab(cluster, page, screenshot):
     """Autoscaler tab shows scale groups."""
-    _wait_for_dashboard_ready(page)
+    wait_for_dashboard_ready(page)
     page.click('button.tab-btn:has-text("Autoscaler")')
 
     screenshot("autoscaler-tab")
@@ -77,7 +69,7 @@ def test_autoscaler_tab(cluster, page, screenshot):
 
 def test_controller_logs(cluster, page, screenshot):
     """Logs tab renders the log viewer component."""
-    _wait_for_dashboard_ready(page)
+    wait_for_dashboard_ready(page)
     page.click('button.tab-btn:has-text("Logs")')
 
     # The log viewer always renders #log-container; wait for it plus either

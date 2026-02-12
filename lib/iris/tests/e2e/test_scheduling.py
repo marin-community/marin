@@ -10,6 +10,8 @@ import pytest
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
+from .conftest import wait_for_dashboard_ready
+
 pytestmark = pytest.mark.e2e
 
 
@@ -69,3 +71,19 @@ def test_multi_worker_execution(multi_worker_cluster):
             workers_used.add(task.worker_id)
 
     assert len(workers_used) > 1, f"Tasks should distribute across workers, but all ran on: {workers_used}"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard assertions (require Playwright via the `page` fixture)
+# ---------------------------------------------------------------------------
+
+
+def test_pending_job_visible_in_dashboard(cluster, page):
+    """An unschedulable job should appear as PENDING in the dashboard."""
+    cluster.submit(lambda: None, "dash-pending", cpu=10000)
+
+    page.goto(f"{cluster.url}/")
+    wait_for_dashboard_ready(page)
+
+    assert page.locator("text=dash-pending").first.is_visible(timeout=5000)
+    assert page.locator("text=PENDING").first.is_visible(timeout=5000)

@@ -12,6 +12,7 @@ from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
+from .conftest import wait_for_dashboard_ready
 from .helpers import _quick, _slow
 
 pytestmark = pytest.mark.e2e
@@ -66,3 +67,17 @@ def test_task_fails_once_then_succeeds(cluster):
     job = cluster.submit(_quick, "retry-once", max_retries_failure=2)
     status = cluster.wait(job, timeout=60)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+# ---------------------------------------------------------------------------
+# Dashboard assertions (require Playwright via the `page` fixture)
+# ---------------------------------------------------------------------------
+
+
+def test_worker_health_in_dashboard(cluster, page):
+    """Workers tab shows at least one healthy worker."""
+    page.goto(f"{cluster.url}/")
+    wait_for_dashboard_ready(page)
+    page.click('button.tab-btn:has-text("Workers")')
+
+    assert page.locator("text=healthy").first.is_visible(timeout=5000)

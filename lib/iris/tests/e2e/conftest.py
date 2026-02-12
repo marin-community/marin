@@ -262,13 +262,30 @@ def chronos(monkeypatch):
 
 @pytest.fixture(scope="module")
 def browser():
-    """Lazily launches a Chromium browser for Playwright-based tests."""
-    from playwright.sync_api import sync_playwright
+    """Lazily launches a Chromium browser for Playwright-based tests.
 
-    with sync_playwright() as p:
+    Skips the requesting test if playwright is not installed, so test files
+    that mix Playwright and non-Playwright tests work correctly.
+    """
+    pw = pytest.importorskip("playwright.sync_api", reason="Playwright not installed")
+
+    with pw.sync_playwright() as p:
         b = p.chromium.launch()
         yield b
         b.close()
+
+
+def wait_for_dashboard_ready(page) -> None:
+    """Wait for Preact to render the dashboard root.
+
+    Waits until the #root element has children and no longer shows "Loading...".
+    Used by dashboard assertion tests across multiple test modules.
+    """
+    page.wait_for_function(
+        "() => document.getElementById('root').children.length > 0"
+        " && !document.getElementById('root').textContent.includes('Loading...')",
+        timeout=30000,
+    )
 
 
 @pytest.fixture
