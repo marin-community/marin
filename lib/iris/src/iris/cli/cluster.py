@@ -215,7 +215,14 @@ def cluster_start(ctx, local: bool):
             address, _vm = start_controller(platform, config)
         click.echo(f"Controller started at {address}")
         click.echo("\nController is running with integrated autoscaler.")
-        click.echo("Use 'iris cluster --config=... status' to check cluster state.")
+        if is_local:
+            click.echo("Press Ctrl+C to stop.")
+            if threading.current_thread() is threading.main_thread():
+                signal.signal(signal.SIGINT, lambda *_: controller.stop())
+                signal.signal(signal.SIGTERM, lambda *_: controller.stop())
+            controller.wait()
+        else:
+            click.echo("Use 'iris --config=... cluster status' to check cluster state.")
     except Exception as e:
         click.echo(f"Failed to start controller: {e}", err=True)
         raise SystemExit(1) from e

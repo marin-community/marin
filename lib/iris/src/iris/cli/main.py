@@ -45,13 +45,16 @@ def require_controller_url(ctx: click.Context) -> str:
             controller_address = iris_config.controller_address()
 
         # Establish tunnel and keep it alive for command duration
-        logger.info("Establishing tunnel to controller...")
-        tunnel_cm = platform.tunnel(address=controller_address)
-        tunnel_url = tunnel_cm.__enter__()
-        ctx.obj["controller_url"] = tunnel_url
-        # Clean up tunnel when context closes
-        ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
-        return tunnel_url
+        try:
+            logger.info("Establishing tunnel to controller...")
+            tunnel_cm = platform.tunnel(address=controller_address)
+            tunnel_url = tunnel_cm.__enter__()
+            ctx.obj["controller_url"] = tunnel_url
+            # Clean up tunnel when context closes
+            ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
+            return tunnel_url
+        except Exception as e:
+            raise click.ClickException(f"Could not connect to controller: {e}") from e
 
     config_file = ctx.obj.get("config_file") if ctx.obj else None
     if config_file:
