@@ -1,11 +1,14 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Sequence
+
 import jax
 import numpy as np
 import pytest
 
 from levanter.data import ListAsyncDataset, MixtureDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import StopStrategy, rescale_mixture_schedule_for_batch_schedule
 from levanter.schedule import BatchSchedule, ScheduleStep
 
@@ -27,6 +30,17 @@ def block_size():
 
 def key():
     return jax.random.PRNGKey(42)
+
+
+class InfiniteCounterDataset(AsyncDataset[int]):
+    async def async_len(self) -> int:
+        raise ValueError("Infinite dataset has no length")
+
+    def is_finite(self) -> bool:
+        return False
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[int]:
+        return [1000 + idx for idx in indices]
 
 
 @pytest.mark.asyncio
@@ -89,7 +103,7 @@ async def test_mixture_dataset_stop_strategy_all():
 
 
 @pytest.mark.asyncio
-async def test_mixture_dataset_all_strategy_infinite_when_tail_omits_dataset():
+async def test_mixture_dataset_all_strategy_can_exhaust_before_tail_stage():
     staged_weights = [(0, {"ds1": 0.5, "ds2": 0.5}), (20, {"ds1": 1.0, "ds2": 0.0})]
     dses = {"ds1": ListAsyncDataset([1, 2, 3, 4, 5]), "ds2": ListAsyncDataset([10, 20, 30, 40, 50])}
     mixture_ds = MixtureDataset(
@@ -101,9 +115,26 @@ async def test_mixture_dataset_all_strategy_infinite_when_tail_omits_dataset():
         stop_strategy=StopStrategy.ALL_STOP_STRATEGY,
     )
 
-    assert not mixture_ds.is_finite()
-    with pytest.raises(ValueError):
-        await mixture_ds.async_len()
+    assert mixture_ds.is_finite()
+    assert await mixture_ds.async_len() == 10
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_first_strategy_exhausts_before_tail_stage():
+    staged_weights = [(0, {"finite": 1.0, "infinite": 0.0}), (10, {"finite": 0.0, "infinite": 1.0})]
+    dses = {"finite": ListAsyncDataset([1, 2, 3, 4, 5]), "infinite": InfiniteCounterDataset()}
+    mixture_ds = MixtureDataset(
+        dses,
+        staged_weights,
+        10,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.FIRST_STOP_STRATEGY,
+    )
+
+    assert mixture_ds.is_finite()
+    assert await mixture_ds.async_len() == 5
+    assert await mixture_ds.get_batch([0, 1, 2, 3, 4]) == [1, 2, 3, 4, 5]
 
 
 @pytest.mark.asyncio

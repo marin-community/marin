@@ -16,7 +16,7 @@ from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.data import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
-from levanter.utils.thread_utils import future_from_value
+from levanter.utils.thread_utils import blocking_wait, future_from_value
 
 
 T = TypeVar("T")
@@ -113,8 +113,8 @@ class MixtureDataset(AsyncDataset[T]):
         self._stage_start_blocks = np.array(
             [start // self.block_size for start, _ in self.weight_stages], dtype=np.int64
         )
-        self._final_stage_counts = self._counts_per_block_per_stage[-1]
         self._dataset_lengths: list[int | None] | None = None
+        self._is_finite_cache: bool | None = None
         self._cached_finite_length: int | None = None
 
     def _initialize_stage_counts(self):
@@ -186,32 +186,21 @@ class MixtureDataset(AsyncDataset[T]):
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             raise ValueError("Length is infinite for restart strategy")
 
-        if not self.is_finite():
+        finite_length = await self._compute_finite_length_or_none()
+        if finite_length is None:
             raise ValueError(f"Length is infinite for stop strategy {self.stop_strategy}")
 
-        if self._cached_finite_length is None:
-            self._cached_finite_length = await self._compute_finite_length()
-
-        return self._cached_finite_length
+        return finite_length
 
     def is_finite(self) -> bool:
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             return False
 
-        has_finite_dataset_in_tail = any(
-            dataset.is_finite() and self._final_stage_counts[i] > 0 for i, dataset in enumerate(self.datasets.values())
-        )
+        if self._is_finite_cache is None:
+            blocking_wait(self._compute_finite_length_or_none())
 
-        if self.stop_strategy == StopStrategy.FIRST_STOP_STRATEGY:
-            return has_finite_dataset_in_tail
-
-        if self.stop_strategy == StopStrategy.ALL_STOP_STRATEGY:
-            return has_finite_dataset_in_tail and all(
-                dataset.is_finite() and self._final_stage_counts[i] > 0
-                for i, dataset in enumerate(self.datasets.values())
-            )
-
-        raise ValueError(f"Unknown stop strategy: {self.stop_strategy}")
+        assert self._is_finite_cache is not None
+        return self._is_finite_cache
 
     def _get_stage_for_block(self, block_id: int) -> int:
         block_start = block_id * self.block_size
@@ -312,27 +301,39 @@ class MixtureDataset(AsyncDataset[T]):
 
         raise ValueError(f"Unknown stop strategy: {self.stop_strategy}")
 
-    async def _compute_finite_length(self) -> int:
+    def _set_finiteness_cache(self, finite_length: int | None) -> int | None:
+        self._cached_finite_length = finite_length
+        self._is_finite_cache = finite_length is not None
+        return finite_length
+
+    async def _compute_finite_length_or_none(self) -> int | None:
+        if self._is_finite_cache is not None:
+            return self._cached_finite_length
+
         lengths = await self._get_dataset_lengths()
         exhaustion_indices: list[int] = []
 
         for dataset_id, dataset_length in enumerate(lengths):
             if dataset_length is None:
+                if self.stop_strategy == StopStrategy.ALL_STOP_STRATEGY:
+                    return self._set_finiteness_cache(None)
                 continue
 
             exhaustion_index = self._first_exhaustion_index_for_dataset(dataset_id, dataset_length)
-            if exhaustion_index is not None:
-                exhaustion_indices.append(exhaustion_index)
+            if exhaustion_index is None:
+                if self.stop_strategy == StopStrategy.ALL_STOP_STRATEGY:
+                    return self._set_finiteness_cache(None)
+                continue
+
+            exhaustion_indices.append(exhaustion_index)
 
         if self.stop_strategy == StopStrategy.FIRST_STOP_STRATEGY:
             if not exhaustion_indices:
-                raise ValueError("No finite dataset can be exhausted under first_exhausted strategy")
-            return min(exhaustion_indices) + 1
+                return self._set_finiteness_cache(None)
+            return self._set_finiteness_cache(min(exhaustion_indices) + 1)
 
         if self.stop_strategy == StopStrategy.ALL_STOP_STRATEGY:
-            if len(exhaustion_indices) != len(self.datasets):
-                raise ValueError("Not all datasets can be exhausted under all_exhausted strategy")
-            return max(exhaustion_indices) + 1
+            return self._set_finiteness_cache(max(exhaustion_indices) + 1)
 
         raise ValueError(f"Unknown stop strategy: {self.stop_strategy}")
 
