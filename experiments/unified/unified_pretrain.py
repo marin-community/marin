@@ -28,10 +28,8 @@ import tempfile
 
 from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
-from transformers import AutoTokenizer
 
 from experiments.defaults import default_train
-from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
 from experiments.simple_train_config import SimpleTrainConfig
@@ -43,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 # --- Constants ---
 
+LLAMA3_GCS_TOKENIZER = "gs://marin-us-central2/tokenizers/llama-3.1-8b"
 LLAMA3_VOCAB_SIZE = 128_256
 TOKLIP_CODEBOOK_SIZE = 16_384
 UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
@@ -70,7 +69,9 @@ def create_unified_tokenizer(output_path: str = UNIFIED_TOKENIZER_PATH) -> str:
 
     from experiments.create_marin_tokenizer import _inject_special_tokens
 
-    tok = AutoTokenizer.from_pretrained(llama3_tokenizer)
+    from levanter.compat.hf_checkpoints import load_tokenizer
+
+    tok = load_tokenizer(LLAMA3_GCS_TOKENIZER)
     assert len(tok) == LLAMA3_VOCAB_SIZE, f"Expected {LLAMA3_VOCAB_SIZE}, got {len(tok)}"
 
     # Rename reserved tokens for vision sentinels
