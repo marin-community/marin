@@ -48,7 +48,6 @@ def test_grug_model_loss_fn_matches_full_logits():
         num_heads=4,
         num_kv_heads=4,
         max_seq_len=seq,
-        cross_entropy_block_size=8,
     )
 
     mesh = _make_grug_mesh()
@@ -77,7 +76,6 @@ def test_grug_wrapper_compute_next_token_loss_uses_grug_loss_fn():
         num_heads=4,
         num_kv_heads=4,
         max_seq_len=seq,
-        cross_entropy_block_size=8,
     )
 
     mesh = _make_grug_mesh()

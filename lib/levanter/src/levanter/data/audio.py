@@ -275,14 +275,8 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
     async def async_len(self) -> int:
         return await self.cache.async_len()
 
-    async def final_length_is_known(self) -> bool:
-        return await self.cache.final_length_is_known()
-
     def is_finite(self) -> bool:
         return self.cache.is_finite()
-
-    async def current_len(self) -> Optional[int]:
-        return await self.cache.current_len()
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[AudioTextDict]:
         return await self.cache.get_batch(indices)

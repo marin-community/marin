@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """SmolTalk2 + Nemotron v2 instruction-tuning mixture.
 
@@ -21,6 +10,7 @@ endpoint so that each split is weighted by its document count. (2025-11-07)
 
 TODO: this should probably be tokens instead of doc counts.
 """
+import dataclasses
 import math
 import re
 
@@ -142,7 +132,7 @@ mixture_sft_config = SimpleSFTConfig(
     learning_rate=1e-5,
     resources=ResourceConfig.with_tpu("v4-2048"),
     tokenizer=marin_tokenizer,
-    model_name_or_path="marin-community/marin-8b-base",
+    initialize_from_hf="marin-community/marin-8b-base",
     max_seq_len=8192,
     seed=0,
 )
@@ -150,16 +140,21 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    permutation_type="feistel",
     shuffle=True,
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
+# Update max_seq_len to match SimpleSFTConfig to prevent errors
+llama_8b_8k = dataclasses.replace(
+    llama_8b,
+    max_seq_len=8192,
+)
+
 marin_8b_sft_smoltalk2_nemotron_v2 = default_sft(
     name="marin_8b_sft_smoltalk2_nemotron_v2_big",
     tokenized=mixture_config,
-    model_config=llama_8b,
+    model_config=llama_8b_8k,
     sft_config=mixture_sft_config,
     tags=["llama", "smoltalk2", "nemotron_v2", "sft"],
 )

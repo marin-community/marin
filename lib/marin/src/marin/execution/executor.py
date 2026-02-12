@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 The `Executor` framework provides a way to specify a DAG of `ExecutorStep`s that
@@ -110,16 +99,9 @@ import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 
-from fray import (
-    Cluster,
-    Entrypoint,
-    EnvironmentConfig,
-    JobId,
-    JobRequest,
-    JobStatus,
-    ResourceConfig,
-    current_cluster,
-)
+from fray.v2 import client as fray_client
+from fray.v2.client import JobHandle, JobStatus
+from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.execution.executor_step_status import (
     HEARTBEAT_INTERVAL,
@@ -182,30 +164,32 @@ class StepRunner:
     executors from running the same step.
     """
 
-    def __init__(self, cluster: Cluster, status_file: StatusFile):
-        self.cluster = cluster
+    def __init__(self, client: fray_client.Client, status_file: StatusFile):
+        self.client = client
         self._status_file = status_file
-        self._job_id: JobId | None = None
+        self._job: JobHandle | None = None
         self._heartbeat_thread: Thread | None = None
         self._stop_event = Event()
 
     @property
-    def job_id(self) -> JobId | None:
-        return self._job_id
+    def job_id(self) -> str | None:
+        return None if self._job is None else self._job.job_id
 
     def launch(self, job_request: JobRequest) -> None:
         """Launch job and start heartbeat thread."""
         self._status_file.write_status(STATUS_RUNNING)
-        self._job_id = self.cluster.launch(job_request)
+        self._job = self.client.submit(job_request)
         self._start_heartbeat()
 
     def wait(self) -> None:
         """Wait for job to complete, stop heartbeat, write final status."""
         try:
-            result = self.cluster.wait(self._job_id)
-            if result.status == JobStatus.FAILED:
+            if self._job is None:
+                raise RuntimeError("StepRunner.wait called before launch")
+            result = self._job.wait(raise_on_failure=False)
+            if result == JobStatus.FAILED:
                 self._status_file.write_status(STATUS_FAILED)
-                raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
+                raise RuntimeError(f"Job {self.job_id} failed")
             self._status_file.write_status(STATUS_SUCCESS)
         except Exception:
             if self._status_file.status != STATUS_FAILED:
@@ -217,9 +201,9 @@ class StepRunner:
 
     def poll(self) -> bool:
         """Return True if job is finished."""
-        if self._job_id is None:
+        if self._job is None:
             return True
-        return JobStatus.finished(self.cluster.poll(self._job_id).status)
+        return JobStatus.finished(self._job.status())
 
     def _start_heartbeat(self) -> None:
         """Start background thread that periodically refreshes the lease."""
@@ -267,6 +251,13 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     return d
 
 
+def _sanitize_job_name(name: str) -> str:
+    """Ensure job names are compatible with Iris and Docker image tags."""
+    sanitized = re.sub(r"[^a-z0-9_.-]+", "-", name.lower())
+    sanitized = sanitized.strip("-.")
+    return sanitized or "job"
+
+
 @dataclass(frozen=True)
 class ExecutorStep(Generic[ConfigT]):
     """
@@ -308,6 +299,9 @@ class ExecutorStep(Generic[ConfigT]):
 
     resources: ResourceConfig | None = None
     """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
+
+    env_vars: dict[str, str] | None = None
+    """Additional environment variables to set for this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -678,7 +672,7 @@ class Executor:
         executor_info_base_path: str,
         description: str | None = None,
     ):
-        self.cluster = current_cluster()
+        self.client = fray_client.current_client()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -706,7 +700,7 @@ class Executor:
         *,
         dry_run: bool = False,
         run_only: list[str] | None = None,
-        force_run_failed: bool = False,
+        force_run_failed: bool = True,
         max_concurrent: int | None = None,
     ):
         """
@@ -777,6 +771,8 @@ class Executor:
 
         ready = [step for step, deps in remaining_deps.items() if not deps]
         running: dict[ExecutorStep, StepRunner | None] = {}
+        failed_steps: set[ExecutorStep] = set()
+        failure_exceptions: list[Exception] = []
 
         while ready or running:
             # Launch ready steps, respecting max_concurrent limit if set
@@ -805,15 +801,31 @@ class Executor:
 
             for finished_step in finished_steps:
                 runner = running[finished_step]
+                step_failed = False
                 if runner is not None:
                     logger.info("Waiting for %s to finish for step %s", runner.job_id, finished_step.name)
-                    runner.wait()
+                    try:
+                        runner.wait()
+                    except Exception as e:
+                        logger.exception("Step %s failed", finished_step.name)
+                        failed_steps.add(finished_step)
+                        failure_exceptions.append(e)
+                        step_failed = True
 
                 running.pop(finished_step)
-                for child in dependents.get(finished_step, []):
-                    remaining_deps[child].remove(finished_step)
-                    if not remaining_deps[child]:
-                        ready.append(child)
+
+                if not step_failed:
+                    for child in dependents.get(finished_step, []):
+                        remaining_deps[child].remove(finished_step)
+                        if not remaining_deps[child]:
+                            ready.append(child)
+
+        if failed_steps:
+            failed_names = sorted(step.name for step in failed_steps)
+            message = f"{len(failed_steps)} step(s) failed: {failed_names}"
+            if failure_exceptions:
+                raise RuntimeError(message) from failure_exceptions[0]
+            raise RuntimeError(message)
 
     def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> StepRunner | None:
         config = self.configs[step]
@@ -855,15 +867,21 @@ class Executor:
             step_fn = _call_remote
 
         # Use the step's resources if specified, otherwise default to CPU
-        step_resources = step.resources if step.resources is not None else ResourceConfig.with_cpu(preemptible=False)
+        step_resources = step.resources if step.resources is not None else ResourceConfig.with_cpu()
+        job_name = _sanitize_job_name(f"{get_fn_name(step.fn, short=True)}:{step.name}")
+        env_vars = step.env_vars or {}
+
         fray_job = JobRequest(
-            name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
+            name=job_name,
             entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
             resources=step_resources,
-            environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
+            environment=create_environment(
+                extras=step.pip_dependency_groups or [],
+                env_vars=env_vars,
+            ),
         )
 
-        runner = StepRunner(self.cluster, status_file)
+        runner = StepRunner(self.client, status_file)
         runner.launch(fray_job)
         return runner
 
@@ -1140,7 +1158,7 @@ class PreviousTaskFailedError(Exception):
     pass
 
 
-def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = False) -> bool:
+def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = True) -> bool:
     """Check if the step should run based on lease-based distributed locking.
 
     Uses lease files for distributed locking and status file for final state.
@@ -1226,7 +1244,7 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
-    force_run_failed: bool = False  # Force run failed steps
+    force_run_failed: bool = True  # Force run failed steps
     run_only: list[str] | None = None
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
@@ -1238,6 +1256,8 @@ class ExecutorMainConfig:
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     time_in = time.time()
 
     prefix = config.prefix

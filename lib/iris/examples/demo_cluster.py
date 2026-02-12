@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Demo cluster with Jupyter notebook integration.
 
@@ -48,7 +37,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
+from iris.cluster.config import make_local_config
+from iris.cluster.controller.local import LocalController
 from iris.rpc import cluster_pb2, config_pb2
 
 # The iris project root (lib/iris/) - used as workspace for the example
@@ -95,7 +85,8 @@ class DemoCluster:
         self._remote_url = controller_url
         self._config_path = config_path
         self._workspace = workspace or IRIS_ROOT
-        self._manager: ClusterManager | None = None
+        self._controller: LocalController | None = None
+        self._controller_address: str | None = None
         self._rpc_client: IrisClient | None = None
 
         # Jupyter integration
@@ -105,7 +96,7 @@ class DemoCluster:
     def _load_or_default_config(self) -> config_pb2.IrisClusterConfig:
         """Load config from file or build a default demo config."""
         if self._config_path:
-            from iris.cluster.vm.config import load_config
+            from iris.cluster.config import load_config
 
             return load_config(Path(self._config_path))
 
@@ -114,6 +105,9 @@ class DemoCluster:
         cpu_sg = config.scale_groups["cpu"]
         cpu_sg.name = "cpu"
         cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        cpu_sg.resources.memory_bytes = int(16 * 1e9)
+        cpu_sg.resources.disk_bytes = int(128 * 1e9)
+        cpu_sg.resources.cpu = 1
         cpu_sg.min_slices = 0
         cpu_sg.max_slices = 4
 
@@ -121,6 +115,11 @@ class DemoCluster:
         tpu_sg.name = "tpu_v5e_16"
         tpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
         tpu_sg.accelerator_variant = "v5litepod-16"
+        tpu_sg.resources.memory_bytes = int(16 * 1e9)
+        tpu_sg.resources.disk_bytes = int(128 * 1e9)
+        tpu_sg.resources.cpu = 128
+        tpu_sg.resources.tpu_count = 4  # chips_per_vm for v5litepod-16
+        tpu_sg.slice_size = 4
         tpu_sg.min_slices = 0
         tpu_sg.max_slices = 4
 
@@ -133,8 +132,8 @@ class DemoCluster:
 
         config = self._load_or_default_config()
         config = make_local_config(config)
-        self._manager = ClusterManager(config)
-        self._manager.start()
+        self._controller = LocalController(config)
+        self._controller_address = self._controller.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -142,8 +141,8 @@ class DemoCluster:
         del exc_type, exc_val, exc_tb  # unused
         self._stop_jupyter()
         self._rpc_client = None
-        if self._manager:
-            self._manager.stop()
+        if self._controller:
+            self._controller.stop()
 
     def _stop_jupyter(self):
         if self._notebook_proc:
@@ -158,10 +157,8 @@ class DemoCluster:
     def controller_url(self) -> str:
         if self._remote_url:
             return self._remote_url
-        if self._manager:
-            url = self._manager.controller.discover()
-            if url:
-                return url
+        if self._controller_address:
+            return self._controller_address
         raise RuntimeError("No controller URL available. Call __enter__ first.")
 
     @property
@@ -246,11 +243,11 @@ class DemoCluster:
             resources=ResourceSpec(
                 cpu=1,
                 memory="512m",
-                replicas=4,
                 device=tpu_device("v5litepod-16"),
             ),
             environment=EnvironmentSpec(),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            replicas=4,
         )
         status = job.wait()
         results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
@@ -358,6 +355,12 @@ class DemoCluster:
         # Set environment for the kernel (inherited by subprocess)
         os.environ["IRIS_CONTROLLER_ADDRESS"] = self.controller_url
         os.environ["IRIS_WORKSPACE"] = str(self._workspace)
+        pythonpath = os.environ.get("PYTHONPATH")
+        iris_src = str(IRIS_ROOT / "src")
+        if pythonpath:
+            os.environ["PYTHONPATH"] = f"{iris_src}:{pythonpath}"
+        else:
+            os.environ["PYTHONPATH"] = iris_src
 
         # Create executor
         ep = ExecutePreprocessor(
@@ -376,7 +379,6 @@ class DemoCluster:
 
 
 @click.command()
-@click.option("--no-browser", is_flag=True, help="Don't auto-open browser for Jupyter")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 @click.option(
     "--controller-url",
@@ -389,18 +391,17 @@ class DemoCluster:
     help="Workspace directory (default: lib/iris)",
 )
 def main(
-    no_browser: bool,
     verbose: bool,
     controller_url: str | None,
     workspace: Path | None,
 ):
-    """Launch demo cluster with Jupyter notebook.
+    """Launch demo cluster and run notebook test.
 
     Runs in-process (no Docker required), with jobs running in threads.
     Can also connect to a remote controller via SSH tunnel.
 
     Examples:
-        # Launch interactive demo with Jupyter
+        # Run demo with local cluster
         uv run python examples/demo_cluster.py
 
         # Connect to remote controller via SSH tunnel
@@ -450,16 +451,9 @@ def main(
         print("Testing notebook execution...")
         if not demo.run_notebook():
             print("WARNING: Notebook test FAILED!")
+            print("(This may be due to kernel environment issues)")
         else:
             print("Notebook test passed!")
-
-        print()
-        print("Launching Jupyter notebook...")
-        url = demo.launch_jupyter(open_browser=not no_browser)
-        print(f"Notebook: {url}")
-        print()
-        print("Press Ctrl+C to stop.")
-        demo.wait_for_interrupt()
 
     print("Shutting down...")
 

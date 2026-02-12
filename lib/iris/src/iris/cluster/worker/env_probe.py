@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Environment probing for worker registration."""
 
@@ -18,10 +7,12 @@ import logging
 import os
 import socket
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -107,6 +98,26 @@ def collect_workdir_size_mb(workdir: Path) -> int:
     return int(size_str)
 
 
+def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
+    """Detect whether this worker is running on a preemptible/spot VM.
+
+    Checks the GCP metadata server first (authoritative for GCP VMs), then
+    falls back to IRIS_WORKER_ATTRIBUTES. Defaults to False for non-GCP
+    environments without explicit configuration.
+    """
+    try:
+        req = urllib.request.Request(
+            "http://metadata.google.internal/computeMetadata/v1/instance/scheduling/preemptible",
+            headers={"Metadata-Flavor": "Google"},
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.read().decode().strip().upper() == "TRUE"
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
+
+    return extra_attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY, "false").lower() == "true"
+
+
 def _get_extra_attributes() -> dict[str, str]:
     """Get extra worker attributes from IRIS_WORKER_ATTRIBUTES env var.
 
@@ -174,6 +185,10 @@ def _build_worker_attributes(
     for key, value in extra_attributes.items():
         attributes[key] = cluster_pb2.AttributeValue(string_value=value)
 
+    # Preemptible detection: GCP metadata server, then IRIS_WORKER_ATTRIBUTES fallback
+    is_preemptible = _detect_preemptible(extra_attributes)
+    attributes[PREEMPTIBLE_ATTRIBUTE_KEY] = cluster_pb2.AttributeValue(string_value=str(is_preemptible).lower())
+
     return attributes
 
 
@@ -181,6 +196,38 @@ class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
+
+
+class TPUSimEnvironmentProvider:
+    """Simulated TPU environment for testing multi-host JAX coordination.
+
+    Wraps DefaultEnvironmentProvider and adds fake TPU metadata so that
+    _build_device_env_vars() sets JAX_COORDINATOR_ADDRESS, JAX_PROCESS_ID,
+    and JAX_NUM_PROCESSES correctly.
+    """
+
+    def __init__(
+        self,
+        worker_id: int,
+        num_workers: int,
+        coordinator_host: str = "127.0.0.1",
+        tpu_variant: str = "v4-8-sim",
+    ):
+        self._worker_id = worker_id
+        self._num_workers = num_workers
+        self._coordinator_host = coordinator_host
+        self._tpu_variant = tpu_variant
+
+    def probe(self) -> cluster_pb2.WorkerMetadata:
+        base = DefaultEnvironmentProvider().probe()
+        # Simulate TPU slice membership
+        base.tpu_name = "sim-tpu-slice"
+        base.tpu_worker_id = str(self._worker_id)
+        base.tpu_worker_hostnames = self._coordinator_host
+        base.tpu_chips_per_host_bounds = "2,2,1"
+        # Mark device as TPU so _build_device_env_vars triggers
+        base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
+        return base
 
 
 class DefaultEnvironmentProvider:
@@ -250,7 +297,7 @@ class DefaultEnvironmentProvider:
         # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
 
-        # VM address from environment (injected by ManagedVm bootstrap)
+        # VM address from environment (injected by Platform bootstrap)
         vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
 
         return cluster_pb2.WorkerMetadata(
