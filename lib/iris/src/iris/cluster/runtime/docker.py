@@ -23,6 +23,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.runtime.profile import (
+    build_memray_attach_cmd,
+    build_memray_transform_cmd,
+    build_pyspy_cmd,
+    resolve_cpu_spec,
+    resolve_memory_spec,
+)
 from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, ImageInfo
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
@@ -348,168 +355,77 @@ exec {quoted_cmd}
         else:
             raise RuntimeError("ProfileType must specify either cpu or memory profiler")
 
+    def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
+
+    def _docker_read_file(self, container_id: str, path: str) -> bytes:
+        result = self._docker_exec(container_id, ["cat", path], capture_output=True, timeout=5)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to read {path}: {result.stderr}")
+        return result.stdout
+
+    def _docker_rm_files(self, container_id: str, paths: list[str]) -> None:
+        self._docker_exec(container_id, ["rm", "-f", *paths], capture_output=True, timeout=10)
+
     def _profile_cpu(
         self, container_id: str, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile", profile_id: str
     ) -> bytes:
         """Profile CPU using py-spy."""
-        # Map protobuf enum to py-spy format strings
-        format_map = {
-            cluster_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
-            cluster_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),
-            cluster_pb2.CpuProfile.RAW: ("raw", "txt"),
-        }
-        py_spy_format, ext = format_map.get(cpu_config.format, ("flamegraph", "svg"))
-        rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 100
-        output_path = f"/tmp/profile-cpu-{profile_id}.{ext}"
-
-        # py-spy is installed in .venv during the BUILD phase;
-        # the entrypoint uses exec so PID 1 is the Python process.
-        cmd = [
-            "docker",
-            "exec",
-            container_id,
-            "/app/.venv/bin/py-spy",
-            "record",
-            "--pid",
-            "1",
-            "--duration",
-            str(duration_seconds),
-            "--rate",
-            str(rate_hz),
-            "--format",
-            py_spy_format,
-            "--output",
-            output_path,
-            "--subprocesses",
-        ]
+        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
+        output_path = f"/tmp/profile-cpu-{profile_id}.{spec.ext}"
+        cmd = build_pyspy_cmd(spec, py_spy_bin="/app/.venv/bin/py-spy", output_path=output_path)
 
         logger.info(
             "CPU profiling container %s for %ds (format=%s, rate=%dHz)",
             container_id,
             duration_seconds,
-            py_spy_format,
-            rate_hz,
+            spec.py_spy_format,
+            spec.rate_hz,
         )
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
+            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
-
-            read_cmd = ["docker", "exec", container_id, "cat", output_path]
-            read_result = subprocess.run(read_cmd, capture_output=True, timeout=5)
-            if read_result.returncode != 0:
-                raise RuntimeError(f"Failed to read CPU profile: {read_result.stderr}")
-
-            return read_result.stdout
+            return self._docker_read_file(container_id, output_path)
         finally:
-            # Clean up the profile file
-            cleanup_cmd = ["docker", "exec", container_id, "rm", "-f", output_path]
-            subprocess.run(cleanup_cmd, capture_output=True, timeout=10)
+            self._docker_rm_files(container_id, [output_path])
 
     def _profile_memory(
         self, container_id: str, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile", profile_id: str
     ) -> bytes:
         """Profile memory using memray."""
-        # Map protobuf enum to memray reporter and file extension
-        format_map = {
-            cluster_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
-            cluster_pb2.MemoryProfile.TABLE: ("table", "txt"),
-            cluster_pb2.MemoryProfile.STATS: ("stats", "json"),
-        }
-        memray_reporter, ext = format_map.get(memory_config.format, ("flamegraph", "html"))
-
-        # memray workflow: attach → binary trace → transform to desired format
+        spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")
+        memray_bin = "/app/.venv/bin/memray"
         trace_path = f"/tmp/memray-trace-{profile_id}.bin"
-        output_path = f"/tmp/memray-output-{profile_id}.{ext}"
+        output_path = f"/tmp/memray-output-{profile_id}.{spec.ext}"
 
-        # Step 1: Attach to PID 1 and record memory trace
-        attach_cmd = [
-            "docker",
-            "exec",
-            container_id,
-            "/app/.venv/bin/memray",
-            "attach",
-            "1",  # PID 1 is the Python process (entrypoint uses exec)
-            "--duration",
-            str(duration_seconds),
-            "--output",
-            trace_path,
-        ]
-        if memory_config.leaks:
-            attach_cmd.append("--aggregate")  # Enable leak detection mode
+        attach_cmd = build_memray_attach_cmd(spec, memray_bin, trace_path)
+        transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
 
         logger.info(
             "Memory profiling container %s for %ds (format=%s, leaks=%s)",
             container_id,
             duration_seconds,
-            memray_reporter,
-            memory_config.leaks,
+            spec.reporter,
+            spec.leaks,
         )
-
         try:
-            # Record the trace
-            result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
+            result = self._docker_exec(
+                container_id, attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10
+            )
             if result.returncode != 0:
                 raise RuntimeError(f"memray attach failed: {result.stderr}")
 
-            # Step 2: Transform binary trace to desired format
-            if memray_reporter == "flamegraph":
-                transform_cmd = [
-                    "docker",
-                    "exec",
-                    container_id,
-                    "/app/.venv/bin/memray",
-                    "flamegraph",
-                    "--force",  # Overwrite if exists
-                    "--output",
-                    output_path,
-                    trace_path,
-                ]
-                if memory_config.leaks:
-                    transform_cmd.insert(4, "--leaks")  # Insert after "flamegraph"
-            elif memray_reporter == "table":
-                transform_cmd = [
-                    "docker",
-                    "exec",
-                    container_id,
-                    "/app/.venv/bin/memray",
-                    "table",
-                    trace_path,
-                ]
-            elif memray_reporter == "stats":
-                transform_cmd = [
-                    "docker",
-                    "exec",
-                    container_id,
-                    "/app/.venv/bin/memray",
-                    "stats",
-                    trace_path,
-                ]
+            result = self._docker_exec(container_id, transform_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
+
+            if spec.output_is_file:
+                return self._docker_read_file(container_id, output_path)
             else:
-                raise RuntimeError(f"Unknown memray reporter: {memray_reporter}")
-
-            # For table/stats, capture stdout directly instead of using output file
-            if memray_reporter in ["table", "stats"]:
-                transform_result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
-                if transform_result.returncode != 0:
-                    raise RuntimeError(f"memray {memray_reporter} failed: {transform_result.stderr}")
-                return transform_result.stdout.encode("utf-8")
-            else:
-                # For flamegraph (HTML), write to file then read
-                transform_result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
-                if transform_result.returncode != 0:
-                    raise RuntimeError(f"memray {memray_reporter} failed: {transform_result.stderr}")
-
-                read_cmd = ["docker", "exec", container_id, "cat", output_path]
-                read_result = subprocess.run(read_cmd, capture_output=True, timeout=5)
-                if read_result.returncode != 0:
-                    raise RuntimeError(f"Failed to read memory profile: {read_result.stderr}")
-
-                return read_result.stdout
+                return result.stdout.encode("utf-8")
         finally:
-            # Clean up trace and output files
-            cleanup_cmd = ["docker", "exec", container_id, "rm", "-f", trace_path, output_path]
-            subprocess.run(cleanup_cmd, capture_output=True, timeout=10)
+            self._docker_rm_files(container_id, [trace_path, output_path])
 
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""

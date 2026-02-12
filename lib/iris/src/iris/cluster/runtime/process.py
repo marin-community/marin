@@ -32,6 +32,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.runtime.profile import (
+    build_memray_attach_cmd,
+    build_memray_transform_cmd,
+    build_pyspy_cmd,
+    resolve_cpu_spec,
+    resolve_memory_spec,
+)
 from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
@@ -401,47 +408,21 @@ class ProcessContainerHandle:
     def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""
         pid = self._container._process.pid
-        rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 100
-
-        # Map protobuf enum to py-spy format strings
-        format_map = {
-            cluster_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
-            cluster_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),
-            cluster_pb2.CpuProfile.RAW: ("raw", "txt"),
-        }
-        py_spy_format, ext = format_map.get(cpu_config.format, ("flamegraph", "svg"))
+        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=str(pid))
 
         output_path = None
         try:
             import tempfile
 
-            with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
+            with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
                 output_path = f.name
 
-            cmd = [
-                "py-spy",
-                "record",
-                "--pid",
-                str(pid),
-                "--duration",
-                str(duration_seconds),
-                "--rate",
-                str(rate_hz),
-                "--format",
-                py_spy_format,
-                "--output",
-                output_path,
-            ]
+            cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path)
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
             if result.returncode == 0:
-                data = Path(output_path).read_bytes()
-                return data
+                return Path(output_path).read_bytes()
         except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
-            logger.warning(
-                "py-spy profiling failed for PID %s; falling back to stub profile output",
-                pid,
-                exc_info=True,
-            )
+            logger.warning("py-spy profiling failed for PID %s; falling back to stub", pid, exc_info=True)
         finally:
             if output_path is not None:
                 Path(output_path).unlink(missing_ok=True)
@@ -451,14 +432,7 @@ class ProcessContainerHandle:
     def _profile_memory(self, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
         """Profile memory using memray, with fallback stub."""
         pid = self._container._process.pid
-
-        # Map protobuf enum to memray reporter
-        format_map = {
-            cluster_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
-            cluster_pb2.MemoryProfile.TABLE: ("table", "txt"),
-            cluster_pb2.MemoryProfile.STATS: ("stats", "json"),
-        }
-        memray_reporter, ext = format_map.get(memory_config.format, ("flamegraph", "html"))
+        spec = resolve_memory_spec(memory_config, duration_seconds, pid=str(pid))
 
         trace_path = None
         output_path = None
@@ -468,49 +442,29 @@ class ProcessContainerHandle:
             with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
                 trace_path = f.name
 
-            # Step 1: Attach to process and record memory trace
-            attach_cmd = [
-                "memray",
-                "attach",
-                str(pid),
-                "--duration",
-                str(duration_seconds),
-                "--output",
-                trace_path,
-            ]
-            if memory_config.leaks:
-                attach_cmd.append("--aggregate")
-
+            attach_cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path)
             result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
             if result.returncode != 0:
                 raise RuntimeError(f"memray attach failed: {result.stderr}")
 
-            # Step 2: Transform binary trace to desired format
-            if memray_reporter == "flamegraph":
-                with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
+            if spec.output_is_file:
+                with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
                     output_path = f.name
-                transform_cmd = ["memray", "flamegraph", "--force", "--output", output_path, trace_path]
-                if memory_config.leaks:
-                    transform_cmd.insert(2, "--leaks")
-                transform_result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
-                if transform_result.returncode != 0:
-                    raise RuntimeError(f"memray flamegraph failed: {transform_result.stderr}")
+
+            transform_cmd = build_memray_transform_cmd(
+                spec, memray_bin="memray", trace_path=trace_path, output_path=output_path or ""
+            )
+            result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
+
+            if spec.output_is_file:
                 return Path(output_path).read_bytes()
-            elif memray_reporter in ["table", "stats"]:
-                transform_cmd = ["memray", memray_reporter, trace_path]
-                transform_result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
-                if transform_result.returncode != 0:
-                    raise RuntimeError(f"memray {memray_reporter} failed: {transform_result.stderr}")
-                return transform_result.stdout.encode("utf-8")
             else:
-                raise RuntimeError(f"Unknown memray reporter: {memray_reporter}")
+                return result.stdout.encode("utf-8")
 
         except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError, RuntimeError):
-            logger.warning(
-                "memray profiling failed for PID %s; falling back to stub profile output",
-                pid,
-                exc_info=True,
-            )
+            logger.warning("memray profiling failed for PID %s; falling back to stub", pid, exc_info=True)
         finally:
             if trace_path is not None:
                 Path(trace_path).unlink(missing_ok=True)
