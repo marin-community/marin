@@ -35,7 +35,7 @@ def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig
         min_slices=1,
         max_slices=max_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
-        slice_size=1,
+        num_vms=1,
         resources=config_pb2.ScaleGroupResources(
             cpu=8,
             memory_bytes=16 * 1024**3,

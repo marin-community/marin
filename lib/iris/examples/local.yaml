@@ -13,7 +13,7 @@ scale_groups:
   cpu:
     accelerator_type: cpu
     accelerator_variant: cpu
-    slice_size: 1
+    num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
@@ -25,5 +25,5 @@ scale_groups:
     slice_template:
       accelerator_type: cpu
       accelerator_variant: cpu
-      slice_size: 1
+      num_vms: 1
       local:

@@ -407,13 +407,13 @@ class LocalPlatform:
         stubs (unit test mode).
         """
         slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
-        slice_size = config.slice_size or 1
+        num_vms = config.num_vms or 1
 
         if self._controller_address is not None:
-            return self._create_slice_with_workers(slice_id, slice_size, config)
+            return self._create_slice_with_workers(slice_id, num_vms, config)
 
-        vm_ids = [f"{slice_id}-worker-{i}" for i in range(slice_size)]
-        addresses = [f"localhost:{9000 + i}" for i in range(slice_size)]
+        vm_ids = [f"{slice_id}-worker-{i}" for i in range(num_vms)]
+        addresses = [f"localhost:{9000 + i}" for i in range(num_vms)]
 
         handle = LocalSliceHandle(
             _slice_id=slice_id,
@@ -429,7 +429,7 @@ class LocalPlatform:
     def _create_slice_with_workers(
         self,
         slice_id: str,
-        slice_size: int,
+        num_vms: int,
         config: config_pb2.SliceConfig,
     ) -> LocalSliceHandle:
         """Spawn real Worker threads for a slice."""
@@ -442,7 +442,7 @@ class LocalPlatform:
         addresses: list[str] = []
 
         # Determine worker count from TPU topology if applicable
-        worker_count = slice_size
+        worker_count = num_vms
         if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU and config.accelerator_variant:
             try:
                 topo = get_tpu_topology(config.accelerator_variant)

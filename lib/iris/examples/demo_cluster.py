@@ -119,7 +119,7 @@ class DemoCluster:
         tpu_sg.resources.disk_bytes = int(128 * 1e9)
         tpu_sg.resources.cpu = 128
         tpu_sg.resources.tpu_count = 4  # chips_per_vm for v5litepod-16
-        tpu_sg.slice_size = 4
+        tpu_sg.num_vms = 4
         tpu_sg.min_slices = 0
         tpu_sg.max_slices = 4
 
