@@ -3,9 +3,8 @@
 
 """Virtual time for chaos tests - makes time.sleep() controllable."""
 
-import time
-import threading
 import heapq
+import threading
 from dataclasses import dataclass, field
 
 
@@ -82,6 +81,9 @@ class VirtualClock:
                 return  # All done
 
             self.tick()  # Wake next sleeper
-            time.sleep(0.001)  # Small real sleep to let thread run
+            # Use threading.Event().wait() instead of time.sleep() because
+            # time.sleep may be monkeypatched by the chronos fixture, which
+            # would deadlock (VirtualClock.sleep blocks waiting for tick()).
+            threading.Event().wait(timeout=0.001)
 
         raise TimeoutError(f"tick_until_idle exceeded {max_iterations} iterations")

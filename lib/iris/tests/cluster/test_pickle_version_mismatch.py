@@ -25,7 +25,7 @@ import sys
 
 import pytest
 
-from tests.cluster.test_e2e import E2ECluster, unique_name
+from tests.e2e._docker_cluster import E2ECluster, unique_name
 
 
 def _hello_tpu_job():

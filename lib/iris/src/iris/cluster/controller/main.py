@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.time_utils import Duration
 
@@ -111,6 +112,10 @@ def serve(
     else:
         effective_timeout = Duration.from_seconds(worker_timeout)
 
+    heartbeat_failure_threshold = (
+        cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
+    )
+
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info(
         "Configuration: scheduler_interval=%.2fs worker_timeout=%.0fms", scheduler_interval, effective_timeout.to_ms()
@@ -122,6 +127,7 @@ def serve(
         bundle_prefix=bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
         worker_timeout=effective_timeout,
+        heartbeat_failure_threshold=heartbeat_failure_threshold,
     )
 
     try:

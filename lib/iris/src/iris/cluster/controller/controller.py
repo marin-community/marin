@@ -25,6 +25,7 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
+    HEARTBEAT_FAILURE_THRESHOLD,
     ControllerState,
     ControllerTask,
     ControllerWorker,
@@ -188,6 +189,9 @@ class ControllerConfig:
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
 
+    heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
+    """Consecutive heartbeat failures before marking worker as dead."""
+
     autoscaler_enabled: bool = False
     worker_access_address: str = ""
 
@@ -241,7 +245,7 @@ class Controller:
         self._config = config
         self._stub_factory = worker_stub_factory
 
-        self._state = ControllerState()
+        self._state = ControllerState(heartbeat_failure_threshold=config.heartbeat_failure_threshold)
         self._scheduler = Scheduler(self._state)
         self._service = ControllerServiceImpl(
             self._state,

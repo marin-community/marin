@@ -1009,8 +1009,9 @@ class ControllerState:
        which creates the attempt and commits resources.
     """
 
-    def __init__(self):
+    def __init__(self, heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD):
         self._lock = RLock()
+        self._heartbeat_failure_threshold = heartbeat_failure_threshold
         self._jobs: dict[JobName, ControllerJob] = {}
         self._tasks: dict[JobName, ControllerTask] = {}
         self._tasks_by_job: dict[JobName, list[JobName]] = {}
@@ -1155,12 +1156,12 @@ class ControllerState:
             return
         worker.consecutive_failures += 1
         txn.log("heartbeat_failed", event.worker_id, consecutive=worker.consecutive_failures)
-        if worker.consecutive_failures >= HEARTBEAT_FAILURE_THRESHOLD:
+        if worker.consecutive_failures >= self._heartbeat_failure_threshold:
             logger.warning(
                 "Worker %s exceeded heartbeat failure threshold: consecutive_failures=%d threshold=%d error=%s",
                 event.worker_id,
                 worker.consecutive_failures,
-                HEARTBEAT_FAILURE_THRESHOLD,
+                self._heartbeat_failure_threshold,
                 event.error,
             )
             self._on_worker_failed(txn, WorkerFailedEvent(worker_id=event.worker_id, error=event.error))
