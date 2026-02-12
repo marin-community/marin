@@ -28,6 +28,7 @@ This evaluator handles several compatibility issues:
 4. GCS model paths not supported by transformers AutoConfig
 """
 
+import dataclasses
 import gc
 import glob
 import hashlib
@@ -42,14 +43,15 @@ import subprocess
 import sys
 import traceback
 from typing import Sequence
+from urllib.parse import urlparse
+
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator, remove_tpu_lockfile_on_exit
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
-from fray.cluster import ResourceConfig, current_cluster
-from fray.cluster.base import JobRequest, Entrypoint, EnvironmentConfig
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +118,7 @@ class _TeeWriter(io.TextIOBase):
         return False
 
 
-class EvalchemyEvaluator(VllmTpuEvaluator):
+class EvalchemyEvaluator(Evaluator):
     """
     Evaluator that runs Evalchemy reasoning benchmarks on TPU via vLLM.
 
@@ -151,6 +153,39 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
         "added_tokens.json",
         "chat_template.jinja",
     ]
+
+    @staticmethod
+    def _is_object_store_path(path: str) -> bool:
+        parsed = urlparse(path)
+        return parsed.scheme in {"gs", "s3"}
+
+    @staticmethod
+    def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
+        """Auto-enable streaming for object-store model paths (gs://, s3://)."""
+        if model.path is None:
+            return model
+        if not EvalchemyEvaluator._is_object_store_path(model.path):
+            return model
+        if "load_format" in model.engine_kwargs:
+            return model
+
+        engine_kwargs = dict(model.engine_kwargs)
+        # Default to the non-sharded streamer for maximum compatibility.
+        # `runai_streamer_sharded` only works for checkpoints that are already sharded
+        # into `model-rank-*-part-*.safetensors`.
+        engine_kwargs["load_format"] = "runai_streamer"
+        return dataclasses.replace(model, engine_kwargs=engine_kwargs)
+
+    @staticmethod
+    def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
+        """Resolve the model argument to pass to vLLM.
+
+        - If `model.path` is set, use it (and auto-enable streaming for gs:// / s3://).
+        - Otherwise, fall back to `model.name` (e.g. an HF repo id).
+        """
+        model = EvalchemyEvaluator._maybe_enable_streaming(model)
+        model_name_or_path = model.path if model.path is not None else model.name
+        return model_name_or_path, model
 
     def get_runtime_env(self) -> dict:
         """Returns the runtime environment for the Ray cluster."""
@@ -1033,7 +1068,6 @@ _patch_autoconfig_for_gcs()
                 except Exception as e:
                     logger.error(f"Failed to upload to GCS: {e}")
 
-            self.cleanup(model)
             if os.path.exists(self.RESULTS_PATH):
                 shutil.rmtree(self.RESULTS_PATH)
             if local_config_dir and os.path.exists(local_config_dir):
