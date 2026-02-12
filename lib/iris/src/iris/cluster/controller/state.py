@@ -21,6 +21,7 @@ from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import NamedTuple
 from threading import RLock
 
 from iris.cluster.controller.events import (
@@ -913,6 +914,33 @@ class ControllerEndpoint:
 # =============================================================================
 
 
+class TaskPriorityKey(NamedTuple):
+    """Priority key for depth-first task ordering.
+
+    Lower values = higher priority.
+    - neg_depth: Negative depth (deeper jobs sort first)
+    - root_submitted_ms: Root job submission time (older trees first)
+    - submitted_ms: Task submission time (FIFO within tree)
+    """
+
+    neg_depth: int
+    root_submitted_ms: int
+    submitted_ms: int
+
+
+class QueueEntry(NamedTuple):
+    """Entry in the priority-sorted task queue.
+
+    - priority: TaskPriorityKey for ordering
+    - insertion_order: Counter to prevent comparing JobName objects
+    - task_id: The task identifier
+    """
+
+    priority: TaskPriorityKey
+    insertion_order: int
+    task_id: JobName
+
+
 @dataclass
 class WorkerTimeoutResult:
     """Result of checking worker heartbeat timeouts."""
@@ -987,11 +1015,8 @@ class ControllerState:
         self._tasks: dict[JobName, ControllerTask] = {}
         self._tasks_by_job: dict[JobName, list[JobName]] = {}
         self._workers: dict[WorkerId, ControllerWorker] = {}
-        # Priority-sorted task queue: (priority_key, insertion_counter, task_id).
-        # Sorted ascending — lower keys = higher priority.
-        # The insertion counter prevents comparing JobName objects (no __lt__).
-        self._task_queue: list[tuple[tuple[int, int, int], int, JobName]] = []
-        self._task_queue_counter: int = 0
+        # Priority-sorted task queue. Sorted ascending — lower keys = higher priority.
+        self._task_queue: list[QueueEntry] = []
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
         self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
@@ -1461,29 +1486,27 @@ class ControllerState:
     # Shared Helpers for Event Handlers
     # -------------------------------------------------------------------------
 
-    def _task_priority_key(self, task_id: JobName) -> tuple[int, int, int]:
+    def _task_priority_key(self, task_id: JobName) -> TaskPriorityKey:
         """Priority key for depth-first task ordering. Lower values = higher priority.
 
-        (-depth, root_submitted_ms, submitted_ms):
         Deeper jobs sort first (negative depth). Among same depth, older root
         trees are preferred. Within the same tree and depth, FIFO by submission.
         """
         task = self._tasks.get(task_id)
         job = self._jobs.get(task.job_id) if task else None
         if not task or not job:
-            return (0, 0, 0)
-        return (
-            -task.job_id.depth,
-            job.root_submitted_at.epoch_ms(),
-            task.submitted_at.epoch_ms(),
+            return TaskPriorityKey(0, 0, 0)
+        return TaskPriorityKey(
+            neg_depth=-task.job_id.depth,
+            root_submitted_ms=job.root_submitted_at.epoch_ms(),
+            submitted_ms=task.submitted_at.epoch_ms(),
         )
 
     def _enqueue_task(self, task_id: JobName) -> None:
         """Insert task into priority-sorted queue."""
         key = self._task_priority_key(task_id)
-        counter = self._task_queue_counter
-        self._task_queue_counter += 1
-        bisect.insort(self._task_queue, (key, counter, task_id))
+        entry = QueueEntry(priority=key, insertion_order=len(self._task_queue), task_id=task_id)
+        bisect.insort(self._task_queue, entry)
 
     def _cleanup_task_resources(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
         """Release worker resources and remove task endpoints."""
@@ -1499,7 +1522,7 @@ class ControllerState:
     def _requeue_task(self, task: ControllerTask, txn: TransactionLog) -> None:
         """Put task back on scheduling queue for retry."""
         task.state = cluster_pb2.TASK_STATE_PENDING
-        if not any(entry[2] == task.task_id for entry in self._task_queue):
+        if not any(entry.task_id == task.task_id for entry in self._task_queue):
             self._enqueue_task(task.task_id)
         txn.log("task_requeued", task.task_id)
 
@@ -1566,6 +1589,19 @@ class ControllerState:
             List of tasks associated with this job
         """
         with self._lock:
+            # Resolve root_submitted_at if not already set (test helper path).
+            # Match production logic from _on_job_submitted.
+            if job.root_submitted_at.epoch_ms() == 0:
+                if job.job_id.is_root:
+                    job.root_submitted_at = job.submitted_at
+                else:
+                    parent_job = self._jobs.get(job.job_id.parent)
+                    if parent_job:
+                        job.root_submitted_at = parent_job.root_submitted_at
+                    else:
+                        # Orphan child (parent already cleaned up) — treat as new root.
+                        job.root_submitted_at = job.submitted_at
+
             self._jobs[job.job_id] = job
             self._tasks_by_job[job.job_id] = []
 
@@ -1620,7 +1656,7 @@ class ControllerState:
             for task_id in task_ids:
                 self._tasks.pop(task_id, None)
             # Filter removed tasks from the priority queue in one pass
-            self._task_queue = [(k, c, tid) for k, c, tid in self._task_queue if tid not in task_id_set]
+            self._task_queue = [entry for entry in self._task_queue if entry.task_id not in task_id_set]
 
             # Remove endpoints for the job
             self.remove_endpoints_for_job(job_id)
@@ -1651,8 +1687,8 @@ class ControllerState:
         """
         with self._lock:
             pending = []
-            for _, _, task_id in self._task_queue:
-                task = self._tasks.get(task_id)
+            for entry in self._task_queue:
+                task = self._tasks.get(entry.task_id)
                 if task and task.can_be_scheduled():
                     pending.append(task)
             return pending
@@ -1793,7 +1829,7 @@ class ControllerState:
 
         # Filter the queue once after collecting all task IDs to remove (O(N) instead of O(N²))
         if tasks_to_remove_from_queue:
-            self._task_queue = [(k, c, tid) for k, c, tid in self._task_queue if tid not in tasks_to_remove_from_queue]
+            self._task_queue = [entry for entry in self._task_queue if entry.task_id not in tasks_to_remove_from_queue]
 
         return tasks_needing_kill_rpc
 
