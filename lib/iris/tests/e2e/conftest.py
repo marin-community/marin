@@ -173,24 +173,24 @@ class TestCluster:
 
 
 def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
-    """Add a scale group with slice_size=2 so coscheduling tests can find a match.
+    """Add a scale group with num_vms=2 so coscheduling tests can find a match.
 
     v5litepod-16 has vm_count=2, so the local platform creates 2 workers per slice
-    sharing the same tpu-name. Setting slice_size=2 lets the demand router match
+    sharing the same tpu-name. Setting num_vms=2 lets the demand router match
     coscheduled jobs with replicas=2.
     """
     sg = config.scale_groups["tpu_cosched_2"]
     sg.name = "tpu_cosched_2"
     sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.accelerator_variant = "v5litepod-16"
-    sg.slice_size = 2
+    sg.num_vms = 2
     sg.min_slices = 1
     sg.max_slices = 2
     sg.resources.cpu = 128
     sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
     sg.resources.disk_bytes = 1024 * 1024 * 1024 * 1024
     sg.slice_template.preemptible = True
-    sg.slice_template.slice_size = 2
+    sg.slice_template.num_vms = 2
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.slice_template.accelerator_variant = "v5litepod-16"
     sg.slice_template.local.SetInParent()
@@ -216,7 +216,7 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
     sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.slice_size = 1
+    sg.num_vms = 1
     sg.min_slices = num_workers
     sg.max_slices = num_workers
     sg.resources.cpu = 8

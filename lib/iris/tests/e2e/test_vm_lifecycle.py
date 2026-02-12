@@ -32,7 +32,7 @@ def _make_scale_group_config(name: str, **kwargs) -> config_pb2.ScaleGroupConfig
 
 
 def _make_slice_config(name: str = "test") -> config_pb2.SliceConfig:
-    return config_pb2.SliceConfig(name_prefix=name, slice_size=1, accelerator_variant="v4-8")
+    return config_pb2.SliceConfig(name_prefix=name, num_vms=1, accelerator_variant="v4-8")
 
 
 def test_quota_exceeded_retry():
