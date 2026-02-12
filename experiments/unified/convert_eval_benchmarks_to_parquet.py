@@ -9,7 +9,9 @@ Downloads benchmarks from HuggingFace and produces sharded parquet files with th
 base schema as training data (messages, images, source) plus extra evaluation columns
 (answer, choices, task_type, question_id, benchmark, split, metadata).
 
-Supported benchmarks: VQAv2, TextVQA, GQA, ChartQA, AI2D, MMMU.
+Supported benchmarks:
+  Understanding: VQAv2, TextVQA, GQA, ChartQA, AI2D, MMMU.
+  Generation:    CIFAR-10 (small/full), ImageNet (small/full).
 
 Usage:
     # Convert all benchmarks (defaults: --output-gcs gs://marin-vlm/eval_benchmarks
@@ -19,6 +21,10 @@ Usage:
     # Convert specific benchmarks
     uv run experiments/unified/convert_eval_benchmarks_to_parquet.py \
         --benchmarks vqav2 textvqa
+
+    # Convert generation benchmarks (small variants for fast iteration)
+    uv run experiments/unified/convert_eval_benchmarks_to_parquet.py \
+        --benchmarks cifar10_small imagenet_small
 
     # Test with small subset, local only
     uv run experiments/unified/convert_eval_benchmarks_to_parquet.py \
@@ -38,6 +44,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from datasets import Dataset, load_dataset
 
 logger = logging.getLogger(__name__)
@@ -101,6 +108,28 @@ def format_mc_options(options: list[str]) -> str:
     for i, opt in enumerate(options):
         lines.append(f"{MC_LETTERS[i]}. {opt}")
     return "\n".join(lines)
+
+
+def build_generation_messages(prompt_text: str) -> list[dict]:
+    """Build Levanter-format messages for a generation eval example.
+
+    The user message contains only a text prompt (no images).
+    The assistant message contains an image placeholder referencing images[0].
+    """
+    return [
+        {"role": "user", "content": [{"type": "text", "text": prompt_text}]},
+        {"role": "assistant", "content": [{"type": "image"}]},
+    ]
+
+
+def class_balanced_sample(dataset: Dataset, label_column: str, n_per_class: int) -> Dataset:
+    """Select exactly n_per_class examples per class from a classification dataset."""
+    labels = np.array(dataset[label_column])
+    indices = []
+    for class_idx in range(labels.max() + 1):
+        class_indices = np.where(labels == class_idx)[0][:n_per_class]
+        indices.extend(class_indices.tolist())
+    return dataset.select(indices)
 
 
 # ---------------------------------------------------------------------------
@@ -449,16 +478,135 @@ class MMMUConverter(BenchmarkConverter):
 
 
 # ---------------------------------------------------------------------------
+# CIFAR-10 (generation benchmark)
+# ---------------------------------------------------------------------------
+
+
+class CIFAR10Converter(BenchmarkConverter):
+    """Class-conditional image generation benchmark using CIFAR-10.
+
+    Stores reference images alongside "a photo of a {class_name}" prompts.
+    Supports class-balanced subsampling via n_per_class.
+    """
+
+    hf_dataset_id = "cifar10"
+    hf_split = "test"
+    task_type = "generation"
+
+    def __init__(self, name: str = "cifar10", n_per_class: int | None = None):
+        self.name = name
+        self._n_per_class = n_per_class
+        self._class_names: list[str] = []
+
+    def load(self, max_rows: int | None = None) -> Dataset:
+        ds = load_dataset(self.hf_dataset_id, split=self.hf_split)
+        self._class_names = ds.features["label"].names
+
+        if self._n_per_class is not None:
+            ds = class_balanced_sample(ds, "label", self._n_per_class)
+
+        if max_rows is not None:
+            ds = ds.select(range(min(max_rows, len(ds))))
+        return ds
+
+    def convert_row(self, item: dict, index: int) -> dict | None:
+        image_bytes = extract_image_bytes(item.get("img"))
+        if image_bytes is None:
+            return None
+
+        label = item["label"]
+        class_name = self._class_names[label]
+        prompt = f"a photo of a {class_name}"
+        messages = build_generation_messages(prompt)
+
+        return {
+            "messages": messages,
+            "images": [{"bytes": image_bytes}],
+            "source": "cifar10",
+            "answer": class_name,
+            "choices": None,
+            "task_type": self.task_type,
+            "question_id": f"cifar10_test_{index}",
+            "benchmark": self.name,
+            "split": "test",
+            "metadata": json.dumps({"class_idx": label, "class_name": class_name}),
+        }
+
+
+# ---------------------------------------------------------------------------
+# ImageNet (generation benchmark)
+# ---------------------------------------------------------------------------
+
+
+class ImageNetConverter(BenchmarkConverter):
+    """Class-conditional image generation benchmark using ImageNet-1K.
+
+    Stores reference images alongside "a photo of a {class_name}" prompts.
+    Supports class-balanced subsampling via n_per_class.
+    Requires HuggingFace authentication (dataset is gated).
+    """
+
+    hf_dataset_id = "ILSVRC/imagenet-1k"
+    hf_split = "validation"
+    task_type = "generation"
+
+    def __init__(self, name: str = "imagenet", n_per_class: int | None = None):
+        self.name = name
+        self._n_per_class = n_per_class
+        self._class_names: list[str] = []
+
+    def load(self, max_rows: int | None = None) -> Dataset:
+        ds = load_dataset(self.hf_dataset_id, split=self.hf_split, token=True)
+        self._class_names = ds.features["label"].names
+
+        if self._n_per_class is not None:
+            ds = class_balanced_sample(ds, "label", self._n_per_class)
+
+        if max_rows is not None:
+            ds = ds.select(range(min(max_rows, len(ds))))
+        return ds
+
+    def convert_row(self, item: dict, index: int) -> dict | None:
+        image_bytes = extract_image_bytes(item.get("image"))
+        if image_bytes is None:
+            return None
+
+        label = item["label"]
+        class_name = self._class_names[label]
+        prompt = f"a photo of a {class_name}"
+        messages = build_generation_messages(prompt)
+
+        return {
+            "messages": messages,
+            "images": [{"bytes": image_bytes}],
+            "source": "imagenet",
+            "answer": class_name,
+            "choices": None,
+            "task_type": self.task_type,
+            "question_id": f"imagenet_val_{index}",
+            "benchmark": self.name,
+            "split": "validation",
+            "metadata": json.dumps({"class_idx": label, "class_name": class_name}),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 BENCHMARK_REGISTRY: dict[str, BenchmarkConverter] = {
+    # Understanding
     "vqav2": VQAv2Converter(),
     "textvqa": TextVQAConverter(),
     "gqa": GQAConverter(),
     "chartqa": ChartQAConverter(),
     "ai2d": AI2DConverter(),
     "mmmu": MMMUConverter(),
+    # Generation
+    "cifar10_small": CIFAR10Converter(name="cifar10_small", n_per_class=100),
+    "cifar10": CIFAR10Converter(name="cifar10"),
+    "imagenet_small": ImageNetConverter(name="imagenet_small", n_per_class=5),
+    "imagenet": ImageNetConverter(name="imagenet"),
 }
 
 ALL_BENCHMARKS = list(BENCHMARK_REGISTRY.keys())
