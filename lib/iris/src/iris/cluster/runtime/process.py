@@ -267,6 +267,19 @@ def _profile_stub(output_format: str) -> bytes:
         return b"py-spy unavailable in local mode\n"
 
 
+def _memory_profile_stub(output_format: str) -> bytes:
+    """Return a minimal stub memory profile for when memray is unavailable."""
+    if output_format == "flamegraph":
+        return (
+            b'<!DOCTYPE html><html><head><title>memray unavailable</title></head>'
+            b'<body><h1>memray unavailable in local mode</h1></body></html>'
+        )
+    elif output_format == "stats":
+        return b'{"error": "memray unavailable in local mode"}'
+    else:
+        return b"memray unavailable in local mode\n"
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -415,6 +428,78 @@ class ProcessContainerHandle:
                 Path(output_path).unlink(missing_ok=True)
 
         return _profile_stub(output_format)
+
+    def memory_profile(
+        self, duration_seconds: int = 10, leaks: bool = False, output_format: str = "flamegraph"
+    ) -> bytes:
+        """Profile memory allocations using memray, with fallback stubs."""
+        if not self._container or not self._container._process:
+            raise RuntimeError("Cannot profile: no running process")
+
+        pid = self._container._process.pid
+
+        trace_path = None
+        output_path = None
+        try:
+            import tempfile
+
+            # Create temporary files for trace and output
+            trace_fd, trace_path = tempfile.mkstemp(suffix=".bin", prefix="memray-")
+            os.close(trace_fd)
+
+            ext_map = {"flamegraph": "html", "table": "txt", "stats": "json"}
+            ext = ext_map.get(output_format, "html")
+            output_fd, output_path = tempfile.mkstemp(suffix=f".{ext}", prefix="memray-")
+            os.close(output_fd)
+
+            # Run memray attach
+            attach_cmd = [
+                "memray",
+                "attach",
+                "--duration",
+                str(duration_seconds),
+                "--output",
+                trace_path,
+                str(pid),
+            ]
+            if leaks:
+                attach_cmd.insert(2, "--method")
+                attach_cmd.insert(3, "leaks")
+
+            result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
+            if result.returncode != 0:
+                logger.warning("memray attach failed, falling back to stub")
+                return _memory_profile_stub(output_format)
+
+            # Transform trace to requested format
+            if output_format == "flamegraph":
+                transform_cmd = ["memray", "flamegraph", "--output", output_path, trace_path]
+            elif output_format == "table":
+                transform_cmd = ["memray", "table", "--output", output_path, trace_path]
+            elif output_format == "stats":
+                transform_cmd = ["memray", "stats", "--output", output_path, "--json", trace_path]
+            else:
+                raise RuntimeError(f"Unknown output format: {output_format}")
+
+            transform_result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
+            if transform_result.returncode == 0:
+                data = Path(output_path).read_bytes()
+                return data
+
+            logger.warning("memray transform failed, falling back to stub")
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
+            logger.warning(
+                "memray profiling failed for PID %s; falling back to stub profile output",
+                pid,
+                exc_info=True,
+            )
+        finally:
+            if trace_path is not None:
+                Path(trace_path).unlink(missing_ok=True)
+            if output_path is not None:
+                Path(output_path).unlink(missing_ok=True)
+
+        return _memory_profile_stub(output_format)
 
     def cleanup(self) -> None:
         """Kill the subprocess and clean up resources."""

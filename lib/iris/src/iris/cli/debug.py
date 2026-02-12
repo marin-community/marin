@@ -800,3 +800,36 @@ def profile(ctx, task_id: str, duration: int, fmt: str, rate: int, output: str |
         click.echo(f"Profile saved to {out_path} ({len(resp.profile_data)} bytes)")
     finally:
         client.close()
+
+
+@debug.command("memory-profile")
+@click.argument("task_id")
+@click.option("--duration", default=10, help="Profiling duration in seconds")
+@click.option("--format", "fmt", type=click.Choice(["flamegraph", "table", "stats"]), default="flamegraph")
+@click.option("--leaks", is_flag=True, help="Only track potential memory leaks")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.pass_context
+def memory_profile(ctx, task_id: str, duration: int, fmt: str, leaks: bool, output: str | None):
+    """Profile memory allocations of a running task with memray and download the result."""
+    controller_url = require_controller_url(ctx)
+    client = ControllerServiceClientSync(controller_url, timeout_ms=(duration + 60) * 1000)
+    try:
+        click.echo(f"Profiling memory for {task_id} for {duration}s (format={fmt}, leaks={leaks})...")
+        resp = client.memory_profile(
+            cluster_pb2.MemoryProfileRequest(
+                task_id=task_id,
+                duration_seconds=duration,
+                leaks=leaks,
+                format=fmt,
+            )
+        )
+        if resp.error:
+            click.echo(f"Error: {resp.error}", err=True)
+            sys.exit(1)
+        ext_map = {"flamegraph": "html", "table": "txt", "stats": "json"}
+        ext = ext_map.get(fmt, "html")
+        out_path = output or f"memory-profile-{task_id.replace('/', '_')}.{ext}"
+        Path(out_path).write_bytes(resp.profile_data)
+        click.echo(f"Memory profile saved to {out_path} ({len(resp.profile_data)} bytes)")
+    finally:
+        client.close()

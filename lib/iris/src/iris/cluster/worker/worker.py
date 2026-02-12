@@ -619,6 +619,19 @@ class Worker:
             raise ValueError(f"Task {task_id} has no container handle")
         return attempt._container_handle.profile(duration_seconds, rate_hz, output_format)
 
+    def memory_profile_task(
+        self, task_id: str, duration_seconds: int = 10, leaks: bool = False, output_format: str = "flamegraph"
+    ) -> bytes:
+        """Profile memory allocations of a running task by delegating to its container handle."""
+        attempt = self._get_current_attempt(task_id)
+        if not attempt:
+            raise ValueError(f"Task {task_id} not found")
+        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
+            raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
+        if not attempt._container_handle:
+            raise ValueError(f"Task {task_id} has no container handle")
+        return attempt._container_handle.memory_profile(duration_seconds, leaks, output_format)
+
     def get_logs(
         self,
         task_id: str,

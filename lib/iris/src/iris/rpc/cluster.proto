@@ -40,6 +40,21 @@ message ProfileTaskResponse {
   string error = 3;             // Non-empty if profiling failed
 }
 
+// --- Memory Profiling ---
+// Shared by both ControllerService and WorkerService (controller proxies to worker).
+message MemoryProfileRequest {
+  string task_id = 1;
+  int32 duration_seconds = 2;   // How long to capture allocations (default: 10)
+  bool leaks = 3;               // If true, only track potential memory leaks
+  string format = 4;            // "flamegraph" (HTML, default), "table" (text), "stats" (JSON)
+}
+
+message MemoryProfileResponse {
+  bytes profile_data = 1;       // HTML/text/JSON output
+  string format = 2;            // Echoed back
+  string error = 3;             // Non-empty if profiling failed
+}
+
 message ProcessLogRecord {
   double timestamp = 1;
   string level = 2;
@@ -787,6 +802,7 @@ service ControllerService {
 
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
+  rpc MemoryProfile(MemoryProfileRequest) returns (MemoryProfileResponse);
 }
 
 service WorkerService {
@@ -797,4 +813,5 @@ service WorkerService {
   rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
+  rpc MemoryProfile(MemoryProfileRequest) returns (MemoryProfileResponse);
 }

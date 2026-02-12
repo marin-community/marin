@@ -162,6 +162,24 @@ class ContainerHandle(Protocol):
         """
         ...
 
+    def memory_profile(
+        self, duration_seconds: int = 10, leaks: bool = False, output_format: str = "flamegraph"
+    ) -> bytes:
+        """Profile memory allocations using memray.
+
+        Args:
+            duration_seconds: How long to capture memory allocations
+            leaks: If True, only track potential memory leaks
+            output_format: "flamegraph" (HTML), "table" (text), or "stats" (JSON)
+
+        Returns:
+            Raw profile output (HTML for flamegraph, text for table, JSON for stats).
+
+        Raises:
+            RuntimeError: If profiling fails or container is not running.
+        """
+        ...
+
     def cleanup(self) -> None:
         """Remove the container and clean up resources."""
         ...

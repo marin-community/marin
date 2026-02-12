@@ -1089,6 +1089,42 @@ class ControllerServiceImpl:
             finally:
                 worker_client.close()
 
+    def memory_profile(
+        self,
+        request: cluster_pb2.MemoryProfileRequest,
+        ctx: RequestContext,
+    ) -> cluster_pb2.MemoryProfileResponse:
+        """Profile memory allocations of a running task by proxying to its worker."""
+        with rpc_error_handler("memory_profile"):
+            try:
+                task_name = JobName.from_wire(request.task_id)
+                task_name.require_task()
+            except ValueError as exc:
+                raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+            task = self._state.get_task(task_name)
+            if not task:
+                raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+
+            worker_id = task.worker_id
+            if not worker_id:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+
+            worker = self._state.get_worker(worker_id)
+            if not worker or not worker.healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+
+            timeout_ms = (request.duration_seconds or 10) * 1000 + 60000  # More time for memray
+            worker_client = WorkerServiceClientSync(f"http://{worker.address}")
+            try:
+                resp = worker_client.memory_profile(request, timeout_ms=timeout_ms)
+                return cluster_pb2.MemoryProfileResponse(
+                    profile_data=resp.profile_data,
+                    format=resp.format,
+                    error=resp.error,
+                )
+            finally:
+                worker_client.close()
+
     # --- Transactions ---
 
     def get_transactions(

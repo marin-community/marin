@@ -35,6 +35,7 @@ class TaskProvider(Protocol):
     def get_logs(self, task_id: str, start_line: int = 0, attempt_id: int = -1) -> list[cluster_pb2.Worker.LogEntry]: ...
     def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
     def profile_task(self, task_id: str, duration_seconds: int, rate_hz: int, output_format: str) -> bytes: ...
+    def memory_profile_task(self, task_id: str, duration_seconds: int, leaks: bool, output_format: str) -> bytes: ...
 
 
 class WorkerServiceImpl:
@@ -191,6 +192,30 @@ class WorkerServiceImpl:
                 )
             except Exception as e:
                 return cluster_pb2.ProfileTaskResponse(
+                    error=str(e),
+                    format=request.format or "flamegraph",
+                )
+
+    def memory_profile(
+        self,
+        request: cluster_pb2.MemoryProfileRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.MemoryProfileResponse:
+        """Profile memory allocations of a running task using memray."""
+        with rpc_error_handler("memory_profile"):
+            try:
+                data = self._provider.memory_profile_task(
+                    request.task_id,
+                    duration_seconds=request.duration_seconds or 10,
+                    leaks=request.leaks or False,
+                    output_format=request.format or "flamegraph",
+                )
+                return cluster_pb2.MemoryProfileResponse(
+                    profile_data=data,
+                    format=request.format or "flamegraph",
+                )
+            except Exception as e:
+                return cluster_pb2.MemoryProfileResponse(
                     error=str(e),
                     format=request.format or "flamegraph",
                 )

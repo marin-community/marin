@@ -379,6 +379,110 @@ exec {quoted_cmd}
             cleanup_cmd = ["docker", "exec", container_id, "rm", "-f", output_path]
             subprocess.run(cleanup_cmd, capture_output=True, timeout=10)
 
+    def memory_profile(
+        self, duration_seconds: int = 10, leaks: bool = False, output_format: str = "flamegraph"
+    ) -> bytes:
+        """Profile memory allocations using memray inside the Docker container."""
+        container_id = self._run_container_id
+        if not container_id:
+            raise RuntimeError("Cannot profile: no running container")
+
+        profile_id = uuid.uuid4().hex[:8]
+        trace_path = f"/tmp/memray-{profile_id}.bin"
+
+        # Determine output extension based on format
+        ext_map = {"flamegraph": "html", "table": "txt", "stats": "json"}
+        ext = ext_map.get(output_format, "html")
+        output_path = f"/tmp/memray-{profile_id}.{ext}"
+
+        # memray attach captures memory allocations from a running process.
+        # The binary trace file is then transformed into the requested output format.
+        attach_cmd = [
+            "docker",
+            "exec",
+            container_id,
+            "/app/.venv/bin/memray",
+            "attach",
+            "--duration",
+            str(duration_seconds),
+            "--output",
+            trace_path,
+            "1",  # PID 1 is the Python process (exec in run script)
+        ]
+
+        if leaks:
+            attach_cmd.insert(5, "--method")
+            attach_cmd.insert(6, "leaks")
+
+        logger.info(
+            "Profiling memory for container %s for %ds (format=%s, leaks=%s)",
+            container_id,
+            duration_seconds,
+            output_format,
+            leaks,
+        )
+
+        try:
+            # Run memray attach
+            result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
+            if result.returncode != 0:
+                raise RuntimeError(f"memray attach failed: {result.stderr}")
+
+            # Transform trace to requested format
+            if output_format == "flamegraph":
+                transform_cmd = [
+                    "docker",
+                    "exec",
+                    container_id,
+                    "/app/.venv/bin/memray",
+                    "flamegraph",
+                    "--output",
+                    output_path,
+                    trace_path,
+                ]
+            elif output_format == "table":
+                transform_cmd = [
+                    "docker",
+                    "exec",
+                    container_id,
+                    "/app/.venv/bin/memray",
+                    "table",
+                    "--output",
+                    output_path,
+                    trace_path,
+                ]
+            elif output_format == "stats":
+                transform_cmd = [
+                    "docker",
+                    "exec",
+                    container_id,
+                    "/app/.venv/bin/memray",
+                    "stats",
+                    "--output",
+                    output_path,
+                    "--json",
+                    trace_path,
+                ]
+            else:
+                raise RuntimeError(f"Unknown output format: {output_format}")
+
+            transform_result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
+            if transform_result.returncode != 0:
+                raise RuntimeError(f"memray transform failed: {transform_result.stderr}")
+
+            # Read the generated report
+            read_cmd = ["docker", "exec", container_id, "cat", output_path]
+            read_result = subprocess.run(read_cmd, capture_output=True, timeout=10)
+            if read_result.returncode != 0:
+                raise RuntimeError(f"Failed to read memory profile: {read_result.stderr}")
+
+            return read_result.stdout
+
+        finally:
+            # Clean up trace and output files
+            cleanup_cmd = ["docker", "exec", container_id, "rm", "-f", trace_path, output_path]
+            subprocess.run(cleanup_cmd, capture_output=True, timeout=10)
+
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""
         if self._run_container_id:
