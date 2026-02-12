@@ -83,7 +83,6 @@ def create_local_autoscaler(
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
-            threads=threads,
         )
 
     autoscaler = Autoscaler.from_config(

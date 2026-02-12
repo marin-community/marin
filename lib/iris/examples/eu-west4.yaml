@@ -40,7 +40,7 @@ scale_groups:
   tpu_v5e_16:
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
-    slice_size: 16
+    num_vms: 4
     resources:
       cpu: 128
       ram: 128GB
@@ -53,7 +53,7 @@ scale_groups:
     slice_template:
       accelerator_type: tpu
       accelerator_variant: v5litepod-16
-      slice_size: 16
+      num_vms: 4
       preemptible: true
       gcp:
         zone: europe-west4-b

@@ -15,7 +15,6 @@ from iris.cluster.controller.scaling_group import (
     SliceLifecycleState,
     SliceState,
     _zones_from_config,
-    slice_handle_status,
 )
 from iris.cluster.platform.base import CloudSliceState, CloudVmState, QuotaExhaustedError, SliceStatus, VmStatus
 from iris.cluster.types import VmWorkerStatus
@@ -31,11 +30,11 @@ DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
 )
 
 
-def _with_resources(config: config_pb2.ScaleGroupConfig, *, slice_size: int = 1) -> config_pb2.ScaleGroupConfig:
+def _with_resources(config: config_pb2.ScaleGroupConfig, *, num_vms: int = 1) -> config_pb2.ScaleGroupConfig:
     if not config.HasField("resources"):
         config.resources.CopyFrom(DEFAULT_RESOURCES)
-    if not config.HasField("slice_size"):
-        config.slice_size = slice_size
+    if not config.HasField("num_vms"):
+        config.num_vms = num_vms
     return config
 
 
@@ -124,6 +123,19 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
 
     platform.create_slice.side_effect = create_slice_side_effect
     return platform
+
+
+def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock]) -> None:
+    """Mark discovered slices as READY with their VM addresses."""
+    for handle in handles:
+        vm_addresses = [vm.internal_address for vm in handle.describe().vms]
+        group.mark_slice_ready(handle.slice_id, vm_addresses)
+
+
+def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> None:
+    """Mark discovered slices as FAILED."""
+    for handle in handles:
+        group.mark_slice_failed(handle.slice_id)
 
 
 def _get_vm_address(handle: MagicMock) -> str:
@@ -256,7 +268,7 @@ class TestScalingGroupVmGroupOwnership:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
-        group.refresh_all_slices()
+        _mark_discovered_ready(group, [discovered[0], discovered[2]])
 
         assert group.slice_count() == 3
         assert group.ready_slice_count() == 2
@@ -461,7 +473,7 @@ class TestScalingGroupIdleTracking:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000))
         group.reconcile()
-        group.refresh_all_slices()
+        _mark_discovered_ready(group, discovered)
 
         # Get the VM address from the SliceHandle
         handle = group.get_slice("slice-001")
@@ -504,7 +516,7 @@ class TestScalingGroupIdleTracking:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
         group.reconcile()
-        group.refresh_all_slices()
+        _mark_discovered_ready(group, discovered)
 
         # Get VM addresses from the handles
         slice_001 = group.get_slice("slice-001")
@@ -538,7 +550,7 @@ class TestScalingGroupIdleTracking:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform)
         group.reconcile()
-        group.refresh_all_slices()
+        _mark_discovered_ready(group, discovered)
 
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
@@ -569,7 +581,7 @@ class TestScalingGroupIdleTracking:
             unbounded_config, platform, idle_threshold=Duration.from_ms(1000), scale_down_cooldown=Duration.from_ms(0)
         )
         group.reconcile()
-        group.refresh_all_slices()
+        _mark_discovered_ready(group, discovered)
 
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
@@ -662,7 +674,11 @@ class TestScalingGroupVmGroupStateCounts:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
-        group.refresh_all_slices()
+        if expected_state == SliceLifecycleState.READY:
+            _mark_discovered_ready(group, discovered)
+        elif expected_state == SliceLifecycleState.FAILED:
+            _mark_discovered_failed(group, discovered)
+        # BOOTING is the default lifecycle state after reconcile
 
         counts = group.slice_state_counts()
 
@@ -682,27 +698,26 @@ class TestScalingGroupVmGroupStateCounts:
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
-        group.refresh_all_slices()
+        _mark_discovered_failed(group, discovered)
 
         counts = group.slice_state_counts()
 
         assert counts[SliceLifecycleState.FAILED] == 1
         assert counts[SliceLifecycleState.READY] == 0
 
-    def test_skips_terminated_vm_groups(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """Terminated VM groups are not counted."""
+    def test_unobserved_slices_counted_as_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Slices that haven't been marked ready or failed are counted as BOOTING."""
         discovered = [
             make_mock_slice_handle("slice-001", vm_states=[vm_pb2.VM_STATE_TERMINATED]),
         ]
         platform = make_mock_platform(slice_handles_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
-        group.refresh_all_slices()
 
         counts = group.slice_state_counts()
 
         assert counts[SliceLifecycleState.READY] == 0
-        assert counts[SliceLifecycleState.BOOTING] == 0
+        assert counts[SliceLifecycleState.BOOTING] == 1
         assert counts[SliceLifecycleState.INITIALIZING] == 0
         assert counts[SliceLifecycleState.FAILED] == 0
 
@@ -874,102 +889,6 @@ class TestScalingGroupAvailability:
         assert not group.matches_device_requirement(DeviceType.GPU, None)
 
 
-class TestScalingGroupFailedSliceCleanup:
-    """Tests for cleanup_failed_slices() behavior."""
-
-    def test_cleanup_failed_slices_terminates_all_failed(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """cleanup_failed_slices() terminates all failed slices."""
-        discovered = [
-            make_mock_slice_handle("slice-001", all_ready=True),
-            make_mock_slice_handle("slice-002", any_failed=True),
-            make_mock_slice_handle("slice-003", any_failed=True),
-        ]
-        platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform)
-        group.reconcile()
-        group.refresh_all_slices()
-
-        cleaned = group.cleanup_failed_slices(timestamp=Timestamp.from_ms(1000))
-
-        assert len(cleaned) == 2
-        assert group.slice_count() == 1
-        assert group.get_slice("slice-001") is not None
-        assert group.get_slice("slice-002") is None
-        assert group.get_slice("slice-003") is None
-
-    def test_cleanup_failed_slices_triggers_backoff_once(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """cleanup_failed_slices() triggers backoff exactly once regardless of slice count."""
-        discovered = [
-            make_mock_slice_handle("slice-001", any_failed=True),
-            make_mock_slice_handle("slice-002", any_failed=True),
-            make_mock_slice_handle("slice-003", any_failed=True),
-        ]
-        platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform, backoff_initial=Duration.from_seconds(5.0))
-        group.reconcile()
-        group.refresh_all_slices()
-
-        group.cleanup_failed_slices(timestamp=Timestamp.from_ms(1000))
-
-        # Only one failure recorded despite cleaning up 3 slices
-        assert group.consecutive_failures == 1
-        assert group._backoff_until is not None
-        assert group._backoff_until.as_timestamp().epoch_ms() == 6000
-
-    def test_cleanup_failed_slices_returns_empty_when_no_failures(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """cleanup_failed_slices() returns empty list when no slices are failed."""
-        discovered = [
-            make_mock_slice_handle("slice-001", all_ready=True),
-            make_mock_slice_handle("slice-002", all_ready=True),
-        ]
-        platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform)
-        group.reconcile()
-
-        cleaned = group.cleanup_failed_slices(timestamp=Timestamp.from_ms(1000))
-
-        assert len(cleaned) == 0
-        assert group.slice_count() == 2
-        assert group.consecutive_failures == 0
-
-    def test_cleanup_failed_slices_cleans_idle_tracking(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """cleanup_failed_slices() removes slices from idle tracking."""
-        discovered = [make_mock_slice_handle("slice-001", any_failed=True)]
-        platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform)
-        group.reconcile()
-        group.refresh_all_slices()
-
-        handle = group.get_slice("slice-001")
-        vm_address = _get_vm_address(handle)
-
-        vm_status_map = {
-            vm_address: VmWorkerStatus(vm_address=vm_address, running_task_ids=frozenset({"task-1"})),
-        }
-        group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
-
-        group.cleanup_failed_slices(timestamp=Timestamp.from_ms(2000))
-
-        assert group.get_slice("slice-001") is None
-
-    def test_cleanup_failed_slices_ignores_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """cleanup_failed_slices() does not respect scale_down_cooldown."""
-        discovered = [make_mock_slice_handle("slice-001", any_failed=True)]
-        platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform, scale_down_cooldown=Duration.from_ms(60_000))
-        group.reconcile()
-        group.refresh_all_slices()
-
-        # Set last scale-down to trigger cooldown for normal scale_down
-        group._last_scale_down = Timestamp.from_ms(1000)
-
-        # Despite cooldown, cleanup_failed_slices() should still work
-        cleaned = group.cleanup_failed_slices(timestamp=Timestamp.from_ms(2000))
-
-        assert len(cleaned) == 1
-        assert group.slice_count() == 0
-
-
 class TestVerifySliceIdle:
     """Tests for _verify_slice_idle behavior with unknown workers."""
 
@@ -990,7 +909,8 @@ class TestVerifySliceIdle:
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
-        group.refresh_all_slices()
+        vm_addresses = [vm.internal_address for vm in handle.describe().vms]
+        group.mark_slice_ready(handle.slice_id, vm_addresses)
         state = _get_slice_state(group, handle)
 
         # Get VM addresses from mock
@@ -1009,109 +929,6 @@ class TestVerifySliceIdle:
         vm_address = _get_vm_address(handle)
         status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset({"task-1"}))}
         assert not group._verify_slice_idle(state, status_map)
-
-
-class TestSliceLivenessTimeout:
-    """Tests for slice liveness tracking and reaping."""
-
-    def test_new_slice_gets_startup_grace(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """complete_scale_up sets a liveness deadline at startup_grace from creation time."""
-        platform = make_mock_platform()
-        grace = Duration.from_seconds(10)
-        group = ScalingGroup(unbounded_config, platform, startup_grace_period=grace)
-
-        ts = Timestamp.from_ms(1000000)
-        handle = _tracked_scale_up(group, timestamp=ts)
-
-        state = group._slices.get(handle.slice_id)
-        assert state is not None
-        assert state.liveness_deadline is not None
-        assert not state.liveness_deadline.expired(now=ts)
-        assert not state.liveness_deadline.expired(now=Timestamp.from_ms(1009000))
-        assert state.liveness_deadline.expired(now=Timestamp.from_ms(1011000))
-
-    def test_liveness_extended_by_heartbeat(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """update_slice_liveness extends deadline when workers appear in status map."""
-        platform = make_mock_platform()
-        startup = Duration.from_seconds(10)
-        heartbeat = Duration.from_seconds(5)
-        group = ScalingGroup(
-            unbounded_config,
-            platform,
-            startup_grace_period=startup,
-            heartbeat_grace_period=heartbeat,
-        )
-
-        ts = Timestamp.from_ms(1000000)
-        handle = _tracked_scale_up(group, timestamp=ts)
-        group.refresh_all_slices()
-        vm_address = _get_vm_address(handle)
-
-        # At t=8s, worker shows up -- extends deadline by heartbeat_grace (5s from now)
-        t_heartbeat = Timestamp.from_ms(1008000)
-        group.update_slice_liveness(
-            {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset())}, t_heartbeat
-        )
-
-        deadline = group._slices[handle.slice_id].liveness_deadline
-        # Should expire at t_heartbeat + 5s = 1013000, not original 1010000
-        assert not deadline.expired(now=Timestamp.from_ms(1012000))
-        assert deadline.expired(now=Timestamp.from_ms(1014000))
-
-    def test_dead_slice_reaped(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Slice that misses its liveness deadline is terminated."""
-        platform = make_mock_platform()
-        grace = Duration.from_seconds(10)
-        group = ScalingGroup(unbounded_config, platform, startup_grace_period=grace)
-
-        ts = Timestamp.from_ms(1000000)
-        handle = _tracked_scale_up(group, timestamp=ts)
-        assert group.slice_count() == 1
-
-        # No heartbeats arrive. After grace period, cleanup should reap it.
-        dead = group.cleanup_dead_slices(Timestamp.from_ms(1011000))
-        assert len(dead) == 1
-        assert dead[0].slice_id == handle.slice_id
-        assert group.slice_count() == 0
-
-    def test_alive_slice_not_reaped(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Slice within its grace period is not reaped."""
-        platform = make_mock_platform()
-        grace = Duration.from_seconds(10)
-        group = ScalingGroup(unbounded_config, platform, startup_grace_period=grace)
-
-        ts = Timestamp.from_ms(1000000)
-        _tracked_scale_up(group, timestamp=ts)
-
-        dead = group.cleanup_dead_slices(Timestamp.from_ms(1005000))
-        assert len(dead) == 0
-        assert group.slice_count() == 1
-
-    def test_reconciled_slice_gets_liveness_deadline(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Slices adopted during reconcile() get a liveness deadline and can be reaped."""
-        discovered = [make_mock_slice_handle("slice-001", all_ready=True)]
-        platform = make_mock_platform(slice_handles_to_discover=discovered)
-        heartbeat = Duration.from_seconds(5)
-        group = ScalingGroup(unbounded_config, platform, heartbeat_grace_period=heartbeat)
-        group.reconcile()
-
-        state = group._slices["slice-001"]
-        assert state.liveness_deadline is not None
-
-    def test_reconciled_slice_reaped_when_no_heartbeat(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """A reconciled slice with no heartbeats is reaped after the heartbeat grace period."""
-        discovered = [make_mock_slice_handle("slice-001", all_ready=True)]
-        platform = make_mock_platform(slice_handles_to_discover=discovered)
-        heartbeat = Duration.from_seconds(5)
-        group = ScalingGroup(unbounded_config, platform, heartbeat_grace_period=heartbeat)
-        group.reconcile()
-
-        # Advance well past the heartbeat grace period
-        far_future = Timestamp.from_ms(Timestamp.now().epoch_ms() + 60_000)
-        dead = group.cleanup_dead_slices(far_future)
-        assert len(dead) == 1
-        assert dead[0].slice_id == "slice-001"
-        assert group.slice_count() == 0
 
 
 class TestZonesFromConfig:
@@ -1191,6 +1008,54 @@ class TestPrepareSliceConfigPreemptible:
         assert result.preemptible is False
 
 
+class TestMarkSliceLockDiscipline:
+    """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
+
+    def test_mark_slice_ready_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """lifecycle and vm_addresses are both set while holding the lock."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        handle = _tracked_scale_up(group)
+
+        # Verify the slice starts as BOOTING with no addresses
+        state = _get_slice_state(group, handle)
+        assert state.lifecycle == SliceLifecycleState.BOOTING
+        assert state.vm_addresses == []
+
+        addresses = ["10.0.0.1", "10.0.0.2"]
+        group.mark_slice_ready(handle.slice_id, addresses)
+
+        # Both fields should be set atomically
+        with group._slices_lock:
+            state = group._slices[handle.slice_id]
+            assert state.lifecycle == SliceLifecycleState.READY
+            assert state.vm_addresses == addresses
+
+    def test_mark_slice_failed_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """lifecycle is set to FAILED while holding the lock."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        handle = _tracked_scale_up(group)
+
+        group.mark_slice_failed(handle.slice_id)
+
+        with group._slices_lock:
+            state = group._slices[handle.slice_id]
+            assert state.lifecycle == SliceLifecycleState.FAILED
+
+    def test_mark_slice_ready_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """mark_slice_ready on a nonexistent slice does not raise."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        group.mark_slice_ready("nonexistent", ["10.0.0.1"])
+
+    def test_mark_slice_failed_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """mark_slice_failed on a nonexistent slice does not raise."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        group.mark_slice_failed("nonexistent")
+
+
 def _make_vm_handle(vm_id: str, cloud_state: CloudVmState, address: str = "10.0.0.1") -> MagicMock:
     handle = MagicMock()
     handle.vm_id = vm_id
@@ -1208,56 +1073,3 @@ def _make_slice_handle(
     handle.slice_id = slice_id
     handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_handles), vms=vm_handles)
     return handle
-
-
-class TestSliceHandleStatusReadinessGating:
-    """VMs in a CREATING or REPAIRING slice must not appear READY."""
-
-    @pytest.mark.parametrize("slice_state", [CloudSliceState.CREATING, CloudSliceState.REPAIRING])
-    def test_running_vms_clamped_to_booting_when_slice_not_ready(self, slice_state: CloudSliceState):
-        """A VM reporting RUNNING should show as BOOTING when the slice is still being set up."""
-        vm = _make_vm_handle("vm-0", CloudVmState.RUNNING)
-        handle = _make_slice_handle("slice-1", slice_state, [vm])
-
-        status = slice_handle_status(handle)
-
-        assert len(status.vms) == 1
-        assert status.vms[0].state == vm_pb2.VM_STATE_BOOTING
-        assert not status.all_ready
-
-    def test_running_vms_report_ready_when_slice_ready(self):
-        """A VM reporting RUNNING should show as READY when the slice itself is READY."""
-        vm = _make_vm_handle("vm-0", CloudVmState.RUNNING)
-        handle = _make_slice_handle("slice-1", CloudSliceState.READY, [vm])
-
-        status = slice_handle_status(handle)
-
-        assert len(status.vms) == 1
-        assert status.vms[0].state == vm_pb2.VM_STATE_READY
-        assert status.all_ready
-
-    def test_non_running_vm_states_unaffected_by_clamping(self):
-        """STOPPED/TERMINATED VMs keep their mapped state regardless of slice state."""
-        vms = [
-            _make_vm_handle("vm-0", CloudVmState.STOPPED),
-            _make_vm_handle("vm-1", CloudVmState.TERMINATED, address="10.0.0.2"),
-        ]
-        handle = _make_slice_handle("slice-1", CloudSliceState.CREATING, vms)
-
-        status = slice_handle_status(handle)
-
-        assert status.vms[0].state == vm_pb2.VM_STATE_FAILED
-        assert status.vms[1].state == vm_pb2.VM_STATE_TERMINATED
-
-    def test_mixed_vms_in_creating_slice(self):
-        """In a CREATING slice, only RUNNING VMs get clamped; others keep their state."""
-        vms = [
-            _make_vm_handle("vm-0", CloudVmState.RUNNING, address="10.0.0.1"),
-            _make_vm_handle("vm-1", CloudVmState.UNKNOWN, address="10.0.0.2"),
-        ]
-        handle = _make_slice_handle("slice-1", CloudSliceState.CREATING, vms)
-
-        status = slice_handle_status(handle)
-
-        assert status.vms[0].state == vm_pb2.VM_STATE_BOOTING  # clamped
-        assert status.vms[1].state == vm_pb2.VM_STATE_BOOTING  # already BOOTING from UNKNOWN

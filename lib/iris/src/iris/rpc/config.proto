@@ -112,7 +112,7 @@ message LocalSliceConfig {}
 
 message SliceConfig {
   string name_prefix = 1;
-  int32 slice_size = 2;
+  int32 num_vms = 2;
   AcceleratorType accelerator_type = 3;
   string accelerator_variant = 4;
   map<string, string> labels = 5;
@@ -166,7 +166,7 @@ message ScaleGroupConfig {
   reserved 12;  // was: runtime_version (now in slice_template.gcp)
   reserved 13;  // was: preemptible (moved to SliceConfig)
   ScaleGroupResources resources = 14;
-  int32 slice_size = 15 [features.field_presence = EXPLICIT];
+  int32 num_vms = 15 [features.field_presence = EXPLICIT];
 
   reserved 20;  // was: zones (now in slice_template.gcp.zone)
 

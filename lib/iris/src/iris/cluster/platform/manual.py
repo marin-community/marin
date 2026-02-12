@@ -229,7 +229,7 @@ class ManualPlatform:
             for h in hosts:
                 self._available_hosts.discard(h)
         else:
-            needed = config.slice_size or 1
+            needed = config.num_vms or 1
             if len(self._available_hosts) < needed:
                 raise RuntimeError(f"Need {needed} hosts but only {len(self._available_hosts)} available")
             hosts = [self._available_hosts.pop() for _ in range(needed)]
