@@ -100,27 +100,28 @@ This section defines how text and visual tokens are organized into training sequ
 
 ### Tokenizer and Special Tokens
 
-We use the **Qwen3 tokenizer** (vocab size 151,936) with the following native special tokens:
+We use the **Llama 3 tokenizer** (`meta-llama/Meta-Llama-3.1-8B`, vocab size 128,256) as the base text tokenizer. This choice is driven by practical infrastructure considerations: Nemotron-CC data is already tokenized and cached on GCS with the Llama 3 tokenizer, avoiding re-tokenization. The Qwen3 model architecture is paired with the Llama 3 tokenizer, following the established pattern in the Marin codebase (e.g., `exp1395_qwen3_32b.py`).
+
+Llama 3 has 256 reserved special tokens (`<|reserved_special_token_0|>` through `<|reserved_special_token_255|>`, IDs 128,002–128,255). We repurpose two of these as vision sentinel tokens:
 
 | Token | ID | Role |
 |---|---|---|
-| `<\|endoftext\|>` | 151643 | Document separator / EOS (also PAD). No BOS is prepended (`add_bos_token = false`). |
-| `<\|im_start\|>` | 151644 | Chat turn start (SFT stage only) |
-| `<\|im_end\|>` | 151645 | Chat turn end / EOS for instruct models (SFT stage only) |
-| `<\|vision_start\|>` | 151652 | Start of visual token sequence |
-| `<\|vision_end\|>` | 151653 | End of visual token sequence |
-| `<\|image_pad\|>` | 151655 | **Not used** — this is for continuous VL models; we use actual discrete visual tokens |
+| `<\|end_of_text\|>` | 128,001 | Document separator / EOS. No BOS is prepended. |
+| `<\|vision_start\|>` | 128,004 | Start of visual token sequence (repurposed `<\|reserved_special_token_2\|>`) |
+| `<\|vision_end\|>` | 128,005 | End of visual token sequence (repurposed `<\|reserved_special_token_3\|>`) |
 
-**Vocabulary extension and token ID shifting**: TokLIP codebook indices start from 0, but they must be shifted to avoid collision with the Qwen3 text vocabulary. We define a shift offset equal to the Qwen3 vocab size (151,936). Each TokLIP codebook index `c` is mapped to token ID `c + 151936` in the unified vocabulary.
+For the SFT stage, chat turn delimiters (`<|im_start|>`, `<|im_end|>`) can be similarly repurposed from the remaining reserved tokens.
+
+**Vocabulary extension and token ID shifting**: TokLIP codebook indices start from 0, but they must be shifted to avoid collision with the Llama 3 text vocabulary. We define a shift offset equal to the Llama 3 vocab size (128,256). Each TokLIP codebook index `c` is mapped to token ID `c + 128256` in the unified vocabulary. The extended tokenizer is created once via `create_unified_tokenizer()` in `experiments/unified/unified_pretrain.py` and saved to GCS at `gs://marin-vlm/tokenizers/llama3-unified-144k`.
 
 | TokLIP Variant | Codebook Range (original) | Token ID Range (shifted) | Unified Vocab Size |
 |---|---|---|---|
-| TokLIP-L | 0 – 16,383 | 151,936 – 168,319 | 168,320 |
-| TokLIP-XL | 0 – 262,143 | 151,936 – 414,079 | 414,080 |
+| TokLIP-L | 0 – 16,383 | 128,256 – 144,639 | 144,640 |
+| TokLIP-XL | 0 – 262,143 | 128,256 – 390,399 | 390,400 |
 
-Visual tokens are denoted V₀, V₁, ..., V₁₆₃₈₃ (TokLIP-L) or V₀, ..., V₂₆₂₁₄₃ (TokLIP-XL), where Vᵢ corresponds to unified token ID `i + 151936`.
+Visual tokens are denoted V₀, V₁, ..., V₁₆₃₈₃ (TokLIP-L) or V₀, ..., V₂₆₂₁₄₃ (TokLIP-XL), where Vᵢ corresponds to unified token ID `i + 128256`.
 
-**Embedding expansion**: The model's token embedding layer and output (lm_head) projection must be resized from 151,936 to the unified vocab size. The newly added visual token embeddings should be randomly initialized (e.g., from the same distribution as the original embeddings). When using cold-start training (from scratch), this is trivially handled by initializing the full vocabulary at model creation time. When using warm-start (from a pre-trained Qwen3 checkpoint), the original text embeddings are preserved and only the appended visual token embeddings are freshly initialized.
+**Embedding expansion**: The model's token embedding layer and output (lm_head) projection are sized to the unified vocab size (e.g., 144,640 for TokLIP-L). Levanter determines the model's vocab size from `len(tokenizer)` at model construction time (`train_lm.py:156`). When using cold-start training (from scratch), this is trivially handled by initializing the full vocabulary at model creation time. When using warm-start (from a pre-trained checkpoint), the original text embeddings are preserved and only the appended visual token embeddings are freshly initialized.
 
 ### Token Composition Types
 
@@ -246,7 +247,7 @@ Study existing scaling law methodology (Chinchilla, Hoffmann et al., etc.) to es
 Extend the **Marin** evaluation framework to support all text benchmarks (HellaSwag, WinoGrande, ARC, MMLU), image understanding benchmarks (VQAv2, TextVQA, GQA, ChartQA, AI2D, MMMU), and image generation benchmarks (FID and CLIP Score on ImageNet / COCO-30K).
 
 ### Milestone 3: Dataset Tokenization
-Tokenize the full multimodal training set into discrete tokens: text tokenization (Qwen3 tokenizer), image tokenization via TokLIP (384×384 → 576 tokens or 512×512 → 1024 tokens per image). Store in a format suitable for efficient data loading with variable mixture ratios.
+Tokenize the full multimodal training set into discrete tokens: text tokenization (Llama 3 tokenizer, extended with TokLIP visual tokens), image tokenization via TokLIP (384×384 → 576 tokens or 512×512 → 1024 tokens per image). Store in Levanter cache format suitable for efficient data loading with variable mixture ratios. Implementation: `experiments/unified/vlm_tokenize_captions.py`.
 
 ### Milestone 4: Stable Multimodal Training
 Build a robust training pipeline for joint text–visual token prediction. Incorporate stability techniques from prior work (e.g., Chameleon: z-loss, QK-Norm). Handle variable-length sequences mixing text and visual tokens. Support configurable visual token loss weight. Validate training stability across model sizes (30M → 3.5B).
@@ -406,3 +407,39 @@ For each compute budget, train the compute-optimal model configuration and colle
 ## Summary
 
 This project aims to answer a series of interconnected questions about unified image-text models: whether multimodal training taxes language capability (RQ1), what the optimal data mixture is and how it scales (RQ2), whether understanding and generation truly benefit each other (RQ3), how visual token loss weights interact with scale (RQ4), whether validation loss reliably predicts downstream benchmarks (RQ5), what role interleaved data plays (RQ6), and how capabilities emerge across scale (RQ7). The deliverable is a comprehensive set of scaling laws that enable principled, compute-efficient training of future large-scale multimodal models.
+
+---
+
+## Edit Log
+
+### 2025-02-11: Tokenizer switch from Qwen3 to Llama 3
+
+**Motivation**: Nemotron-CC text data is already tokenized and cached on GCS with the Llama 3 tokenizer (`meta-llama/Meta-Llama-3.1-8B`). Using the Qwen3 tokenizer would require re-tokenizing the entire ~0.9T token Nemotron corpus, which is unnecessary since the Marin codebase already supports pairing Qwen3 model architecture with Llama 3 tokenized data (established pattern in `exp1395_qwen3_32b.py`).
+
+**Changes to TASK_OVERVIEW.md**:
+
+1. **Section "Tokenizer and Special Tokens"**: Replaced Qwen3 tokenizer (vocab 151,936) with Llama 3 tokenizer (vocab 128,256) as the base text tokenizer. Updated all special token IDs:
+
+   | Token | Old ID (Qwen3) | New ID (Llama 3) |
+   |---|---|---|
+   | `<\|endoftext\|>` / `<\|end_of_text\|>` | 151,643 | 128,001 |
+   | `<\|vision_start\|>` | 151,652 | 128,004 (repurposed `reserved_special_token_2`) |
+   | `<\|vision_end\|>` | 151,653 | 128,005 (repurposed `reserved_special_token_3`) |
+
+   Removed Qwen3-specific tokens (`<|im_start|>`, `<|im_end|>`, `<|image_pad|>`) from the main table since they are not native to Llama 3. Added note that SFT chat delimiters can be repurposed from remaining Llama 3 reserved tokens.
+
+2. **Vocabulary extension table**: Updated shift offset from 151,936 to 128,256, and unified vocab sizes:
+
+   | TokLIP Variant | Old Unified Vocab | New Unified Vocab |
+   |---|---|---|
+   | TokLIP-L | 168,320 | 144,640 |
+   | TokLIP-XL | 414,080 | 390,400 |
+
+3. **Embedding expansion**: Updated to reference Levanter's `len(tokenizer)` mechanism for determining model vocab size, removing the specific number 151,936.
+
+4. **Milestone 3**: Updated from "Qwen3 tokenizer" to "Llama 3 tokenizer, extended with TokLIP visual tokens". Added reference to implementation file `experiments/unified/vlm_tokenize_captions.py`.
+
+**Corresponding code changes**:
+
+- **`experiments/unified/vlm_tokenize_captions.py`**: Updated constants (`VISUAL_TOKEN_OFFSET` 151,936→128,256; `VISION_START_ID` 151,652→128,004; `VISION_END_ID` 151,653→128,005; `ENDOFTEXT_ID` 151,643→128,001). Changed default tokenizer from `Qwen/Qwen3-0.6B` to the extended Llama 3 tokenizer on GCS.
+- **`experiments/unified/unified_pretrain.py`** (new file): Training experiment script implementing `create_unified_tokenizer()` (extends Llama 3 with vision sentinels + 16,384 TokLIP visual tokens), `unified_data_config()` (mixes Nemotron text caches + multimodal Levanter cache), and training configs for Qwen3-0.6B/1.7B/4B model sizes.

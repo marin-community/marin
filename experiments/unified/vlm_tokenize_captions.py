@@ -2,17 +2,40 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tokenize pre-tokenized TokLIP image-caption data into unified sequences for VLM pre-training.
+Tokenize pre-tokenized TokLIP image-caption data into unified sequences for pre-training.
 
 Reads parquet shards from GCS containing TokLIP image tokens and captions,
 produces dual-ordering (image-first + text-first) token sequences with per-token
 loss weights, and writes them to Levanter cache format.
 
+Requires the unified tokenizer to be created first via create_unified_tokenizer()
+in experiments/unified/unified_pretrain.py.
+
 Usage:
+    # Dual ordering (default): both image-first and text-first per row
     uv run experiments/unified/vlm_tokenize_captions.py \
-        --output_path gs://marin-vlm/vlm_pretraining_cache \
-        --start_shard 0 --end_shard 10 \
-        --generation_ratio 0.5
+        --start_shard 0 --end_shard 10
+
+    # Process all shards with dual ordering
+    uv run experiments/unified/vlm_tokenize_captions.py
+
+    # Ratio-controlled: 30% generation (text-first), 70% understanding (image-first)
+    uv run experiments/unified/vlm_tokenize_captions.py \
+        --start_shard 0 --end_shard 100 \
+        --dual_ordering false --generation_ratio 0.3
+
+    # All understanding (image-first only)
+    uv run experiments/unified/vlm_tokenize_captions.py \
+        --dual_ordering false --generation_ratio 0.0
+
+    # All generation (text-first only)
+    uv run experiments/unified/vlm_tokenize_captions.py \
+        --dual_ordering false --generation_ratio 1.0
+
+    # Custom output path and visual loss weight
+    uv run experiments/unified/vlm_tokenize_captions.py \
+        --start_shard 0 --end_shard 50 \
+        --w_visual 0.3 --num_workers 16
 """
 
 from __future__ import annotations
@@ -28,16 +51,17 @@ import numpy as np
 import pyarrow.parquet as pq
 import transformers
 
+from experiments.unified.unified_pretrain import UNIFIED_CACHE_PATH, UNIFIED_TOKENIZER_PATH
 from marin.utils import fsspec_exists, fsspec_glob
 
 logger = logging.getLogger(__name__)
 
-# --- Constants (from unified_model_scaling_law.md) ---
+# --- Constants (Llama3 base tokenizer + TokLIP-L visual tokens) ---
 
-VISUAL_TOKEN_OFFSET = 151_936  # TokLIP codebook index + offset = unified token ID
-VISION_START_ID = 151_652  # <|vision_start|>
-VISION_END_ID = 151_653  # <|vision_end|>
-ENDOFTEXT_ID = 151_643  # <|endoftext|>
+VISUAL_TOKEN_OFFSET = 128_256  # Llama3 vocab size; TokLIP index c → unified ID c + 128256
+VISION_START_ID = 128_004  # <|vision_start|> (repurposed reserved_special_token_2)
+VISION_END_ID = 128_005  # <|vision_end|> (repurposed reserved_special_token_3)
+ENDOFTEXT_ID = 128_001  # <|end_of_text|> (Llama3 EOS)
 
 
 def extract_caption(messages: list[dict]) -> str | None:
@@ -126,18 +150,22 @@ def process_parquet_rows(
     table,
     tokenizer: transformers.PreTrainedTokenizer,
     w_visual: float,
+    dual_ordering: bool,
     generation_ratio: float,
 ) -> Iterator[dict[str, np.ndarray]]:
-    """Process all rows in a PyArrow table, yielding understanding or generation records.
+    """Process all rows in a PyArrow table, yielding token sequences.
 
-    Each row produces a single sequence. The first (1 - generation_ratio) fraction
-    of valid rows yield image-first (understanding) sequences; the remaining
-    generation_ratio fraction yield text-first (generation) sequences.
+    When dual_ordering is True, every valid row produces both an image-first
+    (understanding) and a text-first (generation) sequence.
+
+    When dual_ordering is False, each row produces a single sequence. The first
+    (1 - generation_ratio) fraction of valid rows yield image-first sequences;
+    the remaining generation_ratio fraction yield text-first sequences.
     """
     messages_col = table.column("messages")
     image_tokens_col = table.column("image_tokens")
 
-    # First pass: count valid rows to compute the threshold
+    # First pass: collect valid row indices and compute generation threshold
     valid_indices = []
     for i in range(len(table)):
         messages = messages_col[i].as_py()
@@ -162,7 +190,10 @@ def process_parquet_rows(
         # Tokenize caption (no BOS per doc spec)
         caption_ids = tokenizer.encode(caption, add_special_tokens=False)
 
-        if rank < threshold:
+        if dual_ordering:
+            yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
+            yield build_text_first_sequence(caption_ids, shifted_image_tokens, w_visual)
+        elif rank < threshold:
             yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
         else:
             yield build_text_first_sequence(caption_ids, shifted_image_tokens, w_visual)
@@ -176,6 +207,7 @@ def process_shard(
     output_path: str,
     tokenizer_name: str,
     w_visual: float,
+    dual_ordering: bool,
     generation_ratio: float,
 ) -> dict:
     """Process a single parquet shard and write to Levanter cache.
@@ -192,12 +224,13 @@ def process_shard(
     with fs.open(shard_path) as f:
         table = pq.read_table(f)
 
-    records = process_parquet_rows(table, tokenizer, w_visual, generation_ratio)
+    records = process_parquet_rows(table, tokenizer, w_visual, dual_ordering, generation_ratio)
     metadata = {
         "source_shard": shard_path,
         "tokenizer": tokenizer_name,
         "visual_token_offset": VISUAL_TOKEN_OFFSET,
         "w_visual": w_visual,
+        "dual_ordering": dual_ordering,
         "generation_ratio": generation_ratio,
         "format": "dual_ordering_pretraining",
     }
@@ -226,9 +259,10 @@ def _list_shard_paths(input_path: str, start_shard: int | None, end_shard: int |
 @dataclasses.dataclass
 class TokenizeVLMConfig:
     input_path: str = "gs://marin-vlm/stage2_sharded_full_tokenized"
-    output_path: str = "gs://marin-vlm/vlm_pretraining_cache"
-    tokenizer: str = "Qwen/Qwen3-0.6B"
+    output_path: str = UNIFIED_CACHE_PATH
+    tokenizer: str = UNIFIED_TOKENIZER_PATH
     w_visual: float = 0.5
+    dual_ordering: bool = True
     generation_ratio: float = 0.5
     num_workers: int = 32
     start_shard: int | None = None
@@ -266,7 +300,15 @@ def main(config: TokenizeVLMConfig):
 
         with ProcessPoolExecutor(max_workers=num_workers) as pool:
             futures = {
-                pool.submit(process_shard, shard_path, out_path, config.tokenizer, config.w_visual, config.generation_ratio): shard_path
+                pool.submit(
+                    process_shard,
+                    shard_path,
+                    out_path,
+                    config.tokenizer,
+                    config.w_visual,
+                    config.dual_ordering,
+                    config.generation_ratio,
+                ): shard_path
                 for shard_path, out_path in pending
             }
 
