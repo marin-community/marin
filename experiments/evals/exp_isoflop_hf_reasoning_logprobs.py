@@ -170,7 +170,7 @@ def main():
     import logging
     logging.getLogger("marin.execution.executor").setLevel(logging.ERROR)
     
-    model_types = ["iso"] # ["iso", "hf"]
+    model_types = ["hf"] # ["iso", "hf"]
     steps = build_steps(model_types=model_types)
     
     # bsz = 10
