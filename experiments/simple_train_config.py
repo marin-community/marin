@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 from dataclasses import dataclass
@@ -60,6 +49,10 @@ class SimpleTrainConfig:
     """how often to run task evaluations"""
     steps_per_hf_export: int | None = None
     """None means match steps_per_export, -1 disables"""
+    per_device_parallelism: int = -1
+    """How many examples to process in parallel on each device. -1 (default) means
+    train_batch_size/num_devices (no gradient accumulation). Set to a positive value
+    to enable gradient accumulation."""
     per_device_eval_parallelism: int | None = None
     """Number of examples to evaluate in parallel on each device"""
     max_eval_batches: int | None = None
@@ -80,6 +73,11 @@ class SimpleTrainConfig:
 
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
+
+    pad_tokenizer_to_match_model: bool = False
+    """If True, pad the tokenizer's vocab to match the model's vocab size by adding dummy tokens.
+    Useful when the model checkpoint has a larger vocab than the tokenizer (e.g., Qwen models
+    pad their vocab to be divisible by 4 for TPU efficiency)."""
 
     optimizer_config: OptimizerConfig | None = None
     """Optimizer configuration to use. If not set, Adam will be used."""

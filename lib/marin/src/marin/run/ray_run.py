@@ -1,16 +1,6 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa
 
 import argparse
@@ -36,8 +26,8 @@ if _default_token_path.exists() and "RAY_AUTH_TOKEN_PATH" not in os.environ:
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
-from fray.cluster.ray import DashboardConfig, ray_dashboard
-from fray.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
+from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
+from fray.v1.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +206,7 @@ def main():
         nargs="+",
         metavar=("KEY", "VALUE"),
         help="Set environment variables for the job. If only a KEY is provided, "
-        "the VALUE will be set to an empty string.",
+        "the VALUE will be set to an empty string. Supports KEY=VALUE form.",
     )
     parser.add_argument(
         "--extra",
@@ -312,13 +302,16 @@ def main():
             elif len(item) == 1:
                 # If only the key is provided, set its value to an empty string
                 if "=" in item[0]:
-                    logger.error(
-                        f"Invalid key provided for environment variable: {' '.join(item)}. "
-                        f"Key should not contain '='.\n\n"
-                        f"You probably meant to do '-e {' '.join(item[0].split('='))}'."
-                    )
-                    exit(1)
-                env_vars[item[0]] = ""
+                    key, value = item[0].split("=", 1)
+                    if not key:
+                        logger.error(
+                            f"Invalid key provided for environment variable: {' '.join(item)}. "
+                            f"Key should not be empty."
+                        )
+                        exit(1)
+                    env_vars[key] = value
+                else:
+                    env_vars[item[0]] = ""
             elif len(item) == 2:
                 # If both key and value are provided, store them as a key-value pair
                 if "=" in item[0]:

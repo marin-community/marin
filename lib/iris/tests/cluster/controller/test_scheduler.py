@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for task scheduler.
 
@@ -28,15 +17,15 @@ from iris.cluster.controller.events import (
 )
 from iris.cluster.controller.scheduler import Scheduler, SchedulingResult
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 
-def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
-    """Create a minimal Entrypoint proto for testing."""
-    entrypoint = cluster_pb2.Entrypoint()
-    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
+    """Create a minimal RuntimeEntrypoint proto for testing."""
+    entrypoint = cluster_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
@@ -58,7 +47,7 @@ def register_worker(
             worker_id=wid,
             address=address,
             metadata=metadata,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     return wid
@@ -71,12 +60,13 @@ def submit_job(
     timestamp_ms: int | None = None,
 ) -> list[ControllerTask]:
     """Submit a job via event and return created tasks."""
-    jid = JobId(job_id)
+    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root(job_id)
+    request.name = jid.to_wire()
     state.handle_event(
         JobSubmittedEvent(
             job_id=jid,
             request=request,
-            timestamp_ms=timestamp_ms if timestamp_ms is not None else now_ms(),
+            timestamp=Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
         )
     )
     return state.get_job_tasks(jid)
@@ -148,14 +138,19 @@ def job_request():
         memory_bytes: int = 1024**3,
         scheduling_timeout_seconds: int = 0,
     ) -> cluster_pb2.Controller.LaunchJobRequest:
-        return cluster_pb2.Controller.LaunchJobRequest(
-            name=name,
+        from iris.time_utils import Duration
+
+        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root(name)
+        request = cluster_pb2.Controller.LaunchJobRequest(
+            name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
             replicas=1,
         )
+        if scheduling_timeout_seconds > 0:
+            request.scheduling_timeout.CopyFrom(Duration.from_seconds(scheduling_timeout_seconds).to_proto())
+        return request
 
     return _make
 
@@ -171,8 +166,9 @@ def coscheduled_job_request():
         replicas: int = 4,
         group_by: str = "tpu-name",
     ) -> cluster_pb2.Controller.LaunchJobRequest:
+        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root(name)
         req = cluster_pb2.Controller.LaunchJobRequest(
-            name=name,
+            name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
@@ -330,19 +326,26 @@ def test_scheduler_skips_tasks_that_dont_fit(scheduler, state, job_request, work
 
 def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
     """Verify scheduler identifies tasks that exceeded scheduling timeout and logs the event."""
+    import time
+
+    from iris.time_utils import Deadline, Duration
+
     register_worker(state, "w1", "addr", worker_metadata(cpu=2))
 
     # Job that requires 100 CPUs (will never fit) with 1 second timeout
-    # Submitted 2 seconds ago, so it should be timed out
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="impossible-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
-        scheduling_timeout_seconds=1,
         replicas=1,
     )
-    tasks = submit_job(state, "j1", request, timestamp_ms=now_ms() - 2000)
+    request.scheduling_timeout.CopyFrom(Duration.from_seconds(1).to_proto())
+    tasks = submit_job(state, "j1", request)
+
+    # Manually set the deadline to 2 seconds ago (using monotonic time)
+    job = state.get_job(JobName.root("j1"))
+    job.scheduling_deadline = Deadline(time.monotonic() - 2.0)
 
     pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()
@@ -356,7 +359,7 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
 
 
 def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
-    """Verify task with scheduling_timeout_seconds=0 never times out."""
+    """Verify task with scheduling_timeout=0 never times out."""
     register_worker(state, "w1", "addr", worker_metadata(cpu=2))
 
     # Job that can't fit but has no timeout (0)
@@ -365,10 +368,10 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
-        scheduling_timeout_seconds=0,  # No timeout
         replicas=1,
     )
-    submit_job(state, "j1", request, timestamp_ms=now_ms() - 10000)
+    # No timeout set (field not present)
+    submit_job(state, "j1", request, timestamp_ms=Timestamp.now().epoch_ms() - 10000)
 
     pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()
@@ -826,7 +829,7 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     submit_job(state, "busy", busy_req)
 
     # Assign the busy job's tasks to wa0 and wa1
-    busy_tasks = state.get_job_tasks(JobId("busy"))
+    busy_tasks = state.get_job_tasks(JobName.root("busy"))
     assign_task_to_worker(state, busy_tasks[0], WorkerId("wa0"))
     assign_task_to_worker(state, busy_tasks[1], WorkerId("wa1"))
     transition_task_to_running(state, busy_tasks[0])
@@ -1145,7 +1148,7 @@ def test_tpu_job_rejected_when_insufficient_chips(scheduler, state):
     assert len(result.assignments) == 0
 
 
-def test_tpu_chips_released_after_task_completion(scheduler, state):
+def test_tpu_count_released_after_task_completion(scheduler, state):
     """TPU chips are released when task completes, allowing new tasks to schedule."""
     # Worker with 4 TPU chips
     meta = cluster_pb2.WorkerMetadata(
@@ -1213,7 +1216,7 @@ def test_tpu_chips_released_after_task_completion(scheduler, state):
         state.get_available_workers(),
     )
     assert len(result.assignments) == 1
-    assert result.assignments[0][0].job_id == JobId("j2")
+    assert result.assignments[0][0].job_id == JobName.root("j2")
 
 
 # =============================================================================

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller dashboard behavioral logic.
 
@@ -28,15 +17,15 @@ from iris.cluster.controller.events import JobSubmittedEvent, WorkerRegisteredEv
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 
-def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
-    """Create a minimal Entrypoint proto for testing."""
-    entrypoint = cluster_pb2.Entrypoint()
-    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
+    """Create a minimal RuntimeEntrypoint proto for testing."""
+    entrypoint = cluster_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
@@ -59,7 +48,7 @@ def register_worker(
             worker_id=wid,
             address=address,
             metadata=metadata,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     worker = state.get_worker(wid)
@@ -72,14 +61,15 @@ def submit_job(
     state: ControllerState,
     job_id: str,
     request: cluster_pb2.Controller.LaunchJobRequest,
-) -> JobId:
+) -> JobName:
     """Submit a job via event."""
-    jid = JobId(job_id)
+    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root(job_id)
+    request.name = jid.to_wire()
     state.handle_event(
         JobSubmittedEvent(
             job_id=jid,
             request=request,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     return jid
@@ -158,7 +148,7 @@ def make_worker_metadata():
 @pytest.fixture
 def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
-        name="test-job",
+        name=JobName.root("test-job").to_wire(),
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
@@ -319,10 +309,12 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     Jobs no longer track individual attempts - tasks do. The RPC returns
     aggregate retry information for the job.
     """
+    from iris.time_utils import Timestamp
+
     job_id = submit_job(state, "test-job", job_request)
     job = state.get_job(job_id)
     job.state = cluster_pb2.JOB_STATE_RUNNING
-    job.started_at_ms = 3000
+    job.started_at = Timestamp.from_ms(3000)
 
     # Set retry counts on tasks (the RPC aggregates from tasks)
     tasks = state.get_job_tasks(job_id)
@@ -330,21 +322,74 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     tasks[0].preemption_count = 1
 
     # RPC uses camelCase: jobId not job_id
-    resp = rpc_post(client, "GetJobStatus", {"jobId": "test-job"})
+    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("test-job").to_wire()})
     job_status = resp.get("job", {})
 
     # RPC uses camelCase field names
     assert job_status["failureCount"] == 1
     assert job_status["preemptionCount"] == 1
     assert job_status["state"] == "JOB_STATE_RUNNING"
-    assert int(job_status["startedAtMs"]) == 3000
+    assert int(job_status["startedAt"]["epochMs"]) == 3000
+
+
+def test_get_job_status_returns_original_request(client, state):
+    """GetJobStatus RPC returns the original LaunchJobRequest for the job detail page."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="request-detail-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=4,
+            memory_bytes=8 * 1024**3,
+            disk_bytes=100 * 1024**3,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(
+            pip_packages=["torch", "numpy"],
+            python_version="3.11",
+        ),
+        replicas=2,
+        constraints=[
+            cluster_pb2.Constraint(
+                key="tpu-name",
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="my-tpu"),
+            ),
+        ],
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+    )
+    job_id = submit_job(state, "request-detail-job", request)
+
+    resp = rpc_post(client, "GetJobStatus", {"jobId": job_id.to_wire()})
+    returned_request = resp.get("request", {})
+
+    assert returned_request is not None
+    # Verify entrypoint command is preserved
+    ep = returned_request.get("entrypoint", {})
+    assert ep.get("runCommand", {}).get("argv") == ["python", "-c", "pass"]
+    # Verify resources
+    res = returned_request.get("resources", {})
+    assert res["cpu"] == 4
+    assert int(res["memoryBytes"]) == 8 * 1024**3
+    assert int(res["diskBytes"]) == 100 * 1024**3
+    # Verify environment
+    env = returned_request.get("environment", {})
+    assert env["pipPackages"] == ["torch", "numpy"]
+    assert env["pythonVersion"] == "3.11"
+    # Verify replicas
+    assert returned_request["replicas"] == 2
+    # Verify constraints
+    constraints = returned_request.get("constraints", [])
+    assert len(constraints) == 1
+    assert constraints[0]["key"] == "tpu-name"
+    assert constraints[0]["value"]["stringValue"] == "my-tpu"
+    # Verify coscheduling
+    assert returned_request["coscheduling"]["groupBy"] == "tpu-name"
 
 
 def test_get_job_status_returns_error_for_missing_job(client):
     """GetJobStatus RPC returns error for non-existent job."""
     resp = client.post(
         "/iris.cluster.ControllerService/GetJobStatus",
-        json={"jobId": "nonexistent"},
+        json={"jobId": JobName.root("nonexistent").to_wire()},
         headers={"Content-Type": "application/json"},
     )
     # Connect RPC returns non-200 status for errors
@@ -369,6 +414,7 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
     from iris.rpc import config_pb2, vm_pb2
+    from iris.time_utils import Timestamp
 
     autoscaler = Mock()
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
@@ -403,10 +449,10 @@ def mock_autoscaler():
             ),
         ],
         current_demand={"test-group": 3},
-        last_evaluation_ms=1000,
+        last_evaluation=Timestamp.from_ms(1000).to_proto(),
         recent_actions=[
             vm_pb2.AutoscalerAction(
-                timestamp_ms=1000,
+                timestamp=Timestamp.from_ms(1000).to_proto(),
                 action_type="scale_up",
                 scale_group="test-group",
                 slice_id="slice-1",
@@ -437,8 +483,8 @@ def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscale
 
     # Verify demand tracking
     assert data["currentDemand"] == {"test-group": 3}
-    # Int64 fields are serialized as strings in JSON (protobuf convention)
-    assert int(data["lastEvaluationMs"]) == 1000
+    # Timestamp fields are nested messages
+    assert int(data["lastEvaluation"]["epochMs"]) == 1000
 
     # Verify recent actions
     assert len(data["recentActions"]) == 1
@@ -508,28 +554,33 @@ def test_health_endpoint_empty_cluster(client):
 # =============================================================================
 
 
-def test_get_task_logs_not_found_for_missing_job(client):
-    """GetTaskLogs returns NOT_FOUND when the job doesn't exist."""
+def test_get_task_logs_for_missing_task_returns_empty(client):
+    """GetTaskLogs returns empty batch when the task doesn't exist."""
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"jobId": "nonexistent", "taskIndex": 0},
+        json={"id": JobName.root("nonexistent").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
-    assert resp.status_code != 200
-    assert "not found" in resp.text.lower()
+    # With batch API, nonexistent task returns empty task_logs, not an error
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("taskLogs", []) == []
 
 
-def test_get_task_logs_failed_precondition_for_unassigned_task(client, state, job_request):
-    """GetTaskLogs returns FAILED_PRECONDITION when the task has no worker assigned."""
+def test_get_task_logs_error_for_unassigned_task(client, state, job_request):
+    """GetTaskLogs returns batch with error when the task has no worker assigned."""
     submit_job(state, "pending-job", job_request)
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"jobId": "pending-job", "taskIndex": 0},
+        json={"id": JobName.root("pending-job").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
-    assert resp.status_code != 200
-    assert "no assigned worker" in resp.text.lower()
+    # Batch API returns 200 with error in batch
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data.get("taskLogs", [])) == 1
+    assert "not found" in data["taskLogs"][0].get("error", "").lower()
 
 
 # =============================================================================
@@ -556,7 +607,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     )
     submit_job(state, "cosched-job", request)
 
-    resp = rpc_post(client, "ListTasks", {"jobId": "cosched-job"})
+    resp = rpc_post(client, "ListTasks", {"jobId": JobName.root("cosched-job").to_wire()})
     tasks = resp.get("tasks", [])
     assert len(tasks) == 2
 
@@ -593,7 +644,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     )
     submit_job(state, "big-cosched", request)
 
-    resp = rpc_post(client, "ListTasks", {"jobId": "big-cosched"})
+    resp = rpc_post(client, "ListTasks", {"jobId": JobName.root("big-cosched").to_wire()})
     tasks = resp.get("tasks", [])
     assert len(tasks) == 4
 

@@ -1,23 +1,13 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import time
 import pytest
 from pathlib import Path
 from iris.chaos import reset_chaos
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
-from iris.cluster.vm.config import load_config
+from iris.cluster.config import load_config, make_local_config
+from iris.cluster.manager import connect_cluster
+from iris.rpc import config_pb2
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec, is_job_finished
 
@@ -29,6 +19,12 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
 
 def _quick():
     return 1
+
+
+def _slow():
+    import time
+
+    time.sleep(120)
 
 
 def _block(s):
@@ -55,13 +51,36 @@ def chronos(monkeypatch):
     return clock
 
 
+def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
+    """Add a scale group with slice_size=2 so coscheduling tests can find a match.
+
+    v5litepod-16 has vm_count=2, so the local platform creates 2 workers per slice
+    sharing the same tpu-name. Setting slice_size=2 lets the demand router match
+    coscheduled jobs with replicas=2.
+    """
+    sg = config.scale_groups["tpu_cosched_2"]
+    sg.name = "tpu_cosched_2"
+    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.accelerator_variant = "v5litepod-16"
+    sg.slice_size = 2
+    sg.min_slices = 1
+    sg.max_slices = 2
+    sg.resources.cpu = 128
+    sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
+    sg.resources.disk_bytes = 1024 * 1024 * 1024 * 1024
+    sg.slice_template.preemptible = True
+    sg.slice_template.slice_size = 2
+    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.slice_template.accelerator_variant = "v5litepod-16"
+
+
 @pytest.fixture
 def cluster():
-    """Boots a local cluster via ClusterManager, yields (url, client)."""
+    """Boots a local cluster, yields (url, client)."""
     config = load_config(DEFAULT_CONFIG)
+    _add_coscheduling_group(config)
     config = make_local_config(config)
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         yield url, client
 
@@ -86,17 +105,17 @@ def wait(client, job, timeout=60, chronos=None):
         # Virtual time: tick until job completes or timeout
         start_time = chronos.time()
         while chronos.time() - start_time < timeout:
-            status = client.status(str(job.job_id))
+            status = client.status(job.job_id)
             if is_job_finished(status.state):
                 return status
             chronos.tick(0.5)  # Advance by poll interval
-        return client.status(str(job.job_id))
+        return client.status(job.job_id)
     else:
         # Real time
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            status = client.status(str(job.job_id))
+            status = client.status(job.job_id)
             if is_job_finished(status.state):
                 return status
             time.sleep(0.5)
-        return client.status(str(job.job_id))
+        return client.status(job.job_id)

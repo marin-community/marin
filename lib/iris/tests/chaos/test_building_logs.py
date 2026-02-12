@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for build log visibility during BUILDING state."""
 
@@ -29,7 +18,7 @@ def _quick_task():
     return 42
 
 
-@pytest.mark.skip(reason="Flaky in CI — build log visibility depends on timing; will re-enable after stabilization")
+@pytest.mark.skip(reason="Flaky: chaos delay doesn't reliably trigger BUILDING state")
 def test_build_logs_visible_during_building_state(cluster):
     """Verify that build logs are visible while task is in BUILDING state.
 
@@ -58,7 +47,7 @@ def test_build_logs_visible_during_building_state(cluster):
     timeout = 15.0  # Should be enough for 5s delay + some overhead
 
     while time.time() - start_time < timeout:
-        status = client.status(str(job.job_id))
+        status = client.status(job.job_id)
 
         # Check if any task is in BUILDING state
         task_states = [task.state for task in status.tasks]
@@ -70,8 +59,9 @@ def test_build_logs_visible_during_building_state(cluster):
                 job_running_during_building = True
 
             # Try to fetch logs for the building task
+            task_id = job.job_id.task(0)
             try:
-                logs = client.fetch_task_logs(str(job.job_id), 0)
+                logs = client.fetch_task_logs(task_id)
                 # Look for build logs
                 for entry in logs:
                     if entry.source == "build":
@@ -90,7 +80,7 @@ def test_build_logs_visible_during_building_state(cluster):
     # Wait for job to complete
     deadline = time.time() + timeout
     while time.time() < deadline:
-        status = client.status(str(job.job_id))
+        status = client.status(job.job_id)
         if status.state in (
             cluster_pb2.JOB_STATE_SUCCEEDED,
             cluster_pb2.JOB_STATE_FAILED,
@@ -105,5 +95,5 @@ def test_build_logs_visible_during_building_state(cluster):
     assert build_logs_found, "Build logs were not available during BUILDING state"
 
     # Verify job completed successfully
-    final_status = client.status(str(job.job_id))
+    final_status = client.status(job.job_id)
     assert final_status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job failed with state: {final_status.state}"

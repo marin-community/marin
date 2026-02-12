@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Decontamination using rbloom bloom filters.
@@ -27,7 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum, auto
-import typing
+import dupekit
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
@@ -35,17 +24,13 @@ import fsspec
 import msgspec
 import wandb
 
-from fray.job import get_default_job_ctx
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 
 from marin.utils import fsspec_glob, rebase_file_path
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
-
-if typing.TYPE_CHECKING:
-    from dupekit import Bloom
 
 
 class DeconMode(StrEnum):
@@ -197,11 +182,10 @@ def build_filter(
     """
     Build a bloom filter from input dataset.
     """
-    from dupekit import Bloom
 
     def build_shard_bloom(records: Iterator[dict]) -> Iterator[bytes]:
         """Build bloom filter from a shard of records and yield serialized bytes."""
-        bf = Bloom(config.estimated_doc_count, config.false_positive_rate)
+        bf = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
 
         for record in records:
             text = record.get(config.text_field, "")
@@ -213,46 +197,44 @@ def build_filter(
     all_files = _collect_input_files(input_path)
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
-    # Build bloom filters for all shards in parallel
-    ctx = get_default_job_ctx()
-    shard_blooms_data = Backend.execute(
-        Dataset.from_iterable(all_files)
-        .reshard(num_shards=config.processes)
-        .load_file()
-        .select(config.text_field)
-        .map_shard(build_shard_bloom)
-        .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True),
-        context=ctx,
-        max_parallelism=config.processes,
-    )
-
-    if len(shard_blooms_data) == 1:
-        return shard_blooms_data[0]
-
-    logger.info(f"Merging {len(shard_blooms_data)} shard bloom filters...")
-
     def _merge_bloom(bloom_files: Iterator[str]):
-        merged_bloom = Bloom(config.estimated_doc_count, config.false_positive_rate)
+        merged_bloom = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
         for bloom_file_path in bloom_files:
             fs, path = fsspec.url_to_fs(bloom_file_path)
             with fs.open(path, "rb") as f:
                 bloom_bytes = f.read()
-            shard_bloom = Bloom.load_bytes(bloom_bytes)
+            shard_bloom = dupekit.Bloom.load_bytes(bloom_bytes)
             merged_bloom.update(shard_bloom)
         yield merged_bloom.save_bytes()
 
-    merged_bloom = Backend.execute(
-        Dataset.from_iterable(shard_blooms_data)
-        .reshard(num_shards=1)
-        .map_shard(_merge_bloom)
-        .write_binary(bloom_path, skip_existing=True),
-        context=ctx,
-    )
+    with ZephyrContext(name="decon-build") as ctx:
+        # Build bloom filters for all shards in parallel
+        shard_blooms_data = ctx.execute(
+            Dataset.from_iterable(all_files)
+            .reshard(num_shards=config.processes)
+            .load_file()
+            .select(config.text_field)
+            .map_shard(build_shard_bloom)
+            .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True),
+        )
+
+        if len(shard_blooms_data) == 1:
+            return shard_blooms_data[0]
+
+        logger.info(f"Merging {len(shard_blooms_data)} shard bloom filters...")
+        merged_bloom = ctx.execute(
+            Dataset.from_iterable(shard_blooms_data)
+            .reshard(num_shards=1)
+            .map_shard(_merge_bloom)
+            .write_binary(bloom_path, skip_existing=True),
+        )
 
     return merged_bloom[0]
 
 
-def calculate_paragraph_overlap(paragraph: str, bloom_filter: "Bloom", ngram_config: NGramConfig | None) -> float:
+def calculate_paragraph_overlap(
+    paragraph: str, bloom_filter: "dupekit.Bloom", ngram_config: NGramConfig | None
+) -> float:
     """
     Calculate overlap score for a paragraph against a bloom filter.
     """
@@ -279,7 +261,6 @@ def mark_duplicates_bloom(
     """
     Apply bloom filter to input data, marking duplicate spans.
     """
-    from dupekit import Bloom
 
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
@@ -291,7 +272,7 @@ def mark_duplicates_bloom(
         fs, path = fsspec.url_to_fs(bloom_path)
         with fs.open(path, "rb") as f:
             bloom_bytes = f.read()
-        bf = Bloom.load_bytes(bloom_bytes)
+        bf = dupekit.Bloom.load_bytes(bloom_bytes)
 
         # Process each record
         for record in records:
@@ -316,22 +297,20 @@ def mark_duplicates_bloom(
             }
 
     # Use write_jsonl with callable output pattern
-    ctx = get_default_job_ctx()
-    result = list(
-        Backend.execute(
-            Dataset.from_iterable(all_files)
-            .flat_map(load_file)
-            .map_shard(process_shard_with_bloom)
-            .write_jsonl(
-                output_pattern=lambda shard_idx, total: rebase_file_path(
-                    base_path, all_files[shard_idx], output_path, old_extension=_get_extension(all_files[shard_idx])
+    with ZephyrContext(name="decon-mark") as zephyr_ctx:
+        result = list(
+            zephyr_ctx.execute(
+                Dataset.from_iterable(all_files)
+                .flat_map(load_file)
+                .map_shard(process_shard_with_bloom)
+                .write_jsonl(
+                    output_pattern=lambda shard_idx, total: rebase_file_path(
+                        base_path, all_files[shard_idx], output_path, old_extension=_get_extension(all_files[shard_idx])
+                    ),
+                    skip_existing=True,
                 ),
-                skip_existing=True,
-            ),
-            context=ctx,
-            max_parallelism=config.processes,
+            )
         )
-    )
     return result
 
 

@@ -25,7 +25,7 @@ RPC failures, worker crashes, task lifecycle, scheduling, and VM management.
 | 15 | test_capacity_wait | PASS | 8.5s | Pends while full, schedules when freed |
 | 16 | test_scheduling_timeout | PASS | 10s | Impossible resources hit scheduling timeout |
 | 17 | test_dispatch_delayed | PASS | 6.5s | Chaos delay, then succeeds |
-| 18 | test_quota_exceeded_retry | PASS | 0.01s | FakeVmManager quota error, retry works |
+| 18 | test_quota_exceeded_retry | PASS | 0.01s | FakePlatform quota error, retry works |
 | 19 | test_vm_init_stuck | PASS | 0.01s | VMs stuck in INITIALIZING |
 | 20 | test_vm_preempted | PASS | 0.01s | Terminate transitions to TERMINATED |
 
@@ -149,7 +149,7 @@ of the job submission API.
 7. **Scheduling timeout** (test 16): Jobs requesting impossible resources
    correctly transition to FAILED/UNSCHEDULABLE after the configured timeout.
 
-8. **VM lifecycle** (tests 18-20): FakeVmManager correctly models quota errors,
+8. **VM lifecycle** (tests 18-20): FakePlatform correctly models quota errors,
    stuck initialization, and preemption. The abstraction is clean and
    deterministic.
 
@@ -193,7 +193,7 @@ deterministic and tested via their effects on the points we do inject.
 - **Total runtime:** ~7 minutes (dominated by timeout tests 2, 4, 5, 9)
 - **Fast tests (< 2s):** 14 tests
 - **Slow tests (> 30s):** 4 tests (all waiting for timeouts on known failures)
-- **VM tests:** 3 tests, < 0.1s total (deterministic FakeVmManager, no cluster)
+- **VM tests:** 3 tests, < 0.1s total (deterministic FakePlatform, no cluster)
 
 If the slow tests become a CI bottleneck, the virtual time system described in
 Stage 7 of the plan can reduce them to milliseconds. For now, real time is

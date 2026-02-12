@@ -1,26 +1,17 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Worker failure chaos tests.
 
 Tests worker crashes, delayed registration, stale state, and task-level retries.
 All chaos is injected inline in worker.py.
 """
+
 import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
-from .conftest import submit, wait, _quick, _block
+from iris.time_utils import Duration
+from .conftest import submit, wait, _quick, _slow
 
 
 @pytest.mark.chaos
@@ -59,13 +50,13 @@ def test_worker_sequential_jobs(cluster):
 
 @pytest.mark.chaos
 @pytest.mark.timeout(60)
-def test_all_workers_fail(cluster, sentinel):
+def test_all_workers_fail(cluster):
     """All workers' registration fails permanently. With scheduling timeout,
     job transitions to FAILED/UNSCHEDULABLE when no workers register.
     """
     _url, client = cluster
     enable_chaos("worker.register", failure_rate=1.0, error=RuntimeError("chaos: registration failed"))
-    job = submit(client, _block, "all-workers-fail", sentinel, scheduling_timeout_seconds=15)
+    job = submit(client, _slow, "all-workers-fail", scheduling_timeout=Duration.from_seconds(15))
     status = wait(client, job, timeout=30)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 

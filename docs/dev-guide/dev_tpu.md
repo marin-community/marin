@@ -3,10 +3,20 @@
 Using `ray_run` is great for long-running jobs, but if you are trying to debug a TPU test or memory issue, it's often faster to allocate your own TPU.
 You can use the `scripts/ray/dev_tpu.py` to allocate a temporary TPU for yourself to SSH into as well as sync your local changes and automatically run commands.
 You will need to setup your SSH key in `gcloud` to get started.
+It is usually faster than wiring a full Ray job when you want quick iteration. It is less good if you want to run many different commands in parallel,
+or if you want to run a long experiment and not worry about the TPU going away.
 
-## Quick Start
+## What it does
 
-1. Login to google cloud. It's important to set your default login to your Marin account.
+- `allocate`: reserves a TPU VM and keeps it alive while the command runs. It also creates an SSH alias for the TPU and writes config to `~/.ssh/config` so you can connect easily.
+- `connect`: opens an interactive shell on the TPU.
+- `execute`: syncs local files to remote `~/marin/` (unless `--no-sync`), then runs one command.
+- `watch`: rsync + restart on local file changes.
+
+## Prerequisites
+
+1. Authenticate to GCP and set up Marin development environment.
+
 ```bash
 gcloud auth login
 gcloud config set project hai-gcp-models
@@ -14,42 +24,168 @@ gcloud auth application-default login
 make dev_setup
 ```
 
-2. Add your local machine's SSH key to gcloud: https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys&project=hai-gcp-models&scopeTab=projectMetadata
+2. Ensure your SSH public key is in project metadata:
+   https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys&project=hai-gcp-models&scopeTab=projectMetadata
 
-Your key must have a username at the end of it for this to work. It should look something like:
+## Quick start
 
-```
-ssh-rsa ... username@MyMachine
-```
+### For humans
 
-This is the username you will need to use when connecting to the TPU. It's easiest to just set it to the username for your current machine: this is what `dev_tpu.py` will
-use as the default user for your TPU account.
+Set a TPU name once for your session:
+Allocate:
 
-3. Allocate an interactive node:
 ```bash
-uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml allocate --tpu-type v5p-8
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config infra/marin-us-east5-a.yaml \
+  allocate
 ```
 
-Your TPU will boot up and synchronize your marin directory. The TPU will remain active until you close the allocate terminal (or 8 hours).
+Connect interactively:
 
-4. Connect to the node.
-
-You can connect to the TPU in a few ways:
-  - `dev_tpu.py connect` will give you an SSH terminal.
-  - `dev_tpu.py execute` will sync your directory and run a remote command, for example:
-
-```
-uv run marin/scripts/ray/dev_tpu.py --tpu-name=$USER-scratch --cluster us-central1 execute -- "cd submodules/levanter && EQX_ON_ERROR=nan WANDB_MODE=offline uv run src/levanter/main/sample_lm.py --config config/sampler/sample_llama8b.yaml --n_generations 10 --n_rounds 4 --profile false"
-```
-
-  - You can also connect to dev-tpu-{username} directly from VSCode/Cursor via Remote-SSH's Connect to Host feature.
-
-_If connecting directly, remember Dev TPUs are pre-emptible - don't forget to checkpoint your work frequently if you are making changes!_
-
-# Tips
-1. **Kill ghost processes:** If you encounter `RuntimeError: Unable to initialize backend 'tpu': ABORTED: The TPU is already in use by another process probably owned by another user`, do:
 ```bash
-sudo rm -rf /tmp/libtpu_lockfile and sudo lsof -t /dev/vfio/* | xargs -r sudo kill -9
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config infra/marin-us-east5-a.yaml \
+  connect
 ```
 
-2. **Hide repeated warning messages:** If you see repeated warnings like `Could not open the log file '/tmp/tpu_logs/tpu_driver.t1v-n-796acc90-w-0.kevin.log.INFO.20250925-162309.72655': Permission denied`, you can filter them out by appending `2>&1 | grep -v "Could not"` to the end of the command. The warnings are because the ray user owns those files.
+Run one command (with sync):
+
+```bash
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config infra/marin-us-east5-a.yaml \
+  execute -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
+```
+
+`dev_tpu.py` creates an alias for a TPU VM monitored by Ray. By default, it uses your username together with the
+`cluster_name` from the config to create a name like `dev-<cluster_name>-<user>`.
+You can also pass an explicit `--tpu-name` if you want to manage multiple TPUs or prefer a different naming scheme.
+
+You can also connect directly to `dev-tpu-<tpu-name>` from your terminal or VSCode/Cursor Remote-SSH.
+It's generally best to ensure the connection with `allocate` is still alive before doing this, to avoid
+connecting to a stale VM that might be in use by another agent.
+
+Stop allocation by `Ctrl-C` in the `allocate` terminal.
+
+### For agents
+
+If you are an AI agent, you should always pass `--tpu-name` to avoid collisions with other agents.
+
+```bash
+export TPU_NAME="${USER}-$(git rev-parse --abbrev-ref HEAD)-$(date +%H%M%S)"
+# Example: dlwh-moe-ep-benchmark-153012
+```
+
+Then just run the commands as above, passing `--tpu-name "$TPU_NAME"` each time. (You don't have to use an env var.)
+
+As an agent you probably won't use `connect` at all, but will rely on `execute` to run commands and sync files,
+or just ssh directly to the TPU for a fast inner loop.
+
+## Practical patterns
+
+### 1) Pass extra env vars for one run
+
+Use `-e KEY=VALUE` (repeatable) with `execute`:
+
+```bash
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config infra/marin-us-east5-a.yaml \
+  --tpu-name "$TPU_NAME" \
+  execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- \
+  uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py
+```
+
+Notes:
+- `.levanter.yaml`, `.marin.yaml`, and `.config` env entries are injected automatically.
+- `execute` already wraps the command in `bash -c`; do not pass your own `bash -c`.
+
+### 2) Fast inner loop without repeated sync
+
+For iterative profiling/tuning, either skip sync with `--no-sync` or SSH directly:
+
+```bash
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config infra/marin-us-east5-a.yaml \
+  --tpu-name "$TPU_NAME" \
+  execute --no-sync -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
+```
+
+Or SSH directly:
+
+```bash
+ssh "dev-tpu-${TPU_NAME}"
+cd ~/marin
+source ~/.local/bin/env
+```
+
+Then run multiple commands directly on remote.
+
+### 3) Pull profiles and traces
+
+```bash
+mkdir -p ".profiles/${TPU_NAME}"
+scp "dev-tpu-${TPU_NAME}:~/marin/.profiles/<run_name>/plugins/profile/*/*" ".profiles/${TPU_NAME}/"
+```
+
+You can also use `scp` for specific `*.trace.json.gz` and `*.xplane.pb` files.
+
+## Multi-TPU usage
+
+When using multiple clusters at once, always pass explicit `--config` and `--tpu-name`.
+Use distinct names per cluster to avoid collisions.
+Example:
+
+- `infra/marin-us-central1.yaml` with `--tpu-name "${USER}-central1"`
+- `infra/marin-us-east5-a.yaml` with `--tpu-name "${USER}-east5"`
+
+This avoids ambiguity in SSH aliases and in your own command history.
+
+## Troubleshooting
+
+### `Could not infer TPU type from config`
+
+Your cluster config does not expose `available_node_types.tpu_worker.node_config.acceleratorType`.
+Pass it explicitly:
+
+```bash
+uv run scripts/ray/dev_tpu.py --config <config> allocate --tpu-type v5p-8
+```
+
+### `SSH configuration ... not found`
+
+Run `allocate` first for that `--tpu-name`, then retry `connect`/`execute`.
+
+### TPU busy / stale lockfile
+
+If TPU init fails due lock contention:
+
+```bash
+sudo rm -f /tmp/libtpu_lockfile
+sudo lsof -t /dev/vfio/* | xargs -r sudo kill -9
+```
+
+Then rerun your command.
+
+### `execute` feels slow
+
+By default it syncs files before each run (using rsync). Use `--no-sync` or direct SSH for repeated runs.
+
+## Reference examples
+
+Run tests:
+
+```bash
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config infra/marin-us-east5-a.yaml \
+  --tpu-name "$TPU_NAME" \
+  execute -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
+```
+
+Run benchmark:
+
+```bash
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config infra/marin-us-east5-a.yaml \
+  --tpu-name "$TPU_NAME" \
+  execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- \
+  uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_mlp_profile.py
+```

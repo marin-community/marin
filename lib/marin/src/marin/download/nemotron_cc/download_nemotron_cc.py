@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Download and process Nemotron-CC dataset from Common Crawl.
@@ -31,7 +20,7 @@ import requests
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
 from marin.execution import THIS_OUTPUT_PATH
 from marin.utils import fsspec_exists
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger("ray")
@@ -113,6 +102,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         .write_jsonl(os.path.join(cfg.output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    Backend.execute(pipeline)
+    with ZephyrContext(name="download-nemotron-cc") as ctx:
+        ctx.execute(pipeline)
 
     logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")

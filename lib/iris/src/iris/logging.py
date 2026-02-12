@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import logging
 import sys
@@ -20,7 +9,7 @@ from threading import Lock
 from typing import Protocol
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+LOG_DATEFMT = "%Y%m%d %H%M%S"
 
 
 @dataclass(frozen=True)
@@ -81,7 +70,7 @@ def get_global_buffer() -> LogRingBuffer:
 _configured = False
 
 
-def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
+def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
     """Configure iris logging: stderr handler + ring buffer. Idempotent."""
     global _configured
     if _configured:
@@ -108,5 +97,10 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     ring_handler.setLevel(logging.DEBUG)
     ring_handler.setFormatter(formatter)
     root.addHandler(ring_handler)
+
+    # Suppress noisy HTTP client logging (httpx and httpcore)
+    if level <= logging.INFO:
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     return _global_buffer

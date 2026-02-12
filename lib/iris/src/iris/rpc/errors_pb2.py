@@ -22,9 +22,10 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from . import time_pb2 as time__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0c\x65rrors.proto\x12\x08iris.rpc\"\x90\x01\n\x0c\x45rrorDetails\x12%\n\x0e\x65xception_type\x18\x01 \x01(\tR\rexceptionType\x12\x18\n\x07message\x18\x02 \x01(\tR\x07message\x12\x1c\n\ttraceback\x18\x03 \x01(\tR\ttraceback\x12!\n\x0ctimestamp_ms\x18\x04 \x01(\x03R\x0btimestampMsB\\\n\x0c\x63om.iris.rpcB\x0b\x45rrorsProtoP\x01\xa2\x02\x03IRX\xaa\x02\x08Iris.Rpc\xca\x02\x08Iris\\Rpc\xe2\x02\x14Iris\\Rpc\\GPBMetadata\xea\x02\tIris::Rpcb\x08\x65\x64itionsp\xe8\x07')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0c\x65rrors.proto\x12\x08iris.rpc\x1a\ntime.proto\"\xa1\x01\n\x0c\x45rrorDetails\x12%\n\x0e\x65xception_type\x18\x01 \x01(\tR\rexceptionType\x12\x18\n\x07message\x18\x02 \x01(\tR\x07message\x12\x1c\n\ttraceback\x18\x03 \x01(\tR\ttraceback\x12\x32\n\ttimestamp\x18\x04 \x01(\x0b\x32\x14.iris.time.TimestampR\ttimestampB\\\n\x0c\x63om.iris.rpcB\x0b\x45rrorsProtoP\x01\xa2\x02\x03IRX\xaa\x02\x08Iris.Rpc\xca\x02\x08Iris\\Rpc\xe2\x02\x14Iris\\Rpc\\GPBMetadata\xea\x02\tIris::Rpcb\x08\x65\x64itionsp\xe8\x07')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,6 +33,6 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'errors_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\014com.iris.rpcB\013ErrorsProtoP\001\242\002\003IRX\252\002\010Iris.Rpc\312\002\010Iris\\Rpc\342\002\024Iris\\Rpc\\GPBMetadata\352\002\tIris::Rpc'
-  _globals['_ERRORDETAILS']._serialized_start=27
-  _globals['_ERRORDETAILS']._serialized_end=171
+  _globals['_ERRORDETAILS']._serialized_start=39
+  _globals['_ERRORDETAILS']._serialized_end=200
 # @@protoc_insertion_point(module_scope)

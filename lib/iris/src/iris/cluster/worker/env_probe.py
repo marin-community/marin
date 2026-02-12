@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Environment probing for worker registration."""
 
@@ -209,6 +198,38 @@ class EnvironmentProvider(Protocol):
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
 
 
+class TPUSimEnvironmentProvider:
+    """Simulated TPU environment for testing multi-host JAX coordination.
+
+    Wraps DefaultEnvironmentProvider and adds fake TPU metadata so that
+    _build_device_env_vars() sets JAX_COORDINATOR_ADDRESS, JAX_PROCESS_ID,
+    and JAX_NUM_PROCESSES correctly.
+    """
+
+    def __init__(
+        self,
+        worker_id: int,
+        num_workers: int,
+        coordinator_host: str = "127.0.0.1",
+        tpu_variant: str = "v4-8-sim",
+    ):
+        self._worker_id = worker_id
+        self._num_workers = num_workers
+        self._coordinator_host = coordinator_host
+        self._tpu_variant = tpu_variant
+
+    def probe(self) -> cluster_pb2.WorkerMetadata:
+        base = DefaultEnvironmentProvider().probe()
+        # Simulate TPU slice membership
+        base.tpu_name = "sim-tpu-slice"
+        base.tpu_worker_id = str(self._worker_id)
+        base.tpu_worker_hostnames = self._coordinator_host
+        base.tpu_chips_per_host_bounds = "2,2,1"
+        # Mark device as TPU so _build_device_env_vars triggers
+        base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
+        return base
+
+
 class DefaultEnvironmentProvider:
     """Default implementation that probes real system resources."""
 
@@ -276,7 +297,7 @@ class DefaultEnvironmentProvider:
         # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
 
-        # VM address from environment (injected by ManagedVm bootstrap)
+        # VM address from environment (injected by Platform bootstrap)
         vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
 
         return cluster_pb2.WorkerMetadata(

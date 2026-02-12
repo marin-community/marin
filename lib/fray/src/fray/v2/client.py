@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Client protocol and helpers for fray v2."""
 
@@ -19,28 +8,16 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import logging
-import os
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
-from urllib.parse import parse_qs, urlparse
+from typing import Any, Protocol
 
+from fray.v2.actor import ActorGroup, ActorHandle
 from fray.v2.types import JobRequest, JobStatus, ResourceConfig
-
-if TYPE_CHECKING:
-    from fray.v2.actor import ActorGroup, ActorHandle
 
 logger = logging.getLogger(__name__)
 
-_current_client_var: contextvars.ContextVar[Client | None] = contextvars.ContextVar("_current_client_var", default=None)
 
-
-# ---------------------------------------------------------------------------
-# JobHandle protocol
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
 class JobHandle(Protocol):
     @property
     def job_id(self) -> str: ...
@@ -54,12 +31,6 @@ class JobHandle(Protocol):
     def terminate(self) -> None: ...
 
 
-# ---------------------------------------------------------------------------
-# Client protocol
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
 class Client(Protocol):
     def submit(self, request: JobRequest) -> JobHandle:
         """Submit a job for execution. Returns immediately."""
@@ -93,11 +64,6 @@ class Client(Protocol):
         ...
 
 
-# ---------------------------------------------------------------------------
-# wait_all
-# ---------------------------------------------------------------------------
-
-
 class JobFailed(RuntimeError):
     """Raised when a job fails during wait_all with raise_on_failure=True."""
 
@@ -114,9 +80,6 @@ def wait_all(
     raise_on_failure: bool = True,
 ) -> list[JobStatus]:
     """Wait for all jobs to complete, monitoring concurrently.
-
-    Polls all jobs in a loop rather than waiting sequentially, so a failure
-    in a later job is detected without waiting for earlier jobs to finish.
 
     Args:
         jobs: Job handles to wait for.
@@ -154,49 +117,7 @@ def wait_all(
     return results  # type: ignore[return-value]
 
 
-# ---------------------------------------------------------------------------
-# current_client / set_current_client
-# ---------------------------------------------------------------------------
-
-
-def _parse_client_spec(spec: str) -> Client:
-    """Parse a FRAY_CLIENT_SPEC string into a Client instance.
-
-    Supported formats:
-        "local"              → LocalClient()
-        "local?threads=4"    → LocalClient(max_threads=4)
-        "ray"                → NotImplementedError
-        "iris://host:port"   → NotImplementedError
-    """
-    from fray.v2.local import LocalClient
-
-    parsed = urlparse(spec if "://" in spec else f"fray://{spec}")
-    scheme = parsed.scheme if "://" in spec else spec.split("?")[0]
-
-    if scheme == "local":
-        params = parse_qs(parsed.query if "://" in spec else (spec.split("?", 1)[1] if "?" in spec else ""))
-        threads = int(params["threads"][0]) if "threads" in params else 8
-        return LocalClient(max_threads=threads)
-    elif scheme == "ray":
-        from fray.v2.ray.backend import RayClient
-
-        params = parse_qs(parsed.query if "://" in spec else (spec.split("?", 1)[1] if "?" in spec else ""))
-        namespace = params["namespace"][0] if "namespace" in params else None
-        return RayClient(namespace=namespace)
-    elif scheme == "iris":
-        from pathlib import Path
-
-        from fray.v2.iris_backend import FrayIrisClient
-
-        host_port = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
-        controller_address = f"http://{host_port}"
-        params = parse_qs(parsed.query)
-        workspace = Path(params["ws"][0]) if "ws" in params else None
-        # Inside an Iris job, inherit the parent's bundle for sub-job code
-        bundle_gcs_path = os.environ.get("IRIS_BUNDLE_GCS_PATH")
-        return FrayIrisClient(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
-    else:
-        raise ValueError(f"Unknown FRAY_CLIENT_SPEC scheme: {scheme!r}")
+_current_client_var: contextvars.ContextVar[Client | None] = contextvars.ContextVar("_current_client_var", default=None)
 
 
 def current_client() -> Client:
@@ -204,19 +125,48 @@ def current_client() -> Client:
 
     Resolution order:
         1. Explicitly set client (via set_current_client)
-        2. FRAY_CLIENT_SPEC environment variable
-        3. LocalClient() default
+        2. Auto-detect Iris environment (get_iris_ctx() returns context)
+        3. Auto-detect Ray environment (ray.is_initialized())
+        4. LocalClient() default
     """
+
     client = _current_client_var.get()
     if client is not None:
+        logger.info("current_client: using explicitly set client")
         return client
 
-    spec = os.environ.get("FRAY_CLIENT_SPEC")
-    if spec is not None:
-        return _parse_client_spec(spec)
+    import os
 
-    from fray.v2.local import LocalClient
+    # Auto-detect Iris environment (takes priority over Ray)
+    try:
+        from iris.client.client import get_iris_ctx
 
+        ctx = get_iris_ctx()
+        if ctx is not None:
+            from fray.v2.iris_backend import FrayIrisClient
+
+            logger.info("current_client: using Iris backend (auto-detected)")
+            return FrayIrisClient.from_iris_client(ctx.client)
+    except ImportError:
+        logger.warning("current_client: iris not installed")
+
+    # Auto-detect Ray environment
+    try:
+        import ray
+
+        logger.info("current_client: ray.is_initialized()=%s", ray.is_initialized())
+        # surprisingly, Ray doesn't initialize the worker context by default, so check for the env var for v1 compat
+        if ray.is_initialized() or os.environ.get("FRAY_CLUSTER_SPEC", "").startswith("ray"):
+            from fray.v2.ray_backend.backend import RayClient
+
+            logger.info("current_client: using Ray backend (auto-detected)")
+            return RayClient()
+    except ImportError:
+        logger.warning("current_client: ray not installed")
+
+    from fray.v2.local_backend import LocalClient
+
+    logger.info("current_client: using LocalClient (fallback)")
     return LocalClient()
 
 

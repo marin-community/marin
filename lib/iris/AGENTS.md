@@ -77,6 +77,14 @@ the dashboard, rather than creating a scheduler and running it manually.
 
 ## Architecture Notes
 
+### Concurrency Model
+
+Platform operations (`terminate`, `create_slice`, etc.) shell out to `gcloud`
+via `subprocess.run` and are thread-safe. When multiple independent platform
+operations need to run (e.g. tearing down N slices), use
+`concurrent.futures.ThreadPoolExecutor` — not asyncio. Always apply a hard
+timeout so the CLI doesn't hang on a stuck gcloud call.
+
 ## Planning
 
 Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
@@ -111,27 +119,141 @@ When adding new modules or significant features:
 |------|------|-------------|
 | Architecture | README.md | High-level architecture, CLI reference, quick start |
 | Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
+| Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
 
 ## Key Modules
 
-### Autoscaler and VM Management
+### Time Utilities
 
-The autoscaler runs inside the Controller process and manages cloud VMs based on pending task demand. Key files:
+Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
+
+| Class | Purpose |
+|-------|---------|
+| `Timestamp` | Point in time (epoch-based). Use for created_at, timestamps in logs, etc. |
+| `Duration` | Time interval. Use for timeouts, intervals, configuration values. |
+| `Deadline` | Monotonic deadline for timeout checks. Use in polling loops. |
+| `Timer` | Elapsed time measurement. Use for performance tracking. |
+| `ExponentialBackoff` | Retry/polling with backoff. Use `wait_until()` for condition polling. |
+
+Example:
+```python
+from iris.time_utils import Timestamp, Duration, Deadline
+
+created_at = Timestamp.now()
+timeout = Duration.from_seconds(30.0)
+deadline = Deadline.from_now(timeout)
+deadline.wait_for(condition)
+
+while not deadline.expired():
+    if condition():
+        break
+    time.sleep(0.1)
+```
+
+### Architecture Layers
+
+Iris follows a clean layering architecture:
+
+**Controller layer** (`cluster/controller/`): Task scheduling, autoscaling, and demand routing
+- Depends on Platform layer for VM abstractions (Platform, SliceHandle, VmHandle)
+- Owns autoscaling logic and scaling group state
+
+**Platform layer** (`cluster/platform/`): Platform abstractions for managing VMs
+- Provides VM lifecycle management (GCP, manual, local, CoreWeave)
+- Does NOT depend on controller layer
+
+**Cluster layer** (`cluster/`): High-level orchestration
+- `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
+- `stop_all()` terminates controller + all slices in parallel via ThreadPoolExecutor
+  with a 60s hard timeout. Timed-out operations are logged at WARNING and abandoned.
+- Configuration and platform abstractions
+
+Key files:
 
 ```
 src/iris/
-├── cli.py                       # Main CLI (cluster start/stop/status, slice/vm commands)
+├── cli/                         # CLI package (cluster, build, run, debug commands)
+│   ├── main.py                  # Top-level iris group
+│   ├── cluster.py               # Cluster lifecycle, controller, VM ops, dashboard
+│   ├── build.py                 # Image build commands
+│   ├── debug.py                 # Debugging & validation
+│   ├── run.py                   # Command passthrough job submission
+│   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
+│   ├── config.py                # General Iris configuration (load_config, IrisConfig)
+│   ├── manager.py               # connect_cluster() + stop_all() free functions
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
-│   │   └── main.py              # Controller daemon CLI (serve command)
-│   └── vm/
-│       ├── autoscaler.py        # Core scaling logic
-│       ├── scaling_group.py     # Per-group state tracking
-│       ├── gcp.py               # GCP TPU management
-│       ├── manual.py            # Pre-existing host management
-│       └── config.py            # Config loading + factory functions
+│   │   ├── main.py              # Controller daemon CLI (serve command)
+│   │   ├── autoscaler.py        # Core autoscaling logic and demand routing
+│   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
+│   │   ├── config.py            # Autoscaler factory functions
+│   │   ├── local.py             # LocalController for in-process testing
+│   │   └── lifecycle.py         # Controller lifecycle (start/stop/reload via Platform)
+│   └── platform/
+│       ├── base.py              # Platform protocol and SliceHandle/VmHandle
+│       ├── gcp.py               # GCP TPU platform
+│       ├── manual.py            # Pre-existing host platform
+│       ├── local.py             # Local development platform
+│       ├── coreweave.py         # CoreWeave stub
+│       ├── bootstrap.py         # Worker bootstrap script generation
+│       ├── ssh.py               # SSH connection management
+│       ├── factory.py           # Platform factory from config
+│       └── debug.py             # Platform debugging utilities
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.
+
+### Dashboard Frontend
+
+The controller and worker dashboards are client-side SPAs using Preact + HTM.
+
+**Directory structure:**
+```
+src/iris/cluster/static/
+├── controller/          # Controller dashboard
+│   ├── app.js           # Main app (tabs, state, data fetching)
+│   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
+│   ├── job-detail.js    # Job detail page with task list
+│   ├── workers-tab.js   # Workers table
+│   └── vms-tab.js       # VM management table
+├── shared/              # Shared utilities
+│   ├── rpc.js           # Connect RPC client wrapper
+│   ├── utils.js         # Formatting (dates, durations)
+│   └── styles.css       # Consolidated CSS
+├── vendor/              # Third-party ES modules
+│   ├── preact.mjs       # UI framework
+│   └── htm.mjs          # HTML template literals
+└── worker/              # Worker dashboard components
+```
+
+**Key patterns:**
+- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
+- No REST endpoints - RPC only
+- State management with Preact hooks (`useState`, `useEffect`)
+- HTML templates via `htm.bind(h)` tagged template literals
+- Jobs displayed as a hierarchical tree based on name structure
+
+**When modifying the dashboard:**
+1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
+2. Ensure any new UI features have corresponding RPC endpoints
+3. Follow existing component patterns (functional components, hooks)
+
+## Debugging Container Failures
+
+**Exit code 137** = 128 + 9 = SIGKILL, typically OOM. Check:
+- `ContainerStatus.oom_killed` field (from `docker inspect .State.OOMKilled`)
+- Job's `resources.memory_bytes` vs what was requested
+- Resource flow: `JobRequest.resources` → Iris protobuf → `ContainerConfig` → `docker --memory`
+
+**Resource propagation path:**
+```
+fray.v2.ResourceConfig → iris.cluster.types.ResourceSpec.to_proto()
+  → cluster_pb2.ResourceSpecProto → docker.py _docker_create() --memory/--cpus
+```
+
+**Key files for container debugging:**
+- `cluster/runtime/docker.py`: Docker CLI wrapper, resource limits at lines 396-403
+- `cluster/runtime/types.py`: ContainerStatus with oom_killed field
+- `cluster/worker/task_attempt.py`: _format_exit_error() interprets signals

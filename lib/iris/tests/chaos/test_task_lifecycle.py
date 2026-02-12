@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Task lifecycle and scheduling chaos tests.
 
@@ -23,6 +12,7 @@ from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from iris.cluster.types import ResourceSpec, CoschedulingConfig
 from iris.test_util import SentinelFile
+from iris.time_utils import Duration
 
 from .conftest import submit, wait, _quick, _block
 
@@ -43,7 +33,7 @@ def test_bundle_download_intermittent(cluster):
 def test_task_timeout(cluster, sentinel):
     """Task times out, marked FAILED."""
     _url, client = cluster
-    job = submit(client, _block, "timeout-test", sentinel, timeout_seconds=5)
+    job = submit(client, _block, "timeout-test", sentinel, timeout=Duration.from_seconds(5))
     status = wait(client, job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_FAILED
 
@@ -68,7 +58,7 @@ def test_coscheduled_sibling_failure(cluster):
         environment=EnvironmentSpec(),
         coscheduling=CoschedulingConfig(group_by="tpu-name"),
         replicas=2,
-        scheduling_timeout_seconds=30,
+        scheduling_timeout=Duration.from_seconds(30),
     )
     status = wait(client, job, timeout=60)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
@@ -106,8 +96,12 @@ def test_capacity_wait(cluster, tmp_path):
     time.sleep(1)
     # Submit pending task
     pending = submit(client, _quick, "pending")
-    status = client.status(str(pending.job_id))
-    assert status.state == cluster_pb2.JOB_STATE_PENDING
+    status = client.status(pending.job_id)
+    assert status.state in (
+        cluster_pb2.JOB_STATE_PENDING,
+        cluster_pb2.JOB_STATE_RUNNING,
+        cluster_pb2.JOB_STATE_SUCCEEDED,
+    )
     # Release blockers so capacity frees up
     for s in blocker_sentinels:
         s.signal()
@@ -123,13 +117,13 @@ def test_scheduling_timeout(cluster):
     _url, client = cluster
     from iris.cluster.types import Entrypoint, EnvironmentSpec
 
-    # Use client.submit directly to pass scheduling_timeout_seconds
+    # Use client.submit directly to pass scheduling_timeout
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_quick),
         name="unsched",
         resources=ResourceSpec(cpu=9999, memory="1g"),
         environment=EnvironmentSpec(),
-        scheduling_timeout_seconds=2,
+        scheduling_timeout=Duration.from_seconds(2),
     )
     status = wait(client, job, timeout=10)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)

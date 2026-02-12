@@ -3004,6 +3004,15 @@ wheels = [
 ]
 
 [[package]]
+name = "immutabledict"
+version = "4.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/12/1da8e1a9050d0603ba65fb1796ed8860a705b906701c96e77f85cc7490be/immutabledict-4.2.2.tar.gz", hash = "sha256:cb6ed3090df593148f94cb407d218ca526fd2639694afdb553dc4f50ce6feeca", size = 6099, upload-time = "2025-10-12T13:32:59.755Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/7b/04ab6afa1ff7eb9ccb09049918c0407b205f5009092c0416147d163e4e2b/immutabledict-4.2.2-py3-none-any.whl", hash = "sha256:97c31d098a2c850e93a958badeef765e4736ed7942ec73e439facd764a3a7217", size = 4736, upload-time = "2025-10-12T13:32:58.326Z" },
+]
+
+[[package]]
 name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3132,14 +3141,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "starlette" },
+    { name = "tabulate" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-scripts = [
-    { name = "pillow" },
-    { name = "playwright" },
 ]
 
 [package.dev-dependencies]
@@ -3155,6 +3159,7 @@ dev = [
     { name = "pytest-flakefinder" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 examples = [
     { name = "ipykernel" },
@@ -3173,15 +3178,13 @@ requires-dist = [
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "pillow", marker = "extra == 'scripts'", specifier = ">=10.0.0" },
-    { name = "playwright", marker = "extra == 'scripts'", specifier = ">=1.49.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "starlette", specifier = ">=0.50.0" },
+    { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
-provides-extras = ["scripts"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3196,6 +3199,7 @@ dev = [
     { name = "pytest-flakefinder", specifier = ">=1.1.0" },
     { name = "pytest-playwright", specifier = ">=0.6.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 examples = [
     { name = "ipykernel", specifier = ">=7.1.0" },
@@ -3860,12 +3864,12 @@ dependencies = [
     { name = "gcsfs" },
     { name = "haliax" },
     { name = "humanfriendly" },
+    { name = "immutabledict" },
     { name = "jax" },
     { name = "jaxtyping" },
     { name = "jinja2" },
     { name = "jmp" },
     { name = "lenses" },
-    { name = "matplotlib" },
     { name = "optax" },
     { name = "protobuf" },
     { name = "pyarrow" },
@@ -3875,8 +3879,6 @@ dependencies = [
     { name = "safetensors", extra = ["numpy"] },
     { name = "tblib" },
     { name = "tensorstore" },
-    { name = "tokamax", version = "0.0.4", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "tokamax", version = "0.0.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-cpu' or extra == 'extra-5-marin-cuda12' or extra != 'extra-5-marin-vllm' or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-vllm' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "tokenizers" },
     { name = "tqdm-loggable" },
     { name = "transformers" },
@@ -3894,6 +3896,10 @@ gcp = [
 ]
 gpu = [
     { name = "jax", extra = ["cuda12"], marker = "extra == 'extra-8-levanter-gpu' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
+]
+kernels = [
+    { name = "tokamax", version = "0.0.4", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "tokamax", version = "0.0.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-cpu' or extra == 'extra-5-marin-cuda12' or extra != 'extra-5-marin-vllm' or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-vllm' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
 ]
 lm-eval = [
     { name = "lm-eval" },
@@ -3922,6 +3928,7 @@ tpu = [
 [package.dev-dependencies]
 dev = [
     { name = "click" },
+    { name = "matplotlib" },
     { name = "prompt-toolkit" },
     { name = "pygments" },
 ]
@@ -3972,6 +3979,7 @@ requires-dist = [
     { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
     { name = "haliax", editable = "lib/haliax" },
     { name = "humanfriendly", specifier = "==10.0" },
+    { name = "immutabledict" },
     { name = "jax", specifier = ">=0.8.0" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = ">=0.8.0" },
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = ">=0.8.0" },
@@ -3980,7 +3988,6 @@ requires-dist = [
     { name = "jmp", specifier = ">=0.0.3" },
     { name = "lenses" },
     { name = "lm-eval", marker = "extra == 'lm-eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
-    { name = "matplotlib", specifier = ">=3.7.0" },
     { name = "openai", marker = "extra == 'serve'", specifier = ">=1.0.0" },
     { name = "optax", specifier = ">=0.1.9" },
     { name = "peft", marker = "extra == 'torch-test'", specifier = ">=0.12.0" },
@@ -3994,7 +4001,7 @@ requires-dist = [
     { name = "tensorboard", marker = "extra == 'profiling'", specifier = ">=2.16" },
     { name = "tensorboardx", marker = "extra == 'profiling'", specifier = ">=2.6" },
     { name = "tensorstore", specifier = ">=0.1.73" },
-    { name = "tokamax" },
+    { name = "tokamax", marker = "extra == 'kernels'" },
     { name = "tokenizers", specifier = ">=0.15.2" },
     { name = "torch", marker = "extra == 'torch-test'", specifier = ">=2.7.0" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
@@ -4005,11 +4012,12 @@ requires-dist = [
     { name = "zephyr", editable = "lib/zephyr" },
     { name = "zstandard", specifier = ">=0.18.0" },
 ]
-provides-extras = ["gpu", "tpu", "torch-test", "profiling", "serve", "lm-eval", "gcp"]
+provides-extras = ["gpu", "tpu", "torch-test", "profiling", "serve", "lm-eval", "kernels", "gcp"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "click", specifier = ">=8.0.0" },
+    { name = "matplotlib", specifier = ">=3.7.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "pygments" },
 ]
@@ -4574,7 +4582,6 @@ dependencies = [
     { name = "jax" },
     { name = "jaxopt" },
     { name = "levanter", extra = ["serve"] },
-    { name = "lm-eval" },
     { name = "lxml", extra = ["html-clean"] },
     { name = "lz4" },
     { name = "markdownify" },
@@ -4743,7 +4750,6 @@ requires-dist = [
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = "==0.8.0" },
     { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "levanter", extras = ["serve"], editable = "lib/levanter" },
-    { name = "lm-eval", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lxml", extras = ["html-clean"] },
     { name = "lz4" },
@@ -4867,6 +4873,7 @@ dependencies = [
     { name = "iris" },
     { name = "levanter" },
     { name = "marin" },
+    { name = "watchdog" },
     { name = "zephyr" },
 ]
 
@@ -4877,6 +4884,7 @@ requires-dist = [
     { name = "iris", editable = "lib/iris" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
+    { name = "watchdog" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
 
@@ -11327,6 +11335,7 @@ dependencies = [
     { name = "fray", extra = ["ray"] },
     { name = "fsspec" },
     { name = "humanfriendly" },
+    { name = "iris" },
     { name = "msgspec" },
     { name = "numpy" },
     { name = "tqdm-loggable" },
@@ -11340,11 +11349,13 @@ dev = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -11354,6 +11365,7 @@ requires-dist = [
     { name = "fray", extras = ["ray"], editable = "lib/fray" },
     { name = "fsspec", specifier = ">=2023.1.0" },
     { name = "humanfriendly", specifier = ">=10.0" },
+    { name = "iris", editable = "lib/iris" },
     { name = "msgspec", specifier = ">=0.18.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
@@ -11367,11 +11379,13 @@ dev = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]

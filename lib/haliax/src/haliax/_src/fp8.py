@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 from functools import partial
 
 from jax import custom_jvp, custom_vjp, lax
