@@ -30,11 +30,11 @@ WORKDIR /app
 
 # Copy pyproject.toml first and sync dependencies (cached layer)
 COPY pyproject.toml ./
-RUN uv sync --no-install-project
+RUN uv sync --link-mode copy --no-install-project
 
 # Copy source and install the project
 COPY src/ ./src/
-RUN uv sync
+RUN uv sync --link-mode copy
 
 # Default cache directory
 RUN mkdir -p /var/cache/iris
