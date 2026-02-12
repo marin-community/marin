@@ -51,7 +51,7 @@ def cluster_config_file(tmp_path: Path) -> Path:
                         "accelerator_type": "ACCELERATOR_TYPE_CPU",
                         "min_slices": 1,
                         "max_slices": 1,
-                        "slice_size": 1,
+                        "num_vms": 1,
                         "resources": {
                             "cpu": 1,
                             "ram": "1GB",
@@ -61,7 +61,7 @@ def cluster_config_file(tmp_path: Path) -> Path:
                         },
                         "slice_template": {
                             "accelerator_type": "ACCELERATOR_TYPE_CPU",
-                            "slice_size": 1,
+                            "num_vms": 1,
                             "local": {},
                         },
                     },

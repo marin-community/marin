@@ -101,14 +101,14 @@ def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
 
 
 def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
-    """Validate that scale groups define per-VM resources and slice_size."""
+    """Validate that scale groups define per-VM resources and num_vms."""
     for name, sg_config in config.scale_groups.items():
         if not sg_config.HasField("resources"):
             raise ValueError(f"Scale group '{name}' must set resources.")
-        if not sg_config.HasField("slice_size"):
-            raise ValueError(f"Scale group '{name}' must set slice_size.")
-        if sg_config.slice_size <= 0:
-            raise ValueError(f"Scale group '{name}' has invalid slice_size={sg_config.slice_size}.")
+        if not sg_config.HasField("num_vms"):
+            raise ValueError(f"Scale group '{name}' must set num_vms.")
+        if sg_config.num_vms <= 0:
+            raise ValueError(f"Scale group '{name}' has invalid num_vms={sg_config.num_vms}.")
 
         resources = sg_config.resources
         if resources.cpu < 0:
@@ -171,7 +171,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """Validate cluster config.
 
     Checks all scale groups for:
-    - Required fields (name, resources, slice_size)
+    - Required fields (name, resources, num_vms)
     - Enum fields are not UNSPECIFIED (accelerator_type)
     - Resource values are non-negative
     - Slice templates have required platform-specific fields
@@ -691,7 +691,7 @@ def create_autoscaler(
         scale_groups: Map of scale group name to config
         label_prefix: Prefix for labels on managed resources
         worker_bootstrap: WorkerBootstrap for initializing new VMs (None disables bootstrap)
-        threads: Thread container for monitor threads. Uses global default if not provided.
+        threads: Thread container for background threads. Uses global default if not provided.
 
     Returns:
         Configured Autoscaler instance
@@ -700,11 +700,7 @@ def create_autoscaler(
         ValueError: If autoscaler_config has invalid timing values
     """
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import (
-        DEFAULT_HEARTBEAT_GRACE,
-        DEFAULT_STARTUP_GRACE,
-        ScalingGroup,
-    )
+    from iris.cluster.controller.scaling_group import ScalingGroup
 
     threads = threads or get_thread_container()
 
@@ -713,16 +709,6 @@ def create_autoscaler(
 
     scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
     scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
-    startup_grace = (
-        Duration.from_proto(autoscaler_config.startup_grace_period)
-        if autoscaler_config.startup_grace_period.milliseconds > 0
-        else DEFAULT_STARTUP_GRACE
-    )
-    heartbeat_grace = (
-        Duration.from_proto(autoscaler_config.heartbeat_grace_period)
-        if autoscaler_config.heartbeat_grace_period.milliseconds > 0
-        else DEFAULT_HEARTBEAT_GRACE
-    )
 
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
@@ -732,9 +718,6 @@ def create_autoscaler(
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
-            startup_grace_period=startup_grace,
-            heartbeat_grace_period=heartbeat_grace,
-            threads=threads,
         )
         logger.info("Created scale group %s", name)
 

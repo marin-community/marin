@@ -369,7 +369,7 @@ scale_groups:
   tpu_v5e_4:
     accelerator_type: tpu
     accelerator_variant: v5litepod-4
-    slice_size: 4
+    num_vms: 4
     resources:
       cpu: 64
       ram: 64GB
@@ -387,7 +387,7 @@ scale_groups:
 
   manual_hosts:
     accelerator_type: cpu
-    slice_size: 1
+    num_vms: 1
     resources:
       cpu: 16
       ram: 32GB

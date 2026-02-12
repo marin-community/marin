@@ -43,7 +43,7 @@ scale_groups:
   tpu_v5e_8:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    slice_size: 8
+    num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
@@ -95,7 +95,7 @@ defaults:
 scale_groups:
   manual_hosts:
     accelerator_type: cpu
-    slice_size: 1
+    num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
@@ -154,7 +154,7 @@ scale_groups:
   tpu_group_a:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    slice_size: 8
+    num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
@@ -170,7 +170,7 @@ scale_groups:
   tpu_group_b:
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
-    slice_size: 16
+    num_vms: 16
     resources:
       cpu: 128
       ram: 128GB
@@ -245,7 +245,7 @@ defaults:
 scale_groups:
   test_group:
     accelerator_type: {accelerator_type}
-    slice_size: 1
+    num_vms: 1
     resources:
       cpu: 8
       ram: 16GB
@@ -280,7 +280,7 @@ scale_groups:
   tpu_group:
     accelerator_type: TPU
     accelerator_variant: v5litepod-8
-    slice_size: 8
+    num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
@@ -322,7 +322,7 @@ scale_groups:
   tpu_v5e_8:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    slice_size: 8
+    num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
@@ -372,7 +372,7 @@ defaults:
 scale_groups:
   manual_hosts:
     accelerator_type: cpu
-    slice_size: 1
+    num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
@@ -418,7 +418,7 @@ scale_groups:
   tpu_v5e_8:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    slice_size: 8
+    num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
@@ -574,7 +574,7 @@ scale_groups:
   tpu_group:
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    slice_size: 8
+    num_vms: 8
     resources:
       cpu: 128
       ram: 128GB
@@ -628,7 +628,7 @@ controller:
 scale_groups:
   cpu_group:
     accelerator_type: cpu
-    slice_size: 1
+    num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
@@ -645,7 +645,7 @@ scale_groups:
   tpu_group:
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
-    slice_size: 16
+    num_vms: 16
     resources:
       cpu: 128
       ram: 128GB
@@ -713,11 +713,11 @@ def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
     sg = config_pb2.ScaleGroupConfig(
         name="test",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
-        slice_size=1,
+        num_vms=1,
         resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
     )
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.slice_template.slice_size = 1
+    sg.slice_template.num_vms = 1
     sg.slice_template.local.SetInParent()
     return sg
 
@@ -746,22 +746,22 @@ class TestConfigValidation:
         sg = config.scale_groups["test"]
         sg.name = "test"
         sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.slice_size = 1
+        sg.num_vms = 1
         with pytest.raises(ValueError, match="must set resources"):
             validate_config(config)
 
-    def test_rejects_missing_slice_size(self):
+    def test_rejects_missing_num_vms(self):
         config = config_pb2.IrisClusterConfig()
         sg = config.scale_groups["test"]
         sg.name = "test"
         sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.resources.CopyFrom(config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3))
-        with pytest.raises(ValueError, match="must set slice_size"):
+        with pytest.raises(ValueError, match="must set num_vms"):
             validate_config(config)
 
-    def test_rejects_zero_slice_size(self):
-        with pytest.raises(ValueError, match="invalid slice_size"):
-            validate_config(_config_with(slice_size=0))
+    def test_rejects_zero_num_vms(self):
+        with pytest.raises(ValueError, match="invalid num_vms"):
+            validate_config(_config_with(num_vms=0))
 
     def test_rejects_unspecified_accelerator_type(self):
         with pytest.raises(ValueError, match="must set accelerator_type"):
@@ -781,7 +781,7 @@ class TestConfigValidation:
             name="tpu",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-8",
-            slice_size=8,
+            num_vms=8,
             resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
         )
         sg.slice_template.gcp.zone = "zone-b"
@@ -801,7 +801,7 @@ class TestConfigValidation:
             name="tpu",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-8",
-            slice_size=8,
+            num_vms=8,
             resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
         )
         sg.slice_template.gcp.zone = "zone-a"

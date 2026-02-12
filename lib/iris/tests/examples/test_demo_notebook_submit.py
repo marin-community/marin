@@ -18,7 +18,7 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
     cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
     cpu_sg.min_slices = 0
     cpu_sg.max_slices = 1
-    cpu_sg.slice_size = 1
+    cpu_sg.num_vms = 1
     cpu_sg.resources.cpu = 1
     cpu_sg.resources.memory_bytes = 1024**3
     cpu_sg.resources.disk_bytes = 0

@@ -24,7 +24,6 @@ from iris.cluster.config import IrisConfig, make_local_config
 from iris.cluster.controller.lifecycle import reload_controller, start_controller
 from iris.cluster.controller.local import LocalController
 from iris.cluster.manager import stop_all
-from iris.cluster.controller.scaling_group import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -44,7 +43,7 @@ def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
     header = f"{'Scale Group':<18} {'Booting':>8} {'Initializing':>12} {'Ready':>6} {'Failed':>7} {'Demand':>7}"
     lines = [header]
     for group in status.groups:
-        counts = compute_slice_state_counts(group.slices)
+        counts = dict(group.slice_state_counts)
         line = (
             f"{group.name:<18} "
             f"{counts.get('booting', 0):>8} "
@@ -354,7 +353,7 @@ def vm_status(ctx, scale_group):
     for group in as_status.groups:
         if scale_group and group.name != scale_group:
             continue
-        counts = compute_slice_state_counts(group.slices)
+        counts = dict(group.slice_state_counts)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
         accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
@@ -371,7 +370,9 @@ def vm_status(ctx, scale_group):
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:
-                ss = "READY" if slice_all_ready(si) else ("FAILED" if slice_any_failed(si) else "PENDING")
+                all_ready = bool(si.vms) and all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
+                any_failed = any(vm.state in (vm_pb2.VM_STATE_FAILED, vm_pb2.VM_STATE_PREEMPTED) for vm in si.vms)
+                ss = "READY" if all_ready else ("FAILED" if any_failed else "PENDING")
                 click.echo(f"    {si.slice_id}: {ss}")
                 for vi in si.vms:
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")

@@ -201,8 +201,7 @@ class Controller:
     - Autoscaler loop: evaluates scaling decisions, manages slice lifecycle
 
     Each loop runs on its own thread so blocking operations in one don't
-    stall the others. Per-ScalingGroup monitor threads refresh VM status
-    in the background so the autoscaler reads cached status.
+    stall the others.
 
     Example:
         ```python
@@ -306,7 +305,6 @@ class Controller:
 
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
-            self._autoscaler.start_monitors()
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
         # Wait for server startup with exponential backoff
@@ -591,8 +589,7 @@ class Controller:
     def _run_autoscaler_once(self) -> None:
         """Run one autoscaler cycle: refresh (I/O) then update (CPU).
 
-        Called from the autoscaler loop thread. Status reads use cached
-        VmGroupStatus from monitor threads.
+        Called from the autoscaler loop thread.
         """
         if not self._autoscaler or not self._autoscaler_limiter:
             return

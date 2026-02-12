@@ -59,12 +59,12 @@ def _make_slice_config(env: PlatformEnv, group_name: str) -> config_pb2.SliceCon
         cfg.labels[label_key] = group_name
         return cfg
     elif env.name == "manual":
-        cfg = config_pb2.SliceConfig(name_prefix=f"iris-{group_name}", slice_size=1)
+        cfg = config_pb2.SliceConfig(name_prefix=f"iris-{group_name}", num_vms=1)
         cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
         cfg.labels[label_key] = group_name
         return cfg
     else:
-        cfg = config_pb2.SliceConfig(name_prefix=f"test-{group_name}", slice_size=1)
+        cfg = config_pb2.SliceConfig(name_prefix=f"test-{group_name}", num_vms=1)
         cfg.labels[label_key] = group_name
         return cfg
 
@@ -316,7 +316,7 @@ def test_gcp_list_slices_skips_deleting_tpus():
 def test_manual_host_pool_exhaustion_raises():
     """create_slice raises when not enough hosts are available."""
     platform = ManualPlatform(label_prefix="iris", hosts=["10.0.0.1"])
-    cfg = config_pb2.SliceConfig(name_prefix="iris-group", slice_size=3)
+    cfg = config_pb2.SliceConfig(name_prefix="iris-group", num_vms=3)
     cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
 
     with pytest.raises(RuntimeError, match="Need 3 hosts but only 1 available"):
@@ -359,7 +359,7 @@ def test_manual_slice_terminate_returns_hosts():
     """Terminating a slice returns all its hosts to the pool."""
     platform = ManualPlatform(label_prefix="iris", hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3"])
 
-    cfg = config_pb2.SliceConfig(name_prefix="iris-group", slice_size=2)
+    cfg = config_pb2.SliceConfig(name_prefix="iris-group", num_vms=2)
     cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
     handle = platform.create_slice(cfg)
     assert platform.available_host_count == 1
@@ -388,7 +388,7 @@ def test_local_shutdown_stops_thread_container():
     started.wait(timeout=5.0)
     assert threads.is_alive
 
-    cfg_slice = config_pb2.SliceConfig(name_prefix="test", slice_size=1)
+    cfg_slice = config_pb2.SliceConfig(name_prefix="test", num_vms=1)
     platform.create_slice(cfg_slice)
     assert len(platform.list_slices(zones=["local"])) == 1
 

@@ -146,7 +146,7 @@ class LocalSliceConfig(_message.Message):
     def __init__(self) -> None: ...
 
 class SliceConfig(_message.Message):
-    __slots__ = ("name_prefix", "slice_size", "accelerator_type", "accelerator_variant", "labels", "preemptible", "gcp", "coreweave", "manual", "local")
+    __slots__ = ("name_prefix", "num_vms", "accelerator_type", "accelerator_variant", "labels", "preemptible", "gcp", "coreweave", "manual", "local")
     class LabelsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -155,7 +155,7 @@ class SliceConfig(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     NAME_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    SLICE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    NUM_VMS_FIELD_NUMBER: _ClassVar[int]
     ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
     ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
     LABELS_FIELD_NUMBER: _ClassVar[int]
@@ -165,7 +165,7 @@ class SliceConfig(_message.Message):
     MANUAL_FIELD_NUMBER: _ClassVar[int]
     LOCAL_FIELD_NUMBER: _ClassVar[int]
     name_prefix: str
-    slice_size: int
+    num_vms: int
     accelerator_type: AcceleratorType
     accelerator_variant: str
     labels: _containers.ScalarMap[str, str]
@@ -174,7 +174,7 @@ class SliceConfig(_message.Message):
     coreweave: CoreweaveSliceConfig
     manual: ManualSliceConfig
     local: LocalSliceConfig
-    def __init__(self, name_prefix: _Optional[str] = ..., slice_size: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: _Optional[bool] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ..., local: _Optional[_Union[LocalSliceConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, name_prefix: _Optional[str] = ..., num_vms: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: _Optional[bool] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ..., local: _Optional[_Union[LocalSliceConfig, _Mapping]] = ...) -> None: ...
 
 class ScaleGroupResources(_message.Message):
     __slots__ = ("cpu", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")
@@ -191,14 +191,14 @@ class ScaleGroupResources(_message.Message):
     def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., gpu_count: _Optional[int] = ..., tpu_count: _Optional[int] = ...) -> None: ...
 
 class ScaleGroupConfig(_message.Message):
-    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "resources", "slice_size", "priority", "slice_template")
+    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "resources", "num_vms", "priority", "slice_template")
     NAME_FIELD_NUMBER: _ClassVar[int]
     MIN_SLICES_FIELD_NUMBER: _ClassVar[int]
     MAX_SLICES_FIELD_NUMBER: _ClassVar[int]
     ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
     ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
-    SLICE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    NUM_VMS_FIELD_NUMBER: _ClassVar[int]
     PRIORITY_FIELD_NUMBER: _ClassVar[int]
     SLICE_TEMPLATE_FIELD_NUMBER: _ClassVar[int]
     name: str
@@ -207,10 +207,10 @@ class ScaleGroupConfig(_message.Message):
     accelerator_type: AcceleratorType
     accelerator_variant: str
     resources: ScaleGroupResources
-    slice_size: int
+    num_vms: int
     priority: int
     slice_template: SliceConfig
-    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., slice_size: _Optional[int] = ..., priority: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ...) -> None: ...
 
 class BootstrapConfig(_message.Message):
     __slots__ = ("controller_address", "worker_id", "worker_port", "docker_image", "cache_dir", "env_vars")

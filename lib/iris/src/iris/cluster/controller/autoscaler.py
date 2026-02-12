@@ -12,11 +12,10 @@ Key design principles:
 - ScalingGroup owns per-slice idle tracking and decides which slices to scale down
 
 The run_once() flow splits into two phases:
-- refresh(): I/O phase — cleanup failed/dead slices, scale down idle
+- refresh(): I/O phase — scale down idle slices
 - update(): CPU phase — evaluate demand and execute scale-up decisions
 
-Status queries use cached VmGroupStatus from ScalingGroup monitor threads.
-The remaining blocking operations are terminate() calls for failed/dead/idle slices.
+The remaining blocking operations are terminate() calls for idle slices.
 """
 
 from __future__ import annotations
@@ -135,7 +134,7 @@ def route_demand(
             return False
         if entry.invalid_reason:
             return False
-        if entry.coschedule_group_id and group.slice_size != len(entry.task_ids):
+        if entry.coschedule_group_id and group.num_vms != len(entry.task_ids):
             return False
         if check_accept and not group.can_accept_demand(ts):
             return False
@@ -193,11 +192,11 @@ def route_demand(
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
-        if entry.coschedule_group_id and not any(g.slice_size == len(entry.task_ids) for g in matching_groups):
-            group_sizes = [g.slice_size for g in matching_groups]
+        if entry.coschedule_group_id and not any(g.num_vms == len(entry.task_ids) for g in matching_groups):
+            group_sizes = [g.num_vms for g in matching_groups]
             reason = (
                 f"coschedule_mismatch: job needs {len(entry.task_ids)} tasks coscheduled"
-                f" but matching groups have slice_size={group_sizes}"
+                f" but matching groups have num_vms={group_sizes}"
             )
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
@@ -267,12 +266,18 @@ def bootstrap_slice_vms(
     threads: ThreadContainer,
     timeout: float = 600.0,
     poll_interval: float = 10.0,
+    boot_timeout: float = 1800.0,
 ) -> dict[str, str]:
     """Discover VMs and bootstrap each as it appears.
 
     Polls handle.describe() and spawns a bootstrap thread (via ThreadContainer)
     for each newly-seen VM. Returns bootstrap logs keyed by vm_id.
     Raises PlatformError if expected VM count isn't reached or any VM fails.
+
+    Args:
+        boot_timeout: Maximum time in seconds for all per-VM bootstrap threads
+            to complete after VM discovery. If any thread is still alive after
+            this deadline, raises PlatformError.
     """
     expected = _get_expected_vm_count(handle)
     seen: set[str] = set()
@@ -315,8 +320,14 @@ def bootstrap_slice_vms(
             )
         time.sleep(poll_interval)
 
+    join_deadline = time.time() + boot_timeout
     for t in spawned_threads:
-        t.join()
+        remaining = max(0, join_deadline - time.time())
+        t.join(timeout=Duration.from_seconds(remaining))
+        if t.is_alive:
+            raise PlatformError(
+                f"Slice {handle.slice_id}: bootstrap thread {t.name} " f"still alive after {boot_timeout}s boot timeout"
+            )
 
     logs: dict[str, str] = {}
     errors: list[tuple[str, Exception]] = []
@@ -419,30 +430,17 @@ class Autoscaler:
         # Wait for all threads in the container to finish
         self._threads.wait()
 
-    def start_monitors(self) -> None:
-        """Start per-group monitor threads that periodically refresh slice status."""
-        for group in self._groups.values():
-            group.start_monitor()
-
-    def stop_monitors(self) -> None:
-        """Stop per-group monitor threads."""
-        for group in self._groups.values():
-            group.stop_monitor()
-
     def shutdown(self) -> None:
         """Shutdown the autoscaler, terminate all VM groups, and clean up platform.
 
         Shutdown ordering:
-        1. Stop monitor threads so no new status refreshes occur.
-        2. Stop all threads in the autoscaler's ThreadContainer. This signals
+        1. Stop all threads in the autoscaler's ThreadContainer. This signals
            stop_events for both in-flight scale-up threads AND worker lifecycle
            threads (via child containers), then joins with timeout.
-        3. Terminate all VM groups — calls Worker.stop() for final cleanup
-           of any workers that didn't exit in step 2.
-        4. Shutdown platform — clears local tracking state.
+        2. Terminate all VM groups — calls Worker.stop() for final cleanup
+           of any workers that didn't exit in step 1.
+        3. Shutdown platform — clears local tracking state.
         """
-        self.stop_monitors()
-
         # Stop all threads (scale-ups + workers) via ThreadContainer.
         # Using stop() rather than wait() because wait() doesn't signal
         # stop_events and would block forever on worker-lifecycle threads.
@@ -465,12 +463,17 @@ class Autoscaler:
         """Reconcile all groups (discover existing slices from cloud).
 
         Called once at startup to recover state from a previous controller.
-        Each ScalingGroup queries its VmManager for existing slices.
+        Discovered slices are adopted and then bootstrapped in background threads,
+        following the same flow as newly created slices.
         """
         for group in self._groups.values():
             group.reconcile()
-            for slice_obj in group.slice_handles():
-                self._register_slice_vms(slice_obj, group.name)
+            for slice_handle in group.slice_handles():
+                self._register_slice_vms(slice_handle, group.name)
+                self._threads.spawn(
+                    target=lambda stop, h=slice_handle, g=group: self._bootstrap_slice_safe(h, g),
+                    name=f"bootstrap-reconciled-{slice_handle.slice_id}",
+                )
 
     def _log_action(
         self,
@@ -684,7 +687,7 @@ class Autoscaler:
     def _bootstrap_slice_safe(self, handle: SliceHandle, group: ScalingGroup) -> None:
         """Bootstrap a slice with error handling. Runs in a background thread.
 
-        On failure, scales down the failed slice and records a failure on the group.
+        On failure, marks slice as failed, scales it down, and records a failure on the group.
         """
         try:
             self._bootstrap_slice(handle, group.name)
@@ -695,6 +698,7 @@ class Autoscaler:
                 group.name,
                 e,
             )
+            group.mark_slice_failed(handle.slice_id)
             group.scale_down(handle.slice_id)
             self._unregister_slice_vms(handle.slice_id)
             group.record_failure()
@@ -704,12 +708,18 @@ class Autoscaler:
 
         Collects bootstrap logs from the bootstrap process (if available) and
         stores them on TrackedVm entries for later retrieval via get_init_log().
+        After successful bootstrap, marks the slice as READY with VM addresses.
         """
         bootstrap_logs: dict[str, str] = {}
         if self._worker_bootstrap:
             bootstrap_logs = bootstrap_slice_vms(handle, self._worker_bootstrap, self._threads)
 
         self._register_slice_vms(handle, scale_group, bootstrap_logs)
+
+        group = self._groups.get(scale_group)
+        if group:
+            vm_addresses = [vm.internal_address for vm in handle.describe().vms]
+            group.mark_slice_ready(handle.slice_id, vm_addresses)
 
     def _register_slice_vms(
         self,
@@ -735,34 +745,13 @@ class Autoscaler:
             del self._vms[vm_id]
 
     def refresh(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """I/O phase: cleanup failed/dead slices, scale down idle.
+        """I/O phase: scale down idle slices.
 
-        Status queries use cached VmGroupStatus from monitor threads.
-        The remaining blocking operations are terminate() calls.
+        Failed slices are handled by bootstrap (mark_slice_failed -> scale_down)
+        and worker failure notifications (notify_worker_failed). Dead VMs are
+        detected by worker heartbeat timeouts in the controller.
         """
         timestamp = timestamp or Timestamp.now()
-
-        for group in self._groups.values():
-            cleaned = group.cleanup_failed_slices(timestamp)
-            for slice_obj in cleaned:
-                self._unregister_slice_vms(slice_obj.slice_id)
-                self._log_action(
-                    "failed_cleanup",
-                    group.name,
-                    slice_id=slice_obj.slice_id,
-                    reason="cleaning up failed slice",
-                )
-
-            group.update_slice_liveness(vm_status_map, timestamp)
-            dead = group.cleanup_dead_slices(timestamp)
-            for slice_obj in dead:
-                self._unregister_slice_vms(slice_obj.slice_id)
-                self._log_action(
-                    "liveness_reap",
-                    group.name,
-                    slice_id=slice_obj.slice_id,
-                    reason="slice missed liveness deadline",
-                )
 
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
@@ -808,10 +797,17 @@ class Autoscaler:
         if not tracked:
             return None
 
-        from iris.cluster.controller.scaling_group import _cloud_vm_state_to_iris
+        from iris.cluster.platform.base import CloudVmState
 
         vm_status = tracked.handle.status()
-        iris_state = _cloud_vm_state_to_iris(vm_status.state)
+        if vm_status.state == CloudVmState.RUNNING:
+            iris_state = vm_pb2.VM_STATE_READY
+        elif vm_status.state == CloudVmState.STOPPED:
+            iris_state = vm_pb2.VM_STATE_FAILED
+        elif vm_status.state == CloudVmState.TERMINATED:
+            iris_state = vm_pb2.VM_STATE_TERMINATED
+        else:
+            iris_state = vm_pb2.VM_STATE_BOOTING
 
         return vm_pb2.VmInfo(
             vm_id=tracked.vm_id,
