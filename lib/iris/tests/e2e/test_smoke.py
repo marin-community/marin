@@ -6,7 +6,10 @@
 Migrated from tests/chaos/test_smoke.py and tests/cluster/test_e2e.py::TestJobLifecycle.
 """
 
+from pathlib import Path
+
 import pytest
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import cluster_pb2
 
 from .helpers import _block, _failing, _quick
@@ -52,3 +55,34 @@ def test_multiple_jobs_complete(cluster):
     for job in jobs:
         status = cluster.wait(job, timeout=30)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+@pytest.mark.timeout(120)
+def test_command_parent_callable_child(cluster):
+    """Command entrypoint parent submits a callable child job via iris_ctx().
+
+    Replicates the `iris job run -> executor submits callable child` flow:
+    parent is a command entrypoint that programmatically submits a callable
+    child job and waits for it to complete.
+    """
+    iris_src = str(Path(__file__).resolve().parents[2] / "src")
+    parent_script = (
+        "import sys; "
+        f"sys.path.insert(0, {iris_src!r}); "
+        "from iris.client.client import iris_ctx; "
+        "from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec; "
+        "ctx = iris_ctx(); "
+        "ep = Entrypoint.from_callable(lambda: 'ok'); "
+        "job = ctx.client.submit(ep, 'child-callable', "
+        "ResourceSpec(cpu=1, memory='1g'), environment=EnvironmentSpec()); "
+        "job.wait(timeout=120, raise_on_failure=True)"
+    )
+
+    entrypoint = Entrypoint.from_command("python", "-c", parent_script)
+    job = cluster.client.submit(
+        entrypoint=entrypoint,
+        name="cmd-parent",
+        resources=ResourceSpec(cpu=1, memory="1g"),
+        environment=EnvironmentSpec(),
+    )
+    job.wait(timeout=90, raise_on_failure=True, stream_logs=True)

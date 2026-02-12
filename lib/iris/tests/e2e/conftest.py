@@ -148,6 +148,18 @@ class TestCluster:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         self.controller_client.terminate_job(request)
 
+    def wait_for_workers(self, min_workers: int, timeout: float = 30.0) -> None:
+        """Wait until at least min_workers healthy workers are registered."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            request = cluster_pb2.Controller.ListWorkersRequest()
+            response = self.controller_client.list_workers(request)
+            healthy = [w for w in response.workers if w.healthy]
+            if len(healthy) >= min_workers:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(f"Only {len(healthy)} of {min_workers} workers registered in {timeout}s")
+
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         """Fetch log lines for a task."""
         task_id = job.job_id.task(task_index).to_wire()
@@ -194,6 +206,41 @@ def cluster():
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         yield TestCluster(url=url, client=client, controller_client=controller_client)
+        controller_client.close()
+
+
+def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
+    """Build a local config with a single CPU scale group providing num_workers workers."""
+    config = load_config(DEFAULT_CONFIG)
+    config.scale_groups.clear()
+    sg = config.scale_groups["local-cpu"]
+    sg.name = "local-cpu"
+    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.slice_size = 1
+    sg.min_slices = num_workers
+    sg.max_slices = num_workers
+    sg.resources.cpu = 8
+    sg.resources.memory_bytes = 16 * 1024**3
+    sg.resources.disk_bytes = 50 * 1024**3
+    sg.slice_template.local.SetInParent()
+    return make_local_config(config)
+
+
+@pytest.fixture(scope="module")
+def multi_worker_cluster():
+    """Boots a local cluster with 4 workers for distribution and concurrency tests.
+
+    Waits for all workers to register before yielding, since the autoscaler
+    scales up one slice per evaluation interval (~0.5s each).
+    """
+    num_workers = 4
+    config = _make_multi_worker_config(num_workers)
+    with connect_cluster(config) as url:
+        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        tc = TestCluster(url=url, client=client, controller_client=controller_client)
+        tc.wait_for_workers(num_workers, timeout=30)
+        yield tc
         controller_client.close()
 
 
