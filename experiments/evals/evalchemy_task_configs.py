@@ -45,7 +45,7 @@ __all__ = [
 #
 # Many evalchemy benchmarks hardcode n_repeat > 1 (running each problem multiple times with
 # different seeds for averaged accuracy). We override n_repeat=1 and control the number of
-# seeds from Marin instead, to avoid a hidden seeds × n_repeat multiplier on iteration count.
+# seeds from Marin instead, to avoid a hidden seeds x n_repeat multiplier on iteration count.
 AIME24 = EvalTaskConfig(name="AIME24", num_fewshot=0, task_alias="AIME24", task_kwargs={"n_repeat": 1})
 AIME25 = EvalTaskConfig(name="AIME25", num_fewshot=0, task_alias="AIME25", task_kwargs={"n_repeat": 1})
 AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23", task_kwargs={"n_repeat": 1})
@@ -58,7 +58,9 @@ HMMT = EvalTaskConfig(name="HMMT", num_fewshot=0, task_alias="HMMT", task_kwargs
 # =============================================================================
 HUMANEVAL_PLUS = EvalTaskConfig(name="HumanEvalPlus", num_fewshot=0, task_alias="HumanEvalPlus")
 MBPP_PLUS = EvalTaskConfig(name="MBPPPlus", num_fewshot=0, task_alias="MBPPPlus")
-LIVECODEBENCH = EvalTaskConfig(name="LiveCodeBench", num_fewshot=0, task_alias="LiveCodeBench", task_kwargs={"n_repeat": 1})
+LIVECODEBENCH = EvalTaskConfig(
+    name="LiveCodeBench", num_fewshot=0, task_alias="LiveCodeBench", task_kwargs={"n_repeat": 1}
+)
 BIGCODEBENCH = EvalTaskConfig(name="BigCodeBench", num_fewshot=0, task_alias="BigCodeBench")
 CODEFORCES = EvalTaskConfig(name="CodeForces", num_fewshot=0, task_alias="CodeForces", task_kwargs={"n_repeat": 1})
 CODEELO = EvalTaskConfig(name="CodeElo", num_fewshot=0, task_alias="CodeElo", task_kwargs={"n_repeat": 1})
@@ -73,7 +75,9 @@ JEEBENCH = EvalTaskConfig(name="JEEBench", num_fewshot=0, task_alias="JEEBench",
 # Reasoning tasks
 # =============================================================================
 ALICE_IN_WONDERLAND = EvalTaskConfig(name="AIW", num_fewshot=0, task_alias="AIW")
-HUMANITYS_LAST_EXAM = EvalTaskConfig(name="HumanitysLastExam", num_fewshot=0, task_alias="HumanitysLastExam", task_kwargs={"n_repeat": 1})
+HUMANITYS_LAST_EXAM = EvalTaskConfig(
+    name="HumanitysLastExam", num_fewshot=0, task_alias="HumanitysLastExam", task_kwargs={"n_repeat": 1}
+)
 
 # =============================================================================
 # Task groups

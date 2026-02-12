@@ -88,7 +88,7 @@ BASE_GENERATION_PARAMS = {
 # =============================================================================
 # tensor_parallel_size: Number of TPU chips to use for tensor parallelism
 # v6e-8 has 4 chips, so we use tensor_parallel_size=4 to utilize all chips
-# max_num_seqs: Batch size for parallel generation (default is very low!)
+# max_num_seqs: Batch size for parallel generation
 BATCH_SIZE = 256
 ENGINE_KWARGS = {
     "tensor_parallel_size": (
@@ -106,7 +106,7 @@ ENGINE_KWARGS = {
 # call. Set to None to run all eval steps in a single executor_main call.
 # WARNING: Setting this value higher will cause many jobs to be launched in parallel.
 #          Please be mindful of other users sharing the cluster.
-MAX_PARALLEL_JOBS = 3
+MAX_PARALLEL_JOBS = 30
 
 # =============================================================================
 # Main Execution

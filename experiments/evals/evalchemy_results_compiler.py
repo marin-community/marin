@@ -5,8 +5,8 @@
 Compile and aggregate results from multiple Evalchemy evaluation runs.
 
 This module provides the compile step function for aggregating results across
-seeds and logging averaged metrics to wandb. It is used as the ``fn`` argument
-to an ``ExecutorStep`` created by ``compile_evalchemy_results`` in ``evals.py``.
+seeds and logging averaged metrics to wandb. It is used as the `fn` argument
+to an `ExecutorStep` created by `compile_evalchemy_results` in `evals.py`.
 """
 
 import json
@@ -118,9 +118,7 @@ def _load_results_from_input_paths(
                     all_results.append(record)
 
     if parse_errors:
-        raise RuntimeError(
-            f"Failed to parse {len(parse_errors)} result file(s):\n" + "\n".join(parse_errors)
-        )
+        raise RuntimeError(f"Failed to parse {len(parse_errors)} result file(s):\n" + "\n".join(parse_errors))
 
     if not all_results:
         raise ValueError("No results found in any of the provided steps")
@@ -196,19 +194,13 @@ def _log_averaged_results_to_wandb(
             dataset_suffix = "-".join(sorted(datasets))
 
         if base_eval_run_name:
-            wandb_run_name = (
-                f"evalchemy-{base_eval_run_name}{step_suffix}"
-                f"-{dataset_suffix}-avg{num_seeds}seeds"
-            )
+            wandb_run_name = f"evalchemy-{base_eval_run_name}{step_suffix}" f"-{dataset_suffix}-avg{num_seeds}seeds"
         else:
             if config_model_path:
                 model_id = config_model_path.rstrip("/").split("/")[-1]
             else:
                 model_id = base_model.lower()
-            wandb_run_name = (
-                f"evalchemy-{model_id}{step_suffix}"
-                f"-{dataset_suffix}-avg{num_seeds}seeds"
-            )
+            wandb_run_name = f"evalchemy-{model_id}{step_suffix}" f"-{dataset_suffix}-avg{num_seeds}seeds"
 
         wandb.init(
             project=WANDB_PROJECT,
@@ -273,9 +265,7 @@ def compile_evalchemy_results_fn(config: dict) -> None:
 
     df = pd.DataFrame(all_results)
 
-    df[["base_model_name", "seed"]] = df["model_name"].apply(
-        lambda x: pd.Series(_extract_base_model_and_seed(x))
-    )
+    df[["base_model_name", "seed"]] = df["model_name"].apply(lambda x: pd.Series(_extract_base_model_and_seed(x)))
 
     # Save compiled results
     results_file = f"{output_path}/compiled_results.json"

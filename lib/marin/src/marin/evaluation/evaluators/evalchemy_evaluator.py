@@ -756,7 +756,7 @@ _patch_autoconfig_for_gcs()
                 if arg == "-m":
                     argv_start = i + 2  # Skip "-m" and "eval.eval"
                     break
-            sys.argv = [os.path.join(cwd, "eval", "eval.py")] + cmd[argv_start:]
+            sys.argv = [os.path.join(cwd, "eval", "eval.py"), *cmd[argv_start:]]
 
             # Tee output to both log file and console
             with open(log_file, "w") as lf:
