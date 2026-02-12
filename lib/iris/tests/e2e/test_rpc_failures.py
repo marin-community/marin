@@ -23,16 +23,18 @@ def test_dispatch_intermittent_failure(cluster):
     """Test intermittent heartbeat failure during dispatch (30%). Task assignments are
     buffered and retried on next heartbeat cycle. Task should eventually succeed.
     """
+    cluster.wait_for_workers(1, timeout=15)
     enable_chaos("controller.heartbeat", failure_rate=0.3)
     job = cluster.submit(_quick, "intermittent-dispatch")
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_dispatch_permanent_failure(cluster):
-    """Test permanent heartbeat failure. After 3 consecutive failures -> WorkerFailedEvent ->
-    task marked WORKER_FAILED -> rescheduled -> all workers fail -> job FAILED or UNSCHEDULABLE.
+    """Test permanent heartbeat failure. After consecutive failures exceed the threshold ->
+    WorkerFailedEvent -> task marked WORKER_FAILED -> rescheduled -> all workers fail -> job FAILED or UNSCHEDULABLE.
     """
+    cluster.wait_for_workers(1, timeout=15)
     enable_chaos("controller.heartbeat", failure_rate=1.0)
     job = cluster.submit(_quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(5))
     status = cluster.wait(job, timeout=20)
@@ -40,19 +42,21 @@ def test_dispatch_permanent_failure(cluster):
 
 
 def test_heartbeat_temporary_failure(cluster):
-    """Test heartbeat fails 3 times (30s gap), but worker timeout is 60s. Worker should
-    NOT be marked failed. Task should still succeed.
+    """Test heartbeat fails 3 times, but stays under the heartbeat_failure_threshold.
+    Worker should NOT be marked failed. Task should still succeed.
     """
-    enable_chaos("worker.heartbeat", failure_rate=1.0, max_failures=3)
+    cluster.wait_for_workers(1, timeout=15)
+    enable_chaos("worker.heartbeat", failure_rate=1.0, max_failures=2)
     job = cluster.submit(_quick, "temp-hb-fail")
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_heartbeat_permanent_failure(cluster):
-    """Test heartbeat permanently fails. After 60s, worker marked failed, tasks
-    become WORKER_FAILED. With scheduling timeout, job eventually fails.
+    """Test heartbeat permanently fails. After exceeding the heartbeat failure threshold,
+    worker marked failed, tasks become WORKER_FAILED. With scheduling timeout, job eventually fails.
     """
+    cluster.wait_for_workers(1, timeout=15)
     enable_chaos("worker.heartbeat", failure_rate=1.0)
     job = cluster.submit(_slow, "perm-hb-fail", scheduling_timeout=Duration.from_seconds(5))
     status = cluster.wait(job, timeout=20)
@@ -68,7 +72,8 @@ def test_notify_task_update_failure(cluster):
     it via the next heartbeat response. Controller processes it -> job SUCCEEDED.
     The notify_task_update RPC is just a hint to trigger priority heartbeat.
     """
+    cluster.wait_for_workers(1, timeout=15)
     enable_chaos("worker.notify_task_update", failure_rate=1.0)
     job = cluster.submit(_quick, "notify-fail")
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED

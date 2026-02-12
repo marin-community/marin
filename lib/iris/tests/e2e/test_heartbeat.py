@@ -14,10 +14,14 @@ import time
 
 import pytest
 from iris.chaos import enable_chaos
-from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.rpc import cluster_pb2
 
 pytestmark = pytest.mark.e2e
+
+# Local config sets heartbeat_failure_threshold = 3 via make_local_config().
+# Tests must use this value (not the production default of 10) since the e2e
+# cluster fixture runs with local config.
+LOCAL_HEARTBEAT_FAILURE_THRESHOLD = 3
 
 
 def test_worker_survives_transient_heartbeat_delay(cluster):
@@ -32,7 +36,7 @@ def test_worker_survives_transient_heartbeat_delay(cluster):
         return 42
 
     job = cluster.submit(quick_job, "transient-delay")
-    enable_chaos("worker.heartbeat", delay_seconds=1.0, max_failures=3)
+    enable_chaos("worker.heartbeat", delay_seconds=0.3, max_failures=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -47,7 +51,7 @@ def test_heartbeat_failures_below_threshold_recovers(cluster):
     def quick_job():
         return 42
 
-    failures_to_inject = HEARTBEAT_FAILURE_THRESHOLD - 2
+    failures_to_inject = LOCAL_HEARTBEAT_FAILURE_THRESHOLD - 2
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
@@ -63,7 +67,7 @@ def test_heartbeat_failures_below_threshold_recovers(cluster):
 def test_heartbeat_failures_at_threshold_kills_worker(cluster):
     """Consecutive heartbeat failures at threshold mark worker as failed.
 
-    When heartbeats fail HEARTBEAT_FAILURE_THRESHOLD times consecutively,
+    When heartbeats fail LOCAL_HEARTBEAT_FAILURE_THRESHOLD times consecutively,
     the worker is marked unhealthy and running tasks transition to WORKER_FAILED.
     With retries, the task should be rescheduled when the worker recovers.
     """
@@ -75,12 +79,12 @@ def test_heartbeat_failures_at_threshold_kills_worker(cluster):
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=HEARTBEAT_FAILURE_THRESHOLD,
+        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
 
     job = cluster.submit(slow_job, "threshold-hb-fail", max_retries_preemption=3)
-    status = cluster.wait(job, timeout=120)
+    status = cluster.wait(job, timeout=60)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -103,12 +107,12 @@ def test_dispatch_cleared_on_worker_failure(cluster):
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=HEARTBEAT_FAILURE_THRESHOLD + 2,
+        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD + 2,
         delay_seconds=0.01,
     )
 
     job = cluster.submit(slow_job, "dispatch-clear-test", max_retries_preemption=5)
-    status = cluster.wait(job, timeout=120)
+    status = cluster.wait(job, timeout=60)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -124,7 +128,7 @@ def test_multiple_workers_one_fails(cluster):
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=HEARTBEAT_FAILURE_THRESHOLD,
+        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
 
@@ -147,7 +151,7 @@ def test_heartbeat_failure_with_pending_kills(cluster):
     enable_chaos(
         "controller.heartbeat",
         failure_rate=1.0,
-        max_failures=HEARTBEAT_FAILURE_THRESHOLD,
+        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
 
