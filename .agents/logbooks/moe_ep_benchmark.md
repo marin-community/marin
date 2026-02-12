@@ -42,6 +42,101 @@
   - forward, forward_backward
 
 ## Experiment Log
+### 2026-02-11 10:55 - Jaxformer-Inspired Routing Priority (Negative Result)
+- Hypothesis:
+  - Jaxformer-style score-priority routing order (sort by expert, then by token top-1 route score descending) might improve pack locality and improve end-to-end EP throughput.
+- Change:
+  - Added a new routing strategy `expert_score_sort` in:
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+  - Implementation detail:
+    - `sort((expert_id, -token_top1_score, flat_pos, tok_id))` over flattened assignments.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for strat in argsort expert_score_sort; do for dist in random runs; do for tk in 2 8; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution "$dist" --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk "$tk" --shared-expert-dim 5632 --shared-fused --backend gmm --impl fused_w13 --routing-pack-strategy "$strat" --queue-mode full --remat-mode none --bench-pass forward_backward --iters 3 --warmup 1 --parallel-mode ep; done; done; done'`
+- Result:
+  - `argsort, random, topk=2`: `275.605 TF/s`
+  - `expert_score_sort, random, topk=2`: `275.424 TF/s` (`-0.07%`)
+  - `argsort, random, topk=8`: `444.654 TF/s`
+  - `expert_score_sort, random, topk=8`: `443.716 TF/s` (`-0.21%`)
+  - `argsort, runs, topk=2`: `276.074 TF/s`
+  - `expert_score_sort, runs, topk=2`: `275.819 TF/s` (`-0.09%`)
+  - `argsort, runs, topk=8`: `444.437 TF/s`
+  - `expert_score_sort, runs, topk=8`: `444.483 TF/s` (`+0.01%`)
+- Interpretation:
+  - Strategy is performance-neutral within noise and slightly negative on random distribution.
+  - Keep `argsort` as default; no evidence this routing reorder improves throughput for this harness.
+- Next action:
+  - Sweep capacity policies (`drop`/`pad`) to quantify whether bounded expert capacity can improve pack+compute efficiency at acceptable quality tradeoff.
+
+### 2026-02-11 11:06 - Capacity Policy Sweep in EP (Top-k=2)
+- Hypothesis:
+  - Capacity clipping (`drop`) might reduce local expert work enough to improve EP throughput.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for policy in none drop pad; do for factor in 0.0 1.0 1.25; do if [ "$policy" = "none" ] && [ "$factor" != "0.0" ]; then continue; fi; uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 2 --shared-expert-dim 5632 --shared-fused --backend gmm --impl fused_w13 --routing-pack-strategy argsort --queue-mode full --remat-mode none --bench-pass forward_backward --iters 3 --warmup 1 --parallel-mode ep --capacity-policy "$policy" --capacity-factor "$factor"; done; done'`
+- Result:
+  - `none, factor=0.0`: `275.019 TF/s`
+  - `drop, factor=0.0`: `275.865 TF/s` (equivalent to no-cap path in current code)
+  - `drop, factor=1.0`: `275.649 TF/s`, `drop_frac=0.0139`
+  - `drop, factor=1.25`: `275.414 TF/s`, `drop_frac=0.0000`
+  - `pad`: **unsupported** in EP path (`ValueError: parallel_mode='ep' currently does not support capacity_policy='pad'`)
+- Interpretation:
+  - `drop` is effectively neutral for throughput in this regime (all deltas within noise).
+  - Capacity clipping does not currently unlock a meaningful EP speedup at this shape.
+  - `pad` remains unavailable for EP in this harness.
+- Next action:
+  - Probe scaling with larger expert count (`experts=128`) and fixed `topk` to test whether EP throughput remains flat or regresses as shard-local expert tables grow.
+
+### 2026-02-11 11:12 - Expert Count Scaling (`E=64/96/128`, topk=2/4/8)
+- Hypothesis:
+  - Increasing number of experts at fixed tokens should lower per-expert token density and may reduce MFU due to less favorable local GEMM shapes.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for e in 64 96 128; do for tk in 2 4 8; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts "$e" --topk "$tk" --shared-expert-dim 5632 --shared-fused --backend gmm --impl fused_w13 --routing-pack-strategy argsort --queue-mode full --remat-mode none --bench-pass forward_backward --iters 3 --warmup 1 --parallel-mode ep; done; done'`
+- Result:
+  - `E=64`: topk2 `275.636`, topk4 `345.629`, topk8 `444.110` TF/s
+  - `E=96`: topk2 `244.662`, topk4 `309.934`, topk8 `406.603` TF/s
+  - `E=128`: topk2 `220.508`, topk4 `282.142`, topk8 `375.956` TF/s
+- Interpretation:
+  - Throughput declines monotonically as experts increase at fixed token budget.
+  - This supports the practical rule that fewer/larger experts are better for accelerator efficiency at constant quality target and token budget.
+  - The top-k trend still holds: larger top-k raises TF/s while lowering tokens/s.
+- Next action:
+  - Run one larger-token ablation (`tokens=65536`) for `E=128, topk=2/8` to test whether increased token budget can recover part of the lost throughput.
+
+### 2026-02-11 11:24 - Larger Token Budget Ablation (`tokens=65536`, `E=128`)
+- Hypothesis:
+  - Increasing token budget should raise tokens/expert and recover compute efficiency, especially for low `topk`.
+- Command(s):
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --tokens 65536 --hidden 2048 --mlp-dim 2048 --experts 128 --topk 2 --shared-expert-dim 5632 --shared-fused --backend gmm --impl fused_w13 --routing-pack-strategy argsort --queue-mode full --remat-mode none --bench-pass forward_backward --iters 3 --warmup 1 --parallel-mode ep'`
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --tokens 65536 --hidden 2048 --mlp-dim 2048 --experts 128 --topk 8 --shared-expert-dim 5632 --shared-fused --backend gmm --impl fused_w13 --routing-pack-strategy argsort --queue-mode full --remat-mode none --bench-pass forward_backward --iters 3 --warmup 1 --parallel-mode ep'`
+- Result:
+  - `tokens=65536, E=128, topk=2`: `284.255 TF/s`, `792,650 tok/s`
+  - `tokens=65536, E=128, topk=8`: `454.414 TF/s`, `559,900 tok/s`
+  - Reference at `tokens=32768, E=128`:
+    - `topk=2`: `220.508 TF/s`
+    - `topk=8`: `375.956 TF/s`
+- Interpretation:
+  - Larger token budget materially improves throughput for high-expert regime:
+    - `topk=2`: `+28.9%`
+    - `topk=8`: `+20.9%`
+  - This confirms token density per expert is a key lever; EP pays off better at larger effective tokens/expert.
+- Next action:
+  - Sweep `distribution=runs` for the same large-token shape to verify locality sensitivity stays weak even when token density increases.
+
+### 2026-02-11 11:28 - Locality Check at Larger Token Budget (`tokens=65536`, `E=128`)
+- Hypothesis:
+  - With higher token density per expert, `runs` locality might improve throughput relative to random.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for dist in random runs; do for tk in 2 8; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution "$dist" --tokens 65536 --hidden 2048 --mlp-dim 2048 --experts 128 --topk "$tk" --shared-expert-dim 5632 --shared-fused --backend gmm --impl fused_w13 --routing-pack-strategy argsort --queue-mode full --remat-mode none --bench-pass forward_backward --iters 3 --warmup 1 --parallel-mode ep; done; done'`
+- Result:
+  - `random, topk=2`: `284.428 TF/s`
+  - `runs,   topk=2`: `284.000 TF/s` (`-0.15%`)
+  - `random, topk=8`: `454.303 TF/s`
+  - `runs,   topk=8`: `453.553 TF/s` (`-0.17%`)
+- Interpretation:
+  - Even at larger token budget, routing locality as modeled by `runs` remains throughput-neutral in this harness.
+  - Current bottlenecks are not meaningfully improved by this synthetic locality signal.
+- Next action:
+  - If we continue this branch: prioritize experiments that increase effective tokens/expert (batch/sequence/EP scale) and keep top-k low for training-path efficiency.
+
 ### 2026-02-09 00:00 - Kickoff
 - Hypothesis: EP will improve effective tokens/expert-shard and increase end-to-end training-path throughput at moderate/high top-k.
 - Command: N/A (planning + setup)
@@ -489,3 +584,377 @@
   - This suggests the top-k=8 small-shape gap is not primarily a simple block-size mismatch.
 - Notes:
   - One remaining candidate (`bt=256,bf=1024,...`) was interrupted by a host alias/network resolution glitch before completion; rerun when SSH alias is stable.
+
+### 2026-02-11 12:42 - MaxText `use_custom_sort_vjp` Pattern Port (Prepared, TPU-Blocked)
+- Goal:
+  - Test whether MaxText-style permutation VJP helps our backward path (especially sort/unsort portions).
+- Code changes:
+  - Added a MaxText-style custom VJP for permutation sorts in:
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+  - New knobs:
+    - `--dispatch-permute-mode {direct_take,repeat_sort}`
+      - `direct_take`: existing `x_repeat_sort = x[token_idx_sort]`.
+      - `repeat_sort`: MaxText-style `x_repeat = repeat(x, topk)` then permutation-sort by `sort_idx`.
+    - `--use-custom-sort-vjp`
+      - Uses explicit backward via inverse permutation (`argsort(sort_indices)`).
+  - The non-scatter combine unsort path now optionally routes through the same custom permutation VJP helper.
+- Local validation:
+  - CPU smoke tests passed for:
+    - forward `direct_take`
+    - forward `repeat_sort + custom_vjp`
+    - forward_backward `repeat_sort + custom_vjp`
+- TPU status:
+  - Bench collection blocked by infrastructure reachability during this window:
+    - `dev-tpu-dlwh-codex1`: timeout/refused on port 22.
+    - `dev-tpu-dlwh-codex2`: timeout on port 22.
+  - Also observed pre-existing TPU occupancy on codex1 before it became unreachable (`/dev/vfio/* busy`).
+- Ready-to-run A/B matrix (once TPU SSH is back):
+  - Baseline:
+    - `... --dispatch-permute-mode direct_take`
+  - Baseline + custom VJP:
+    - `... --dispatch-permute-mode direct_take --use-custom-sort-vjp`
+  - MaxText-style permutation:
+    - `... --dispatch-permute-mode repeat_sort`
+  - MaxText-style + custom VJP:
+    - `... --dispatch-permute-mode repeat_sort --use-custom-sort-vjp`
+  - Suggested fixed args for apples-to-apples:
+    - `--distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode none --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 4 --iters 4 --warmup 2 --routing-pack-strategy argsort`
+
+### 2026-02-11 12:55 - MaxText Ring-of-Experts Comm Path Port (Prepared, TPU-Blocked)
+- Goal:
+  - Add a communication-path A/B for EP high-top-k behavior:
+    - Current compact EP path (`psum` over full token outputs).
+    - MaxText-style ring path (`all_gather` dispatch + `psum_scatter` collect).
+- Code changes:
+  - Added `--ep-comm-path {compact_psum,ring_ag_rs}` in:
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+  - `compact_psum`:
+    - Existing behavior unchanged.
+  - `ring_ag_rs`:
+    - Shards token inputs across EP axis.
+    - Performs dispatch communication via `lax.all_gather(..., axis_name="ep", tiled=True)`.
+    - Runs local-expert compute on gathered tokens.
+    - Collects outputs via `lax.psum_scatter(..., axis_name="ep", scatter_dimension=0, tiled=True)`.
+    - Applies shared expert on local token shard.
+  - Guard:
+    - `ring_ag_rs` requires `tokens % ep_size == 0`.
+- Local validation:
+  - CPU smoke checks pass for:
+    - `parallel_mode=ep, ep_comm_path=compact_psum` (forward)
+    - `parallel_mode=ep, ep_comm_path=ring_ag_rs` (forward)
+    - `parallel_mode=ep, ep_comm_path=ring_ag_rs` (forward_backward)
+- TPU status:
+  - Could not collect TPU numbers in this window due VM alias reachability timeouts/refusals:
+    - `dev-tpu-dlwh-codex1`
+    - `dev-tpu-dlwh-codex2`
+- Ready-to-run TPU A/B:
+  - Baseline:
+    - `... --parallel-mode ep --ep-comm-path compact_psum`
+  - Ring path:
+    - `... --parallel-mode ep --ep-comm-path ring_ag_rs`
+  - Suggested high-top-k comparison:
+    - `--distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --iters 4 --warmup 2 --routing-pack-strategy argsort`
+
+### 2026-02-11 13:34 - EP Comm Path A/B (High Top-k): `compact_psum` vs `ring_ag_rs`
+- Goal:
+  - Complete the pending MaxText-style ring communication comparison at high top-k.
+- Command(s):
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --iters 4 --warmup 2 --routing-pack-strategy argsort --ep-comm-path compact_psum`
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --iters 4 --warmup 2 --routing-pack-strategy argsort --ep-comm-path ring_ag_rs`
+- Result:
+  - `compact_psum`: `472.032 TF/s`
+  - `ring_ag_rs`: `503.310 TF/s`
+  - Delta: `+6.63%` for `ring_ag_rs`.
+- Interpretation:
+  - Ring-style dispatch/collect path is a real improvement for this high-top-k EP configuration.
+
+### 2026-02-11 13:36 - MaxText Sort-VJP Pattern A/B (Completed)
+- Goal:
+  - Evaluate `dispatch_permute_mode` and `use_custom_sort_vjp` variants in both non-EP and EP paths.
+- Command(s):
+  - `parallel_mode=none` matrix on `codex1` and `parallel_mode=ep --ep-comm-path ring_ag_rs` matrix on `codex2`:
+    - `dispatch_permute_mode in {direct_take, repeat_sort}`
+    - `use_custom_sort_vjp in {off, on}`
+  - Fixed args:
+    - `--distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --routing-pack-strategy argsort`
+- EP result (`ring_ag_rs`):
+  - `direct_take, no_vjp`: `504.948 TF/s`
+  - `direct_take, custom_vjp`: `503.916 TF/s`
+  - `repeat_sort, no_vjp`: `505.079 TF/s`
+  - `repeat_sort, custom_vjp`: `504.620 TF/s`
+- EP interpretation:
+  - All four variants are effectively identical (within noise, <0.3% spread).
+- Non-EP result:
+  - Initial 4-point matrix showed high variance. Follow-up controlled paired repeats (`iters=5, warmup=2`, `dispatch_permute_mode=direct_take`) were stable:
+    - no_vjp: `191.837`, `191.861`, `191.897` TF/s (mean `191.865`)
+    - custom_vjp: `216.859`, `216.948`, `216.771` TF/s (mean `216.859`)
+  - Delta: `+13.03%` for `custom_vjp` in non-EP backward-inclusive path.
+- Non-EP interpretation:
+  - `use_custom_sort_vjp` is a strong win in this non-EP forward_backward configuration.
+  - For EP high-top-k with ring comm, sort-VJP changes are neutral.
+
+### 2026-02-11 13:49 - True Prequeue A/B (`bench_pass=forward`, `queue_mode=both`)
+- Goal:
+  - Finish queued prequeue experiment on the real prequeue path (forward-only), across `random` and `runs`.
+- Command(s):
+  - Non-EP (`codex1`):
+    - `... --bench-pass forward --queue-mode both --parallel-mode none --dispatch-permute-mode direct_take`
+  - EP ring (`codex2`):
+    - `... --bench-pass forward --queue-mode both --parallel-mode ep --ep-comm-path ring_ag_rs --dispatch-permute-mode direct_take`
+  - Fixed shape: `tokens=32768 hidden=2048 mlp_dim=2048 experts=64 topk=8`.
+- Result (non-EP):
+  - `random`: full `210.201`, prequeue `277.222` TF/s (`+31.88%`)
+  - `runs`: full `208.477`, prequeue `277.212` TF/s (`+32.97%`)
+- Result (EP ring):
+  - `random`: full `302.337`, prequeue `303.238` TF/s (`+0.30%`)
+  - `runs`: full `302.644`, prequeue `303.643` TF/s (`+0.33%`)
+- Interpretation:
+  - Prequeue is a major forward-path lever for non-EP at this shape.
+  - For EP ring path, prequeue is effectively neutral.
+
+### 2026-02-11 13:56 - EP Comm Path by Top-k (`compact_psum` vs `ring_ag_rs`)
+- Goal:
+  - Determine whether ring comm advantage is only high-topk or broad across `topk`.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for tk in 2 4 8; do for path in compact_psum ring_ag_rs; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk "$tk" --iters 4 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take --ep-comm-path "$path"; done; done'`
+- Result:
+  - `topk=2`: compact `198.277`, ring `224.542` TF/s (`+13.25%`)
+  - `topk=4`: compact `321.985`, ring `355.305` TF/s (`+10.35%`)
+  - `topk=8`: compact `470.598`, ring `503.816` TF/s (`+7.06%`)
+- Interpretation:
+  - Ring comm path wins across the full tested top-k range, not just at `topk=8`.
+  - Relative gain decreases as top-k increases, but remains materially positive.
+  - Practical default for EP in this harness should be `ep_comm_path=ring_ag_rs`.
+
+### 2026-02-11 14:00 - Trace Capture: EP `compact_psum` vs `ring_ag_rs` (`topk=8`)
+- Goal:
+  - Capture Perfetto traces for both EP comm paths on identical config and quantify timeline deltas.
+- Harness update:
+  - Added `--trace-dir` option to `lib/levanter/scripts/bench/bench_moe_hillclimb.py`.
+  - Each benchmark run now optionally wraps `_bench_one_distribution(...)` with `jax.profiler.trace(...)` into a unique subdirectory.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; trace_root=/tmp/moe_ep_comm_traces_20260211_1400; mkdir -p "$trace_root"; for path in compact_psum ring_ag_rs; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --iters 4 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take --ep-comm-path "$path" --trace-dir "$trace_root/$path"; done'`
+- Measured run result (same traced runs):
+  - compact: `468.496 TF/s`
+  - ring: `502.845 TF/s`
+  - delta: `+7.33%` (ring)
+- Trace artifacts (local):
+  - `/tmp/marin-moe-ep-benchmark/.profiles/moe_ep_comm_traces_20260211_1400/compact_psum/1770847606631578491_random_topk8_fused_w13_preweight_ep_compact_psum_forward_backward_full/plugins/profile/2026_02_11_22_07_23/perfetto_trace.json.gz`
+  - `/tmp/marin-moe-ep-benchmark/.profiles/moe_ep_comm_traces_20260211_1400/ring_ag_rs/1770847715481704075_random_topk8_fused_w13_preweight_ep_ring_ag_rs_forward_backward_full/plugins/profile/2026_02_11_22_09_01/perfetto_trace.json.gz`
+- Quick timeline comparison:
+  - `PjitFunction(loss_fn)` total duration in trace:
+    - compact: `22.284 ms`
+    - ring: `19.386 ms`
+    - savings: `2.898 ms` (`~13.0%`)
+- Interpretation:
+  - Ring path reduces end-to-end loss step time in this config; trace-level `loss_fn` timing is consistent with benchmark TF/s gain.
+
+### 2026-02-11 14:07 - EP Comm Path by Top-k (No Shared)
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for tk in 2 4 8; do for path in compact_psum ring_ag_rs; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk "$tk" --iters 4 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take --ep-comm-path "$path"; done; done'`
+- Result:
+  - `topk=2`: compact `198.277`, ring `224.542` TF/s (`+13.25%`)
+  - `topk=4`: compact `321.985`, ring `355.305` TF/s (`+10.35%`)
+  - `topk=8`: compact `470.598`, ring `503.816` TF/s (`+7.06%`)
+- Interpretation:
+  - Ring comm wins across `topk=2..8`; advantage shrinks with larger top-k.
+
+### 2026-02-11 14:11 - EP Comm Path by Top-k (Shared Expert Enabled)
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for tk in 2 4 8; do for path in compact_psum ring_ag_rs; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk "$tk" --shared-expert-dim 5632 --shared-fused --iters 4 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take --ep-comm-path "$path"; done; done'`
+- Result:
+  - `topk=2`: compact `276.140`, ring `431.147` TF/s (`+56.14%`)
+  - `topk=4`: compact `346.225`, ring `506.276` TF/s (`+46.23%`)
+  - `topk=8`: compact `444.874`, ring `599.571` TF/s (`+34.77%`)
+- Interpretation:
+  - Ring comm has even larger benefit when shared expert is enabled at this shape.
+
+### 2026-02-11 14:16 - Structural Cause Identified in Current Harness
+- Code observation:
+  - `ep_routed_only` (`compact_psum` path) uses `jax.shard_map` with token input spec `P(None, None)` (replicated token activations across EP devices):
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py` around EP setup and `ep_routed_only`.
+  - `ep_routed_ring` (`ring_ag_rs`) uses token input spec `P("ep", None)` plus explicit `all_gather` dispatch and `psum_scatter` collect.
+- Implication:
+  - `compact_psum` currently pays for a replicated-token EP path, while ring path is token-sharded and collective-structured.
+  - This explains why ring wins broadly and why the gain is especially large with shared expert enabled in this harness.
+
+### 2026-02-11 14:20 - Prequeue Check on Best EP Ring + Shared Path
+- Goal:
+  - Verify whether prequeue matters on the strongest current path (`ep_comm_path=ring_ag_rs`, shared expert enabled).
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for dist in random runs; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution "$dist" --impl fused_w13_preweight --backend gmm --bench-pass forward --queue-mode both --parallel-mode ep --ep-comm-path ring_ag_rs --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --shared-expert-dim 5632 --shared-fused --iters 4 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take; done'`
+- Result:
+  - `random`: full `359.184`, prequeue `360.864` TF/s (`+0.47%`)
+  - `runs`: full `360.481`, prequeue `360.556` TF/s (`+0.02%`)
+- Interpretation:
+  - Even on the strongest EP ring + shared path, prequeue remains effectively neutral.
+
+### 2026-02-11 14:23 - Non-EP Baseline vs EP Ring (Shared Shape)
+- Goal:
+  - Add direct non-EP baseline points on the same TPU for the shared shape, to quantify EP ring speedup factors.
+- Command (non-EP baseline):
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for tk in 2 4 8; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode none --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk "$tk" --shared-expert-dim 5632 --shared-fused --iters 4 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take; done'`
+- Non-EP result:
+  - `topk=2`: `234.975 TF/s`
+  - `topk=4`: `224.058 TF/s`
+  - `topk=8`: `222.883 TF/s`
+- EP ring result (from previous section):
+  - `topk=2`: `431.147 TF/s`
+  - `topk=4`: `506.276 TF/s`
+  - `topk=8`: `599.571 TF/s`
+- Speedup (EP ring / non-EP):
+  - `topk=2`: `1.83x`
+  - `topk=4`: `2.26x`
+  - `topk=8`: `2.69x`
+- Interpretation:
+  - On this shared configuration, EP ring is decisively ahead and its relative advantage grows with top-k.
+
+### 2026-02-11 14:27 - `use_custom_sort_vjp` Sanity on Best EP Ring + Shared Path
+- Goal:
+  - Re-check `use_custom_sort_vjp` on best-performing path after one anomalous low reading.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for rep in 1 2; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --ep-comm-path ring_ag_rs --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --shared-expert-dim 5632 --shared-fused --iters 5 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take; uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --ep-comm-path ring_ag_rs --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --shared-expert-dim 5632 --shared-fused --iters 5 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take --use-custom-sort-vjp; done'`
+- Result:
+  - no_vjp: `598.585`, `598.083` TF/s
+  - custom_vjp: `598.534`, `596.475` TF/s
+- Interpretation:
+  - Effect is neutral within normal run variance.
+  - The earlier `482 TF/s` custom-vjp reading was a bad outlier.
+
+### 2026-02-11 14:35 - Expert Count Scaling at High Top-k (Shared Shape)
+- Goal:
+  - Evaluate whether EP ring speedup persists as expert count rises.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for e in 64 96 128; do for pm in none ep; do extra=""; if [ "$pm" = ep ]; then extra="--ep-comm-path ring_ag_rs"; fi; uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode "$pm" $extra --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts "$e" --topk 8 --shared-expert-dim 5632 --shared-fused --iters 3 --warmup 1 --routing-pack-strategy argsort --dispatch-permute-mode direct_take; done; done'`
+- Result:
+  - `E=64`: non-EP `222.475`, EP ring `599.976` TF/s (`2.70x`)
+  - `E=96`: non-EP `215.872`, EP ring `531.705` TF/s (`2.46x`)
+  - `E=128`: non-EP `208.583`, EP ring `480.872` TF/s (`2.31x`)
+- Interpretation:
+  - EP ring remains strongly favorable as experts increase.
+  - Absolute TF/s declines with expert count for both paths, but EP ring keeps a large multiplicative advantage.
+
+### 2026-02-11 14:48 - Routing Pack Strategy Sweep on Best Shared Shape
+- Goal:
+  - Verify whether Jaxformer/MaxText-inspired routing pack ordering variants matter in the current best configuration.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-east5-a.yaml --tpu-name dlwh-codex2 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for pm in none ep; do for strat in argsort tuple_sort expert_score_sort; do extra=""; if [ "$pm" = ep ]; then extra="--ep-comm-path ring_ag_rs"; fi; uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode "$pm" $extra --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --shared-expert-dim 5632 --shared-fused --iters 4 --warmup 2 --routing-pack-strategy "$strat" --dispatch-permute-mode direct_take; done; done'`
+- Result:
+  - non-EP:
+    - `argsort`: `222.379 TF/s`
+    - `tuple_sort`: `222.097 TF/s`
+    - `expert_score_sort`: `222.040 TF/s`
+  - EP ring:
+    - `argsort`: `595.189 TF/s`
+    - `tuple_sort`: `597.717 TF/s`
+    - `expert_score_sort`: `598.512 TF/s`
+- Interpretation:
+  - non-EP is effectively identical across routing pack strategy variants.
+  - EP ring shows only a small spread (`~0.6%` from lowest to highest). No major routing-pack win here.
+
+### 2026-02-11 15:03 - Random vs Runs Distribution on Same Hardware (codex1)
+- Goal:
+  - Confirm whether run-locality in assignments materially changes throughput for the current best shared shape.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for pm in none ep; do extra=""; if [ "$pm" = ep ]; then extra="--ep-comm-path ring_ag_rs"; fi; for dist in random runs; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution "$dist" --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode "$pm" $extra --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk 8 --shared-expert-dim 5632 --shared-fused --iters 5 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take; done; done'`
+- Result:
+  - non-EP:
+    - `random`: `223.113 TF/s`
+    - `runs`: `222.789 TF/s` (`-0.15%`)
+  - EP ring:
+    - `random`: `596.961 TF/s`
+    - `runs`: `600.937 TF/s` (`+0.67%`)
+- Interpretation:
+  - Throughput is effectively insensitive to this random-vs-runs switch at this shape in both non-EP and EP ring paths.
+  - The synthetic run-locality here mainly changes run statistics, not end-to-end step throughput.
+
+### 2026-02-11 15:16 - EP Ring + Shared Top-k Sweep (Random vs Runs)
+- Goal:
+  - Re-check top-k scaling and locality interaction under the best current EP path (`ring_ag_rs`) with shared expert enabled.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for dist in random runs; do for tk in 1 2 4 6 8; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution "$dist" --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --ep-comm-path ring_ag_rs --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk "$tk" --shared-expert-dim 5632 --shared-fused --iters 4 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take; done; done'`
+- Result (EP ring + shared):
+  - random:
+    - `topk=1`: `379.192 TF/s`
+    - `topk=2`: `428.870 TF/s`
+    - `topk=4`: `505.270 TF/s`
+    - `topk=6`: `560.017 TF/s`
+    - `topk=8`: `598.993 TF/s`
+  - runs:
+    - `topk=1`: `378.953 TF/s`
+    - `topk=2`: `428.919 TF/s`
+    - `topk=4`: `504.782 TF/s`
+    - `topk=6`: `559.219 TF/s`
+    - `topk=8`: `598.334 TF/s`
+- Interpretation:
+  - Top-k scaling remains monotonic in this harness at fixed shape (higher top-k => higher measured TF/s, due larger counted MoE FLOP volume).
+  - Random vs runs is again effectively neutral across top-k on this path.
+
+### 2026-02-11 15:18 - EP Comm Path Sweep Expanded to `topk={1,2,4,6,8}` (Shared)
+- Goal:
+  - Extend the EP comm-path comparison to include `topk=1` and `topk=6` on the same host/hardware.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for path in compact_psum ring_ag_rs; do for tk in 1 2 4 6 8; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --ep-comm-path "$path" --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts 64 --topk "$tk" --shared-expert-dim 5632 --shared-fused --iters 4 --warmup 2 --routing-pack-strategy argsort --dispatch-permute-mode direct_take; done; done'`
+- Result (random, shared):
+  - `topk=1`: compact `233.426`, ring `379.055` TF/s (`+62.4%`)
+  - `topk=2`: compact `276.195`, ring `429.483` TF/s (`+55.5%`)
+  - `topk=4`: compact `346.406`, ring `505.240` TF/s (`+45.9%`)
+  - `topk=6`: compact `401.536`, ring `559.235` TF/s (`+39.3%`)
+  - `topk=8`: compact `446.163`, ring `598.411` TF/s (`+34.1%`)
+- Interpretation:
+  - Ring path wins for every tested top-k, including low-top-k where the relative gain is largest.
+  - Relative ring advantage shrinks as top-k grows, but remains material throughout the tested range.
+
+### 2026-02-11 15:37 - Expert Count Sweep for EP Comm Paths (Shared, `topk=8`)
+- Goal:
+  - Check whether ring-vs-compact advantage persists as expert count increases.
+- Command:
+  - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-name dlwh-codex1 execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- /bin/bash -lc 'set -euo pipefail; for e in 64 96 128; do for path in compact_psum ring_ag_rs; do uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py --distribution random --impl fused_w13_preweight --backend gmm --bench-pass forward_backward --queue-mode full --parallel-mode ep --ep-comm-path "$path" --tokens 32768 --hidden 2048 --mlp-dim 2048 --experts "$e" --topk 8 --shared-expert-dim 5632 --shared-fused --iters 3 --warmup 1 --routing-pack-strategy argsort --dispatch-permute-mode direct_take; done; done'`
+- Result:
+  - `E=64`: compact `446.015`, ring `598.960` TF/s (`+34.3%`)
+  - `E=96`: compact `408.888`, ring `534.409` TF/s (`+30.7%`)
+  - `E=128`: compact `377.118`, ring `480.561` TF/s (`+27.4%`)
+- Interpretation:
+  - Ring remains clearly better as experts increase.
+  - Absolute throughput drops as `E` increases for both paths, and ring’s relative margin narrows somewhat, but remains large.
+
+### 2026-02-11 14:58 - TPU Availability Note (codex2)
+- During a `random/runs` comparison run on `dlwh-codex2`, SSH to `34.42.114.33` was closed/refused mid-experiment.
+- Recovery:
+  - Re-ran the full matrix on `dlwh-codex1` (`infra/marin-us-central1.yaml`) and recorded final numbers above.
+
+### 2026-02-11 16:48 - Mixtral-like Block Push Toward 1101 TF/s (Forward+Backward)
+- Goal:
+  - Push Mixtral-like MoE block throughput to `>=1101 TF/s`.
+- Shape target:
+  - `hidden=4096, mlp_dim=14336, experts=8, topk=2`, `shared_expert_dim=0`, backend `gmm`.
+- Initial comm-path baseline (`tokens=32768`, `impl=fused_w13_preweight`, random):
+  - non-EP: `316.611 TF/s`
+  - EP compact: `801.379 TF/s`
+  - EP ring: `859.113 TF/s`
+- Token scaling (EP ring, `impl=fused_w13_preweight`):
+  - `32768`: `859.003 TF/s`
+  - `49152`: `941.925 TF/s`
+  - `65536`: `980.645 TF/s`
+  - `98304`: `1034.277 TF/s`
+  - `131072`: `1054.411 TF/s`
+- Impl sweep at `tokens=131072` (EP ring):
+  - `baseline`: `1070.775 TF/s`
+  - `fused_w13`: `1057.049 TF/s`
+  - `preweight`: `1071.492 TF/s`
+  - `fused_w13_preweight`: `1059.256 TF/s`
+  - `scatter`: `1074.243 TF/s`  ← best
+  - `fast`: `1050.897 TF/s`
+- High-token sweep using best impl (`scatter`, EP ring):
+  - `131072`: `1072.849 TF/s`
+  - `163840`: `1084.843 TF/s`
+  - `196608`: `1097.746 TF/s`
+  - `212992`: `1094.071 TF/s`
+  - `229376`: `1099.646 TF/s`
+  - `245760`: `1102.002 TF/s`  ✅ target met
+  - `262144`: `1109.714 TF/s`  ✅ target exceeded
+- Routing-pack strategy check at `tokens=196608` (`scatter`, EP ring):
+  - `argsort`: `1093.089 TF/s`
+  - `tuple_sort`: `1095.387 TF/s`
+  - `expert_score_sort`: `1094.950 TF/s`
+  - Interpretation: negligible spread (wash).

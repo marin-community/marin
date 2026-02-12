@@ -27,9 +27,11 @@ Impl = Literal[
 BenchPass = Literal["forward", "forward_backward"]
 CapacityPolicy = Literal["none", "drop", "pad"]
 QueueMode = Literal["full", "prequeue", "both"]
-RoutingPackStrategy = Literal["argsort", "tuple_sort"]
+RoutingPackStrategy = Literal["argsort", "tuple_sort", "expert_score_sort"]
 RematMode = Literal["none", "expert_mlp", "combine"]
 ParallelMode = Literal["none", "ep"]
+DispatchPermuteMode = Literal["direct_take", "repeat_sort"]
+EpCommPath = Literal["compact_psum", "ring_ag_rs"]
 
 
 def _time_fn(fn: Callable, *args, warmup: int = 2, iters: int = 5) -> float:
@@ -61,6 +63,39 @@ def _ragged_dot(
     )
 
 
+def _sort_by_permutation(
+    inputs: jax.Array,
+    sort_indices: jax.Array,
+    *,
+    use_custom_sort_vjp: bool,
+) -> jax.Array:
+    """Sorts the leading axis by a permutation, with an optional explicit VJP."""
+    if use_custom_sort_vjp:
+        return _sort_by_permutation_custom(inputs, sort_indices)
+    return jnp.take(inputs, sort_indices, axis=0)
+
+
+@jax.custom_vjp
+def _sort_by_permutation_custom(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
+    return jnp.take(inputs, sort_indices, axis=0)
+
+
+def _sort_by_permutation_custom_fwd(inputs: jax.Array, sort_indices: jax.Array) -> tuple[jax.Array, jax.Array]:
+    return _sort_by_permutation_custom(inputs, sort_indices), sort_indices
+
+
+def _sort_by_permutation_custom_bwd(residuals: jax.Array, grads: jax.Array) -> tuple[jax.Array, None]:
+    sort_indices = residuals
+    # Explicit inverse-permutation backward mirrors MaxText's custom sort VJP.
+    return _sort_by_permutation_custom(grads, jnp.argsort(sort_indices, axis=0)), None
+
+
+_sort_by_permutation_custom.defvjp(
+    _sort_by_permutation_custom_fwd,
+    _sort_by_permutation_custom_bwd,
+)
+
+
 def _prepare_dispatch(
     x: jax.Array,
     topk_idx: jax.Array,
@@ -70,6 +105,8 @@ def _prepare_dispatch(
     capacity_factor: float,
     capacity_policy: CapacityPolicy,
     routing_pack_strategy: RoutingPackStrategy,
+    dispatch_permute_mode: DispatchPermuteMode,
+    use_custom_sort_vjp: bool,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     tokens = x.shape[0]
     topk = topk_idx.shape[1]
@@ -78,17 +115,39 @@ def _prepare_dispatch(
     topk_idx_flat = topk_idx.reshape(-1)
     topk_weights_flat = topk_weights.reshape(-1)
 
+    tok_id = jnp.repeat(jnp.arange(tokens, dtype=jnp.int32), topk)
     if routing_pack_strategy == "argsort":
         sort_idx = jnp.argsort(topk_idx_flat, axis=0)
-        token_idx_sort = sort_idx // topk
+        token_idx_sort = jnp.take(tok_id, sort_idx, axis=0)
     elif routing_pack_strategy == "tuple_sort":
         flat_pos = jnp.arange(assignments, dtype=jnp.int32)
-        tok_id = jnp.repeat(jnp.arange(tokens, dtype=jnp.int32), topk)
         _, sort_idx, token_idx_sort = jax.lax.sort((topk_idx_flat, flat_pos, tok_id), dimension=0)
+    elif routing_pack_strategy == "expert_score_sort":
+        # Jaxformer-style score-priority within each expert group:
+        # sort first by expert id, then by descending token top-1 score.
+        flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+        top1_score_flat = jnp.repeat(topk_weights[:, 0].astype(jnp.float32), topk)
+        _, _, sort_idx, token_idx_sort = jax.lax.sort(
+            (
+                topk_idx_flat,
+                -top1_score_flat,
+                flat_pos,
+                tok_id,
+            ),
+            dimension=0,
+        )
     else:
         raise ValueError(f"Unknown routing pack strategy: {routing_pack_strategy}")
 
-    x_repeat_sort = jnp.take(x, token_idx_sort, axis=0)
+    if dispatch_permute_mode == "repeat_sort":
+        x_repeat = jnp.repeat(x, topk, axis=0)
+        x_repeat_sort = _sort_by_permutation(
+            x_repeat,
+            sort_idx,
+            use_custom_sort_vjp=use_custom_sort_vjp,
+        )
+    else:
+        x_repeat_sort = jnp.take(x, token_idx_sort, axis=0)
     sorted_weights = jnp.take(topk_weights_flat, sort_idx, axis=0).astype(x.dtype)
     group_sizes_raw = jnp.bincount(topk_idx_flat, length=num_experts).astype(jnp.int32)
 
@@ -150,6 +209,8 @@ def _moe_block(
     capacity_factor: float,
     capacity_policy: CapacityPolicy,
     routing_pack_strategy: RoutingPackStrategy,
+    dispatch_permute_mode: DispatchPermuteMode,
+    use_custom_sort_vjp: bool,
     remat_mode: RematMode,
 ) -> jax.Array:
     tokens, hidden = x.shape
@@ -163,6 +224,8 @@ def _moe_block(
         capacity_factor=capacity_factor,
         capacity_policy=capacity_policy,
         routing_pack_strategy=routing_pack_strategy,
+        dispatch_permute_mode=dispatch_permute_mode,
+        use_custom_sort_vjp=use_custom_sort_vjp,
     )
 
     return _moe_from_dispatch(
@@ -185,6 +248,7 @@ def _moe_block(
         impl=impl,
         shared_fused=shared_fused,
         force_scatter=(capacity_policy == "pad"),
+        use_custom_sort_vjp=use_custom_sort_vjp,
         remat_mode=remat_mode,
     )
 
@@ -210,6 +274,7 @@ def _moe_from_dispatch(
     impl: Impl,
     shared_fused: bool,
     force_scatter: bool = False,
+    use_custom_sort_vjp: bool = False,
     remat_mode: RematMode = "none",
 ) -> jax.Array:
     tokens, hidden = x.shape
@@ -272,7 +337,11 @@ def _moe_from_dispatch(
             return jnp.zeros((tokens, hidden), dtype=weighted.dtype).at[token_idx_sort_in].add(weighted)
 
         inv_sort_idx = jnp.argsort(sort_idx_in, axis=0)
-        out_repeat = jnp.take(out_repeat_sort_in, inv_sort_idx, axis=0)
+        out_repeat = _sort_by_permutation(
+            out_repeat_sort_in,
+            inv_sort_idx,
+            use_custom_sort_vjp=use_custom_sort_vjp,
+        )
         out_repeat = out_repeat.reshape(tokens, topk, hidden)
         return jnp.sum(out_repeat, axis=1) if preweight else jnp.sum(out_repeat * topk_weights[..., None], axis=1)
 
@@ -421,6 +490,9 @@ def _bench_one_distribution(
     capacity_factor: float,
     capacity_policy: CapacityPolicy,
     routing_pack_strategy: RoutingPackStrategy,
+    dispatch_permute_mode: DispatchPermuteMode,
+    use_custom_sort_vjp: bool,
+    ep_comm_path: EpCommPath,
     remat_mode: RematMode,
     parallel_mode: ParallelMode,
     queue_mode: QueueMode,
@@ -472,6 +544,8 @@ def _bench_one_distribution(
         capacity_factor=capacity_factor,
         capacity_policy=capacity_policy,
         routing_pack_strategy=routing_pack_strategy,
+        dispatch_permute_mode=dispatch_permute_mode,
+        use_custom_sort_vjp=use_custom_sort_vjp,
     )
 
     if parallel_mode == "ep" and capacity_policy == "pad":
@@ -512,6 +586,8 @@ def _bench_one_distribution(
             capacity_factor=capacity_factor,
             capacity_policy=capacity_policy,
             routing_pack_strategy=routing_pack_strategy,
+            dispatch_permute_mode=dispatch_permute_mode,
+            use_custom_sort_vjp=use_custom_sort_vjp,
             remat_mode=remat_mode,
         )
 
@@ -633,6 +709,7 @@ def _bench_one_distribution(
                 impl=impl,
                 shared_fused=shared_fused,
                 force_scatter=True,
+                use_custom_sort_vjp=use_custom_sort_vjp,
                 remat_mode=remat_mode,
             )
             out_local = jax.lax.psum(out_local, "ep")
@@ -640,7 +717,129 @@ def _bench_one_distribution(
                 return out_local[None, ...]
             return out_local
 
-        def ep_forward_fn(
+        if tokens % num_devices != 0 and ep_comm_path == "ring_ag_rs":
+            raise ValueError(
+                f"ep_comm_path='ring_ag_rs' requires tokens divisible by local device count: "
+                f"tokens={tokens}, devices={num_devices}"
+            )
+
+        @partial(
+            jax.shard_map,
+            mesh=ep_mesh,
+            in_specs=(
+                P("ep", None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P("ep", None, None),
+                P(None, None),
+                P(None, None),
+                P(None, None),
+                P(None, None),
+                P("ep", None),
+                P("ep", None),
+                P("ep", None),
+                P("ep", None),
+            ),
+            out_specs=P("ep", None),
+            check_vma=False,
+        )
+        def ep_routed_ring(
+            x_in,
+            w1_in,
+            w2_in,
+            w3_in,
+            w13_in,
+            sw1_in,
+            sw2_in,
+            sw3_in,
+            sw13_in,
+            valid_local_in,
+            token_local_in,
+            weight_local_in,
+            group_local_in,
+        ):
+            x_local = x_in[0] if x_in.ndim == 3 and x_in.shape[0] == 1 else x_in
+            # MaxText-style ring dispatch: all-gather token activations to all expert shards.
+            x_global = jax.lax.all_gather(x_local, "ep", tiled=True)
+
+            valid_local = valid_local_in.reshape(-1)
+            token_local = token_local_in.reshape(-1)
+            weight_local = weight_local_in.reshape(-1)
+            group_local = group_local_in.reshape(-1)
+
+            x_take = jnp.take(x_global, token_local, axis=0)
+            x_dispatch_local = jnp.where(valid_local[:, None], x_take, jnp.zeros_like(x_take))
+            weight_dispatch_local = jnp.where(valid_local, weight_local, jnp.zeros_like(weight_local))
+
+            zero_sw1 = jnp.zeros((x_global.shape[1], 0), dtype=x_global.dtype)
+            zero_sw2 = jnp.zeros((0, x_global.shape[1]), dtype=x_global.dtype)
+            zero_sw3 = jnp.zeros((x_global.shape[1], 0), dtype=x_global.dtype)
+            zero_sw13 = jnp.zeros((x_global.shape[1], 0), dtype=x_global.dtype)
+
+            out_local_full = _moe_from_dispatch(
+                x_global,
+                topk_weights,
+                x_dispatch_local,
+                weight_dispatch_local,
+                token_local,
+                jnp.zeros((1,), dtype=jnp.int32),
+                group_local,
+                w1_in,
+                w2_in,
+                w3_in,
+                w13_in,
+                zero_sw1,
+                zero_sw2,
+                zero_sw3,
+                zero_sw13,
+                backend=backend,
+                impl=impl,
+                shared_fused=shared_fused,
+                force_scatter=True,
+                use_custom_sort_vjp=use_custom_sort_vjp,
+                remat_mode=remat_mode,
+            )
+            # MaxText-style ring collect: reduce-scatter token outputs across expert shards.
+            out_shard = jax.lax.psum_scatter(out_local_full, "ep", scatter_dimension=0, tiled=True)
+
+            shared_dim = sw2_in.shape[0]
+            if shared_dim > 0:
+                if shared_fused:
+                    shared13 = jax.lax.dot_general(
+                        x_local,
+                        sw13_in,
+                        (((1,), (0,)), ((), ())),
+                        preferred_element_type=jnp.float32,
+                    )
+                    shared1, shared3 = jnp.split(shared13, [shared_dim], axis=-1)
+                else:
+                    shared1 = jax.lax.dot_general(
+                        x_local,
+                        sw1_in,
+                        (((1,), (0,)), ((), ())),
+                        preferred_element_type=jnp.float32,
+                    )
+                    shared3 = jax.lax.dot_general(
+                        x_local,
+                        sw3_in,
+                        (((1,), (0,)), ((), ())),
+                        preferred_element_type=jnp.float32,
+                    )
+                shared_gated = jax.nn.silu(shared1) * shared3
+                shared_out = jax.lax.dot_general(
+                    shared_gated,
+                    sw2_in,
+                    (((1,), (0,)), ((), ())),
+                    preferred_element_type=jnp.float32,
+                )
+                out_shard = out_shard + shared_out.astype(out_shard.dtype)
+
+            if x_in.ndim == 3 and x_in.shape[0] == 1:
+                return out_shard[None, ...].astype(x_local.dtype)
+            return out_shard.astype(x_local.dtype)
+
+        def ep_forward_fn_compact(
             x_in,
             w1_in,
             w2_in,
@@ -695,7 +894,34 @@ def _bench_one_distribution(
                 out = out + shared_out.astype(out.dtype)
             return out.astype(x_in.dtype)
 
-        forward_fn = ep_forward_fn
+        def ep_forward_fn_ring(
+            x_in,
+            w1_in,
+            w2_in,
+            w3_in,
+            w13_in,
+            sw1_in,
+            sw2_in,
+            sw3_in,
+            sw13_in,
+        ):
+            return ep_routed_ring(
+                x_in,
+                w1_in,
+                w2_in,
+                w3_in,
+                w13_in,
+                sw1_in,
+                sw2_in,
+                sw3_in,
+                sw13_in,
+                valid_mask_per_dev,
+                token_local_per_dev,
+                weight_local_per_dev,
+                group_local_per_dev,
+            )
+
+        forward_fn = ep_forward_fn_ring if ep_comm_path == "ring_ag_rs" else ep_forward_fn_compact
 
     for mode in modes:
         fn: Callable
@@ -764,6 +990,7 @@ def _bench_one_distribution(
                             impl=impl,
                             shared_fused=shared_fused,
                             force_scatter=(capacity_policy == "pad"),
+                            use_custom_sort_vjp=use_custom_sort_vjp,
                             remat_mode=remat_mode,
                         )
 
@@ -823,6 +1050,7 @@ def _bench_one_distribution(
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} backend={backend}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} remat_mode={remat_mode}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} parallel_mode={parallel_mode}")
+        print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} ep_comm_path={ep_comm_path}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} time_s={dt:.6f}")
         print(f"[{distribution}] mode={mode} pass={bench_pass} topk={topk} impl={impl} tflops={tflops:.3f}")
         print(
@@ -857,6 +1085,8 @@ def _bench_one_distribution(
                 capacity_factor=capacity_factor,
                 capacity_policy=capacity_policy,
                 routing_pack_strategy=routing_pack_strategy,
+                dispatch_permute_mode=dispatch_permute_mode,
+                use_custom_sort_vjp=use_custom_sort_vjp,
             )
 
         pack_dt = _time_fn(pack_fn, x, warmup=warmup, iters=iters)
@@ -898,7 +1128,11 @@ def _bench_one_distribution(
                 weighted = out_in if preweight else (out_in * w_in[:, None])
                 return jnp.zeros((tokens, hidden), dtype=weighted.dtype).at[tok_in].add(weighted)
             inv_sort_idx = jnp.argsort(sort_in, axis=0)
-            out_repeat = jnp.take(out_in, inv_sort_idx, axis=0).reshape(tokens, topk, hidden)
+            out_repeat = _sort_by_permutation(
+                out_in,
+                inv_sort_idx,
+                use_custom_sort_vjp=use_custom_sort_vjp,
+            ).reshape(tokens, topk, hidden)
             return jnp.sum(out_repeat, axis=1) if preweight else jnp.sum(out_repeat * topk_weights[..., None], axis=1)
 
         combine_dt = _time_fn(
@@ -938,8 +1172,29 @@ def main() -> None:
     parser.add_argument("--distribution", choices=["random", "runs", "both"], default="both")
     parser.add_argument("--bench-pass", choices=["forward", "forward_backward"], default="forward")
     parser.add_argument("--parallel-mode", choices=["none", "ep"], default="none")
+    parser.add_argument(
+        "--ep-comm-path",
+        choices=["compact_psum", "ring_ag_rs"],
+        default="compact_psum",
+        help="Communication strategy for parallel_mode=ep.",
+    )
     parser.add_argument("--queue-mode", choices=["full", "prequeue", "both"], default="full")
-    parser.add_argument("--routing-pack-strategy", choices=["argsort", "tuple_sort"], default="argsort")
+    parser.add_argument(
+        "--routing-pack-strategy",
+        choices=["argsort", "tuple_sort", "expert_score_sort"],
+        default="argsort",
+    )
+    parser.add_argument(
+        "--dispatch-permute-mode",
+        choices=["direct_take", "repeat_sort"],
+        default="direct_take",
+        help="How token-to-expert dispatch activations are materialized.",
+    )
+    parser.add_argument(
+        "--use-custom-sort-vjp",
+        action="store_true",
+        help="Use explicit inverse-permutation VJP for permutation sorts (MaxText style).",
+    )
     parser.add_argument("--remat-mode", choices=["none", "expert_mlp", "combine"], default="none")
     parser.add_argument("--stage-timing", action="store_true")
     parser.add_argument("--capacity-factor", type=float, default=0.0)
@@ -955,6 +1210,12 @@ def main() -> None:
         type=float,
         default=0.35,
         help="Noise scale for runs distribution (lower => longer runs).",
+    )
+    parser.add_argument(
+        "--trace-dir",
+        type=str,
+        default="",
+        help="Optional base directory for JAX profiler traces (one subdirectory per run).",
     )
     parser.add_argument("--iters", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
@@ -983,8 +1244,11 @@ def main() -> None:
         f"impl={args.impl} shared_expert_dim={args.shared_expert_dim} "
         f"shared_fused={args.shared_fused} bench_pass={args.bench_pass} "
         f"parallel_mode={args.parallel_mode} "
+        f"ep_comm_path={args.ep_comm_path} "
         f"queue_mode={args.queue_mode} "
         f"routing_pack_strategy={args.routing_pack_strategy} "
+        f"dispatch_permute_mode={args.dispatch_permute_mode} "
+        f"use_custom_sort_vjp={args.use_custom_sort_vjp} "
         f"remat_mode={args.remat_mode} "
         f"capacity_policy={args.capacity_policy} capacity_factor={args.capacity_factor} "
         f"stage_timing={args.stage_timing}"
@@ -1011,11 +1275,13 @@ def main() -> None:
     else:
         impls = [args.impl]
 
+    trace_dir = args.trace_dir.strip()
+
     route_keys = jax.random.split(key_route, len(distributions))
     for dist, dist_key in zip(distributions, route_keys, strict=True):
         for tk in topks:
             for impl in impls:
-                _bench_one_distribution(
+                bench_kwargs = dict(
                     distribution=dist,
                     key=dist_key,
                     x=x,
@@ -1038,12 +1304,27 @@ def main() -> None:
                     capacity_factor=args.capacity_factor,
                     capacity_policy=args.capacity_policy,
                     routing_pack_strategy=args.routing_pack_strategy,
+                    dispatch_permute_mode=args.dispatch_permute_mode,
+                    use_custom_sort_vjp=args.use_custom_sort_vjp,
+                    ep_comm_path=args.ep_comm_path,
                     remat_mode=args.remat_mode,
                     warmup=args.warmup,
                     iters=args.iters,
                     run_alpha=args.run_alpha,
                     run_noise_scale=args.run_noise_scale,
                 )
+                if not trace_dir:
+                    _bench_one_distribution(**bench_kwargs)
+                    continue
+
+                trace_name = (
+                    f"{int(time.time_ns())}_{dist}_topk{tk}_{impl}_"
+                    f"{args.parallel_mode}_{args.ep_comm_path}_{args.bench_pass}_{args.queue_mode}"
+                )
+                trace_path = f"{trace_dir.rstrip('/')}/{trace_name}"
+                print(f"trace_dir={trace_path}")
+                with jax.profiler.trace(trace_path, create_perfetto_trace=True):
+                    _bench_one_distribution(**bench_kwargs)
 
 
 if __name__ == "__main__":
