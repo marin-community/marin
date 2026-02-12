@@ -1083,7 +1083,6 @@ class ControllerServiceImpl:
                 resp = worker_client.profile_task(request, timeout_ms=timeout_ms)
                 return cluster_pb2.ProfileTaskResponse(
                     profile_data=resp.profile_data,
-                    format=resp.format,
                     error=resp.error,
                 )
             finally:
