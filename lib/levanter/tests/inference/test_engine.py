@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import dataclasses
+
 import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp
+import pytest
 from haliax import Axis
 
-from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, _DecodePerfSamples
 from levanter.inference.page_table import PageTableSpec
 from levanter.layers.kv_cache import KvPageCache
 
@@ -42,7 +45,7 @@ class DummyModel(eqx.Module):
         return logits, kv_cache
 
 
-def _build_service(vocab_size=10):
+def _build_service(vocab_size=10, reset_mode="physical"):
     model = DummyModel(vocab_size=vocab_size, eos_id=3)
     service = InferenceEngine.from_model_with_config(
         model=model,  # type: ignore
@@ -55,6 +58,58 @@ def _build_service(vocab_size=10):
             compute_dtype=jnp.float32,
             max_queued_tokens=64,
             max_seqs_in_prefill=4,
+            reset_mode=reset_mode,
         ),
     )
     return service
+
+
+def test_engine_reset_logical_clears_metadata():
+    service = _build_service(reset_mode="logical")
+    ds = service.gen_state.decode_state
+    ds, slot = ds.reserve_slot(0)
+    slot_id = int(slot)
+    slot_ids = hax.named(jnp.array([slot_id], dtype=jnp.int32), axis=("position",))
+    pos_ids = hax.named(jnp.array([0], dtype=jnp.int32), axis=("position",))
+    ds, _ = ds.allocate_for_seq(slot_ids, pos_ids)
+    service.gen_state = dataclasses.replace(service.gen_state, decode_state=ds)
+
+    assert int(ds.sequences.used_mask.array.sum()) == 1
+    assert int(ds.page_table.page_ref_counts.array.sum()) == 1
+
+    service.reset()
+    ds_after = service.gen_state.decode_state
+    assert int(ds_after.sequences.used_mask.array.sum()) == 0
+    assert int(ds_after.page_table.page_ref_counts.array.sum()) == 0
+
+
+def test_decode_perf_samples_summary_aggregates_timings():
+    samples = _DecodePerfSamples()
+    samples.record(iter_total_s=1.0, submit_s=0.1, extract_s=0.2, host_s=0.9, device_s=0.1, new_tokens=10)
+    samples.record(iter_total_s=2.0, submit_s=0.2, extract_s=0.4, host_s=1.9, device_s=0.1, new_tokens=20)
+    samples.record(iter_total_s=3.0, submit_s=0.3, extract_s=0.6, host_s=2.9, device_s=0.1, new_tokens=30)
+
+    summary = samples.to_summary(prefill_extract_s=4.0, assembly_s=0.5, total_generated=80, round_time_s=10.0)
+
+    assert summary["decode_iters"] == 3
+    assert summary["decode_new_tokens"] == 60
+    assert summary["decode_total_s"] == pytest.approx(6.0)
+    assert summary["decode_avg_tok_s"] == pytest.approx(10.0)
+    assert summary["round_avg_tok_s"] == pytest.approx(8.0)
+    assert summary["iter_total_s_p50"] == pytest.approx(2.0)
+    assert summary["iter_total_s_p90"] == pytest.approx(2.8)
+    assert summary["iter_total_s_max"] == pytest.approx(3.0)
+    assert summary["extract_s_p50"] == pytest.approx(0.4)
+    assert summary["host_s_max"] == pytest.approx(2.9)
+
+
+def test_decode_perf_samples_summary_handles_empty():
+    summary = _DecodePerfSamples().to_summary(
+        prefill_extract_s=0.0, assembly_s=0.0, total_generated=0, round_time_s=0.0
+    )
+    assert summary["decode_iters"] == 0
+    assert summary["decode_new_tokens"] == 0
+    assert summary["decode_total_s"] == pytest.approx(0.0)
+    assert summary["decode_avg_tok_s"] == pytest.approx(0.0)
+    assert summary["iter_total_s_p50"] == pytest.approx(0.0)
+    assert summary["submit_s_p90"] == pytest.approx(0.0)

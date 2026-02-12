@@ -76,7 +76,6 @@ class SequenceTable(eqx.Module):
 
     seq_lens: ht.i32[NamedArray, "seq"]
     clone_sources: ht.i32[NamedArray, "seq"]
-    kv_pages: ht.i32[NamedArray, "seq page"]
     page_indices: ht.i32[NamedArray, "seq page"]
     used_mask: ht.bool_[NamedArray, "seq"]
     page_size: int = eqx.field(static=True)
@@ -87,7 +86,6 @@ class SequenceTable(eqx.Module):
         return SequenceTable(
             seq_lens=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
             clone_sources=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
-            kv_pages=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
             page_indices=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
             used_mask=hax.full({"seq": max_seqs}, False, dtype=bool),
             page_size=page_size,
@@ -140,7 +138,6 @@ class SequenceTable(eqx.Module):
         def do_assign(table):
             seq_lens = table.seq_lens.at["seq", slot].set(0)
             clone_sources = table.clone_sources.at["seq", slot].set(INVALID)
-            kv_pages = table.kv_pages.at["seq", slot].set(hax.full_like(table.kv_pages["seq", slot], INVALID))
             page_indices = table.page_indices.at["seq", slot].set(
                 hax.full_like(table.page_indices["seq", slot], INVALID)
             )
@@ -149,7 +146,6 @@ class SequenceTable(eqx.Module):
                 table,
                 seq_lens=seq_lens,
                 clone_sources=clone_sources,
-                kv_pages=kv_pages,
                 page_indices=page_indices,
                 used_mask=used_mask,
             )
@@ -162,13 +158,11 @@ class SequenceTable(eqx.Module):
         slot_id: int,
         *,
         seq_len: jnp.ndarray,
-        kv_pages: ht.i32[NamedArray, "page"],  # type: ignore[name-defined]
         page_indices: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         clone_source: jnp.ndarray | int = INVALID,
     ) -> "SequenceTable":
         seq_lens = self.seq_lens.at["seq", slot_id].set(seq_len)
         clone_sources = self.clone_sources.at["seq", slot_id].set(clone_source)
-        kv_pages_arr = self.kv_pages.at["seq", slot_id].set(kv_pages)
         indices_row = (
             page_indices if page_indices is not None else hax.full_like(self.page_indices["seq", slot_id], INVALID)
         )
@@ -178,7 +172,6 @@ class SequenceTable(eqx.Module):
             self,
             seq_lens=seq_lens,
             clone_sources=clone_sources,
-            kv_pages=kv_pages_arr,
             page_indices=page_indices_arr,
             used_mask=used_mask,
         )
@@ -190,13 +183,11 @@ class SequenceTable(eqx.Module):
     def clear_slots(self, mask: ht.bool_[NamedArray, "seq"]) -> "SequenceTable":  # type: ignore[name-defined]
         new_seq_lens = hax.where(mask, INVALID, self.seq_lens)
         new_clone_sources = hax.where(mask, INVALID, self.clone_sources)
-        new_kv_pages = hax.where(mask, INVALID, self.kv_pages)
         new_page_indices = hax.where(mask, INVALID, self.page_indices)
         new_used_mask = hax.where(mask, False, self.used_mask)
         return SequenceTable(
             new_seq_lens,
             new_clone_sources,
-            new_kv_pages,
             new_page_indices,
             new_used_mask,
             self.page_size,
@@ -353,8 +344,7 @@ class SequenceTable(eqx.Module):
             token_pos_ids,
         )
 
-        kv_pages = self.kv_pages.at["seq", safe_updated].set(page_indices["seq", safe_updated])
-        new_sequences = dataclasses.replace(self, seq_lens=new_lens, page_indices=page_indices, kv_pages=kv_pages)
+        new_sequences = dataclasses.replace(self, seq_lens=new_lens, page_indices=page_indices)
         new_page_table = dataclasses.replace(page_table, page_ref_counts=page_ref_counts)
 
         return new_sequences, new_page_table, batch_info
@@ -417,7 +407,6 @@ class SequenceTable(eqx.Module):
 
         new_seq_lens = self.seq_lens.at["seq", seq_id].set(0)
         new_clone_sources = self.clone_sources.at["seq", seq_id].set(INVALID)
-        new_kv_pages = self.kv_pages.at["seq", seq_id].set(hax.full_like(self.kv_pages["seq", seq_id], INVALID))
         new_page_indices = self.page_indices.at["seq", seq_id].set(
             hax.full_like(self.page_indices["seq", seq_id], INVALID)
         )
@@ -426,7 +415,6 @@ class SequenceTable(eqx.Module):
         new_sequences = SequenceTable(
             new_seq_lens,
             new_clone_sources,
-            new_kv_pages,
             new_page_indices,
             new_used_mask,
             self.page_size,
@@ -522,13 +510,11 @@ class SequenceTable(eqx.Module):
         seq_lens = self.seq_lens.at["seq", dst_seq_id].set(src_len)
         used_mask = self.used_mask.at["seq", dst_seq_id].set(True)
 
-        kv_pages = self.kv_pages.at["seq", dst_seq_id].set(page_indices["seq", dst_seq_id])
         sequences = dataclasses.replace(
             self,
             seq_lens=seq_lens,
             page_indices=page_indices,
             used_mask=used_mask,
-            kv_pages=kv_pages,
         )
         page_table = dataclasses.replace(page_table, page_ref_counts=ref_counts)
         return sequences, page_table
@@ -539,6 +525,15 @@ class SequenceTable(eqx.Module):
         next_page = ((cur + size - 1) // size) * size
         new_seq_lens = self.seq_lens.at["seq", seq_id].set(next_page)
         return dataclasses.replace(self, seq_lens=new_seq_lens)
+
+
+class DecodeStats(eqx.Module):
+    """Lightweight stats for KV cache state."""
+
+    active_seqs: jnp.ndarray
+    pages_in_use: jnp.ndarray
+    free_pages: jnp.ndarray
+    max_refcount: jnp.ndarray
 
 
 class DecodeState(eqx.Module):
@@ -635,6 +630,18 @@ class DecodeState(eqx.Module):
             finished=hax.zeros({"seq": max_seqs}, dtype=bool),
         )
 
+    def stats(self) -> DecodeStats:
+        """Return a small PyTree of scalar stats for logging/diagnostics."""
+        used_mask = self.sequences.used_mask.array
+        ref_counts = self.page_table.page_ref_counts.array
+        pages_in_use = jnp.sum(ref_counts > 0)
+        return DecodeStats(
+            active_seqs=jnp.sum(used_mask),
+            pages_in_use=pages_in_use,
+            free_pages=jnp.asarray(self.page_table.num_pages) - pages_in_use,
+            max_refcount=jnp.max(ref_counts),
+        )
+
     @property
     def seq_lens(self) -> ht.i32[NamedArray, "seq"]:  # type: ignore[name-defined]
         """Current logical length for each active sequence."""
@@ -645,18 +652,13 @@ class DecodeState(eqx.Module):
         """Mapping from clone targets to their parent sequences."""
         return self.sequences.clone_sources
 
-    @property
-    def kv_pages(self) -> ht.i32[NamedArray, "seq page"]:  # type: ignore[name-defined]
-        """KV page assignments per sequence."""
-        return self.sequences.kv_pages
-
     @eqx.filter_jit(donate="all")
     def invalidate_finished(self) -> "DecodeState":
         """Invalidate metadata for sequences marked finished by ``finished_mask``.
 
         - Sets ``seq_lens`` to INVALID for finished slots
         - Resets ``clone_sources`` to INVALID
-        - Clears ``kv_pages`` rows for finished slots to INVALID
+        - Clears ``page_indices`` rows for finished slots to INVALID
         """
         mask = self.finished
         finished = hax.zeros_like(self.finished)
@@ -696,6 +698,38 @@ class DecodeState(eqx.Module):
     def free_pages_for_finished(self, finished_mask: jnp.ndarray) -> "DecodeState":
         sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask)
         return dataclasses.replace(self, sequences=sequences, page_table=page_table)
+
+    @eqx.filter_jit(donate="all")
+    def free_finished(self) -> "DecodeState":
+        """Free pages for finished sequences and clear finished flags.
+
+        This is intended for end-of-generation cleanup where we want to validate refcount
+        invariants without touching the decode queue.
+        """
+        finished_mask = self.finished
+        sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask.array)
+        cleared_finished = hax.where(finished_mask, False, self.finished)
+        return dataclasses.replace(
+            self,
+            sequences=sequences,
+            page_table=page_table,
+            finished=cleared_finished,
+        )
+
+    @eqx.filter_jit(donate="all")
+    def cleanup_finished(self) -> "DecodeState":
+        """Free pages for finished sequences and purge their queued tokens."""
+        finished_mask = self.finished
+        tqueue = self.tqueue.purge_finished(finished_mask)
+        sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask.array)
+        cleared_finished = hax.where(finished_mask, False, self.finished)
+        return dataclasses.replace(
+            self,
+            sequences=sequences,
+            page_table=page_table,
+            tqueue=tqueue,
+            finished=cleared_finished,
+        )
 
     def bump_seq_len_to_next_page(self, seq_id: int) -> "DecodeState":
         sequences = self.sequences.bump_seq_len_to_next_page(seq_id)
@@ -759,9 +793,7 @@ class DecodeState(eqx.Module):
         return dataclasses.replace(self, sequences=new_sequences)
 
     def clone_pages_from(self, src, dest) -> "DecodeState":
-        """
-        Clone kv_pages from src slot to dest slot.
-        """
+        """Clone page assignments and refcounts from src slot to dest slot."""
         sequences, page_table = self.sequences.clone_pages_from(self.page_table, src, dest)
         return dataclasses.replace(self, sequences=sequences, page_table=page_table)
 
@@ -803,7 +835,6 @@ class DecodeState(eqx.Module):
         local_slot_id: int,
         tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
         seq_len: jnp.ndarray | int = 0,
-        kv_pages: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         page_indices: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         seq_params: SeqDecodingParams | None = None,
     ) -> "DecodeState":
@@ -812,13 +843,9 @@ class DecodeState(eqx.Module):
         new_tokens = self.tokens.at["seq", local_slot_id, "position", 0 : tokens.axis_size("position")].set(tokens)
 
         sequences = self.sequences
-        if kv_pages is None:
-            kv_pages = hax.full_like(sequences.kv_pages["seq", local_slot_id], INVALID)
-
         new_sequences = sequences.assign_slot(
             local_slot_id,
             seq_len=seq_len,
-            kv_pages=kv_pages,
             page_indices=page_indices,
         )
 
@@ -963,7 +990,7 @@ num_tokens: {num_tokens}
 finished: {finished}
 tokens: {tokens}
 stop_tokens: {stop_tokens}
-kv_pages: {kv_pages}
+page_indices: {page_indices}
 logprobs: {logprobs}
 max_num_tokens: {max_num_tokens}
 """,
@@ -971,7 +998,7 @@ max_num_tokens: {max_num_tokens}
             finished=self.finished,
             tokens=self.tokens,
             stop_tokens=self.stop_tokens,
-            kv_pages=self.sequences.kv_pages,
+            page_indices=self.sequences.page_indices,
             logprobs=self.logprobs if self.logprobs is not None else "None",
             max_num_tokens=self.max_num_tokens,
         )
@@ -1130,6 +1157,32 @@ class TokenQueue(eqx.Module):
             queued_pos_ids=new_pos_ids,
             num_queued_tokens=new_queued,
         )
+
+    def purge_mask(self, mask: ht.bool_[NamedArray, "position"]) -> "TokenQueue":  # type: ignore[name-defined]
+        """
+        Remove all tokens from the queue where ``mask`` is True.
+        Slides remaining tokens to the front of the queue.
+        """
+        new_slot_ids = purge(self.queued_slot_ids, mask)
+        new_tokens = purge(self.queued_tokens, mask)
+        new_pos_ids = purge(self.queued_pos_ids, mask)
+        new_queued = hax.sum(new_slot_ids != INVALID).scalar()
+
+        return dataclasses.replace(
+            self,
+            queued_tokens=new_tokens,
+            queued_slot_ids=new_slot_ids,
+            queued_pos_ids=new_pos_ids,
+            num_queued_tokens=new_queued,
+        )
+
+    def purge_finished(self, finished_mask: ht.bool_[NamedArray, "seq"]) -> "TokenQueue":  # type: ignore[name-defined]
+        """Remove all queued tokens that belong to finished sequences."""
+        valid = is_valid(self.queued_slot_ids)
+        safe_ids = hax.where(valid, self.queued_slot_ids, 0)
+        finished_for_pos = finished_mask["seq", safe_ids]
+        purge_mask = hax.where(valid, finished_for_pos, hax.zeros_like(valid))
+        return self.purge_mask(purge_mask)
 
     def cleared(self) -> "TokenQueue":
         """

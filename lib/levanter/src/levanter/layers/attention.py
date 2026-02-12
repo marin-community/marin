@@ -1575,6 +1575,12 @@ class AttentionConfig:
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
     """Configuration for QK normalization. If None, no normalization is applied."""
+    use_tpu_ragged_paged_attention: bool = True
+    """Whether to use the TPU ragged paged attention kernel when available. Set to False to use the reference implementation."""
+    ragged_paged_q_block_size: int = 16
+    """Query block size for reference ragged paged attention."""
+    ragged_paged_kv_block_pages: int = 16
+    """Number of KV pages per block for reference ragged paged attention."""
 
     def __post_init__(self):
         assert (
@@ -1774,6 +1780,9 @@ class Attention(eqx.Module):
             batch_info.num_seqs,
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
+            use_tpu_ragged_paged_attention=self.config.use_tpu_ragged_paged_attention,
+            q_block_size=self.config.ragged_paged_q_block_size,
+            kv_block_pages=self.config.ragged_paged_kv_block_pages,
         )
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
@@ -1825,14 +1834,23 @@ def ragged_paged_attention(
     num_seqs: jnp.ndarray,
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
+    use_tpu_ragged_paged_attention: bool = True,
+    q_block_size: int = 16,
+    kv_block_pages: int = 16,
 ) -> NamedArray:
     """Ragged attention for paged KV caches.
 
     This function dispatches to the TPU implementation when available and
     supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
+
+    Args:
+        use_tpu_ragged_paged_attention: If True (default), use the TPU kernel when available.
+            Set to False to force the reference implementation.
     """
 
     def _tpu_rpa_available() -> bool:
+        if not use_tpu_ragged_paged_attention:
+            return False
         if tpu_ragged_paged_attention is None:
             return False
         if jax.default_backend() != "tpu":
@@ -1853,6 +1871,8 @@ def ragged_paged_attention(
                 num_seqs,
                 sm_scale=sm_scale,
                 soft_cap=soft_cap,
+                q_block_size=q_block_size,
+                kv_block_pages=kv_block_pages,
             )
             return out
         except Exception:  # pragma: no cover - fall back if kernel fails
@@ -1871,6 +1891,8 @@ def ragged_paged_attention(
         num_seqs,
         sm_scale=sm_scale,
         soft_cap=soft_cap,
+        q_block_size=q_block_size,
+        kv_block_pages=kv_block_pages,
     )
 
 
@@ -1883,6 +1905,8 @@ def _do_tpu_ragged_paged_attention(
     num_seqs: jnp.ndarray,  # scalar int32
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
+    q_block_size: int = 16,
+    kv_block_pages: int = 16,
 ) -> NamedArray:
     # Usual shardmap dance
     # Ensure last dimension (head_size) is a multiple of 128 for Pallas kernels
@@ -1916,9 +1940,17 @@ def _do_tpu_ragged_paged_attention(
     this_num_seqs = jnp.where(this_num_seqs < 0, 0, this_num_seqs)
     page_indices = hax.where(~is_valid(page_indices), 0, page_indices)
     kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
+    pages_per_seq = page_indices.axis_size("page")
+    kv_pages_per_block = min(kv_block_pages, pages_per_seq)
 
     o = shard_map(
-        Partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
+        Partial(
+            tpu_ragged_paged_attention,
+            sm_scale=sm_scale,
+            soft_cap=soft_cap,
+            num_queries_per_block=q_block_size,
+            num_kv_pages_per_block=kv_pages_per_block,
+        ),
         mesh=jax.sharding.get_abstract_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),
@@ -1974,6 +2006,8 @@ def default_ragged_paged_attention(
     num_seqs: jnp.ndarray,  # scalar int32
     sm_scale: float,
     soft_cap: float | None = None,
+    q_block_size: int = 16,
+    kv_block_pages: int = 16,
 ) -> NamedArray:
     """Default implementation of ragged paged attention.
     This implementation is not optimized for performance and is intended for testing purposes.
@@ -1981,8 +2015,13 @@ def default_ragged_paged_attention(
     It does each sequence independently
     """
 
-    Q_BS = min(1, q.axis_size("position"))  # block size for query
-    KV_BS = min(2, page_indices.axis_size("page"))  # block size for key-value
+    if q_block_size <= 0:
+        raise ValueError(f"q_block_size must be positive, got {q_block_size}")
+    if kv_block_pages <= 0:
+        raise ValueError(f"kv_block_pages must be positive, got {kv_block_pages}")
+
+    Q_BS = min(int(q_block_size), q.axis_size("position"))  # block size for query
+    KV_BS = min(int(kv_block_pages), page_indices.axis_size("page"))  # block size for key-value
     Q_B = hax.Axis("position", Q_BS)
 
     H = q.resolve_axis("kv_head")

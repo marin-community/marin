@@ -1,5 +1,4 @@
-hf_checkpoint: meta-llama/Llama-3.2-1B
-tokenizer: meta-llama/Llama-3.2-1B
+hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3.2-1B--main
 trainer:
   ray:
     auto_start_cluster: false
@@ -18,3 +17,6 @@ engine:
   max_prefill_size: 128
   max_tokens_per_round: 8
   max_rounds: 16
+  debug_stats_every_n: 10
+  reset_mode: physical
+  cleanup_mode: end

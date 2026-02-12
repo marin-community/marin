@@ -18,6 +18,17 @@ from levanter.infra.docker import make_docker_run_command
 logger = logging.getLogger(__name__)
 
 
+def ensure_gcloud_alpha_available() -> None:
+    """Ensure `gcloud alpha` commands can be invoked in this environment."""
+    try:
+        subprocess.check_call(["gcloud", "alpha", "--help"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        # Some system-managed gcloud installations disable component installation.
+        # Try install only when alpha is actually unavailable.
+        run_command("gcloud", "components", "install", "alpha", "--quiet")
+
+
 def setup_vm_docker(tpu_name, zone, node_count):
     """Change docker permissions on `tpu_name`, remove any old runs, and setup the cache volume."""
     tpu_ssh(
@@ -69,8 +80,7 @@ def describe_tpu_queued_resource(tpu_name, zone):
 
 
 def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version, zone, node_count):
-    # ensure alpha is enabled
-    run_command("gcloud", "components", "install", "alpha", "--quiet")
+    ensure_gcloud_alpha_available()
     if version is None:
         version = "tpu-ubuntu2204-base"
     tpu_stat = describe_tpu_queued_resource(tpu_name, zone)
@@ -110,14 +120,10 @@ def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version,
 
     if version is not None:
         command.append(f"--runtime-version={version}")
-    if capacity_type in ["best-effort", "preemptible"]:
+    if capacity_type in ["best-effort", "preemptible", "spot"]:
         command.append("--best-effort")
-        command.extend(["--provisioning-model", "spot"])
     elif capacity_type == "reserved":
         command.append("--reserved")
-    elif capacity_type == "spot":
-        command.append("--spot")
-        command.append(["--provisioning-model", "spot"])
     elif capacity_type == "on-demand" or capacity_type is None:
         pass
     else:

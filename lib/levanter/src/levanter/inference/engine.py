@@ -8,7 +8,7 @@ import os
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence
 
 import equinox as eqx
 import fsspec
@@ -36,6 +36,9 @@ from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_
 
 logger = logging.getLogger(__name__)
 
+ResetMode = Literal["logical", "physical"]
+CleanupMode = Literal["none", "end", "incremental"]
+
 
 @dataclass(frozen=True)
 class InferenceEngineConfig:
@@ -57,6 +60,18 @@ class InferenceEngineConfig:
 
     max_rounds: int = 32
     """Maximum number of while-loop iterations per decode call. Higher values increase throughput but also latency."""
+
+    debug_stats_every_n: int | None = 10
+    """Log decode stats every N iterations. Set to None or 0 to disable."""
+
+    log_decode_perf_summary: bool = True
+    """Emit one aggregate decode performance summary per generate() call."""
+
+    reset_mode: ResetMode = "physical"
+    """Reset behavior for the KV cache: "logical" resets metadata only; "physical" also zeros KV pages."""
+
+    cleanup_mode: CleanupMode = "end"
+    """When to free finished sequences: "none" skips cleanup, "end" frees after generate, "incremental" frees during decode."""
 
     # Stop-token capacity (used for validation and buffer sizing at init)
     max_stop_seqs: int = 4
@@ -96,6 +111,11 @@ class InferenceEngineConfig:
     max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
+    # Device override for multi-host inference
+    devices: Optional[Sequence] = None
+    """Devices to use for inference. If None, uses jax.devices(). For multi-host inference,
+    pass jax.local_devices() to run inference on a single host's devices only."""
+
     def __post_init__(self):
         # this one is only required because of clones. If we really care, we could relax this
         if self.max_queued_tokens < self.max_seqs:
@@ -106,6 +126,11 @@ class InferenceEngineConfig:
 
         if self.max_queued_tokens < self.max_seqs_in_prefill:
             raise ValueError("max_queued_tokens must be >= max_seqs_in_prefill")
+
+        if self.reset_mode not in ("logical", "physical"):
+            raise ValueError(f"reset_mode must be 'logical' or 'physical', got {self.reset_mode!r}")
+        if self.cleanup_mode not in ("none", "end", "incremental"):
+            raise ValueError(f"cleanup_mode must be 'none', 'end', or 'incremental', got {self.cleanup_mode!r}")
 
     @property
     def imputed_max_tokens_per_round(self) -> int:
@@ -123,13 +148,19 @@ def _tree_byte_size(tree) -> int:
     return sharded_tree_size(tree)
 
 
-def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
-    """Estimate the per-device HBM budget available to the KV cache."""
+def _available_hbm_budget_bytes(hbm_utilization: float, devices: Sequence | None = None) -> int:
+    """Estimate the per-device HBM budget available to the KV cache.
+
+    Args:
+        hbm_utilization: Fraction of HBM to use (0, 1].
+        devices: Devices to consider. If None, uses jax.devices().
+    """
 
     if not (0.0 < hbm_utilization <= 1.0):
         raise ValueError("hbm_utilization must be in the interval (0, 1].")
 
-    devices = jax.devices()
+    if devices is None:
+        devices = jax.devices()
     if not devices:
         raise RuntimeError("No JAX devices available for inference.")
 
@@ -154,7 +185,7 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
     max_pages_per_seq = config.max_pages_per_seq
 
     try:
-        budget = _available_hbm_budget_bytes(config.hbm_utilization)
+        budget = _available_hbm_budget_bytes(config.hbm_utilization, devices=config.devices)
     except Exception as exc:  # pragma: no cover - depends on runtime environment
         logger.warning(
             "Falling back to max_seqs * max_pages_per_seq for KV cache sizing because HBM budget "
@@ -261,6 +292,88 @@ class DecodeResult:
     logprobs: list[float] = field(default_factory=list)
 
 
+@dataclasses.dataclass
+class _DecodePerfSamples:
+    """Accumulate decode timings and compute one aggregate summary."""
+
+    iter_total_s: list[float] = field(default_factory=list)
+    submit_s: list[float] = field(default_factory=list)
+    extract_s: list[float] = field(default_factory=list)
+    host_s: list[float] = field(default_factory=list)
+    device_s: list[float] = field(default_factory=list)
+    new_tokens: list[int] = field(default_factory=list)
+
+    def record(
+        self,
+        *,
+        iter_total_s: float,
+        submit_s: float,
+        extract_s: float,
+        host_s: float,
+        device_s: float,
+        new_tokens: int,
+    ) -> None:
+        self.iter_total_s.append(float(iter_total_s))
+        self.submit_s.append(float(submit_s))
+        self.extract_s.append(float(extract_s))
+        self.host_s.append(float(host_s))
+        self.device_s.append(float(device_s))
+        self.new_tokens.append(int(new_tokens))
+
+    @staticmethod
+    def _summary_stats(values: list[float]) -> tuple[float, float, float]:
+        if not values:
+            return 0.0, 0.0, 0.0
+        array = np.asarray(values, dtype=np.float64)
+        return float(np.percentile(array, 50)), float(np.percentile(array, 90)), float(np.max(array))
+
+    def to_summary(
+        self,
+        *,
+        prefill_extract_s: float,
+        assembly_s: float,
+        total_generated: int,
+        round_time_s: float,
+    ) -> dict[str, int | float]:
+        decode_total_s = float(np.sum(np.asarray(self.iter_total_s, dtype=np.float64))) if self.iter_total_s else 0.0
+        decode_new_tokens = int(np.sum(np.asarray(self.new_tokens, dtype=np.int64))) if self.new_tokens else 0
+        avg_decode_toks_per_s = (decode_new_tokens / decode_total_s) if decode_total_s > 0 else 0.0
+        avg_round_toks_per_s = (total_generated / round_time_s) if round_time_s > 0 else 0.0
+
+        iter_p50, iter_p90, iter_max = self._summary_stats(self.iter_total_s)
+        submit_p50, submit_p90, submit_max = self._summary_stats(self.submit_s)
+        extract_p50, extract_p90, extract_max = self._summary_stats(self.extract_s)
+        host_p50, host_p90, host_max = self._summary_stats(self.host_s)
+        device_p50, device_p90, device_max = self._summary_stats(self.device_s)
+
+        return {
+            "decode_iters": len(self.iter_total_s),
+            "decode_new_tokens": decode_new_tokens,
+            "decode_total_s": decode_total_s,
+            "decode_avg_tok_s": avg_decode_toks_per_s,
+            "round_total_generated": int(total_generated),
+            "round_total_s": float(round_time_s),
+            "round_avg_tok_s": avg_round_toks_per_s,
+            "prefill_extract_s": float(prefill_extract_s),
+            "assembly_s": float(assembly_s),
+            "iter_total_s_p50": iter_p50,
+            "iter_total_s_p90": iter_p90,
+            "iter_total_s_max": iter_max,
+            "submit_s_p50": submit_p50,
+            "submit_s_p90": submit_p90,
+            "submit_s_max": submit_max,
+            "extract_s_p50": extract_p50,
+            "extract_s_p90": extract_p90,
+            "extract_s_max": extract_max,
+            "host_s_p50": host_p50,
+            "host_s_p90": host_p90,
+            "host_s_max": host_max,
+            "device_s_p50": device_p50,
+            "device_s_p90": device_p90,
+            "device_s_max": device_max,
+        }
+
+
 class GenState(eqx.Module):
     """Container for generation state used during decoding.
 
@@ -272,11 +385,24 @@ class GenState(eqx.Module):
     cache: PageCache
     decode_state: DecodeState
 
-    def reset(self):
+    def reset(self) -> "GenState":
+        return self.reset_physical()
+
+    def reset_logical(self) -> "GenState":
         return GenState(
-            cache=self.cache.reset(),
+            cache=self.cache,
             decode_state=self.decode_state.reset(),
         )
+
+    def reset_physical(self) -> "GenState":
+        return GenState(
+            cache=self.cache.zero(),
+            decode_state=self.decode_state.reset(),
+        )
+
+    def free_finished(self) -> "GenState":
+        """Free pages for finished sequences and clear finished flags."""
+        return dataclasses.replace(self, decode_state=self.decode_state.free_finished())
 
     def clone_sequence(
         self, parent_local_id: int, child_local_id: int | None = None, seq_params: SeqDecodingParams | None = None
@@ -308,6 +434,16 @@ class GenState(eqx.Module):
         return new_state, child_local_id  # type: ignore
 
 
+@functools.partial(eqx.filter_jit, donate="all")
+def _reset_gen_state_logical(gen_state: GenState) -> GenState:
+    return gen_state.reset_logical()
+
+
+@functools.partial(eqx.filter_jit, donate="all")
+def _reset_gen_state_physical(gen_state: GenState) -> GenState:
+    return gen_state.reset_physical()
+
+
 @functools.partial(jax.jit, donate_argnums=0)
 def _clone_sequence(
     state,
@@ -328,14 +464,12 @@ def _clone_sequence(
             child_local_id, assigned_id != child_local_id, "Requested clone slot already in use."
         )
 
-    # Assign child sequence state (copies tokens up to prefix and kv_pages row)
-    parent_kv_pages = decode_state.kv_pages["seq", parent_local_id]
+    # Assign child sequence state (copies tokens up to prefix and page_indices row)
     parent_page_indices = decode_state.sequences.page_indices["seq", parent_local_id]
     decode_state = decode_state.assign_seq(
         local_slot_id=child_local_id,
         tokens=decode_state.tokens["seq", parent_local_id],
         seq_len=decode_state.seq_lens["seq", parent_local_id],
-        kv_pages=parent_kv_pages,
         page_indices=parent_page_indices,
         seq_params=seq_params,
     )
@@ -516,7 +650,6 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
                     local_slot_id=slot_val,
                     tokens=work.prompt_tokens["seq", i],
                     seq_len=prompt_len,
-                    kv_pages=None,  # Will be allocated later in allocate_for_seq
                     page_indices=None,  # Will be set during page allocation
                     seq_params=seq_params,
                 )
@@ -530,7 +663,9 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     return jax.lax.fori_loop(0, max_slots, body, gen_state)
 
 
-@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
+@hax.named_jit(
+    donate_args=(True, False, False, False, False),
+)
 def _run_prefill(
     gen_state: GenState,
     model: LmHeadModel,
@@ -653,13 +788,16 @@ def _handle_clones(
 
 
 # @hax.named_jit(donate_args=(True, False, False))
-@functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
+@hax.named_jit(
+    donate_args=(True, False, False, False, False, False),
+)
 def _run_generation_loop(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     max_tokens_per_round: int,
     max_rounds: int,
+    cleanup_each_step: bool,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run autoregressive generation until all sequences finish or `max_rounds` reached."""
 
@@ -716,6 +854,9 @@ def _run_generation_loop(
         new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
         # Append non-stateful outputs for host-side extraction
         outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        if cleanup_each_step:
+            cleaned_state = new_gen_state.decode_state.cleanup_finished()
+            new_gen_state = dataclasses.replace(new_gen_state, decode_state=cleaned_state)
 
         # jax.debug.print(
         #     "[gen] step={step} outputs_size={size} queued_after={queued}",
@@ -836,11 +977,30 @@ class InferenceEngine:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
+        if self.config.reset_mode == "logical":
+            self.gen_state = _reset_gen_state_logical(self.gen_state)
+        else:
+            self.gen_state = _reset_gen_state_physical(self.gen_state)
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
+
+    def _log_decode_stats(self, stage: str) -> None:
+        stats = jax.device_get(self.gen_state.decode_state.stats())
+        if jax.process_index() != 0:
+            return
+        logger.info(
+            "DecodeStats[%s]: active=%d pages_in_use=%d free=%d max_refcount=%d",
+            stage,
+            int(stats.active_seqs),
+            int(stats.pages_in_use),
+            int(stats.free_pages),
+            int(stats.max_refcount),
+        )
+
+    def _free_finished(self) -> None:
+        self.gen_state = eqx.filter_jit(self.gen_state.free_finished, donate="all")()
 
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
@@ -852,7 +1012,11 @@ class InferenceEngine:
         if prefill_work is None:
             return None
         new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
+            self.gen_state,
+            self.model,
+            self.sampler,
+            prefill_work,
+            int(self.config.max_seqs_in_prefill),
         )
 
         # _run_prefill returns (GenState, _DecodeOutputs)
@@ -1033,7 +1197,12 @@ class InferenceEngine:
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
+        if self.config.debug_stats_every_n:
+            logger.info("Generate reset: start")
         self.reset()
+        if self.config.debug_stats_every_n:
+            logger.info("Generate reset: done")
+        self._log_decode_stats("after_reset")
 
         # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]
@@ -1071,9 +1240,11 @@ class InferenceEngine:
                 )
 
         time_in = time.time()
+        perf_samples = _DecodePerfSamples() if self.config.log_decode_perf_summary else None
         # Initial admission from queue and extract prompt tokens
         decode_outputs = self._prefill_batch(requests)
         self._ingest_outputs(decode_outputs)
+        self._log_decode_stats("after_prefill")
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1106,6 +1277,7 @@ class InferenceEngine:
                     self.sampler,
                     1,
                     0,
+                    self.config.cleanup_mode == "incremental",
                 )
             )
             fake_submit_done = time.time()
@@ -1116,8 +1288,9 @@ class InferenceEngine:
                 self.model,
                 self.sampler,
                 # TODO: tune max_tokens_per_round
-                self.config.imputed_max_tokens_per_round,
-                self.config.max_rounds,
+                int(self.config.imputed_max_tokens_per_round),
+                int(self.config.max_rounds),
+                self.config.cleanup_mode == "incremental",
             )
             submit_done = time.time()
             # Time spent with device executing (and the host thread waiting)
@@ -1142,6 +1315,19 @@ class InferenceEngine:
                     f"{tps_total:.2f} tok/s, {new_tokens} new"
                     f" (extract {extract_time:.3f}s"
                 )
+            if perf_samples is not None:
+                perf_samples.record(
+                    iter_total_s=iter_time,
+                    submit_s=submit_time,
+                    extract_s=extract_time,
+                    host_s=host_time,
+                    device_s=device_time,
+                    new_tokens=new_tokens,
+                )
+
+            if self.config.debug_stats_every_n:
+                if decode_iteration % self.config.debug_stats_every_n == 0:
+                    self._log_decode_stats(f"iter{decode_iteration}")
 
             decode_iteration += 1
 
@@ -1154,50 +1340,92 @@ class InferenceEngine:
                 logger.warning("No progress in decoding for 2 consecutive iterations; breaking to avoid hang.")
                 break
 
+        self._log_decode_stats("after_decode")
+        if self.config.cleanup_mode != "none":
+            self._free_finished()
+            self._log_decode_stats("after_cleanup")
+
+        if self.config.debug_stats_every_n:
+            logger.info("Assembling outputs: start")
+        assembly_start = time.time()
         # Assemble outputs in the order of the requests for this call
-        outputs_list: list[list[int]] = []
-        logprobs_list: list[list[float]] = []
-        total_prompt_tokens = 0
-        for r in requests:
-            rid = int(r.request_id)
-            total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
-            # Initialize result buckets for this rid if not present
-            kid_map = self.results.get(rid, {})
-            for k in range(int(r.n_generations)):
-                dr = kid_map.get(k)
-                if dr is None:
-                    # Ensure a placeholder exists to avoid KeyErrors
-                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
-                    dr = kid_map[k]
-                outputs_list.append(dr.token_list)
-                logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
-            self.results[rid] = kid_map
+        try:
+            outputs_list: list[list[int]] = []
+            logprobs_list: list[list[float]] = []
+            total_prompt_tokens = 0
+            for r in requests:
+                rid = int(r.request_id)
+                total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
+                # Initialize result buckets for this rid if not present
+                kid_map = self.results.get(rid, {})
+                for k in range(int(r.n_generations)):
+                    dr = kid_map.get(k)
+                    if dr is None:
+                        # Ensure a placeholder exists to avoid KeyErrors
+                        kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
+                        dr = kid_map[k]
+                    outputs_list.append(dr.token_list)
+                    logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
+                self.results[rid] = kid_map
+            if self.config.debug_stats_every_n:
+                logger.info(
+                    "Assembling outputs: prompts=%d expected=%d total_prompt_tokens=%d",
+                    len(requests),
+                    len(outputs_list),
+                    total_prompt_tokens,
+                )
+        except Exception:
+            logger.exception("Output assembly failed before totals computation")
+            raise
+        assembly_time = time.time() - assembly_start
         total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
         total_time = time.time() - time_in
         tps_overall = (total_generated / total_time) if total_time > 0 else 0.0
         logger.debug(f"Batch generated in {total_time:.2f}s, {total_generated} tokens, {tps_overall:.2f} tok/s")
+        if perf_samples is not None:
+            perf_summary = perf_samples.to_summary(
+                prefill_extract_s=initial_prefill_out - time_in,
+                assembly_s=assembly_time,
+                total_generated=total_generated,
+                round_time_s=total_time,
+            )
+            logger.info("Decode perf summary: %s", perf_summary)
+        if self.config.debug_stats_every_n:
+            logger.info("Assembling outputs: total_generated=%d", total_generated)
         # Clear results for these requests now that we've assembled outputs
         for rid in call_rids:
             if rid in self.results:
                 self.results.pop(rid, None)
+        if self.config.debug_stats_every_n:
+            logger.info("Assembling outputs: done (cleared %d requests)", len(call_rids))
         return GenerationResult(tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated)
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """
         Write out jaxpr and hlo for the generation loop to the given path.
         """
-        traced = _run_generation_loop.trace(
+        traced = jax.make_jaxpr(_run_generation_loop.__wrapped__)(
             self.gen_state,
             self.model,
             self.sampler,
             # TODO: tune max_tokens_per_round
-            self.config.imputed_max_tokens_per_round,
-            self.config.max_rounds,
+            int(self.config.imputed_max_tokens_per_round),
+            int(self.config.max_rounds),
+            self.config.cleanup_mode == "incremental",
         )
         with fsspec.open(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(traced.jaxpr))
         with fsspec.open(os.path.join(path, "gen_loop.hlo.txt.gz"), "w", compression="infer") as f:
-            f.write(traced.lower().as_text())
+            f.write(
+                _run_generation_loop.lower(
+                    self.gen_state,
+                    self.model,
+                    self.sampler,
+                    int(self.config.imputed_max_tokens_per_round),
+                    int(self.config.max_rounds),
+                    self.config.cleanup_mode == "incremental",
+                ).as_text()
+            )
 
         def _create_dummy_work():
             max_slots = self.config.max_seqs_in_prefill
@@ -1224,17 +1452,25 @@ class InferenceEngine:
                 ),
             )
 
-        prefill_traced = _run_prefill.trace(
+        prefill_traced = jax.make_jaxpr(_run_prefill.__wrapped__)(
             self.gen_state,
             self.model,
             self.sampler,
             eqx.filter_eval_shape(_create_dummy_work),
-            self.config.max_seqs_in_prefill,
+            int(self.config.max_seqs_in_prefill),
         )
         with fsspec.open(os.path.join(path, "run_prefill.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(prefill_traced.jaxpr))
         with fsspec.open(os.path.join(path, "run_prefill.hlo.txt.gz"), "w", compression="infer") as f:
-            f.write(prefill_traced.lower().as_text())
+            f.write(
+                _run_prefill.lower(
+                    self.gen_state,
+                    self.model,
+                    self.sampler,
+                    eqx.filter_eval_shape(_create_dummy_work),
+                    int(self.config.max_seqs_in_prefill),
+                ).as_text()
+            )
 
         if log_artifacts:
             levanter.tracker.current_tracker().log_artifact(path, name="generation_kernels")
@@ -1250,29 +1486,63 @@ class InferenceEngine:
         if pending_outputs is None:
             return 0
 
-        # Pull the entire buffer in one host op
-        pending_outputs = jax.device_get(pending_outputs)
-        n = int(pending_outputs.num_tokens)
-        fins = pending_outputs.finished.array
-        toks_arr = pending_outputs.tokens.array
-        sids_arr = pending_outputs.slot_ids.array
+        # Pull only the used token slices instead of the full backing buffers.
+        n = int(jax.device_get(pending_outputs.num_tokens))
+        fins = np.asarray(jax.device_get(pending_outputs.finished.array), dtype=np.bool_)
+        if n > 0:
+            toks_arr = np.asarray(jax.device_get(pending_outputs.tokens.array[:n]), dtype=np.int32)
+            sids_arr = np.asarray(jax.device_get(pending_outputs.slot_ids.array[:n]), dtype=np.int32)
+            logprobs_arr = (
+                None
+                if pending_outputs.logprobs is None
+                else np.asarray(jax.device_get(pending_outputs.logprobs.array[:n]), dtype=np.float32)
+            )
+        else:
+            toks_arr = np.empty((0,), dtype=np.int32)
+            sids_arr = np.empty((0,), dtype=np.int32)
+            logprobs_arr = None
 
         appended = 0
         unmapped = 0
-        for i in range(n):
-            local_slot = int(sids_arr[i])
-            tok = int(toks_arr[i])
-            info = self.local_map.get(local_slot)
-            if info is None:
-                unmapped += 1
+        max_slots = int(self.gen_state.decode_state.max_seqs)
+        slot_results: list[DecodeResult | None] = [None] * max_slots
+        for slot_id, (rid, cid) in self.local_map.items():
+            if slot_id < 0 or slot_id >= max_slots:
                 continue
-            rid, cid = info
-            dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
-            dr.token_list.append(tok)
-            if pending_outputs.logprobs is not None:
-                dr.logprobs.append(float(pending_outputs.logprobs.array[i]))
-            dr.tokens_decoded += 1
-            appended += 1
+            kid_map = self.results.get(rid)
+            if kid_map is None:
+                continue
+            dr = kid_map.get(cid)
+            if dr is None:
+                dr = DecodeResult(id=rid, choice=cid, token_list=[])
+                kid_map[cid] = dr
+            slot_results[slot_id] = dr
+
+        if logprobs_arr is None:
+            for local_slot, tok in zip(sids_arr, toks_arr, strict=False):
+                if local_slot < 0 or local_slot >= max_slots:
+                    unmapped += 1
+                    continue
+                dr = slot_results[local_slot]
+                if dr is None:
+                    unmapped += 1
+                    continue
+                dr.token_list.append(int(tok))
+                dr.tokens_decoded += 1
+                appended += 1
+        else:
+            for local_slot, tok, lp in zip(sids_arr, toks_arr, logprobs_arr, strict=False):
+                if local_slot < 0 or local_slot >= max_slots:
+                    unmapped += 1
+                    continue
+                dr = slot_results[local_slot]
+                if dr is None:
+                    unmapped += 1
+                    continue
+                dr.token_list.append(int(tok))
+                dr.logprobs.append(float(lp))
+                dr.tokens_decoded += 1
+                appended += 1
 
             # # Print accumulated decoded text as it is generated -- For debugging
             # print_every_n = 10
@@ -1288,22 +1558,40 @@ class InferenceEngine:
         for local_slot, is_done in enumerate(fins):
             if not bool(is_done):
                 continue
-            info = self.local_map.get(local_slot)
-            if info is None:
+            if local_slot >= max_slots:
                 continue
-            rid, cid = info
-            dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
+            dr = slot_results[local_slot]
+            if dr is None or dr.done:
+                continue
             dr.done = True
 
             # Print final complete text when sequence is finished
-            try:
-                full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
-                logger.debug(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): '{full_text}'")
-            except Exception as e:
-                logger.error(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>")
+            if logger.isEnabledFor(logging.DEBUG):
+                try:
+                    full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
+                    logger.debug(
+                        "[Request %d, Choice %d] FINAL (%d tokens): '%s'",
+                        dr.id,
+                        dr.choice,
+                        dr.tokens_decoded,
+                        full_text,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[Request %d, Choice %d] FINAL (%d tokens): <decode_error>",
+                        dr.id,
+                        dr.choice,
+                        dr.tokens_decoded,
+                    )
 
-        num_finished = int(fins.sum()) if hasattr(fins, "sum") else 0
-        logger.debug(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
+        num_finished = int(np.sum(fins, dtype=np.int32))
+        logger.debug(
+            "extract: appended=%d (drained=%d) unmapped=%d finished_count=%d",
+            appended,
+            n,
+            unmapped,
+            num_finished,
+        )
 
         return appended
 

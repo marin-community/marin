@@ -242,6 +242,9 @@ of your main script.
 * `save_xla_dumps` is useful for debugging XLA compilation issues. It tends to dump a lot of stuff, so we don't save it by default.
 To use it, you must also set the right environment variables. Something like `XLA_FLAGS="--xla_dump_to=/tmp/output_folder/xla_dumps --xla_dump_hlo_pass_re=.*`.
 We will automatically parse out the env variable.
+* For multi-host, multi-round sampling workflows (for example `sample_lm_multihost.py`), keep
+  `defer_tracker_logs_until_end: true` unless all in-loop tracker emission paths are disabled.
+  In-loop tracker emission with deferred logging disabled is known to destabilize round-boundary execution on TPU.
 
 ### Tensorboard
 

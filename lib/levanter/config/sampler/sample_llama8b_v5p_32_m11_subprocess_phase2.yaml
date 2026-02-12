@@ -1,0 +1,177 @@
+# M11 Subprocess Phase 2: Host-data-parallel inference from HF checkpoint.
+# Loads the step-2 HF checkpoint saved by phase 1 and generates 128 prompts x 2048 tokens.
+hf_checkpoint: gs://marin-us-central1/checkpoints/simpo/m11_subprocess_test/hf/step-1
+tokenizer: marin-community/marin-tokenizer
+stop_sequence: null
+max_new_tokens: 2048
+temperature: 0.0
+n_rounds: 1
+n_generations: 1
+defer_tracker_logs_until_end: true
+skip_samples_table: false
+
+trainer:
+  tracker:
+    type: wandb
+    project: marin
+    tags: ["m11", "simpo", "subprocess", "phase2-inference"]
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  mesh:
+    axes:
+      model: 4
+
+model:
+  type: llama
+  use_tpu_ragged_paged_attention: false
+
+engine:
+  max_seq_len: 2176
+  max_pages: 4224
+  page_size: 64
+  max_seqs: 128
+  max_seqs_in_prefill: 128
+  max_prefill_size: 2176
+  max_queued_tokens: 256
+  max_tokens_per_round: 256
+  max_rounds: 32
+  debug_stats_every_n: 10
+  reset_mode: physical
+  cleanup_mode: none
+  max_stop_seqs: 4
+  max_stop_tokens: 16
+  seed: 0
+
+inference_mode: host_data_parallel
+host_data_parallel_output_dir: gs://marin-us-central1/checkpoints/simpo/m11_subprocess_test/inference_outputs
+
+prompts:
+  - "M11 prompt 0001: explain one practical ML idea in concise terms."
+  - "M11 prompt 0002: explain one practical ML idea in concise terms."
+  - "M11 prompt 0003: explain one practical ML idea in concise terms."
+  - "M11 prompt 0004: explain one practical ML idea in concise terms."
+  - "M11 prompt 0005: explain one practical ML idea in concise terms."
+  - "M11 prompt 0006: explain one practical ML idea in concise terms."
+  - "M11 prompt 0007: explain one practical ML idea in concise terms."
+  - "M11 prompt 0008: explain one practical ML idea in concise terms."
+  - "M11 prompt 0009: explain one practical ML idea in concise terms."
+  - "M11 prompt 0010: explain one practical ML idea in concise terms."
+  - "M11 prompt 0011: explain one practical ML idea in concise terms."
+  - "M11 prompt 0012: explain one practical ML idea in concise terms."
+  - "M11 prompt 0013: explain one practical ML idea in concise terms."
+  - "M11 prompt 0014: explain one practical ML idea in concise terms."
+  - "M11 prompt 0015: explain one practical ML idea in concise terms."
+  - "M11 prompt 0016: explain one practical ML idea in concise terms."
+  - "M11 prompt 0017: explain one practical ML idea in concise terms."
+  - "M11 prompt 0018: explain one practical ML idea in concise terms."
+  - "M11 prompt 0019: explain one practical ML idea in concise terms."
+  - "M11 prompt 0020: explain one practical ML idea in concise terms."
+  - "M11 prompt 0021: explain one practical ML idea in concise terms."
+  - "M11 prompt 0022: explain one practical ML idea in concise terms."
+  - "M11 prompt 0023: explain one practical ML idea in concise terms."
+  - "M11 prompt 0024: explain one practical ML idea in concise terms."
+  - "M11 prompt 0025: explain one practical ML idea in concise terms."
+  - "M11 prompt 0026: explain one practical ML idea in concise terms."
+  - "M11 prompt 0027: explain one practical ML idea in concise terms."
+  - "M11 prompt 0028: explain one practical ML idea in concise terms."
+  - "M11 prompt 0029: explain one practical ML idea in concise terms."
+  - "M11 prompt 0030: explain one practical ML idea in concise terms."
+  - "M11 prompt 0031: explain one practical ML idea in concise terms."
+  - "M11 prompt 0032: explain one practical ML idea in concise terms."
+  - "M11 prompt 0033: explain one practical ML idea in concise terms."
+  - "M11 prompt 0034: explain one practical ML idea in concise terms."
+  - "M11 prompt 0035: explain one practical ML idea in concise terms."
+  - "M11 prompt 0036: explain one practical ML idea in concise terms."
+  - "M11 prompt 0037: explain one practical ML idea in concise terms."
+  - "M11 prompt 0038: explain one practical ML idea in concise terms."
+  - "M11 prompt 0039: explain one practical ML idea in concise terms."
+  - "M11 prompt 0040: explain one practical ML idea in concise terms."
+  - "M11 prompt 0041: explain one practical ML idea in concise terms."
+  - "M11 prompt 0042: explain one practical ML idea in concise terms."
+  - "M11 prompt 0043: explain one practical ML idea in concise terms."
+  - "M11 prompt 0044: explain one practical ML idea in concise terms."
+  - "M11 prompt 0045: explain one practical ML idea in concise terms."
+  - "M11 prompt 0046: explain one practical ML idea in concise terms."
+  - "M11 prompt 0047: explain one practical ML idea in concise terms."
+  - "M11 prompt 0048: explain one practical ML idea in concise terms."
+  - "M11 prompt 0049: explain one practical ML idea in concise terms."
+  - "M11 prompt 0050: explain one practical ML idea in concise terms."
+  - "M11 prompt 0051: explain one practical ML idea in concise terms."
+  - "M11 prompt 0052: explain one practical ML idea in concise terms."
+  - "M11 prompt 0053: explain one practical ML idea in concise terms."
+  - "M11 prompt 0054: explain one practical ML idea in concise terms."
+  - "M11 prompt 0055: explain one practical ML idea in concise terms."
+  - "M11 prompt 0056: explain one practical ML idea in concise terms."
+  - "M11 prompt 0057: explain one practical ML idea in concise terms."
+  - "M11 prompt 0058: explain one practical ML idea in concise terms."
+  - "M11 prompt 0059: explain one practical ML idea in concise terms."
+  - "M11 prompt 0060: explain one practical ML idea in concise terms."
+  - "M11 prompt 0061: explain one practical ML idea in concise terms."
+  - "M11 prompt 0062: explain one practical ML idea in concise terms."
+  - "M11 prompt 0063: explain one practical ML idea in concise terms."
+  - "M11 prompt 0064: explain one practical ML idea in concise terms."
+  - "M11 prompt 0065: explain one practical ML idea in concise terms."
+  - "M11 prompt 0066: explain one practical ML idea in concise terms."
+  - "M11 prompt 0067: explain one practical ML idea in concise terms."
+  - "M11 prompt 0068: explain one practical ML idea in concise terms."
+  - "M11 prompt 0069: explain one practical ML idea in concise terms."
+  - "M11 prompt 0070: explain one practical ML idea in concise terms."
+  - "M11 prompt 0071: explain one practical ML idea in concise terms."
+  - "M11 prompt 0072: explain one practical ML idea in concise terms."
+  - "M11 prompt 0073: explain one practical ML idea in concise terms."
+  - "M11 prompt 0074: explain one practical ML idea in concise terms."
+  - "M11 prompt 0075: explain one practical ML idea in concise terms."
+  - "M11 prompt 0076: explain one practical ML idea in concise terms."
+  - "M11 prompt 0077: explain one practical ML idea in concise terms."
+  - "M11 prompt 0078: explain one practical ML idea in concise terms."
+  - "M11 prompt 0079: explain one practical ML idea in concise terms."
+  - "M11 prompt 0080: explain one practical ML idea in concise terms."
+  - "M11 prompt 0081: explain one practical ML idea in concise terms."
+  - "M11 prompt 0082: explain one practical ML idea in concise terms."
+  - "M11 prompt 0083: explain one practical ML idea in concise terms."
+  - "M11 prompt 0084: explain one practical ML idea in concise terms."
+  - "M11 prompt 0085: explain one practical ML idea in concise terms."
+  - "M11 prompt 0086: explain one practical ML idea in concise terms."
+  - "M11 prompt 0087: explain one practical ML idea in concise terms."
+  - "M11 prompt 0088: explain one practical ML idea in concise terms."
+  - "M11 prompt 0089: explain one practical ML idea in concise terms."
+  - "M11 prompt 0090: explain one practical ML idea in concise terms."
+  - "M11 prompt 0091: explain one practical ML idea in concise terms."
+  - "M11 prompt 0092: explain one practical ML idea in concise terms."
+  - "M11 prompt 0093: explain one practical ML idea in concise terms."
+  - "M11 prompt 0094: explain one practical ML idea in concise terms."
+  - "M11 prompt 0095: explain one practical ML idea in concise terms."
+  - "M11 prompt 0096: explain one practical ML idea in concise terms."
+  - "M11 prompt 0097: explain one practical ML idea in concise terms."
+  - "M11 prompt 0098: explain one practical ML idea in concise terms."
+  - "M11 prompt 0099: explain one practical ML idea in concise terms."
+  - "M11 prompt 0100: explain one practical ML idea in concise terms."
+  - "M11 prompt 0101: explain one practical ML idea in concise terms."
+  - "M11 prompt 0102: explain one practical ML idea in concise terms."
+  - "M11 prompt 0103: explain one practical ML idea in concise terms."
+  - "M11 prompt 0104: explain one practical ML idea in concise terms."
+  - "M11 prompt 0105: explain one practical ML idea in concise terms."
+  - "M11 prompt 0106: explain one practical ML idea in concise terms."
+  - "M11 prompt 0107: explain one practical ML idea in concise terms."
+  - "M11 prompt 0108: explain one practical ML idea in concise terms."
+  - "M11 prompt 0109: explain one practical ML idea in concise terms."
+  - "M11 prompt 0110: explain one practical ML idea in concise terms."
+  - "M11 prompt 0111: explain one practical ML idea in concise terms."
+  - "M11 prompt 0112: explain one practical ML idea in concise terms."
+  - "M11 prompt 0113: explain one practical ML idea in concise terms."
+  - "M11 prompt 0114: explain one practical ML idea in concise terms."
+  - "M11 prompt 0115: explain one practical ML idea in concise terms."
+  - "M11 prompt 0116: explain one practical ML idea in concise terms."
+  - "M11 prompt 0117: explain one practical ML idea in concise terms."
+  - "M11 prompt 0118: explain one practical ML idea in concise terms."
+  - "M11 prompt 0119: explain one practical ML idea in concise terms."
+  - "M11 prompt 0120: explain one practical ML idea in concise terms."
+  - "M11 prompt 0121: explain one practical ML idea in concise terms."
+  - "M11 prompt 0122: explain one practical ML idea in concise terms."
+  - "M11 prompt 0123: explain one practical ML idea in concise terms."
+  - "M11 prompt 0124: explain one practical ML idea in concise terms."
+  - "M11 prompt 0125: explain one practical ML idea in concise terms."
+  - "M11 prompt 0126: explain one practical ML idea in concise terms."
+  - "M11 prompt 0127: explain one practical ML idea in concise terms."
+  - "M11 prompt 0128: explain one practical ML idea in concise terms."

@@ -13,7 +13,6 @@ import jax
 import jax.numpy as jnp
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
-from jax import lax
 
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 
@@ -23,6 +22,10 @@ class PageCache(eqx.Module):
 
     def copy_page(self, src_page: int, dst_page: int) -> Self:
         """Return a copy of this cache with ``src_page`` cloned into ``dst_page``."""
+        raise NotImplementedError
+
+    def zero(self) -> Self:
+        """Return a version of this cache with KV pages zeroed."""
         raise NotImplementedError
 
     def reset(self) -> Self:
@@ -59,7 +62,13 @@ class KvPageCache(PageCache):
 
     def reset(self) -> "KvPageCache":
         """Return a reset version of this cache."""
-        reset_pages = jnp.zeros_like(self.kv_pages.array)
+        return self.zero()
+
+    def zero(self) -> "KvPageCache":
+        """Return a version of this cache with KV pages zeroed."""
+        # Use a multiply-by-zero to let XLA reuse the input buffer when donation is enabled,
+        # avoiding a full extra allocation for large KV caches.
+        reset_pages = self.kv_pages.array * jnp.array(0, dtype=self.kv_pages.array.dtype)
         return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
 
     @named_call
@@ -112,7 +121,10 @@ class ListCache(PageCache, Generic[PageCacheT]):
         object.__setattr__(self, "caches", tuple(self.caches))
 
     def reset(self) -> "ListCache[PageCacheT]":
-        return ListCache(tuple(cache.reset() for cache in self.caches))
+        return self.zero()
+
+    def zero(self) -> "ListCache[PageCacheT]":
+        return ListCache(tuple(cache.zero() for cache in self.caches))
 
     @staticmethod
     def from_iterable(caches: Iterable[PageCacheT]) -> "ListCache[PageCacheT]":
@@ -156,10 +168,18 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
     """
     kv_ev = _interleave_kv(new_k.astype(kv_pages.dtype), new_v.astype(kv_pages.dtype))  # [T, 2H, D]
 
-    def body(i, buf):
-        p = t_pages[i]
-        s = t_slots[i]
-        ins = kv_ev[i][None, None, :, :]
-        return lax.dynamic_update_slice(buf, ins, (p, s, 0, 0))
+    # Only the prefix [0, K) is valid; masked entries keep zero delta.
+    # We use scatter-add with per-index deltas so invalid tail updates are true no-ops.
+    total_tokens = kv_ev.shape[0]
+    clipped_k = jnp.clip(K, 0, total_tokens)
+    token_idx = jnp.arange(total_tokens, dtype=jnp.int32)
+    valid_mask = token_idx < clipped_k
 
-    return lax.fori_loop(0, K, body, kv_pages)
+    safe_pages = jnp.where(valid_mask, t_pages, 0)
+    safe_slots = jnp.where(valid_mask, t_slots, 0)
+
+    current = kv_pages[safe_pages, safe_slots, :, :]
+    deltas = (kv_ev - current).astype(kv_pages.dtype)
+    deltas = jnp.where(valid_mask[:, None, None], deltas, jnp.zeros_like(deltas))
+
+    return kv_pages.at[safe_pages, safe_slots, :, :].add(deltas)
