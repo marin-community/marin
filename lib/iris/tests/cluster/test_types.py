@@ -83,3 +83,13 @@ def test_job_name_to_safe_token_and_deep_nesting():
     job = JobName.from_string("/a/b/c/d/e/0")
     assert job.to_safe_token() == "job__a__b__c__d__e__0"
     assert job.require_task()[1] == 0
+
+
+def test_job_name_depth():
+    """Job depth increases with hierarchy; tasks inherit parent depth."""
+    assert JobName.root("train").depth == 1
+    assert JobName.from_string("/train/eval").depth == 2
+    assert JobName.from_string("/train/eval/score").depth == 3
+    # Task depth equals parent job depth
+    assert JobName.from_string("/train/0").depth == 1
+    assert JobName.from_string("/train/eval/0").depth == 2

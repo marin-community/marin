@@ -123,6 +123,24 @@ class JobName:
         """True if this is a task (last component is numeric)."""
         return self.task_index is not None
 
+    @property
+    def depth(self) -> int:
+        """Depth in the job hierarchy. Root jobs have depth 1.
+
+        Tasks inherit their parent job's depth (the task index
+        is not counted as a depth level).
+
+        Examples:
+            /root -> 1
+            /root/child -> 2
+            /root/child/grandchild -> 3
+            /root/0 (task) -> 1
+            /root/child/0 (task) -> 2
+        """
+        if self.is_task:
+            return len(self._parts) - 1
+        return len(self._parts)
+
     def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
         """True if this job name is an ancestor of another job name."""
         if include_self and self == other:
