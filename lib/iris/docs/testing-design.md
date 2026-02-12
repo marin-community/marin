@@ -61,6 +61,7 @@ lib/iris/tests/e2e/
 ├── test_dashboard.py        # Dashboard tabs render, job detail pages, log viewer
 ├── test_endpoints.py        # Endpoint registration, prefix matching
 ├── test_high_concurrency.py # 128+ tasks, race condition reproduction
+├── test_docker.py           # Docker-only: OOM detection, TPU sim, command→callable
 ├── chronos.py               # VirtualClock (moved from chaos/)
 └── helpers.py               # Shared job functions (_quick, _slow, _block, etc.)
 ```
@@ -121,6 +122,38 @@ def multi_worker_cluster():
     with connect_cluster(config) as url:
         ...
 ```
+
+#### Why the default cluster doesn't use Docker
+
+`connect_cluster()` + `LocalController` runs workers as in-process threads via
+`LocalPlatform`. There is no Docker runtime involved — tasks execute as
+functions in the worker thread. This is intentional: it's fast (~2s boot), needs
+no Docker daemon, and exercises the same controller/scheduler/RPC code paths
+that production uses.
+
+Docker mode requires a fundamentally different setup: manual `Controller` +
+`Worker` instances with a `DockerRuntime`, temp directories for bundle caching,
+explicit port allocation, and `uv sync` inside each container (~30-60s
+overhead). This is the `E2ECluster(use_docker=True)` path.
+
+Since most tests (chaos injection, scheduling, heartbeat, dashboard rendering)
+don't care whether tasks run as threads or containers, they use the fast local
+cluster. Only tests that exercise Docker-specific behavior (OOM detection via
+cgroups, JAX coordinator env vars from `_build_device_env_vars`, command
+entrypoints that need a real filesystem) need Docker.
+
+#### `docker_cluster` fixture
+
+For Docker-specific tests, we keep a separate fixture based on `E2ECluster`:
+
+```python
+@pytest.fixture(scope="module")
+def docker_cluster(shared_uv_cache):
+    with E2ECluster(use_docker=True, uv_cache_dir=shared_uv_cache) as cluster:
+        yield cluster
+```
+
+This lives in `test_docker.py` and is only used by tests marked `@pytest.mark.docker`.
 
 #### `page` fixture
 
@@ -319,20 +352,68 @@ Once migration is complete:
 | Path | Action |
 |------|--------|
 | `tests/chaos/` | Delete entirely (all tests moved to `tests/e2e/`) |
-| `tests/cluster/test_e2e.py` | Delete `TestJobLifecycle`, `TestResourceScheduling`, `TestMultiWorker`, `TestPorts`, `TestJobInfo`, `TestEndpoints`, `TestHighTaskCount`. Keep Docker-only tests (`TestDockerOOM`, `TestTPUSimulation`, `TestCommandParentCallableChild`) in a `tests/e2e/test_docker.py` with `@pytest.mark.docker`. |
-| `scripts/screenshot-dashboard.py` | Delete. Dashboard coverage moves to `test_dashboard.py`. If a standalone screenshot tool is still wanted, it becomes `uv run pytest tests/e2e/test_dashboard.py -k screenshot --screenshot-dir /tmp/screenshots`. |
+| `tests/cluster/test_e2e.py` | Delete entirely. Non-Docker tests move to `test_smoke.py`, `test_scheduling.py`, `test_endpoints.py`, `test_high_concurrency.py`. Docker tests (`TestDockerOOM`, `TestTPUSimulation`, `TestCommandParentCallableChild`) move to `tests/e2e/test_docker.py`. `E2ECluster` moves to `conftest.py` as the `docker_cluster` fixture. |
+| `scripts/screenshot-dashboard.py` | Delete. Dashboard coverage moves to `test_dashboard.py`. If a standalone screenshot tool is still wanted, it becomes `IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest tests/e2e/test_dashboard.py`. |
 
-### Pytest Configuration
+### `test_docker.py`
 
-Add marks and defaults to `pyproject.toml` (or the iris-local equivalent):
+Docker tests use `E2ECluster(use_docker=True)` which manually wires up
+Controller + Workers with a `DockerRuntime`. These tests validate behavior
+that only manifests inside real containers:
+
+```python
+pytestmark = [pytest.mark.e2e, pytest.mark.docker]
+
+@pytest.fixture(scope="module")
+def docker_cluster(shared_uv_cache):
+    with E2ECluster(use_docker=True, uv_cache_dir=shared_uv_cache) as cluster:
+        yield cluster
+
+def test_oom_detection(docker_cluster):
+    """Container killed by OOM reports oom_killed in error message."""
+    ...
+
+def test_jax_coordinator_address_format(tpu_sim_cluster):
+    """JAX_COORDINATOR_ADDRESS has correct host:port format."""
+    ...
+
+def test_command_parent_callable_child(docker_cluster):
+    """Command entrypoint parent submits callable child via iris_ctx()."""
+    ...
+```
+
+The `use_docker` parametrization from the current `test_e2e.py` is removed.
+Tests that work identically with or without Docker (job lifecycle, scheduling,
+ports, endpoints) just use the local cluster. Tests that specifically need
+Docker are explicitly in `test_docker.py`.
+
+### Pytest Marks
+
+The existing `chaos` mark is retired. All tests in `tests/e2e/` share a single
+`e2e` mark. Docker tests get an additional `docker` mark for selective
+exclusion (Docker tests are slow and need a daemon).
 
 ```ini
 [tool.pytest.ini_options]
 markers = [
-    "chaos: tests requiring chaos injection",
-    "docker: tests requiring Docker runtime",
-    "dashboard: tests requiring Playwright",
+    "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
+    "docker: tests requiring Docker runtime (slow, needs daemon)",
 ]
+```
+
+Every test file in `tests/e2e/` uses `pytestmark = pytest.mark.e2e` at module
+level. No per-test `@pytest.mark.chaos` — if you're in `tests/e2e/`, you're an
+E2E test. The `e2e` mark is the single selector for the whole suite:
+
+```bash
+# Run all E2E tests (chaos + dashboard + scheduling + everything)
+uv run pytest lib/iris/tests/e2e/ -m e2e
+
+# Skip Docker tests (fast local-only run)
+uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker"
+
+# Only Docker tests
+uv run pytest lib/iris/tests/e2e/ -m docker
 ```
 
 The `IRIS_SCREENSHOT_DIR` environment variable controls where screenshots are
@@ -391,21 +472,26 @@ After migration, update `lib/iris/AGENTS.md` to add:
 ```markdown
 ## Testing
 
-All Iris E2E tests live in `tests/e2e/`. Tests use three fixtures:
+All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
+Tests use three core fixtures:
 
 - `cluster`: Booted local cluster with `IrisClient` and RPC access
-- `page`: Playwright page pointed at the dashboard
+- `page`: Playwright page pointed at the dashboard (request only when needed)
 - `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
 
 Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
+Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 
 Run all E2E tests:
-    uv run pytest lib/iris/tests/e2e/ -x
+    uv run pytest lib/iris/tests/e2e/ -m e2e
 
-Run chaos tests only:
-    uv run pytest lib/iris/tests/e2e/ -m chaos
+Run E2E tests without Docker (fast):
+    uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker"
 
-Run dashboard tests with screenshots:
+Run Docker-only tests:
+    uv run pytest lib/iris/tests/e2e/ -m docker
+
+Run dashboard tests with saved screenshots:
     IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py
 
 When modifying the dashboard:
