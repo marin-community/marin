@@ -227,6 +227,78 @@ JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate_mbpp.py \
   --corpus-file experiments/kelp/corpus.txt
 ```
 
+## Roadmap & Contributing
+
+Kelp is an open experiment within the [Marin project](https://marin.community/). Contributions are welcome — here's what's ahead and how to help.
+
+### Roadmap
+
+**Near-term (laptop-scale validation):**
+- Evaluate v5 (10K corpus) on both hand-crafted tasks and MBPP to measure the effect of corpus diversity
+- Improve edit position prediction accuracy — the model often picks the right replacement but the wrong location (see `tree/beam_search.py`)
+- Fix whitespace accumulation in corruption/repair cycles that causes spurious indentation diffs (see `tree/mutation.py`)
+- Experiment with longer training runs (24K+ steps) now that overfitting is less likely with a larger corpus
+
+**Medium-term (single GPU):**
+- Run a 24-hour A100 training run with the `single_gpu` preset (768d/12L, ~300M params)
+- Scale the corpus to 50K–100K programs using codeparrot/github-code and Stack-Edu
+- Add multi-edit prediction — currently the model predicts one edit per forward pass; batching edits could speed inference significantly
+- Implement MBPP pass@k metrics for direct comparison with code generation baselines
+
+**Long-term (transfer learning & scale):**
+- Transfer from Marin's pretrained 8B model into a tree diffusion model (the original vision from [kelp.md](kelp.md))
+- Support multi-language tree diffusion (TypeScript, Rust) by swapping the AST parser
+- Explore conditioning on natural language prompts (docstrings → code repair)
+- Scale to TPU pods using Marin's Ray-based executor infrastructure
+
+### How to Contribute
+
+**Run an experiment.** The fastest way to contribute is to train a model and report results. The whole pipeline runs on a laptop:
+
+```bash
+# 1. Set up the environment
+git clone https://github.com/marin-community/marin && cd marin
+uv sync
+
+# 2. Prepare a corpus (2-3 minutes, needs internet)
+uv run python experiments/kelp/prepare_corpus.py --output experiments/kelp/corpus.txt
+
+# 3. Train overnight (~5 hours on Apple Silicon)
+JAX_PLATFORMS=cpu uv run python experiments/kelp/train.py \
+  --preset overnight_cpu --steps 12000 --augment \
+  --corpus-file experiments/kelp/corpus.txt \
+  --checkpoint-interval 2000 --output-dir checkpoints/my-run
+
+# 4. Evaluate
+JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate.py \
+  --checkpoint-dir checkpoints/my-run \
+  --corpus-file experiments/kelp/corpus.txt
+```
+
+**Pick up a known issue.** Some concrete improvements we know are needed:
+- **Whitespace fix** — corruption/repair cycles accumulate extra indentation; small, well-scoped bug in `tree/mutation.py`
+- **Edit position accuracy** — the model often predicts a valid replacement but applies it at the wrong AST location; see `tree/beam_search.py`
+- **New eval tasks** — add functions to `EVAL_TASKS` in `evaluate.py` and report results
+- **New augmentation strategies** — add a new source to `augmentation.py`'s `augment_bank()` pipeline
+
+**Add a new corpus source.** The corpus pipeline (`prepare_corpus.py`) is designed to be extended. Write a function that returns `list[str]` of Python programs and plug it into `main()`. Deduplication and decontamination are handled automatically.
+
+**Improve the SubtreeBank.** The bank augmentation pipeline (`tree/augmentation.py`) chains multiple strategies. You can add new ones — the interface is: take a `SubtreeBank`, return a larger `SubtreeBank`. E-graph augmentation (`tree/egraph_augmentation.py`) is a good example to follow.
+
+**Run on a GPU.** If you have access to an A100 or similar, try the `single_gpu` preset and report scaling behavior. We haven't yet validated the model beyond laptop-scale.
+
+### Development
+
+All code lives under `experiments/kelp/` with tests in `tests/kelp/`. Follow [Marin's contribution guidelines](../../CONTRIBUTING.md).
+
+```bash
+# Run kelp tests
+uv run pytest tests/kelp/ -x -q
+
+# Run pre-commit checks
+./infra/pre-commit.py --all-files
+```
+
 ## References
 
 - [Tree Diffusion (Tseng et al., 2024)](https://arxiv.org/abs/2405.20519) — AST-based diffusion for program synthesis
