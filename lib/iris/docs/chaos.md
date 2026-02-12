@@ -3,6 +3,9 @@
 > **Note:** This is the original design document. The chaos tests have been
 > consolidated into `lib/iris/tests/e2e/` alongside the other E2E tests.
 > See `lib/iris/AGENTS.md` for current test run commands.
+>
+> **All file paths and commands below are historical** — they reference the
+> original `tests/chaos/` layout. For current paths, see `tests/e2e/`.
 
 Multi-stage plan for building a chaos testing system that validates Iris resilience
 against distributed system failure modes.

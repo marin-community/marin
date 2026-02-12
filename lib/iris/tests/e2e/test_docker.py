@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.worker.env_probe import TPUSimEnvironmentProvider
 from iris.rpc import cluster_pb2
 
 from tests.e2e._docker_cluster import E2ECluster
@@ -44,8 +45,6 @@ def tpu_sim_cluster(shared_uv_cache):
     tpu_worker_id, and device.tpu. This triggers _build_device_env_vars() in docker.py
     to set JAX_COORDINATOR_ADDRESS, JAX_PROCESS_ID, and JAX_NUM_PROCESSES.
     """
-    from iris.cluster.worker.env_probe import TPUSimEnvironmentProvider
-
     with E2ECluster(
         num_workers=2,
         use_docker=True,
