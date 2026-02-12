@@ -39,12 +39,6 @@ members = [
     "lib/zephyr",
 ]
 
-# PyTorch CPU index for TPU/CPU machines (no CUDA libs). Use marin[gpu] and GPU index elsewhere.
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
 [tool.uv.sources]
 iris = { workspace = true }
 fray = { workspace = true }
@@ -55,9 +49,6 @@ zephyr = { workspace = true }
 # NOTE: dupekit is an optional dependency, it could be a workspace member but declaring
 # it as a path dependency makes it less likely to trigger unnecessary build
 dupekit = { path = "lib/dupekit", editable = true }
-# Force CPU PyTorch so that uv run works on TPU without CUDA libs (libcudart/libcublas).
-torch = { index = "pytorch-cpu" }
-torchvision = { index = "pytorch-cpu" }
 
 [tool.black]
 line-length = 121

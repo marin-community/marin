@@ -35,7 +35,7 @@ This project investigates scaling behavior in the **10¹⁸–10²⁰ FLOPs** co
 
 | Dimension | Description |
 |---|---|
-| **Model Size** | Llama-architecture models ranging from 30M to 3.5B parameters |
+| **Model Size** | Qwen model series |
 | **Total Data Size** | Amount of training data consumed |
 | **Data Mixture** | Ratio r₁ (text vs. multimodal) and r₂ (understanding vs. generation within multimodal) |
 | **Visual Token Loss Weight** | Ratio w_text / w_visual within multimodal data (w_visual/w_text = 0 → understanding only; w_text/w_visual = 0 → generation only; Emu3 baseline uses w_visual = 0.5) |
@@ -44,8 +44,8 @@ This project investigates scaling behavior in the **10¹⁸–10²⁰ FLOPs** co
 
 ## Architecture
 
-- **Language Model**: Llama-series architecture (30M–3.5B parameters), 4096 context length
-  - Alternative: Qwen3-series (includes QK-Norm for training stability)
+- **Language Model**: 
+ Alternative: Qwen3-series (includes QK-Norm for training stability)
 - **Visual Tokenizer**: Two candidates under consideration:
 
 | Property | TokLIP-L (recommended) | TokLIP-XL |
@@ -246,7 +246,7 @@ Study existing scaling law methodology (Chinchilla, Hoffmann et al., etc.) to es
 Extend the **Marin** evaluation framework to support all text benchmarks (HellaSwag, WinoGrande, ARC, MMLU), image understanding benchmarks (VQAv2, TextVQA, GQA, ChartQA, AI2D, MMMU), and image generation benchmarks (FID and CLIP Score on ImageNet / COCO-30K).
 
 ### Milestone 3: Dataset Tokenization
-Tokenize the full multimodal training set into discrete tokens: text tokenization (Llama/Qwen tokenizer), image tokenization via TokLIP (384×384 → 576 tokens or 512×512 → 1024 tokens per image). Store in a format suitable for efficient data loading with variable mixture ratios.
+Tokenize the full multimodal training set into discrete tokens: text tokenization (Qwen3 tokenizer), image tokenization via TokLIP (384×384 → 576 tokens or 512×512 → 1024 tokens per image). Store in a format suitable for efficient data loading with variable mixture ratios.
 
 ### Milestone 4: Stable Multimodal Training
 Build a robust training pipeline for joint text–visual token prediction. Incorporate stability techniques from prior work (e.g., Chameleon: z-loss, QK-Norm). Handle variable-length sequences mixing text and visual tokens. Support configurable visual token loss weight. Validate training stability across model sizes (30M → 3.5B).
