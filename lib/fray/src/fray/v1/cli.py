@@ -4,7 +4,6 @@
 """Fray CLI for cluster job management."""
 
 import contextlib
-import datetime
 import getpass
 import logging
 import os
@@ -15,6 +14,7 @@ from pathlib import Path
 
 import click
 import yaml
+from tabulate import tabulate
 
 from fray.v1.cluster import Cluster, create_cluster
 from fray.v1.cluster.base import (
@@ -37,7 +37,6 @@ def main(ctx: click.Context, cluster: str):
     """Fray cluster job management."""
     ctx.ensure_object(dict)
     cluster_obj = create_cluster(cluster)
-    ctx.with_resource(cluster_obj.connect())
     ctx.obj["cluster"] = cluster_obj
 
 
@@ -175,21 +174,15 @@ def submit_and_monitor(cluster, job_req, is_tpu, should_stop, no_wait):
 @click.pass_context
 def list_jobs(ctx):
     """List all jobs."""
-    cluster = ctx.obj["cluster"]
+    cluster: Cluster = ctx.obj["cluster"]
     jobs = cluster.list_jobs()
 
     if not jobs:
         click.echo("No jobs found.")
         return
 
-    click.echo(f"{'JOB_ID':<40} {'NAME':<30} {'STATUS':<12} {'START':<20}")
-    click.echo("-" * 102)
-    for job in jobs:
-        if job.start_time:
-            start = datetime.datetime.fromtimestamp(job.start_time).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            start = "N/A"
-        click.echo(f"{job.job_id:<40} {job.name:<30} {job.status:<12} {start:<20}")
+    table_data = [[job.job_id, job.name, job.status] for job in jobs]
+    click.echo(tabulate(table_data, headers=["JOB_ID", "NAME", "STATUS"]))
 
 
 @main.command()

@@ -92,7 +92,6 @@ def create_cluster(cluster_spec: str) -> Cluster:
     Returns:
         Configured cluster instance
     """
-    from pathlib import Path
     from urllib.parse import parse_qs, urlparse
 
     parsed = urlparse(cluster_spec)
