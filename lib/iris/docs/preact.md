@@ -53,4 +53,4 @@ Data flows via Connect RPC — both controller and worker JS call their respecti
 
 - `pytest lib/iris/tests/cluster/controller/test_dashboard.py` — controller API + page tests
 - `pytest lib/iris/tests/cluster/worker/test_dashboard.py` — worker RPC + page tests
-- `uv run lib/iris/scripts/screenshot-dashboard.py --output-dir /tmp/screenshots` — visual validation
+- `IRIS_SCREENSHOT_DIR=/tmp/screenshots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="` — visual validation

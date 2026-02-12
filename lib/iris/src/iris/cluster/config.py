@@ -321,6 +321,10 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
 
     merged.defaults.CopyFrom(result_defaults)
 
+    # Apply controller defaults
+    if not merged.controller.HasField("heartbeat_failure_threshold"):
+        merged.controller.heartbeat_failure_threshold = 10
+
     # Apply scale group defaults
     for group in merged.scale_groups.values():
         if not group.HasField("priority"):
@@ -368,8 +372,9 @@ def make_local_config(
     if not config.HasField("defaults"):
         config.defaults.CopyFrom(config_pb2.DefaultsConfig())
 
-    # Set fast worker timeout for local testing
-    config.controller.worker_timeout.CopyFrom(Duration.from_seconds(5).to_proto())
+    # Set fast controller timings for local testing
+    config.controller.worker_timeout.CopyFrom(Duration.from_seconds(1).to_proto())
+    config.controller.heartbeat_failure_threshold = 3
 
     # Set fast autoscaler timings for local testing
     config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())

@@ -237,6 +237,7 @@ message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
   string bundle_prefix = 11;    // URI prefix for job bundles (e.g., gs://bucket/path)
   iris.time.Duration worker_timeout = 12;  // Default: 60s
+  int32 heartbeat_failure_threshold = 13;  // Consecutive heartbeat failures before marking worker dead (default: 10)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;

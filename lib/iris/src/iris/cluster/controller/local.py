@@ -157,6 +157,7 @@ class LocalController:
                 port=port,
                 bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
                 worker_timeout=worker_timeout,
+                heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,
