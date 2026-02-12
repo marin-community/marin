@@ -104,7 +104,8 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
 
         logger.info("Terminating %d resource(s) in parallel", len(targets))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(targets))
+        try:
             future_to_name: dict[concurrent.futures.Future, str] = {executor.submit(fn): name for name, fn in targets}
 
             done, not_done = concurrent.futures.wait(future_to_name, timeout=TERMINATE_TIMEOUT_SECONDS)
@@ -124,8 +125,11 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
                     name,
                     TERMINATE_TIMEOUT_SECONDS,
                 )
-                future.cancel()
                 errors.append(f"timeout:{name}")
+        finally:
+            # wait=False so we don't block on timed-out gcloud subprocesses;
+            # cancel_futures prevents any not-yet-started work from running.
+            executor.shutdown(wait=False, cancel_futures=True)
     finally:
         platform.shutdown()
 

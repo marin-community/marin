@@ -109,12 +109,6 @@ def test_stop_all_timeout_logs_warning(caplog):
     platform = FakeManagerPlatform(slices=[slow_slice])
     config = _make_manager_config()
 
-    # Release the blocked thread after stop_all's timeout fires but before
-    # pytest's test timeout. We schedule this on a background timer so that
-    # stop_all can return (its ThreadPoolExecutor.__exit__ waits for threads).
-    release_timer = threading.Timer(3.0, slow_slice._release.set)
-    release_timer.start()
-
     try:
         with (
             patch("iris.cluster.manager.IrisConfig") as mock_config_cls,
@@ -125,6 +119,8 @@ def test_stop_all_timeout_logs_warning(caplog):
             with pytest.raises(RuntimeError, match="error"):
                 stop_all(config)
     finally:
-        release_timer.cancel()
+        # Unblock the thread so it can exit cleanly (shutdown(wait=False)
+        # leaves it running until the fake delay completes).
+        slow_slice._release.set()
 
     assert any("still running" in record.message for record in caplog.records)
