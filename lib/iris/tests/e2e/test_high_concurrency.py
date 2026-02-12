@@ -15,6 +15,7 @@ from iris.rpc import cluster_pb2
 pytestmark = pytest.mark.e2e
 
 
+@pytest.mark.slow
 def test_128_tasks_concurrent_scheduling(multi_worker_cluster, sentinel):
     """128 simultaneous tasks expose heartbeat iteration race conditions.
 
