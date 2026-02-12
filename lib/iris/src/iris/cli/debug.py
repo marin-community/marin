@@ -778,7 +778,9 @@ def cleanup(ctx, dry_run: bool):
 @click.option("--leaks", is_flag=True, help="Focus on potential memory leaks (memory profiling only)")
 @click.option("--output", "-o", type=click.Path(), help="Output file path")
 @click.pass_context
-def profile(ctx, task_id: str, duration: int, profiler: str, fmt: str | None, rate: int, leaks: bool, output: str | None):
+def profile(
+    ctx, task_id: str, duration: int, profiler: str, fmt: str | None, rate: int, leaks: bool, output: str | None
+):
     """Profile a running task with py-spy (CPU) or memray (memory)."""
     controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url, timeout_ms=(duration + 30) * 1000)
@@ -796,9 +798,7 @@ def profile(ctx, task_id: str, duration: int, profiler: str, fmt: str | None, ra
             if fmt not in format_map:
                 click.echo(f"Invalid CPU format: {fmt}. Use flamegraph|speedscope|raw", err=True)
                 sys.exit(1)
-            profile_type = cluster_pb2.ProfileType(
-                cpu=cluster_pb2.CpuProfile(format=format_map[fmt], rate_hz=rate)
-            )
+            profile_type = cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=format_map[fmt], rate_hz=rate))
             ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
         else:  # memory
             # Default memory format: flamegraph
@@ -812,9 +812,7 @@ def profile(ctx, task_id: str, duration: int, profiler: str, fmt: str | None, ra
             if fmt not in format_map:
                 click.echo(f"Invalid memory format: {fmt}. Use flamegraph|table|stats", err=True)
                 sys.exit(1)
-            profile_type = cluster_pb2.ProfileType(
-                memory=cluster_pb2.MemoryProfile(format=format_map[fmt], leaks=leaks)
-            )
+            profile_type = cluster_pb2.ProfileType(memory=cluster_pb2.MemoryProfile(format=format_map[fmt], leaks=leaks))
             ext_map = {"flamegraph": "html", "table": "txt", "stats": "json"}
 
         click.echo(f"Profiling {task_id} for {duration}s ({profiler} profiler, format={fmt})...")

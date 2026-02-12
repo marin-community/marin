@@ -25,6 +25,7 @@ from pathlib import Path
 
 from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, ImageInfo
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -332,7 +333,6 @@ exec {quoted_cmd}
 
     def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
         """Profile the running process using py-spy (CPU) or memray (memory)."""
-        from iris.rpc import cluster_pb2
 
         container_id = self._run_container_id
         if not container_id:
@@ -352,8 +352,6 @@ exec {quoted_cmd}
         self, container_id: str, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile", profile_id: str
     ) -> bytes:
         """Profile CPU using py-spy."""
-        from iris.rpc import cluster_pb2
-
         # Map protobuf enum to py-spy format strings
         format_map = {
             cluster_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
@@ -412,8 +410,6 @@ exec {quoted_cmd}
         self, container_id: str, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile", profile_id: str
     ) -> bytes:
         """Profile memory using memray."""
-        from iris.rpc import cluster_pb2
-
         # Map protobuf enum to memray reporter and file extension
         format_map = {
             cluster_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),

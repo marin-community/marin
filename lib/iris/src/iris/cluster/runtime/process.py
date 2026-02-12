@@ -35,6 +35,7 @@ from pathlib import Path
 from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
+from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -253,8 +254,6 @@ class ProcessContainer:
 
 def _cpu_profile_stub(cpu_format: int) -> bytes:
     """Return a minimal stub CPU profile for when py-spy is unavailable."""
-    from iris.rpc import cluster_pb2
-
     if cpu_format == cluster_pb2.CpuProfile.FLAMEGRAPH:
         return (
             b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="50">'
@@ -271,8 +270,6 @@ def _cpu_profile_stub(cpu_format: int) -> bytes:
 
 def _memory_profile_stub(memory_format: int) -> bytes:
     """Return a minimal stub memory profile for when memray is unavailable."""
-    from iris.rpc import cluster_pb2
-
     if memory_format == cluster_pb2.MemoryProfile.FLAMEGRAPH:
         return (
             b"<!DOCTYPE html><html><head><title>Memory Profile</title></head><body>"
@@ -387,9 +384,8 @@ class ProcessContainerHandle:
         """Get resource usage statistics."""
         return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
 
-    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""
-        from iris.rpc import cluster_pb2
 
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
@@ -402,10 +398,8 @@ class ProcessContainerHandle:
         else:
             raise RuntimeError("ProfileType must specify either cpu or memory profiler")
 
-    def _profile_cpu(self, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile") -> bytes:
+    def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""
-        from iris.rpc import cluster_pb2
-
         pid = self._container._process.pid
         rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 100
 
@@ -454,10 +448,8 @@ class ProcessContainerHandle:
 
         return _cpu_profile_stub(cpu_config.format)
 
-    def _profile_memory(self, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile") -> bytes:
+    def _profile_memory(self, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
         """Profile memory using memray, with fallback stub."""
-        from iris.rpc import cluster_pb2
-
         pid = self._container._process.pid
 
         # Map protobuf enum to memray reporter
