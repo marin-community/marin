@@ -14,13 +14,21 @@ in experiments/unified/unified_pretrain.py.
 Usage:
     # Dual ordering (default): both image-first and text-first per row
     uv run experiments/unified/vlm_tokenize_captions.py \
+        --input_path gs://marin-vlm/stage2_sharded_full_tokenized \
         --start_shard 0 --end_shard 10
 
     # Process all shards with dual ordering
     uv run experiments/unified/vlm_tokenize_captions.py
 
+    # Custom input parquet path
+    uv run experiments/unified/vlm_tokenize_captions.py \
+        --input_path gs://marin-vlm/stage2_sharded_full_tokenized \
+        --output_path gs://marin-vlm/stage2_sharded_full_tokenized_llama3 \
+        --start_shard 0 --end_shard 10 --dual_ordering false
+
     # Ratio-controlled: 30% generation (text-first), 70% understanding (image-first)
     uv run experiments/unified/vlm_tokenize_captions.py \
+        --input_path gs://marin-vlm/stage2_sharded_full_tokenized \
         --start_shard 0 --end_shard 100 \
         --dual_ordering false --generation_ratio 0.3
 
@@ -32,13 +40,12 @@ Usage:
     uv run experiments/unified/vlm_tokenize_captions.py \
         --dual_ordering false --generation_ratio 1.0
 
-    # Custom output path and visual loss weight
+    # Custom visual loss weight and worker count
     uv run experiments/unified/vlm_tokenize_captions.py \
+        --input_path gs://marin-vlm/stage2_sharded_full_tokenized \
         --start_shard 0 --end_shard 50 \
         --w_visual 0.3 --num_workers 16
 """
-
-from __future__ import annotations
 
 import dataclasses
 import logging
@@ -218,7 +225,9 @@ def process_shard(
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+    from levanter.compat.hf_checkpoints import load_tokenizer
+
+    tokenizer = load_tokenizer(tokenizer_name)
     fs = gcsfs.GCSFileSystem()
 
     with fs.open(shard_path) as f:
@@ -249,9 +258,9 @@ def _list_shard_paths(input_path: str, start_shard: int | None, end_shard: int |
 
     if start_shard is not None or end_shard is not None:
         start = start_shard or 0
-        end = end_shard if end_shard is not None else len(all_paths) - 1
-        all_paths = all_paths[start : end + 1]
-        logger.info("Selected shards %d-%d (%d shards)", start, end, len(all_paths))
+        end = end_shard if end_shard is not None else len(all_paths)
+        all_paths = all_paths[start:end]
+        logger.info("Selected shards [%d, %d) (%d shards)", start, end, len(all_paths))
 
     return all_paths
 

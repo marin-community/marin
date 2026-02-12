@@ -12,17 +12,17 @@ base schema as training data (messages, images, source) plus extra evaluation co
 Supported benchmarks: VQAv2, TextVQA, GQA, ChartQA, AI2D, MMMU.
 
 Usage:
-    # Convert all benchmarks to GCS
-    uv run experiments/unified/convert_eval_benchmarks_to_parquet.py \
-        --output-gcs gs://marin-vlm/eval_benchmarks/
+    # Convert all benchmarks (defaults: --output-gcs gs://marin-vlm/eval_benchmarks
+    #                                    --output-local /tmp/eval_benchmarks)
+    uv run experiments/unified/convert_eval_benchmarks_to_parquet.py
 
-    # Convert specific benchmarks locally
+    # Convert specific benchmarks
     uv run experiments/unified/convert_eval_benchmarks_to_parquet.py \
-        --benchmarks vqav2 textvqa --output-local /tmp/eval_benchmarks/
+        --benchmarks vqav2 textvqa
 
-    # Test with small subset
+    # Test with small subset, local only
     uv run experiments/unified/convert_eval_benchmarks_to_parquet.py \
-        --benchmarks chartqa --max-rows 10 --output-local /tmp/test_eval/
+        --benchmarks chartqa --max-rows 10 --output-gcs ""
 """
 
 from __future__ import annotations
@@ -601,14 +601,14 @@ def main():
     parser.add_argument(
         "--output-gcs",
         type=str,
-        default=None,
-        help="GCS output path (e.g., gs://marin-vlm/eval_benchmarks/)",
+        default="gs://marin-vlm/eval_benchmarks",
+        help="GCS output path (default: gs://marin-vlm/eval_benchmarks)",
     )
     parser.add_argument(
         "--output-local",
         type=str,
-        default=None,
-        help="Local output directory",
+        default="/tmp/eval_benchmarks",
+        help="Local output directory (default: /tmp/eval_benchmarks)",
     )
     parser.add_argument(
         "--rows-per-shard",
@@ -624,11 +624,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.output_gcs is None and args.output_local is None:
-        args.output_local = "/tmp/eval_benchmarks"
-        logger.info("No output specified, defaulting to %s", args.output_local)
-
-    output_dir = args.output_local or "/tmp/eval_benchmarks_staging"
+    output_dir = args.output_local
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     all_stats: list[dict] = []
