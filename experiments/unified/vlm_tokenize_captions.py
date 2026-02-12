@@ -221,17 +221,35 @@ def process_shard(
 
     This function is designed to run in a worker process.
     """
+    import os
+    import sys
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
+    pid = os.getpid()
+
+    logger.info("[pid=%d] Starting shard %s → %s", pid, shard_path, output_path)
+    sys.stderr.flush()
+
+    logger.info("[pid=%d] Importing zephyr.writers ...", pid)
+    sys.stderr.flush()
     from zephyr.writers import write_levanter_cache
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
+    logger.info("[pid=%d] Loading tokenizer from %s ...", pid, tokenizer_name)
+    sys.stderr.flush()
     from levanter.compat.hf_checkpoints import load_tokenizer
 
     tokenizer = load_tokenizer(tokenizer_name)
+    logger.info("[pid=%d] Tokenizer loaded (vocab_size=%d)", pid, len(tokenizer))
+    sys.stderr.flush()
+
+    logger.info("[pid=%d] Reading parquet shard %s ...", pid, shard_path)
+    sys.stderr.flush()
     fs = gcsfs.GCSFileSystem()
 
     with fs.open(shard_path) as f:
         table = pq.read_table(f)
+    logger.info("[pid=%d] Read %d rows from %s", pid, len(table), shard_path)
+    sys.stderr.flush()
 
     records = process_parquet_rows(table, tokenizer, w_visual, dual_ordering, generation_ratio)
     metadata = {
@@ -244,8 +262,11 @@ def process_shard(
         "format": "dual_ordering_pretraining",
     }
 
+    logger.info("[pid=%d] Writing levanter cache to %s ...", pid, output_path)
+    sys.stderr.flush()
     result = write_levanter_cache(records, output_path, metadata)
-    logger.info("Shard %s → %s: %d records, %d tokens", shard_path, output_path, result["count"], result["token_count"])
+    logger.info("[pid=%d] Shard %s done: %d records, %d tokens", pid, shard_path, result["count"], result["token_count"])
+    sys.stderr.flush()
     return result
 
 
