@@ -47,6 +47,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
@@ -58,7 +66,7 @@ jobs:
             actions: read
 
           # Allow rebase and pre-commit operations
-          claude_args: '--allowed-tools "Bash(git *)" "Bash(./infra/pre-commit.py *)" "Bash(uv *)" "Bash(pytest *)" "Bash(gh *)"'
+          claude_args: '--allowed-tools "Bash(git *)" "Bash(./infra/pre-commit.py *)" "Bash(uv *)" "Bash(pytest *)" "Bash(gh *)" "Bash(python *)"'
 
           custom_instructions: |
             Always read and follow the guidelines in AGENTS.md before starting work.
