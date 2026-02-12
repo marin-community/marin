@@ -94,7 +94,7 @@ def test_command_parent_callable_child(cluster):
 # ---------------------------------------------------------------------------
 
 
-def test_succeeded_job_visible_in_dashboard(cluster, page):
+def test_succeeded_job_visible_in_dashboard(cluster, page, screenshot):
     """After smoke tests run, the dashboard Jobs tab should show a SUCCEEDED job."""
     job = cluster.submit(_quick, "dash-smoke-ok")
     cluster.wait(job, timeout=30)
@@ -104,9 +104,10 @@ def test_succeeded_job_visible_in_dashboard(cluster, page):
 
     assert page.locator("text=dash-smoke-ok").first.is_visible(timeout=5000)
     assert page.locator("text=SUCCEEDED").first.is_visible(timeout=5000)
+    screenshot("jobs-succeeded")
 
 
-def test_failed_job_visible_in_dashboard(cluster, page):
+def test_failed_job_visible_in_dashboard(cluster, page, screenshot):
     """After smoke tests run, the dashboard Jobs tab should show a FAILED job."""
     job = cluster.submit(_failing, "dash-smoke-fail")
     cluster.wait(job, timeout=30)
@@ -116,3 +117,4 @@ def test_failed_job_visible_in_dashboard(cluster, page):
 
     assert page.locator("text=dash-smoke-fail").first.is_visible(timeout=5000)
     assert page.locator("text=FAILED").first.is_visible(timeout=5000)
+    screenshot("jobs-failed")

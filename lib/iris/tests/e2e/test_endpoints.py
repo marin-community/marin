@@ -236,7 +236,7 @@ def _register_and_hold(prefix):
         client.close()
 
 
-def test_endpoints_visible_in_dashboard(cluster, page):
+def test_endpoints_visible_in_dashboard(cluster, page, screenshot):
     """Endpoints tab shows a registered endpoint while the job is running."""
     prefix = f"dash-ep-{uuid.uuid4().hex[:8]}"
     job = cluster.submit(_register_and_hold, "dash-endpoint", prefix)
@@ -248,5 +248,6 @@ def test_endpoints_visible_in_dashboard(cluster, page):
     page.click('button.tab-btn:has-text("Endpoints")')
 
     assert page.locator(f"text={prefix}/dashboard-check").first.is_visible(timeout=5000)
+    screenshot("endpoints-tab")
 
     cluster.kill(job)

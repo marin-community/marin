@@ -77,10 +77,11 @@ def test_task_fails_once_then_succeeds(cluster):
 # ---------------------------------------------------------------------------
 
 
-def test_worker_health_in_dashboard(cluster, page):
+def test_worker_health_in_dashboard(cluster, page, screenshot):
     """Workers tab shows at least one healthy worker."""
     page.goto(f"{cluster.url}/")
     wait_for_dashboard_ready(page)
     page.click('button.tab-btn:has-text("Workers")')
 
     assert page.locator("text=healthy").first.is_visible(timeout=5000)
+    screenshot("workers-healthy")
