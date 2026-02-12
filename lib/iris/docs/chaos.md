@@ -1,5 +1,9 @@
 # Iris Chaos Testing Framework
 
+> **Note:** This is the original design document. The chaos tests have been
+> consolidated into `lib/iris/tests/e2e/` alongside the other E2E tests.
+> See `lib/iris/AGENTS.md` for current test run commands.
+
 Multi-stage plan for building a chaos testing system that validates Iris resilience
 against distributed system failure modes.
 

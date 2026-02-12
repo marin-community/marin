@@ -21,6 +21,7 @@ Usage:
 """
 
 import asyncio
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -47,7 +48,7 @@ def generate_screenshots(output_dir: Path) -> None:
     print(f"{'=' * 80}")
 
     iris_root = Path(__file__).parent.parent
-    env = {**__import__("os").environ, "IRIS_SCREENSHOT_DIR": str(output_dir)}
+    env = {**os.environ, "IRIS_SCREENSHOT_DIR": str(output_dir)}
     cmd = [
         "uv",
         "run",

@@ -50,14 +50,11 @@ def test_build_logs_visible_during_building_state(cluster):
             if status.state == cluster_pb2.JOB_STATE_RUNNING:
                 job_running_during_building = True
 
-            try:
-                logs = cluster.get_task_logs(job, task_index=0)
-                for line in logs:
-                    if "build" in line:
-                        build_logs_found = True
-                        break
-            except Exception:
-                pass
+            logs = cluster.get_task_logs(job, task_index=0)
+            for line in logs:
+                if "build" in line:
+                    build_logs_found = True
+                    break
 
         if building_state_observed and build_logs_found and job_running_during_building:
             break

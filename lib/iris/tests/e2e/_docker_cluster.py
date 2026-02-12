@@ -14,25 +14,21 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.local import LocalController
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.cluster.worker.bundle_cache import BundleCache
+from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration
 
-if TYPE_CHECKING:
-    from iris.cluster.worker.env_probe import EnvironmentProvider
-
 # Factory type for creating per-worker environment providers.
 # Signature: (worker_id, num_workers) -> EnvironmentProvider
-EnvProviderFactory = Callable[[int, int], "EnvironmentProvider"]
+EnvProviderFactory = Callable[[int, int], EnvironmentProvider]
 
 
 def find_free_port() -> int:
@@ -322,7 +318,7 @@ class E2ECluster:
         job_id = self._to_job_id_str(job_or_id)
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         assert self._controller_client is not None
-        self.controller_client.terminate_job(request)
+        self._controller_client.terminate_job(request)
 
     def get_client(self) -> IrisClient:
         if self._rpc_client is None:
