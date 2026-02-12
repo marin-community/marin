@@ -22,6 +22,9 @@ Issues = "https://github.com/marin-community/marin/issues"
 sdist-include = ["README.md"]
 # Avoid linking libpython, making wheels portable
 features = ["pyo3/extension-module"]
+# Place the compiled _native.so inside the dupekit/ Python package
+module-name = "dupekit._native"
+python-source = "."
 
 [tool.uv]
 # Force rebuild if Rust sources or Cargo manifests change

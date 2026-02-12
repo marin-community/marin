@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Docker runtime with cgroups v2 resource limits and BuildKit image caching.
 
@@ -29,6 +18,7 @@ import re
 import shlex
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -340,6 +330,55 @@ exec {quoted_cmd}
             return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
 
+    def profile(self, duration_seconds: int = 10, rate_hz: int = 100, output_format: str = "flamegraph") -> bytes:
+        """Profile the running process using py-spy inside the Docker container."""
+        container_id = self._run_container_id
+        if not container_id:
+            raise RuntimeError("Cannot profile: no running container")
+
+        ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
+        ext = ext_map.get(output_format, "svg")
+        profile_id = uuid.uuid4().hex[:8]
+        output_path = f"/tmp/profile-{profile_id}.{ext}"
+
+        # py-spy is installed in .venv during the BUILD phase;
+        # the entrypoint uses exec so PID 1 is the Python process.
+        cmd = [
+            "docker",
+            "exec",
+            container_id,
+            "/app/.venv/bin/py-spy",
+            "record",
+            "--pid",
+            "1",
+            "--duration",
+            str(duration_seconds),
+            "--rate",
+            str(rate_hz),
+            "--format",
+            output_format,
+            "--output",
+            output_path,
+            "--subprocesses",
+        ]
+
+        logger.info("Profiling container %s for %ds (format=%s)", container_id, duration_seconds, output_format)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
+            if result.returncode != 0:
+                raise RuntimeError(f"py-spy failed: {result.stderr}")
+
+            read_cmd = ["docker", "exec", container_id, "cat", output_path]
+            read_result = subprocess.run(read_cmd, capture_output=True, timeout=5)
+            if read_result.returncode != 0:
+                raise RuntimeError(f"Failed to read profile: {read_result.stderr}")
+
+            return read_result.stdout
+        finally:
+            # Clean up the profile file
+            cleanup_cmd = ["docker", "exec", container_id, "rm", "-f", output_path]
+            subprocess.run(cleanup_cmd, capture_output=True, timeout=10)
+
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""
         if self._run_container_id:
@@ -380,6 +419,7 @@ exec {quoted_cmd}
             cmd.append("--add-host=host.docker.internal:host-gateway")
 
         cmd.extend(["--cap-drop", "ALL"])
+        cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_resources:

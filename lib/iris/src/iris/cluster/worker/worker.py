@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Unified worker managing all components and lifecycle."""
 
@@ -244,7 +233,7 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Get VM address from probe (injected by ManagedVm bootstrap via IRIS_VM_ADDRESS)
+        # Get VM address from probe (injected by Platform bootstrap via IRIS_VM_ADDRESS)
         # For non-cloud workers, use host:port as both worker_id and vm_address
         vm_address = metadata.vm_address
         if not vm_address:
@@ -616,6 +605,19 @@ class Worker:
         if not current:
             return False
         return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
+
+    def profile_task(
+        self, task_id: str, duration_seconds: int = 10, rate_hz: int = 100, output_format: str = "flamegraph"
+    ) -> bytes:
+        """Profile a running task by delegating to its container handle."""
+        attempt = self._get_current_attempt(task_id)
+        if not attempt:
+            raise ValueError(f"Task {task_id} not found")
+        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
+            raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
+        if not attempt._container_handle:
+            raise ValueError(f"Task {task_id} has no container handle")
+        return attempt._container_handle.profile(duration_seconds, rate_hz, output_format)
 
     def get_logs(
         self,

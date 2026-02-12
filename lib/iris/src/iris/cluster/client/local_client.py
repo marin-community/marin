@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Local cluster client using real Controller/Worker with in-process execution.
 
@@ -19,16 +8,15 @@ instead of Docker containers, ensuring local execution follows the same code pat
 as production cluster execution.
 """
 
-import time
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.manager import ClusterManager
 from iris.cluster.config import make_local_config
+from iris.cluster.controller.local import LocalController
+from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from iris.time_utils import Duration, ExponentialBackoff
 
 
 def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
@@ -74,8 +62,8 @@ class LocalClusterClient:
         client.shutdown()
     """
 
-    def __init__(self, manager: ClusterManager, remote_client: RemoteClusterClient):
-        self._manager = manager
+    def __init__(self, controller: LocalController, remote_client: RemoteClusterClient):
+        self._controller = controller
         self._remote_client = remote_client
 
     @classmethod
@@ -89,11 +77,11 @@ class LocalClusterClient:
             A fully initialized LocalClusterClient ready for use
         """
         config = _make_local_cluster_config(max_workers)
-        manager = ClusterManager(config)
-        address = manager.start()
+        controller = LocalController(config)
+        address = controller.start()
         cls._wait_for_worker_registration(address)
         remote_client = RemoteClusterClient(controller_address=address, timeout_ms=30000)
-        return cls(manager, remote_client)
+        return cls(controller, remote_client)
 
     @staticmethod
     def _wait_for_worker_registration(controller_address: str, timeout: float = 10.0) -> None:
@@ -102,20 +90,18 @@ class LocalClusterClient:
             timeout_ms=30000,
         )
         try:
-            start = time.monotonic()
-            while time.monotonic() - start < timeout:
-                response = temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
-                if response.workers:
-                    return
-                time.sleep(0.1)
-            raise TimeoutError("Worker failed to register with controller")
+            ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+                lambda: bool(temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers),
+                timeout=Duration.from_seconds(timeout),
+                error_message="Worker failed to register with controller",
+            )
         finally:
             temp_client.close()
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
         self._remote_client.shutdown()
-        self._manager.stop()
+        self._controller.stop()
 
     def submit_job(
         self,

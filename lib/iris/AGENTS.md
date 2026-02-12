@@ -77,6 +77,14 @@ the dashboard, rather than creating a scheduler and running it manually.
 
 ## Architecture Notes
 
+### Concurrency Model
+
+Platform operations (`terminate`, `create_slice`, etc.) shell out to `gcloud`
+via `subprocess.run` and are thread-safe. When multiple independent platform
+operations need to run (e.g. tearing down N slices), use
+`concurrent.futures.ThreadPoolExecutor` — not asyncio. Always apply a hard
+timeout so the CLI doesn't hang on a stuck gcloud call.
+
 ## Planning
 
 Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
@@ -148,15 +156,17 @@ while not deadline.expired():
 Iris follows a clean layering architecture:
 
 **Controller layer** (`cluster/controller/`): Task scheduling, autoscaling, and demand routing
-- Depends on VM layer for platform abstractions (VmManagerProtocol, VmGroupProtocol)
+- Depends on Platform layer for VM abstractions (Platform, SliceHandle, VmHandle)
 - Owns autoscaling logic and scaling group state
 
-**VM layer** (`cluster/vm/`): Platform abstractions for managing VMs
-- Provides VM lifecycle management (GCP, manual, local)
+**Platform layer** (`cluster/platform/`): Platform abstractions for managing VMs
+- Provides VM lifecycle management (GCP, manual, local, CoreWeave)
 - Does NOT depend on controller layer
 
 **Cluster layer** (`cluster/`): High-level orchestration
-- ClusterManager coordinates controller and VM lifecycle
+- `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
+- `stop_all()` terminates controller + all slices in parallel via ThreadPoolExecutor
+  with a 60s hard timeout. Timed-out operations are logged at WARNING and abandoned.
 - Configuration and platform abstractions
 
 Key files:
@@ -172,7 +182,7 @@ src/iris/
 │   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
 │   ├── config.py                # General Iris configuration (load_config, IrisConfig)
-│   ├── manager.py               # ClusterManager - high-level cluster orchestration
+│   ├── manager.py               # connect_cluster() + stop_all() free functions
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
 │   │   ├── main.py              # Controller daemon CLI (serve command)
@@ -180,12 +190,17 @@ src/iris/
 │   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
 │   │   ├── config.py            # Autoscaler factory functions
 │   │   ├── local.py             # LocalController for in-process testing
-│   │   └── lifecycle.py         # Controller factory (create_controller_vm)
-│   └── vm/
-│       ├── controller_vm.py     # GCP/manual controller VM lifecycle
-│       ├── gcp_tpu_platform.py  # GCP TPU management
-│       ├── manual_platform.py   # Pre-existing host management
-│       └── local_platform.py    # Local development platform
+│   │   └── lifecycle.py         # Controller lifecycle (start/stop/reload via Platform)
+│   └── platform/
+│       ├── base.py              # Platform protocol and SliceHandle/VmHandle
+│       ├── gcp.py               # GCP TPU platform
+│       ├── manual.py            # Pre-existing host platform
+│       ├── local.py             # Local development platform
+│       ├── coreweave.py         # CoreWeave stub
+│       ├── bootstrap.py         # Worker bootstrap script generation
+│       ├── ssh.py               # SSH connection management
+│       ├── factory.py           # Platform factory from config
+│       └── debug.py             # Platform debugging utilities
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """E2E integration tests for cluster controller and worker.
 
@@ -29,17 +18,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from connectrpc.errors import ConnectError
 from iris.client import IrisClient
 from iris.cluster.client import get_job_info
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.cluster.manager import ClusterManager
-from iris.cluster.worker.bundle_cache import BundleCache
+from iris.cluster.controller.local import LocalController
 from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from iris.time_utils import Duration, ExponentialBackoff
 
 if TYPE_CHECKING:
     from iris.cluster.worker.env_probe import EnvironmentProvider
@@ -73,7 +63,6 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     # Configure scale group with local provider
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
-        vm_type=config_pb2.VM_TYPE_LOCAL_VM,
         min_slices=num_workers,
         max_slices=num_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
@@ -129,7 +118,7 @@ class E2ECluster:
         self._use_docker = use_docker
         self._uv_cache_dir = uv_cache_dir
         self._env_provider_factory = env_provider_factory
-        self._manager: ClusterManager | None = None
+        self._controller: LocalController | None = None
         self._controller_port: int | None = None
         # Docker-specific fields
         self._temp_dir: tempfile.TemporaryDirectory | None = None
@@ -143,10 +132,9 @@ class E2ECluster:
 
     def __enter__(self):
         if not self._use_docker:
-            # Use ClusterManager for non-Docker path
             config = _make_e2e_config(self._num_workers)
-            self._manager = ClusterManager(config)
-            address = self._manager.start()
+            self._controller = LocalController(config)
+            address = self._controller.start()
             # Extract port from address for controller_client
             self._controller_port = int(address.rsplit(":", 1)[1])
             self._controller_client = ControllerServiceClientSync(
@@ -227,24 +215,27 @@ class E2ECluster:
 
     def _wait_for_workers(self, timeout: float = 10.0) -> None:
         """Wait for all workers to register with the controller."""
-        start = time.time()
-        while time.time() - start < timeout:
+
+        def _all_workers_healthy() -> bool:
             request = cluster_pb2.Controller.ListWorkersRequest()
             assert self._controller_client is not None
             response = self._controller_client.list_workers(request)
             healthy_workers = [w for w in response.workers if w.healthy]
-            if len(healthy_workers) >= self._num_workers:
-                return
-            time.sleep(0.1)
-        raise TimeoutError(f"Workers failed to register within {timeout}s")
+            return len(healthy_workers) >= self._num_workers
+
+        ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+            _all_workers_healthy,
+            timeout=Duration.from_seconds(timeout),
+            error_message=f"Workers failed to register within {timeout}s",
+        )
 
     def __exit__(self, *args):
         if self._rpc_client:
             self._rpc_client = None
         if self._controller_client:
             self._controller_client.close()
-        if self._manager:
-            self._manager.stop()
+        if self._controller:
+            self._controller.stop()
         else:
             # Docker path cleanup
             for worker in self._workers:
@@ -321,21 +312,27 @@ class E2ECluster:
             "error": response.task.error,
         }
 
-    def wait(self, job_or_id, timeout: float = 60.0, poll_interval: float = 0.1) -> dict:
+    def wait(self, job_or_id, timeout: float = 60.0) -> dict:
         job_id = self._to_job_id_str(job_or_id)
-        start = time.time()
         terminal_states = {
             "JOB_STATE_SUCCEEDED",
             "JOB_STATE_FAILED",
             "JOB_STATE_KILLED",
             "JOB_STATE_UNSCHEDULABLE",
         }
-        while time.time() - start < timeout:
-            status = self.status(job_id)
-            if status["state"] in terminal_states:
-                return status
-            time.sleep(poll_interval)
-        raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
+        result: dict = {}
+
+        def _is_terminal() -> bool:
+            nonlocal result
+            result = self.status(job_id)
+            return result["state"] in terminal_states
+
+        ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+            _is_terminal,
+            timeout=Duration.from_seconds(timeout),
+            error_message=f"Job {job_id} did not complete in {timeout}s",
+        )
+        return result
 
     def get_task_logs(self, job_or_id, task_index: int = 0) -> list[str]:
         """Fetch container logs for a task. Useful for debugging failures."""
@@ -463,11 +460,11 @@ class TestJobLifecycle:
         job_id = test_cluster.submit(long_job, sentinel, name=unique_name("long-job"))
 
         # Wait for job to start running
-        for _ in range(50):
-            status = test_cluster.status(job_id)
-            if status["state"] == "JOB_STATE_RUNNING":
-                break
-            time.sleep(0.1)
+        ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+            lambda: test_cluster.status(job_id)["state"] == "JOB_STATE_RUNNING",
+            timeout=Duration.from_seconds(5.0),
+            error_message="Job did not reach RUNNING state",
+        )
 
         test_cluster.kill(job_id)
         sentinel.signal()
@@ -1042,3 +1039,98 @@ class TestTPUSimulation:
         if status["state"] != "JOB_STATE_SUCCEEDED":
             logs = tpu_sim_cluster.get_task_logs(job)
             pytest.fail(f"Job failed: {status}\nLogs:\n" + "\n".join(logs[-50:]))
+
+
+# =============================================================================
+# Tests: Profiling
+# =============================================================================
+
+
+def _wait_for_task_running(cluster: E2ECluster, job, timeout: float = 30.0) -> str:
+    """Wait for task 0 of a job to reach TASK_STATE_RUNNING and return its task_id.
+
+    The worker's profile_task RPC requires the task to be in RUNNING state
+    (not BUILDING), so we poll the task status rather than the job status.
+    """
+    last_state = "unknown"
+
+    def _is_running() -> bool:
+        nonlocal last_state
+        task_status = cluster.task_status(job, task_index=0)
+        last_state = task_status["state"]
+        return last_state == "TASK_STATE_RUNNING"
+
+    ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+        _is_running,
+        timeout=Duration.from_seconds(timeout),
+        error_message=f"Task did not reach RUNNING within {timeout}s, last state: {last_state}",
+    )
+    return cluster.task_status(job, task_index=0)["taskId"]
+
+
+class TestProfiling:
+    """Test py-spy profiling via ProfileTask RPC."""
+
+    def test_profile_running_task(self, test_cluster, sentinel):
+        """Profile a running task and verify we get profile data back."""
+
+        def slow_task():
+            # Busy-loop with real Python work so py-spy can capture stack frames
+            # (time.sleep blocks in C, producing zero Python samples)
+            end = time.monotonic() + 5
+            while time.monotonic() < end:
+                sum(range(1000))
+
+        job = test_cluster.submit(slow_task, name=unique_name("profile-test"))
+        task_id = _wait_for_task_running(test_cluster, job)
+
+        request = cluster_pb2.ProfileTaskRequest(
+            task_id=task_id,
+            duration_seconds=2,
+            format="flamegraph",
+        )
+        assert test_cluster._controller_client is not None
+        response = test_cluster._controller_client.profile_task(request, timeout_ms=3000)
+
+        # In local mode: either real py-spy data or a stub SVG
+        # In docker mode: real py-spy flamegraph SVG
+        assert len(response.profile_data) > 0
+        assert not response.error
+
+        test_cluster.wait(job, timeout=test_cluster.wait_timeout)
+
+    def test_profile_formats(self, test_cluster):
+        """All three profile formats return data."""
+
+        def slow_task():
+            end = time.monotonic() + 5
+            while time.monotonic() < end:
+                sum(range(1000))
+
+        job = test_cluster.submit(slow_task, name=unique_name("profile-fmts"))
+        task_id = _wait_for_task_running(test_cluster, job)
+
+        assert test_cluster._controller_client is not None
+
+        for fmt in ["flamegraph", "speedscope", "raw"]:
+            request = cluster_pb2.ProfileTaskRequest(
+                task_id=task_id,
+                duration_seconds=1,
+                format=fmt,
+            )
+            response = test_cluster._controller_client.profile_task(request, timeout_ms=3000)
+            assert len(response.profile_data) > 0, f"Format {fmt} returned empty data"
+            assert not response.error, f"Format {fmt} returned error: {response.error}"
+
+        test_cluster.wait(job, timeout=test_cluster.wait_timeout)
+
+    def test_profile_nonexistent_task(self, test_cluster):
+        """Profiling a non-existent task returns an error."""
+        request = cluster_pb2.ProfileTaskRequest(
+            task_id="/nonexistent/task/0",
+            duration_seconds=1,
+            format="flamegraph",
+        )
+        assert test_cluster._controller_client is not None
+        with pytest.raises(ConnectError):
+            test_cluster._controller_client.profile_task(request, timeout_ms=5000)

@@ -1,21 +1,14 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Local in-process controller for testing.
 
 This module provides LocalController which runs the controller and autoscaler
 in the current process for local testing. Workers are threads, not VMs.
+
+Provides:
+- create_local_autoscaler: Factory for creating autoscaler with LocalPlatform
+- LocalController: In-process controller implementation for testing
 """
 
 from __future__ import annotations
@@ -25,17 +18,81 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.config import create_local_autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
     ControllerConfig as _InnerControllerConfig,
     RpcWorkerStubFactory,
 )
-from iris.cluster.vm.controller_vm import ControllerStatus
-from iris.cluster.vm.local_platform import find_free_port
+from iris.cluster.controller.lifecycle import ControllerStatus
+from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.platform.local import LocalPlatform, find_free_port
+from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
+
+
+def create_local_autoscaler(
+    config: config_pb2.IrisClusterConfig,
+    controller_address: str,
+    threads: ThreadContainer | None = None,
+) -> tuple[Autoscaler, tempfile.TemporaryDirectory]:
+    """Create Autoscaler with LocalPlatform for all scale groups.
+
+    Creates temp directories and a PortAllocator so that LocalPlatform can
+    spawn real Worker threads that register with the controller.
+
+    Args:
+        config: Cluster configuration (with defaults already applied)
+        controller_address: Address for workers to connect to
+        threads: Optional thread container for testing
+
+    Returns:
+        Tuple of (autoscaler, temp_dir). The caller owns the temp_dir and
+        must call cleanup() when done.
+    """
+    label_prefix = config.platform.label_prefix or "iris"
+
+    temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_autoscaler_")
+    temp_path = Path(temp_dir.name)
+    cache_path = temp_path / "cache"
+    cache_path.mkdir()
+    fake_bundle = temp_path / "fake_bundle"
+    fake_bundle.mkdir()
+    (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'test'\n")
+
+    port_allocator = PortAllocator()
+
+    platform = LocalPlatform(
+        label_prefix=label_prefix,
+        threads=threads,
+        controller_address=controller_address,
+        cache_path=cache_path,
+        fake_bundle=fake_bundle,
+        port_allocator=port_allocator,
+    )
+
+    scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
+    scale_down_delay = Duration.from_proto(config.defaults.autoscaler.scale_down_delay)
+
+    scale_groups: dict[str, ScalingGroup] = {}
+    for name, sg_config in config.scale_groups.items():
+        scale_groups[name] = ScalingGroup(
+            config=sg_config,
+            platform=platform,
+            label_prefix=label_prefix,
+            scale_up_cooldown=scale_up_delay,
+            scale_down_cooldown=scale_down_delay,
+            threads=threads,
+        )
+
+    autoscaler = Autoscaler.from_config(
+        scale_groups=scale_groups,
+        config=config.defaults.autoscaler,
+        platform=platform,
+        threads=threads,
+    )
+    return autoscaler, temp_dir
 
 
 class _InProcessController(Protocol):
@@ -55,7 +112,7 @@ class _InProcessController(Protocol):
 class LocalController:
     """In-process controller for local testing.
 
-    Runs Controller + Autoscaler(LocalVmManagers) in the current process.
+    Runs Controller + Autoscaler(LocalPlatform) in the current process.
     Workers are threads, not VMs. No Docker, no GCS, no SSH.
     """
 
@@ -69,6 +126,7 @@ class LocalController:
         self._controller: _InProcessController | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
+        self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
 
     def start(self) -> str:
         # Create temp dir for controller's bundle storage
@@ -83,7 +141,7 @@ class LocalController:
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
         # Autoscaler creates its own temp dirs for worker resources
-        self._autoscaler = create_local_autoscaler(
+        self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
             self._config,
             address,
             threads=autoscaler_threads,
@@ -112,11 +170,11 @@ class LocalController:
         if self._controller:
             self._controller.stop()
             self._controller = None
-        # Clean up autoscaler's temp dir
-        if self._autoscaler and hasattr(self._autoscaler, "_temp_dir"):
-            self._autoscaler._temp_dir.cleanup()
+        if self._autoscaler is not None:
             self._autoscaler = None
-        # Clean up controller's temp dir
+        if self._autoscaler_temp_dir is not None:
+            self._autoscaler_temp_dir.cleanup()
+            self._autoscaler_temp_dir = None
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None

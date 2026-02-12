@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Controller RPC service implementation handling job, task, and worker operations.
 
@@ -1061,6 +1050,44 @@ class ControllerServiceImpl:
             last_timestamp_ms=last_timestamp_ms,
             truncated=truncated,
         )
+
+    # --- Profiling ---
+
+    def profile_task(
+        self,
+        request: cluster_pb2.ProfileTaskRequest,
+        ctx: RequestContext,
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Profile a running task by proxying to its worker."""
+        with rpc_error_handler("profile_task"):
+            try:
+                task_name = JobName.from_wire(request.task_id)
+                task_name.require_task()
+            except ValueError as exc:
+                raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+            task = self._state.get_task(task_name)
+            if not task:
+                raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+
+            worker_id = task.worker_id
+            if not worker_id:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+
+            worker = self._state.get_worker(worker_id)
+            if not worker or not worker.healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+
+            timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
+            worker_client = WorkerServiceClientSync(f"http://{worker.address}")
+            try:
+                resp = worker_client.profile_task(request, timeout_ms=timeout_ms)
+                return cluster_pb2.ProfileTaskResponse(
+                    profile_data=resp.profile_data,
+                    format=resp.format,
+                    error=resp.error,
+                )
+            finally:
+                worker_client.close()
 
     # --- Transactions ---
 

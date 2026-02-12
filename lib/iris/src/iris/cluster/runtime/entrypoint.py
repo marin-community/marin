@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Convert user-facing Entrypoint + EnvironmentConfig into a structured RuntimeEntrypoint.
 
@@ -47,7 +36,7 @@ def _build_uv_sync_flags(extras: Sequence[str]) -> str:
 
 def _build_pip_install_args(pip_packages: Sequence[str]) -> str:
     """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
-    packages = ["cloudpickle", *list(pip_packages)]
+    packages = ["cloudpickle", "py-spy", *list(pip_packages)]
     # Use shlex.quote to safely escape each package spec for the shell.
     return " ".join(shlex.quote(pkg) for pkg in packages)
 

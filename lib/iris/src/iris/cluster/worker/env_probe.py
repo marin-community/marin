@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Environment probing for worker registration."""
 
@@ -308,7 +297,7 @@ class DefaultEnvironmentProvider:
         # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
 
-        # VM address from environment (injected by ManagedVm bootstrap)
+        # VM address from environment (injected by Platform bootstrap)
         vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
 
         return cluster_pb2.WorkerMetadata(
