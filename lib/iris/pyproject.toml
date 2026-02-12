@@ -59,11 +59,10 @@ packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 30
-addopts = "-n auto --durations=10 -m 'not slow and not chaos and not docker and not e2e'"
+addopts = "-n auto --durations=10 -m 'not slow and not e2e and not docker'"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "chaos: marks chaos/fault injection tests (deselect with '-m \"not chaos\"')",
-    "docker: marks tests requiring iris-task Docker image (deselect with '-m \"not docker\"')",
+    "docker: marks tests requiring Docker runtime (slow, needs daemon)",
     "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]

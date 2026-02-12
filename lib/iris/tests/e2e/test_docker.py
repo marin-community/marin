@@ -15,7 +15,7 @@ import pytest
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import cluster_pb2
 
-from tests.cluster.test_e2e import E2ECluster
+from tests.e2e._docker_cluster import E2ECluster
 
 pytestmark = [pytest.mark.e2e, pytest.mark.docker]
 

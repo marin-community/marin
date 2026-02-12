@@ -236,9 +236,36 @@ src/iris/cluster/static/
 - Jobs displayed as a hierarchical tree based on name structure
 
 **When modifying the dashboard:**
-1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
+1. Run dashboard tests: `uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="`
 2. Ensure any new UI features have corresponding RPC endpoints
 3. Follow existing component patterns (functional components, hooks)
+
+## Testing
+
+All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
+Tests use three core fixtures:
+
+- `cluster`: Booted local cluster with `IrisClient` and RPC access
+- `page`: Playwright page pointed at the dashboard (request only when needed)
+- `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
+
+Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
+Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
+
+Run all E2E tests:
+    uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
+
+Run E2E tests without Docker (fast):
+    uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
+
+Run Docker-only tests:
+    uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
+
+Run dashboard tests with saved screenshots:
+    IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="
+
+When modifying the dashboard:
+    uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
 
 ## Debugging Container Failures
 

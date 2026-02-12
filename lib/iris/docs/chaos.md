@@ -11,7 +11,7 @@ The chaos framework is two things:
 2. **Inline `chaos()` calls** — sprinkled at key points in production code (zero-cost when inactive)
 
 Tests use `connect_cluster()` + `make_local_config()` + `IrisClient.remote()` — the same
-pattern as `screenshot-dashboard.py`. No E2ECluster.
+pattern as the E2E test fixtures in `tests/e2e/conftest.py`. No E2ECluster.
 
 ## Stage 1: Core chaos module + infrastructure
 
