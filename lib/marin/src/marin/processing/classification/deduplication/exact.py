@@ -15,6 +15,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     _load_batches,
     _load_dupe_map_shard,
 )
+import dupekit
 from marin.utils import rebase_file_path
 import pyarrow as pa
 import logging
@@ -26,19 +27,18 @@ logger = logging.getLogger(__name__)
 
 
 def dedup_exact_paragraph(config: DedupConfig):
-    import dupekit
-    from dupekit import Transformation
-
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
     _init_wandb(config)
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
         pipeline = [
-            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
-            Transformation.SplitParagraphs(text_col=config.text_field, id_col="resolved_id"),
-            Transformation.Hash(input_col="paragraph_text", output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
-            Transformation.SelectColumns(columns=["hash", "doc_id"]),
+            dupekit.Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            dupekit.Transformation.SplitParagraphs(text_col=config.text_field, id_col="resolved_id"),
+            dupekit.Transformation.Hash(
+                input_col="paragraph_text", output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128
+            ),
+            dupekit.Transformation.SelectColumns(columns=["hash", "doc_id"]),
         ]
         return dupekit.transform(batch, pipeline)
 
@@ -106,18 +106,17 @@ def dedup_exact_paragraph(config: DedupConfig):
 
 def dedup_exact_document(config: DedupConfig):
     """Exact document deduplication: identify duplicate documents based on full text hash"""
-    import dupekit
-    from dupekit import Transformation
-
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
     _init_wandb(config)
 
     def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
         pipeline = [
-            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
-            Transformation.Hash(input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
-            Transformation.SelectColumns(columns=["hash", "resolved_id"]),
+            dupekit.Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            dupekit.Transformation.Hash(
+                input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128
+            ),
+            dupekit.Transformation.SelectColumns(columns=["hash", "resolved_id"]),
         ]
         return dupekit.transform(batch, pipeline)
 
@@ -153,8 +152,8 @@ def dedup_exact_document(config: DedupConfig):
                 prepared_batch = dupekit.transform(
                     batch,
                     [
-                        Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="id"),
-                        Transformation.Hash(
+                        dupekit.Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="id"),
+                        dupekit.Transformation.Hash(
                             input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128
                         ),
                     ],
