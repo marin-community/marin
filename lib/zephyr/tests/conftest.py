@@ -36,13 +36,12 @@ IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "demo.
 @pytest.fixture(scope="session")
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
-    from iris.cluster.manager import ClusterManager
+    from iris.cluster.manager import connect_cluster
     from iris.cluster.config import load_config, make_local_config
 
     config = load_config(IRIS_CONFIG)
     config = make_local_config(config)
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         yield url
 
 
