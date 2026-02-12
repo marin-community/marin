@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Capture dashboard screenshots for documentation and visual review.
 
@@ -43,8 +32,8 @@ from iris.cluster.types import (
     EnvironmentSpec,
     ResourceSpec,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import load_config, make_local_config
+from iris.cluster.manager import connect_cluster
+from iris.cluster.config import load_config, make_local_config
 from iris.rpc import cluster_pb2
 
 IRIS_ROOT = Path(__file__).parent.parent
@@ -735,9 +724,7 @@ def main(config: Path, output_dir: Path, stay_open: bool):
     cluster_config = load_config(config)
     cluster_config = make_local_config(cluster_config)
 
-    manager = ClusterManager(cluster_config)
-
-    with manager.connect() as url:
+    with connect_cluster(cluster_config) as url:
         logger.info("Cluster running at %s", url)
 
         client = IrisClient.remote(url, workspace=IRIS_ROOT)

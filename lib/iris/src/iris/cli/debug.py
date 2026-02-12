@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Cluster debug and validation commands.
 
@@ -111,11 +100,22 @@ def _get_zone_project(ctx: click.Context) -> tuple[str, str]:
     if config.platform.WhichOneof("platform") != "gcp":
         click.echo("Error: Debug commands require a GCP platform config", err=True)
         raise SystemExit(1)
-    platform = config.platform.gcp
-    zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
-    project = platform.project_id
-    if not zone or not project:
-        click.echo("Error: Config must specify platform.gcp.project_id and zone", err=True)
+    project = config.platform.gcp.project_id
+    if not project:
+        click.echo("Error: Config must specify platform.gcp.project_id", err=True)
+        raise SystemExit(1)
+    # Zone is now per-slice in ScaleGroupConfig.slice_template.gcp.
+    # For debug commands, pick the zone from the first GCP scale group.
+    zone = ""
+    for sg in config.scale_groups.values():
+        if sg.HasField("slice_template") and sg.slice_template.HasField("gcp"):
+            gcp_slice = sg.slice_template.gcp
+            if gcp_slice.zone:
+                zone = gcp_slice.zone
+            if zone:
+                break
+    if not zone:
+        click.echo("Error: No zone found in any scale group's slice_template.gcp", err=True)
         raise SystemExit(1)
     return zone, project
 
@@ -767,3 +767,36 @@ def cleanup(ctx, dry_run: bool):
     if failed > 0:
         click.echo(f"Failed to delete {failed} resource(s).", err=True)
         sys.exit(1)
+
+
+@debug.command()
+@click.argument("task_id")
+@click.option("--duration", default=10, help="Profiling duration in seconds")
+@click.option("--format", "fmt", type=click.Choice(["flamegraph", "speedscope", "raw"]), default="speedscope")
+@click.option("--rate", default=100, help="Sample rate in Hz")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.pass_context
+def profile(ctx, task_id: str, duration: int, fmt: str, rate: int, output: str | None):
+    """Profile a running task with py-spy and download the result."""
+    controller_url = require_controller_url(ctx)
+    client = ControllerServiceClientSync(controller_url, timeout_ms=(duration + 30) * 1000)
+    try:
+        click.echo(f"Profiling {task_id} for {duration}s (format={fmt}, rate={rate}Hz)...")
+        resp = client.profile_task(
+            cluster_pb2.ProfileTaskRequest(
+                task_id=task_id,
+                duration_seconds=duration,
+                rate_hz=rate,
+                format=fmt,
+            )
+        )
+        if resp.error:
+            click.echo(f"Error: {resp.error}", err=True)
+            sys.exit(1)
+        ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
+        ext = ext_map.get(fmt, "bin")
+        out_path = output or f"profile-{task_id.replace('/', '_')}.{ext}"
+        Path(out_path).write_bytes(resp.profile_data)
+        click.echo(f"Profile saved to {out_path} ({len(resp.profile_data)} bytes)")
+    finally:
+        client.close()

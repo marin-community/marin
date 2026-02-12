@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Actor-based execution engine for Zephyr pipelines.
 
@@ -191,17 +180,22 @@ class ZephyrWorkerError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# shard_ctx() — worker-side context access
+# WorkerContext protocol — the public interface exposed to user task code
 # ---------------------------------------------------------------------------
 
-_shard_ctx_var: ContextVar[ZephyrWorker | None] = ContextVar("zephyr_shard_ctx", default=None)
+
+class WorkerContext(Protocol):
+    def get_shared(self, name: str) -> Any: ...
 
 
-def shard_ctx() -> ZephyrWorker:
+_worker_ctx_var: ContextVar[ZephyrWorker | None] = ContextVar("zephyr_worker_ctx", default=None)
+
+
+def zephyr_worker_ctx() -> WorkerContext:
     """Get the current worker's context. Only valid inside a worker task."""
-    ctx = _shard_ctx_var.get()
+    ctx = _worker_ctx_var.get()
     if ctx is None:
-        raise RuntimeError("shard_ctx() called outside of a worker task")
+        raise RuntimeError("zephyr_worker_ctx() called outside of a worker task")
     return ctx
 
 
@@ -788,7 +782,7 @@ class ZephyrWorker:
         self._chunk_prefix = config["chunk_prefix"]
         self._execution_id = config["execution_id"]
 
-        _shard_ctx_var.set(self)
+        _worker_ctx_var.set(self)
 
         logger.info(
             "[shard %d/%d] Starting stage=%s, %d input chunks, %d ops",
@@ -924,7 +918,7 @@ class ZephyrContext:
         """Register shared data to broadcast to all workers.
 
         Must be called before execute(). The object must be picklable.
-        Workers access it via shard_ctx().get_shared(name).
+        Workers access it via zephyr_worker_ctx().get_shared(name).
         """
         self._shared_data[name] = obj
 

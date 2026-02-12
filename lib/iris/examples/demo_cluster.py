@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Demo cluster with Jupyter notebook integration.
 
@@ -48,8 +37,8 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import make_local_config
+from iris.cluster.config import make_local_config
+from iris.cluster.controller.local import LocalController
 from iris.rpc import cluster_pb2, config_pb2
 
 # The iris project root (lib/iris/) - used as workspace for the example
@@ -96,7 +85,8 @@ class DemoCluster:
         self._remote_url = controller_url
         self._config_path = config_path
         self._workspace = workspace or IRIS_ROOT
-        self._manager: ClusterManager | None = None
+        self._controller: LocalController | None = None
+        self._controller_address: str | None = None
         self._rpc_client: IrisClient | None = None
 
         # Jupyter integration
@@ -106,7 +96,7 @@ class DemoCluster:
     def _load_or_default_config(self) -> config_pb2.IrisClusterConfig:
         """Load config from file or build a default demo config."""
         if self._config_path:
-            from iris.cluster.vm.config import load_config
+            from iris.cluster.config import load_config
 
             return load_config(Path(self._config_path))
 
@@ -142,8 +132,8 @@ class DemoCluster:
 
         config = self._load_or_default_config()
         config = make_local_config(config)
-        self._manager = ClusterManager(config)
-        self._manager.start()
+        self._controller = LocalController(config)
+        self._controller_address = self._controller.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -151,8 +141,8 @@ class DemoCluster:
         del exc_type, exc_val, exc_tb  # unused
         self._stop_jupyter()
         self._rpc_client = None
-        if self._manager:
-            self._manager.stop()
+        if self._controller:
+            self._controller.stop()
 
     def _stop_jupyter(self):
         if self._notebook_proc:
@@ -167,10 +157,8 @@ class DemoCluster:
     def controller_url(self) -> str:
         if self._remote_url:
             return self._remote_url
-        if self._manager:
-            url = self._manager.controller.discover()
-            if url:
-                return url
+        if self._controller_address:
+            return self._controller_address
         raise RuntimeError("No controller URL available. Call __enter__ first.")
 
     @property

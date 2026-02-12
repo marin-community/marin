@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for config loading, serialization, and deserialization.
 
@@ -23,13 +12,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from iris.cluster.vm.config import (
+from iris.cluster.config import (
     config_to_dict,
     create_autoscaler,
     get_ssh_config,
     load_config,
+    validate_config,
 )
-from iris.cluster.vm.platform import create_platform
+from iris.cluster.platform.factory import create_platform
 from iris.rpc import config_pb2
 
 
@@ -37,12 +27,11 @@ class TestConfigRoundTrip:
     """Tests for config serialization/deserialization round-trips."""
 
     def test_tpu_provider_survives_round_trip(self, tmp_path: Path):
-        """TPU vm_type survives proto→dict→yaml→dict→proto round-trip."""
+        """TPU config survives proto→dict→yaml→dict→proto round-trip."""
         config_content = """\
 platform:
   gcp:
     project_id: my-project
-    zone: us-central1-a
 
 defaults:
   bootstrap:
@@ -52,10 +41,8 @@ defaults:
 
 scale_groups:
   tpu_v5e_8:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 8
     resources:
       cpu: 128
@@ -65,7 +52,10 @@ scale_groups:
       gpu_count: 0
     min_slices: 1
     max_slices: 10
-    zones: [us-central1-a]
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+        zone: us-central1-a
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -73,8 +63,8 @@ scale_groups:
         # Load config from YAML
         original_config = load_config(config_path)
 
-        # Verify vm_type before round-trip
-        assert original_config.scale_groups["tpu_v5e_8"].vm_type == config_pb2.VM_TYPE_TPU_VM
+        # Verify accelerator type
+        assert original_config.scale_groups["tpu_v5e_8"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
         # Round-trip: proto → dict → yaml → dict → proto
         config_dict = config_to_dict(original_config)
@@ -84,11 +74,11 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        # Verify vm_type is still TPU after round-trip
-        assert loaded_config.scale_groups["tpu_v5e_8"].vm_type == config_pb2.VM_TYPE_TPU_VM
+        # Verify accelerator type is still TPU after round-trip
+        assert loaded_config.scale_groups["tpu_v5e_8"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
     def test_manual_provider_survives_round_trip(self, tmp_path: Path):
-        """Manual vm_type survives proto→dict→yaml→dict→proto round-trip."""
+        """Manual config survives proto→dict→yaml→dict→proto round-trip."""
         config_content = """\
 platform:
   manual: {}
@@ -104,7 +94,6 @@ defaults:
 
 scale_groups:
   manual_hosts:
-    vm_type: manual_vm
     accelerator_type: cpu
     slice_size: 1
     resources:
@@ -113,9 +102,10 @@ scale_groups:
       disk: 100GB
       tpu_count: 0
       gpu_count: 0
-    manual:
-      hosts: [10.0.0.1, 10.0.0.2]
-      ssh_user: ubuntu
+    slice_template:
+      manual:
+        hosts: [10.0.0.1, 10.0.0.2]
+        ssh_user: ubuntu
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -123,9 +113,13 @@ scale_groups:
         # Load config from YAML
         original_config = load_config(config_path)
 
-        # Verify vm_type is manual before round-trip
-        assert original_config.scale_groups["manual_hosts"].vm_type == config_pb2.VM_TYPE_MANUAL_VM
-        assert list(original_config.scale_groups["manual_hosts"].manual.hosts) == ["10.0.0.1", "10.0.0.2"]
+        # Verify manual hosts configuration
+        assert original_config.scale_groups["manual_hosts"].HasField("slice_template")
+        assert original_config.scale_groups["manual_hosts"].slice_template.HasField("manual")
+        assert list(original_config.scale_groups["manual_hosts"].slice_template.manual.hosts) == [
+            "10.0.0.1",
+            "10.0.0.2",
+        ]
 
         # Round-trip: proto → dict → yaml → dict → proto
         config_dict = config_to_dict(original_config)
@@ -135,17 +129,20 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        # Verify vm_type is still manual after round-trip
-        assert loaded_config.scale_groups["manual_hosts"].vm_type == config_pb2.VM_TYPE_MANUAL_VM
-        assert list(loaded_config.scale_groups["manual_hosts"].manual.hosts) == ["10.0.0.1", "10.0.0.2"]
+        # Verify manual hosts configuration survives round-trip
+        assert loaded_config.scale_groups["manual_hosts"].HasField("slice_template")
+        assert loaded_config.scale_groups["manual_hosts"].slice_template.HasField("manual")
+        assert list(loaded_config.scale_groups["manual_hosts"].slice_template.manual.hosts) == [
+            "10.0.0.1",
+            "10.0.0.2",
+        ]
 
-    def test_multiple_scale_groups_preserve_vm_types(self, tmp_path: Path):
-        """Config with multiple TPU scale groups preserves vm_type values."""
+    def test_multiple_scale_groups_preserve_accelerator_types(self, tmp_path: Path):
+        """Config with multiple TPU scale groups preserves accelerator types."""
         config_content = """\
 platform:
   gcp:
     project_id: my-project
-    zone: us-central1-a
 
 defaults:
   bootstrap:
@@ -155,10 +152,8 @@ defaults:
 
 scale_groups:
   tpu_group_a:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 8
     resources:
       cpu: 128
@@ -168,12 +163,13 @@ scale_groups:
       gpu_count: 0
     min_slices: 1
     max_slices: 10
-    zones: [us-central1-a]
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+        zone: us-central1-a
   tpu_group_b:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 16
     resources:
       cpu: 128
@@ -183,7 +179,10 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 4
-    zones: [us-central1-a]
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+        zone: us-central1-a
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -197,8 +196,8 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        assert loaded_config.scale_groups["tpu_group_a"].vm_type == config_pb2.VM_TYPE_TPU_VM
-        assert loaded_config.scale_groups["tpu_group_b"].vm_type == config_pb2.VM_TYPE_TPU_VM
+        assert loaded_config.scale_groups["tpu_group_a"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert loaded_config.scale_groups["tpu_group_b"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
     def test_example_eu_west4_config_round_trips(self, tmp_path: Path):
         """Real example config from examples/eu-west4.yaml round-trips correctly."""
@@ -209,9 +208,9 @@ scale_groups:
 
         original_config = load_config(config_path)
 
-        # Verify it has TPU vm_type before round-trip
+        # Verify it has TPU accelerator type before round-trip
         assert "tpu_v5e_16" in original_config.scale_groups
-        assert original_config.scale_groups["tpu_v5e_16"].vm_type == config_pb2.VM_TYPE_TPU_VM
+        assert original_config.scale_groups["tpu_v5e_16"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
         # Round-trip via dict and YAML
         config_dict = config_to_dict(original_config)
@@ -220,8 +219,8 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        # Verify vm_type is still TPU
-        assert loaded_config.scale_groups["tpu_v5e_16"].vm_type == config_pb2.VM_TYPE_TPU_VM
+        # Verify accelerator type is still TPU
+        assert loaded_config.scale_groups["tpu_v5e_16"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
     @pytest.mark.parametrize(
         "accelerator_type,expected_enum",
@@ -245,7 +244,6 @@ defaults:
 
 scale_groups:
   test_group:
-    vm_type: manual_vm
     accelerator_type: {accelerator_type}
     slice_size: 1
     resources:
@@ -254,9 +252,9 @@ scale_groups:
       disk: 50GB
       tpu_count: 0
       gpu_count: 0
-    manual:
-      hosts: [10.0.0.1]
-    zones: [local]
+    slice_template:
+      manual:
+        hosts: [10.0.0.1]
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -271,7 +269,6 @@ scale_groups:
 platform:
   gcp:
     project_id: my-project
-    zone: us-central1-a
 
 defaults:
   bootstrap:
@@ -281,10 +278,8 @@ defaults:
 
 scale_groups:
   tpu_group:
-    vm_type: tpu_vm
     accelerator_type: TPU
     accelerator_variant: v5litepod-8
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 8
     resources:
       cpu: 128
@@ -294,7 +289,10 @@ scale_groups:
       gpu_count: 0
     min_slices: 1
     max_slices: 10
-    zones: [us-central1-a]
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+        zone: us-central1-a
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -308,12 +306,11 @@ class TestCreateAutoscalerFromConfig:
     """Tests for create_autoscaler factory function."""
 
     def test_creates_autoscaler_with_tpu_provider(self, tmp_path: Path):
-        """create_autoscaler works with TPU vm_type config."""
+        """create_autoscaler works with TPU config."""
         config_content = """\
 platform:
   gcp:
     project_id: my-project
-    zone: us-central1-a
 
 defaults:
   bootstrap:
@@ -323,10 +320,8 @@ defaults:
 
 scale_groups:
   tpu_v5e_8:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 8
     resources:
       cpu: 128
@@ -336,7 +331,10 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 2
-    zones: [us-central1-a]
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+        zone: us-central1-a
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -344,22 +342,20 @@ scale_groups:
         config = load_config(config_path)
         platform = create_platform(
             platform_config=config.platform,
-            bootstrap_config=config.defaults.bootstrap,
-            timeout_config=config.defaults.timeouts,
             ssh_config=config.defaults.ssh,
         )
         autoscaler = create_autoscaler(
             platform=platform,
             autoscaler_config=config.defaults.autoscaler,
             scale_groups=config.scale_groups,
-            dry_run=True,
+            label_prefix=config.platform.label_prefix or "iris",
         )
 
         assert autoscaler is not None
         assert "tpu_v5e_8" in autoscaler.groups
 
     def test_creates_autoscaler_with_manual_provider(self, tmp_path: Path):
-        """create_autoscaler works with manual vm_type config."""
+        """create_autoscaler works with manual config."""
         config_content = """\
 platform:
   manual: {}
@@ -375,7 +371,6 @@ defaults:
 
 scale_groups:
   manual_hosts:
-    vm_type: manual_vm
     accelerator_type: cpu
     slice_size: 1
     resources:
@@ -384,8 +379,9 @@ scale_groups:
       disk: 100GB
       tpu_count: 0
       gpu_count: 0
-    manual:
-      hosts: [10.0.0.1, 10.0.0.2]
+    slice_template:
+      manual:
+        hosts: [10.0.0.1, 10.0.0.2]
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -393,15 +389,13 @@ scale_groups:
         config = load_config(config_path)
         platform = create_platform(
             platform_config=config.platform,
-            bootstrap_config=config.defaults.bootstrap,
-            timeout_config=config.defaults.timeouts,
             ssh_config=config.defaults.ssh,
         )
         autoscaler = create_autoscaler(
             platform=platform,
             autoscaler_config=config.defaults.autoscaler,
             scale_groups=config.scale_groups,
-            dry_run=True,
+            label_prefix=config.platform.label_prefix or "iris",
         )
 
         assert autoscaler is not None
@@ -413,7 +407,6 @@ scale_groups:
 platform:
   gcp:
     project_id: my-project
-    zone: us-central1-a
 
 defaults:
   bootstrap:
@@ -423,10 +416,8 @@ defaults:
 
 scale_groups:
   tpu_v5e_8:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
-    runtime_version: v2-alpha-tpuv5-lite
     slice_size: 8
     resources:
       cpu: 128
@@ -436,7 +427,10 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 2
-    zones: [us-central1-a]
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+        zone: us-central1-a
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -453,15 +447,13 @@ scale_groups:
         # Should be able to create autoscaler from round-tripped config
         platform = create_platform(
             platform_config=loaded_config.platform,
-            bootstrap_config=loaded_config.defaults.bootstrap,
-            timeout_config=loaded_config.defaults.timeouts,
             ssh_config=loaded_config.defaults.ssh,
         )
         autoscaler = create_autoscaler(
             platform=platform,
             autoscaler_config=loaded_config.defaults.autoscaler,
             scale_groups=loaded_config.scale_groups,
-            dry_run=True,
+            label_prefix=loaded_config.platform.label_prefix or "iris",
         )
 
         assert autoscaler is not None
@@ -489,25 +481,22 @@ class TestSshConfigMerging:
         assert ssh_config.user == "ubuntu"
         assert ssh_config.key_file == "~/.ssh/cluster_key"
         assert ssh_config.port == 22  # DEFAULT_SSH_PORT
-        assert ssh_config.connect_timeout == Duration.from_seconds(60)
+        assert ssh_config.connect_timeout.milliseconds == 60_000
 
     def test_applies_per_group_ssh_overrides(self):
-        """get_ssh_config applies per-group SSH overrides for manual vm_type."""
+        """get_ssh_config applies per-group SSH overrides for manual slice template."""
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
 
-        config.scale_groups["manual_group"].CopyFrom(
-            config_pb2.ScaleGroupConfig(
-                name="manual_group",
-                vm_type=config_pb2.VM_TYPE_MANUAL_VM,
-                manual=config_pb2.ManualProvider(
-                    hosts=["10.0.0.1"],
-                    ssh_user="admin",
-                    ssh_key_file="~/.ssh/group_key",
-                ),
-            )
+        manual_config = config_pb2.ScaleGroupConfig(
+            name="manual_group",
         )
+        manual_config.slice_template.manual.hosts.append("10.0.0.1")
+        manual_config.slice_template.manual.ssh_user = "admin"
+        manual_config.slice_template.manual.ssh_key_file = "~/.ssh/group_key"
+
+        config.scale_groups["manual_group"].CopyFrom(manual_config)
 
         ssh_config = get_ssh_config(config, group_name="manual_group")
 
@@ -524,36 +513,32 @@ class TestSshConfigMerging:
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
         config.defaults.ssh.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
 
-        config.scale_groups["manual_group"].CopyFrom(
-            config_pb2.ScaleGroupConfig(
-                name="manual_group",
-                vm_type=config_pb2.VM_TYPE_MANUAL_VM,
-                manual=config_pb2.ManualProvider(
-                    hosts=["10.0.0.1"],
-                    ssh_user="admin",  # Override user only
-                ),
-            )
+        manual_config = config_pb2.ScaleGroupConfig(
+            name="manual_group",
         )
+        manual_config.slice_template.manual.hosts.append("10.0.0.1")
+        manual_config.slice_template.manual.ssh_user = "admin"  # Override user only
+
+        config.scale_groups["manual_group"].CopyFrom(manual_config)
 
         ssh_config = get_ssh_config(config, group_name="manual_group")
 
         assert ssh_config.user == "admin"  # Overridden
         assert ssh_config.key_file == "~/.ssh/cluster_key"  # From default
         assert ssh_config.port == 22  # From default
-        assert ssh_config.connect_timeout.to_seconds() == 30  # From default
+        assert ssh_config.connect_timeout.milliseconds == 30_000  # From default
 
     def test_uses_defaults_when_cluster_ssh_config_empty(self):
         """get_ssh_config uses built-in defaults when cluster config empty."""
-        from iris.time_utils import Duration
 
         config = config_pb2.IrisClusterConfig()
 
         ssh_config = get_ssh_config(config)
 
         assert ssh_config.user == "root"
-        assert ssh_config.key_file is None
+        assert ssh_config.key_file == ""
         assert ssh_config.port == 22
-        assert ssh_config.connect_timeout == Duration.from_seconds(30)
+        assert ssh_config.connect_timeout.milliseconds == 30_000
 
 
 class TestLocalConfigTransformation:
@@ -561,13 +546,12 @@ class TestLocalConfigTransformation:
 
     def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
         """make_local_config transforms GCP config to local mode."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
   gcp:
     project_id: test-project
-    zone: us-central1-a
 
 defaults:
   bootstrap:
@@ -588,7 +572,6 @@ controller:
 
 scale_groups:
   tpu_group:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-8
     slice_size: 8
@@ -600,7 +583,10 @@ scale_groups:
       gpu_count: 0
     min_slices: 1
     max_slices: 10
-    zones: [us-central1-a]
+    slice_template:
+      gcp:
+        zone: us-central1-a
+        runtime_version: tpu-ubuntu2204-base
 """
         config_path = tmp_path / "gcp_config.yaml"
         config_path.write_text(config_content)
@@ -616,9 +602,6 @@ scale_groups:
         assert local_config.controller.WhichOneof("controller") == "local"
         assert local_config.controller.local.port == 0  # auto-assign
 
-        # Verify scale groups transformed to local VM
-        assert local_config.scale_groups["tpu_group"].vm_type == config_pb2.VM_TYPE_LOCAL_VM
-
         # Verify fast timings applied (0.5s eval, 1s scale_up)
         assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
         assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
@@ -627,13 +610,12 @@ scale_groups:
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
   gcp:
     project_id: test-project
-    zone: us-central1-a
 
 defaults:
   bootstrap:
@@ -645,7 +627,6 @@ controller:
 
 scale_groups:
   cpu_group:
-    vm_type: gce_vm
     accelerator_type: cpu
     slice_size: 1
     resources:
@@ -656,10 +637,12 @@ scale_groups:
       gpu_count: 0
     min_slices: 2
     max_slices: 5
-    zones: [us-central1-a]
     priority: 50
+    slice_template:
+      gcp:
+        zone: us-central1-a
+        runtime_version: cos-stable
   tpu_group:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
     slice_size: 16
@@ -671,8 +654,11 @@ scale_groups:
       gpu_count: 0
     min_slices: 1
     max_slices: 3
-    zones: [us-central1-a]
     priority: 100
+    slice_template:
+      gcp:
+        zone: us-central1-a
+        runtime_version: tpu-ubuntu2204-base
 """
         config_path = tmp_path / "multi_group.yaml"
         config_path.write_text(config_content)
@@ -680,16 +666,14 @@ scale_groups:
         original_config = load_config(config_path)
         local_config = make_local_config(original_config)
 
-        # Verify VM types changed but other fields preserved
+        # Verify other fields preserved
         cpu_group = local_config.scale_groups["cpu_group"]
-        assert cpu_group.vm_type == config_pb2.VM_TYPE_LOCAL_VM
         assert cpu_group.accelerator_type == config_pb2.ACCELERATOR_TYPE_CPU
         assert cpu_group.min_slices == 2
         assert cpu_group.max_slices == 5
         assert cpu_group.priority == 50
 
         tpu_group = local_config.scale_groups["tpu_group"]
-        assert tpu_group.vm_type == config_pb2.VM_TYPE_LOCAL_VM
         assert tpu_group.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
         assert tpu_group.accelerator_variant == "v5litepod-16"
         assert tpu_group.min_slices == 1
@@ -698,7 +682,7 @@ scale_groups:
 
     def test_example_configs_load_and_transform(self):
         """Example configs in examples/ directory load and transform to local correctly."""
-        from iris.cluster.vm.config import make_local_config
+        from iris.cluster.config import make_local_config
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
@@ -722,3 +706,106 @@ scale_groups:
             # Verify fast timings applied
             assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
             assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
+
+
+def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
+    """Create a valid ScaleGroupConfig for use in validation tests."""
+    sg = config_pb2.ScaleGroupConfig(
+        name="test",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        slice_size=1,
+        resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+    )
+    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.slice_template.slice_size = 1
+    sg.slice_template.local.SetInParent()
+    return sg
+
+
+def _config_with(**overrides) -> config_pb2.IrisClusterConfig:
+    """Build an IrisClusterConfig with a single scale group, overriding fields."""
+    sg = _valid_scale_group()
+    for key, value in overrides.items():
+        if key == "resources":
+            sg.resources.CopyFrom(value)
+        else:
+            setattr(sg, key, value)
+    config = config_pb2.IrisClusterConfig()
+    config.scale_groups["test"].CopyFrom(sg)
+    return config
+
+
+class TestConfigValidation:
+    """Tests for validate_config: the consolidated entry point for config validation."""
+
+    def test_valid_config_accepted(self):
+        validate_config(_config_with())
+
+    def test_rejects_missing_resources(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config.scale_groups["test"]
+        sg.name = "test"
+        sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_size = 1
+        with pytest.raises(ValueError, match="must set resources"):
+            validate_config(config)
+
+    def test_rejects_missing_slice_size(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config.scale_groups["test"]
+        sg.name = "test"
+        sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.resources.CopyFrom(config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3))
+        with pytest.raises(ValueError, match="must set slice_size"):
+            validate_config(config)
+
+    def test_rejects_zero_slice_size(self):
+        with pytest.raises(ValueError, match="invalid slice_size"):
+            validate_config(_config_with(slice_size=0))
+
+    def test_rejects_unspecified_accelerator_type(self):
+        with pytest.raises(ValueError, match="must set accelerator_type"):
+            validate_config(_config_with(accelerator_type=config_pb2.ACCELERATOR_TYPE_UNSPECIFIED))
+
+    def test_rejects_negative_cpu(self):
+        with pytest.raises(ValueError, match="invalid cpu"):
+            validate_config(_config_with(resources=config_pb2.ScaleGroupResources(cpu=-1, memory_bytes=16 * 1024**3)))
+
+    def test_rejects_gcp_zone_not_in_platform_zones(self):
+        """Validation fails when scale group zone is not in platform.gcp.zones."""
+        config = config_pb2.IrisClusterConfig()
+        config.platform.gcp.project_id = "test"
+        config.platform.gcp.zones.append("zone-a")
+
+        sg = config_pb2.ScaleGroupConfig(
+            name="tpu",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-8",
+            slice_size=8,
+            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
+        )
+        sg.slice_template.gcp.zone = "zone-b"
+        sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
+        config.scale_groups["tpu"].CopyFrom(sg)
+
+        with pytest.raises(ValueError, match=r"not in platform\.gcp\.zones"):
+            validate_config(config)
+
+    def test_accepts_gcp_zone_in_platform_zones(self):
+        """Validation passes when scale group zone is in platform.gcp.zones."""
+        config = config_pb2.IrisClusterConfig()
+        config.platform.gcp.project_id = "test"
+        config.platform.gcp.zones.append("zone-a")
+
+        sg = config_pb2.ScaleGroupConfig(
+            name="tpu",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-8",
+            slice_size=8,
+            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
+        )
+        sg.slice_template.gcp.zone = "zone-a"
+        sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
+        config.scale_groups["tpu"].CopyFrom(sg)
+
+        validate_config(config)  # Should not raise

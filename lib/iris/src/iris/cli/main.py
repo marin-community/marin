@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Top-level Iris CLI entry point.
 
@@ -22,7 +11,7 @@ import sys
 
 import click
 
-from iris.logging import configure_logging as _configure_logging
+from iris.logging import configure_logging
 
 logger = _logging_module.getLogger(__name__)
 
@@ -58,21 +47,24 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     ctx.obj["traceback"] = show_traceback
 
     if verbose:
-        _configure_logging(level=_logging_module.DEBUG)
+        configure_logging(level=_logging_module.DEBUG)
     else:
-        _configure_logging(level=_logging_module.INFO)
+        configure_logging(level=_logging_module.INFO)
 
     # Validate mutually exclusive options
     if controller_url and config_file:
         raise click.UsageError("Cannot specify both --controller-url and --config")
 
-    # Skip expensive operations when showing help or doing shell completion
-    if ctx.resilient_parsing or "--help" in sys.argv or "-h" in sys.argv:
+    # Skip expensive operations when showing help or doing shell completion.
+    # Only check for help flags before "--" to avoid matching help flags
+    # intended for the user's command (e.g., "job run -- python script.py --help").
+    argv_before_separator = sys.argv[: sys.argv.index("--")] if "--" in sys.argv else sys.argv
+    if ctx.resilient_parsing or "--help" in argv_before_separator or "-h" in argv_before_separator:
         return
 
     # Load config if provided
     if config_file:
-        from iris.cluster.vm.config import IrisConfig
+        from iris.cluster.config import IrisConfig
 
         iris_config = IrisConfig.load(config_file)
         ctx.obj["config"] = iris_config.proto
@@ -87,22 +79,18 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
         platform = iris_config.platform()
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.vm.cluster_manager import ClusterManager
+            from iris.cluster.controller.local import LocalController
 
-            manager = ClusterManager(iris_config.proto)
-            controller_address = manager.start()
-            ctx.call_on_close(manager.stop)
+            controller = LocalController(iris_config.proto)
+            controller_address = controller.start()
+            ctx.call_on_close(controller.stop)
         else:
             controller_address = iris_config.controller_address()
 
-        # Establish tunnel with 5-second timeout and keep it alive for command duration
+        # Establish tunnel and keep it alive for command duration
         try:
             logger.info("Establishing tunnel to controller...")
-            tunnel_cm = platform.tunnel(
-                controller_address=controller_address,
-                timeout=5.0,
-                tunnel_logger=logger,
-            )
+            tunnel_cm = platform.tunnel(address=controller_address)
             tunnel_url = tunnel_cm.__enter__()
             ctx.obj["controller_url"] = tunnel_url
             # Clean up tunnel when context closes
@@ -117,8 +105,8 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
 # always available when the ``iris`` group is used.
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
-from iris.cli.rpc import register_rpc_commands  # noqa: E402
 from iris.cli.job import job  # noqa: E402
+from iris.cli.rpc import register_rpc_commands  # noqa: E402
 
 iris.add_command(cluster)
 iris.add_command(build)

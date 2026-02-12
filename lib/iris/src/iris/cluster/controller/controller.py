@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
@@ -26,7 +15,7 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
-from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
@@ -49,11 +38,11 @@ from iris.cluster.types import (
     get_device_type_enum,
     get_device_variant,
 )
-from iris.cluster.vm.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +62,7 @@ def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint
 
 def compute_demand_entries(state: ControllerState) -> list:
     """Compute demand entries from controller state."""
-    from iris.cluster.vm.autoscaler import DemandEntry
+    from iris.cluster.controller.autoscaler import DemandEntry
     from iris.cluster.types import DeviceType
 
     demand_entries: list[DemandEntry] = []
@@ -206,14 +195,14 @@ class ControllerConfig:
 class Controller:
     """Unified controller managing all components and lifecycle.
 
-    Runs two background loops:
-    - Scheduling loop: finds task assignments, checks worker timeouts, runs autoscaler
+    Runs three background loops:
+    - Scheduling loop: finds task assignments, checks worker timeouts
     - Heartbeat loop: sends heartbeat RPCs to workers, delivering buffered dispatches/kills
+    - Autoscaler loop: evaluates scaling decisions, manages slice lifecycle
 
-    Separating these ensures slow heartbeat RPCs don't block scheduling and vice versa.
-
-    When an autoscaler is provided, manages it in a background thread that
-    provisions/terminates VM slices based on demand.
+    Each loop runs on its own thread so blocking operations in one don't
+    stall the others. Per-ScalingGroup monitor threads refresh VM status
+    in the background so the autoscaler reads cached status.
 
     Example:
         ```python
@@ -272,6 +261,9 @@ class Controller:
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None
+        self._scheduling_thread: ManagedThread | None = None
+        self._heartbeat_thread: ManagedThread | None = None
+        self._autoscaler_thread: ManagedThread | None = None
 
         # Thread pool for parallel heartbeat dispatch, owned by the ThreadContainer
         # so it is shut down automatically during stop().
@@ -282,7 +274,9 @@ class Controller:
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
-        self._last_autoscaler_run: float = 0.0
+        self._autoscaler_limiter: RateLimiter | None = (
+            RateLimiter(autoscaler.evaluation_interval.to_seconds()) if autoscaler else None
+        )
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -296,8 +290,8 @@ class Controller:
 
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
-        self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
-        self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
+        self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
+        self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
@@ -310,9 +304,10 @@ class Controller:
         self._server = uvicorn.Server(server_config)
         self._threads.spawn_server(self._server, name="controller-server")
 
-        # Log autoscaler configuration if provided (runs from scheduling loop, not separate thread)
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
+            self._autoscaler.start_monitors()
+            self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
@@ -323,24 +318,31 @@ class Controller:
     def stop(self) -> None:
         """Stop all background components gracefully.
 
-        Signals all managed threads via their stop events, then joins.
-        If shutdown hangs, test framework timeout will kill the process.
+        Shutdown ordering:
+        1. Stop scheduling/heartbeat/autoscaler loops so no new work is triggered.
+        2. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
+        3. Stop remaining threads (server) and executors.
         """
-        # Wake the loops so they check stop_event promptly
         self._wake_event.set()
         self._heartbeat_event.set()
+        join_timeout = Duration.from_seconds(5.0)
+        if self._scheduling_thread:
+            self._scheduling_thread.stop()
+            self._scheduling_thread.join(timeout=join_timeout)
+        if self._heartbeat_thread:
+            self._heartbeat_thread.stop()
+            self._heartbeat_thread.join(timeout=join_timeout)
+        if self._autoscaler_thread:
+            self._autoscaler_thread.stop()
+            self._autoscaler_thread.join(timeout=join_timeout)
 
-        # Stop all managed threads and executors (signals stop_event + joins;
-        # server stop is handled by spawn_server's stop_event bridge, executor
-        # shutdown is handled by ThreadContainer)
-        self._threads.stop()
-
-        # Shutdown autoscaler
         if self._autoscaler:
             self._autoscaler.shutdown()
 
+        self._threads.stop()
+
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
-        """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
+        """Scheduling loop: task assignment and worker timeout checks only."""
         while not stop_event.is_set():
             self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
             self._wake_event.clear()
@@ -351,8 +353,17 @@ class Controller:
             self._run_scheduling()
             self._check_worker_timeouts()
 
-            if self._autoscaler:
+    def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
+        """Autoscaler loop: runs on its own thread so blocking cloud API calls
+        don't stall scheduling or heartbeats."""
+        while not stop_event.is_set():
+            stop_event.wait(timeout=self._config.scheduler_interval_seconds)
+            if stop_event.is_set():
+                break
+            try:
                 self._run_autoscaler_once()
+            except Exception:
+                logger.exception("Autoscaler loop iteration failed")
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
@@ -578,33 +589,26 @@ class Controller:
                 self._autoscaler.notify_worker_failed(vm_address)
 
     def _run_autoscaler_once(self) -> None:
-        """Run one autoscaler evaluation cycle.
+        """Run one autoscaler cycle: refresh (I/O) then update (CPU).
 
-        Called from the scheduling loop every cycle. Computes demand from pending
-        tasks and worker idle state, then runs the autoscaler.
-
-        Rate-limits evaluations based on the autoscaler's configured evaluation_interval_seconds.
+        Called from the autoscaler loop thread. Status reads use cached
+        VmGroupStatus from monitor threads.
         """
-        if not self._autoscaler:
+        if not self._autoscaler or not self._autoscaler_limiter:
+            return
+        if not self._autoscaler_limiter.should_run():
             return
 
-        from time import monotonic
-
-        now = monotonic()
-        interval = self._autoscaler.evaluation_interval_seconds
-        if interval > 0 and now - self._last_autoscaler_run < interval:
-            return
-        self._last_autoscaler_run = now
-
-        demand_entries = compute_demand_entries(self._state)
         vm_status_map = self._build_vm_status_map()
-        self._autoscaler.run_once(demand_entries, vm_status_map=vm_status_map)
+        self._autoscaler.refresh(vm_status_map)
+        demand_entries = compute_demand_entries(self._state)
+        self._autoscaler.update(demand_entries)
 
     def _build_vm_status_map(self) -> VmWorkerStatusMap:
         """Build a map of VM address to worker status for autoscaler.
 
         The autoscaler needs to look up worker status by VM address (not worker_id)
-        because ManagedVm only knows the VM's IP address, not the worker's self-assigned ID.
+        because VmHandle only exposes the VM's IP address, not the worker's self-assigned ID.
         Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
         """
         result: VmWorkerStatusMap = {}

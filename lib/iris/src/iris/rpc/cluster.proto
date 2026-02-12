@@ -25,6 +25,21 @@ import "vm.proto";
 
 message Empty {}
 
+// --- Profiling ---
+// Shared by both ControllerService and WorkerService (controller proxies to worker).
+message ProfileTaskRequest {
+  string task_id = 1;
+  int32 duration_seconds = 2;   // How long to sample (default: 10)
+  int32 rate_hz = 3;            // Sample rate (default: 100)
+  string format = 4;            // "flamegraph" (default), "speedscope", "raw"
+}
+
+message ProfileTaskResponse {
+  bytes profile_data = 1;       // SVG/JSON/text output
+  string format = 2;            // Echoed back
+  string error = 3;             // Non-empty if profiling failed
+}
+
 message ProcessLogRecord {
   double timestamp = 1;
   string level = 2;
@@ -322,7 +337,7 @@ message WorkerMetadata {
   map<string, AttributeValue> attributes = 40;
 
   // VM address from IRIS_VM_ADDRESS env var, used for autoscaler VM tracking.
-  // For cloud VMs, this is the VM's IP address injected by ManagedVm.
+  // For cloud VMs, this is the VM's IP address injected by the Platform bootstrap.
   // For local workers, this may be empty or a local identifier.
   string vm_address = 41;
 }
@@ -626,6 +641,7 @@ message Controller {
   message GetProcessLogsResponse {
     repeated ProcessLogRecord records = 1;
   }
+
 }
 
 // ============================================================================
@@ -768,6 +784,9 @@ service ControllerService {
 
   // Controller process logs
   rpc GetProcessLogs(Controller.GetProcessLogsRequest) returns (Controller.GetProcessLogsResponse);
+
+  // Profiling (proxied to worker)
+  rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 }
 
 service WorkerService {
@@ -777,4 +796,5 @@ service WorkerService {
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
   rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 }

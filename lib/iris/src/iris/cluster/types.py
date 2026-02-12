@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Core types for the iris cluster layer.
 
@@ -28,8 +17,10 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum, IntEnum
+from pathlib import Path
 from typing import Any, NewType
 
+import cloudpickle
 import humanfriendly
 
 from iris.rpc import cluster_pb2
@@ -706,24 +697,25 @@ class Entrypoint:
         payload = self.workdir_files.get("_callable.pkl")
         if payload is None:
             raise ValueError("Not a callable entrypoint")
-        import cloudpickle
 
         return cloudpickle.loads(payload)
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        import sys
-        from pathlib import Path
-
-        import cloudpickle
-
+        # mark any testing code as pickle_by_value so we can use it with cloudpickle
         module = sys.modules.get(fn.__module__)
         module_path = Path(module.__file__).parts if module and getattr(module, "__file__", None) else ()
         if module and (module.__package__ is None or module.__spec__ is None or "tests" in module_path):
             cloudpickle.register_pickle_by_value(module)
 
+        # We use bash -c so that $IRIS_WORKDIR and $IRIS_PYTHON are expanded
+        # at runtime from the container's environment.  ProcessContainerHandle
+        # remaps IRIS_WORKDIR to the host workdir and IRIS_PYTHON to
+        # sys.executable for local execution; in Docker containers these are
+        # set to "/app" and "python" respectively by task_attempt env setup.
+        # `exec` replaces bash with python to avoid an extra parent process.
         return cls(
-            command=["bash", "-c", "exec python -u $IRIS_WORKDIR/_callable_runner.py"],
+            command=["bash", "-c", "exec $IRIS_PYTHON -u $IRIS_WORKDIR/_callable_runner.py"],
             workdir_files={
                 "_callable.pkl": cloudpickle.dumps((fn, args, kwargs)),
                 "_callable_runner.py": CALLABLE_RUNNER.encode(),
