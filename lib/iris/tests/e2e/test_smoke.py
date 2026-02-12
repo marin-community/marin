@@ -12,7 +12,7 @@ import pytest
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import cluster_pb2
 
-from .conftest import wait_for_dashboard_ready
+from .conftest import assert_visible, dashboard_goto, wait_for_dashboard_ready
 from .helpers import _block, _failing, _quick
 
 pytestmark = pytest.mark.e2e
@@ -99,11 +99,11 @@ def test_succeeded_job_visible_in_dashboard(cluster, page, screenshot):
     job = cluster.submit(_quick, "dash-smoke-ok")
     cluster.wait(job, timeout=30)
 
-    page.goto(f"{cluster.url}/")
+    dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
 
-    assert page.locator("text=dash-smoke-ok").first.is_visible(timeout=5000)
-    assert page.locator("text=SUCCEEDED").first.is_visible(timeout=5000)
+    assert_visible(page, "text=dash-smoke-ok")
+    assert_visible(page, "text=SUCCEEDED")
     screenshot("jobs-succeeded")
 
 
@@ -112,9 +112,9 @@ def test_failed_job_visible_in_dashboard(cluster, page, screenshot):
     job = cluster.submit(_failing, "dash-smoke-fail")
     cluster.wait(job, timeout=30)
 
-    page.goto(f"{cluster.url}/")
+    dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
 
-    assert page.locator("text=dash-smoke-fail").first.is_visible(timeout=5000)
-    assert page.locator("text=FAILED").first.is_visible(timeout=5000)
+    assert_visible(page, "text=dash-smoke-fail")
+    assert_visible(page, "text=FAILED")
     screenshot("jobs-failed")

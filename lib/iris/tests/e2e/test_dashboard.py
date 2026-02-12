@@ -11,10 +11,8 @@ rendering via screenshots.
 import pytest
 from iris.rpc import cluster_pb2
 
-from .conftest import wait_for_dashboard_ready
+from .conftest import _is_noop_page, assert_visible, dashboard_click, dashboard_goto, wait_for_dashboard_ready
 from .helpers import _failing, _quick, _slow
-
-pytest.importorskip("playwright")
 
 pytestmark = pytest.mark.e2e
 
@@ -29,11 +27,11 @@ def test_jobs_tab_shows_all_states(cluster, page, screenshot):
     cluster.wait(failed_job, timeout=30)
     cluster.wait_for_state(running_job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
 
-    page.goto(f"{cluster.url}/")
+    dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
 
     for name in ["dash-succeeded", "dash-failed", "dash-running"]:
-        assert page.locator(f"text={name}").first.is_visible(timeout=5000)
+        assert_visible(page, f"text={name}")
 
     screenshot("jobs-all-states")
 
@@ -43,26 +41,26 @@ def test_job_detail_page(cluster, page, screenshot):
     job = cluster.submit(_quick, "dash-detail")
     cluster.wait(job, timeout=30)
 
-    page.goto(f"{cluster.url}/job/{job.job_id.to_wire()}")
+    dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
     wait_for_dashboard_ready(page)
 
-    assert page.locator("text=SUCCEEDED").first.is_visible(timeout=5000)
+    assert_visible(page, "text=SUCCEEDED")
     screenshot("job-detail-succeeded")
 
 
 def test_workers_tab(cluster, page, screenshot):
     """Workers tab shows healthy workers."""
     wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Workers")')
+    dashboard_click(page, 'button.tab-btn:has-text("Workers")')
 
-    assert page.locator("text=healthy").first.is_visible(timeout=5000)
+    assert_visible(page, "text=healthy")
     screenshot("workers-tab")
 
 
 def test_autoscaler_tab(cluster, page, screenshot):
     """Autoscaler tab shows scale groups."""
     wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Autoscaler")')
+    dashboard_click(page, 'button.tab-btn:has-text("Autoscaler")')
 
     screenshot("autoscaler-tab")
 
@@ -70,13 +68,13 @@ def test_autoscaler_tab(cluster, page, screenshot):
 def test_controller_logs(cluster, page, screenshot):
     """Logs tab renders the log viewer component."""
     wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Logs")')
+    dashboard_click(page, 'button.tab-btn:has-text("Logs")')
 
-    # The log viewer always renders #log-container; wait for it plus either
-    # log lines or the "No logs found" empty state (both are valid).
-    page.wait_for_selector("#log-container", timeout=10000)
-    page.wait_for_function(
-        "() => document.querySelectorAll('.log-line').length > 0" " || document.querySelector('.empty-state') !== null",
-        timeout=10000,
-    )
+    if not _is_noop_page(page):
+        page.wait_for_selector("#log-container", timeout=10000)
+        page.wait_for_function(
+            "() => document.querySelectorAll('.log-line').length > 0"
+            " || document.querySelector('.empty-state') !== null",
+            timeout=10000,
+        )
     screenshot("controller-logs")

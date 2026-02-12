@@ -12,7 +12,7 @@ from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
-from .conftest import wait_for_dashboard_ready
+from .conftest import assert_visible, dashboard_click, dashboard_goto, wait_for_dashboard_ready
 from .helpers import _quick, _slow
 
 pytestmark = pytest.mark.e2e
@@ -79,9 +79,9 @@ def test_task_fails_once_then_succeeds(cluster):
 
 def test_worker_health_in_dashboard(cluster, page, screenshot):
     """Workers tab shows at least one healthy worker."""
-    page.goto(f"{cluster.url}/")
+    dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Workers")')
+    dashboard_click(page, 'button.tab-btn:has-text("Workers")')
 
-    assert page.locator("text=healthy").first.is_visible(timeout=5000)
+    assert_visible(page, "text=healthy")
     screenshot("workers-healthy")

@@ -8,9 +8,8 @@ Migrated from tests/chaos/test_vm_failures.py.
 """
 
 import pytest
-from iris.cluster.controller.scaling_group import slice_handle_status
-from iris.cluster.platform.base import QuotaExhaustedError
-from iris.rpc import config_pb2, vm_pb2
+from iris.cluster.platform.base import CloudVmState, QuotaExhaustedError
+from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
 
@@ -48,10 +47,10 @@ def test_quota_exceeded_retry():
 
     platform.tick(Timestamp.now().epoch_ms())
 
-    status = slice_handle_status(handle)
+    status = handle.describe()
     assert any(
-        vm.state == vm_pb2.VM_STATE_READY for vm in status.vms
-    ), f"Expected at least one VM in READY state, got states: {[vm.state for vm in status.vms]}"
+        vm.status().state == CloudVmState.RUNNING for vm in status.vms
+    ), f"Expected at least one VM in RUNNING state, got states: {[vm.status().state for vm in status.vms]}"
 
 
 def test_vm_init_stuck():
@@ -62,11 +61,11 @@ def test_vm_init_stuck():
 
     platform.tick(Timestamp.now().epoch_ms())
 
-    status = slice_handle_status(handle)
-    vm_states = [vm.state for vm in status.vms]
+    status = handle.describe()
+    vm_states = [vm.status().state for vm in status.vms]
     assert all(
-        vm.state != vm_pb2.VM_STATE_READY for vm in status.vms
-    ), f"Expected no VMs in READY state, got states: {vm_states}"
+        vm.status().state != CloudVmState.RUNNING for vm in status.vms
+    ), f"Expected no VMs in RUNNING state, got states: {vm_states}"
 
 
 def test_vm_preempted():
@@ -77,14 +76,14 @@ def test_vm_preempted():
 
     platform.tick(Timestamp.now().epoch_ms())
 
-    status = slice_handle_status(handle)
+    status = handle.describe()
     assert any(
-        vm.state == vm_pb2.VM_STATE_READY for vm in status.vms
-    ), f"Expected at least one VM in READY state before termination, got: {[vm.state for vm in status.vms]}"
+        vm.status().state == CloudVmState.RUNNING for vm in status.vms
+    ), f"Expected at least one VM in RUNNING state before termination, got: {[vm.status().state for vm in status.vms]}"
 
     handle.terminate()
 
-    status = slice_handle_status(handle)
+    status = handle.describe()
     assert all(
-        vm.state == vm_pb2.VM_STATE_TERMINATED for vm in status.vms
-    ), f"Expected all VMs in TERMINATED state after preemption, got: {[vm.state for vm in status.vms]}"
+        vm.status().state == CloudVmState.TERMINATED for vm in status.vms
+    ), f"Expected all VMs in TERMINATED state after preemption, got: {[vm.status().state for vm in status.vms]}"

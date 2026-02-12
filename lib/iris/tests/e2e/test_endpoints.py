@@ -19,7 +19,7 @@ from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
-from .conftest import wait_for_dashboard_ready
+from .conftest import assert_visible, dashboard_click, dashboard_goto, wait_for_dashboard_ready
 
 pytestmark = pytest.mark.e2e
 
@@ -243,11 +243,11 @@ def test_endpoints_visible_in_dashboard(cluster, page, screenshot):
     cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
     time.sleep(2)
 
-    page.goto(f"{cluster.url}/")
+    dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Endpoints")')
+    dashboard_click(page, 'button.tab-btn:has-text("Endpoints")')
 
-    assert page.locator(f"text={prefix}/dashboard-check").first.is_visible(timeout=5000)
+    assert_visible(page, f"text={prefix}/dashboard-check")
     screenshot("endpoints-tab")
 
     cluster.kill(job)

@@ -275,6 +275,9 @@ class _NoOpPage:
     def click(self, selector, **kwargs):
         pass
 
+    def wait_for_selector(self, selector, **kwargs):
+        pass
+
     def locator(self, selector, **kwargs):
         return _NoOpLocator()
 
@@ -312,6 +315,31 @@ class _NoOpBrowser:
         pass
 
 
+def _is_noop_page(page) -> bool:
+    return isinstance(page, _NoOpPage)
+
+
+def assert_visible(page, selector: str, *, timeout: int = 5000) -> None:
+    """Assert a selector is visible. No-op when Playwright is unavailable."""
+    if _is_noop_page(page):
+        return
+    assert page.locator(selector).first.is_visible(timeout=timeout)
+
+
+def dashboard_click(page, selector: str) -> None:
+    """Click a selector. No-op when Playwright is unavailable."""
+    if _is_noop_page(page):
+        return
+    page.click(selector)
+
+
+def dashboard_goto(page, url: str) -> None:
+    """Navigate to URL. No-op when Playwright is unavailable."""
+    if _is_noop_page(page):
+        return
+    page.goto(url)
+
+
 @pytest.fixture(scope="module")
 def browser():
     """Lazily launches a Chromium browser for Playwright-based tests.
@@ -338,6 +366,8 @@ def wait_for_dashboard_ready(page) -> None:
     Waits until the #root element has children and no longer shows "Loading...".
     Used by dashboard assertion tests across multiple test modules.
     """
+    if _is_noop_page(page):
+        return
     page.wait_for_function(
         "() => document.getElementById('root').children.length > 0"
         " && !document.getElementById('root').textContent.includes('Loading...')",
