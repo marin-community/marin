@@ -1,713 +1,755 @@
-(raylet, ip=10.164.15.203) [2026-02-11 13:25:13,400 E 2094 2094] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 41x across cluster]
-(raylet, ip=10.164.2.125) [2026-02-11 13:25:31,797 E 2092 2092] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(autoscaler +29m11s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +29m11s) Resized to 4920 CPUs, 164 TPUs.
-(<lambda> pid=2086, ip=10.164.0.202) 2026-02-11T13:27:02 - 0 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
-(raylet, ip=10.164.15.212) [2026-02-11 13:25:35,563 E 2095 2095] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(<lambda> pid=2086, ip=10.164.0.202) wandb: updating run metadata
-(<lambda> pid=2086, ip=10.164.0.202) wandb: uploading wandb-summary.json; uploading config.yaml
-(<lambda> pid=2086, ip=10.164.0.202) wandb: uploading summary, console lines 25-25
-(SliceActor pid=2013, ip=10.164.0.179) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2086, ip=10.164.0.202)
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=2013, ip=10.164.0.179)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=2013, ip=10.164.0.179)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main
-(SliceActor pid=2013, ip=10.164.0.179)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=2013, ip=10.164.0.179)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 4410, in __init__
-(SliceActor pid=2013, ip=10.164.0.179)     super().__init__(
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=2013, ip=10.164.0.179)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=2013, ip=10.164.0.179)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=2013, ip=10.164.0.179)     return asyncio.run(coro)
-(SliceActor pid=2013, ip=10.164.0.179)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-(SliceActor pid=2013, ip=10.164.0.179)     return runner.run(main)
-(SliceActor pid=2013, ip=10.164.0.179)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-(SliceActor pid=2013, ip=10.164.0.179)     return self._loop.run_until_complete(task)
-(SliceActor pid=2013, ip=10.164.0.179)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=2013, ip=10.164.0.179)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=2013, ip=10.164.0.179)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=2013, ip=10.164.0.179)     return (await self.get_batch([index]))[0]
-(SliceActor pid=2013, ip=10.164.0.179)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch
-(SliceActor pid=2013, ip=10.164.0.179)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=2013, ip=10.164.0.179)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-(SliceActor pid=2013, ip=10.164.0.179)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=2013, ip=10.164.0.179)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process
-(SliceActor pid=2013, ip=10.164.0.179)     self._start_pipeline(items_to_skip)
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2569, in _start_pipeline
-(SliceActor pid=2013, ip=10.164.0.179)     self._load_current_shard()
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard
-(SliceActor pid=2013, ip=10.164.0.179)     self._current_shard_data = list(self.source.open_shard(shard_name))
-(SliceActor pid=2013, ip=10.164.0.179)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row
-(SliceActor pid=2013, ip=10.164.0.179)     table = pa.Table.from_batches(
-(SliceActor pid=2013, ip=10.164.0.179)             ^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2013, ip=10.164.0.179)   File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches
-(SliceActor pid=2013, ip=10.164.0.179)   File "pyarrow/_parquet.pyx", line 1777, in iter_batches
-(SliceActor pid=2013, ip=10.164.0.179)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
-(SliceActor pid=2013, ip=10.164.0.179) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
-(<lambda> pid=2086, ip=10.164.0.202) wandb: 
-(<lambda> pid=2086, ip=10.164.0.202) wandb: Run summary:
-(<lambda> pid=2086, ip=10.164.0.202) wandb:                                 backend tpu
-(<lambda> pid=2086, ip=10.164.0.202) wandb:                             num_devices 128
-(<lambda> pid=2086, ip=10.164.0.202) wandb:                               num_hosts 32
-(<lambda> pid=2086, ip=10.164.0.202) wandb:                         parameter_count 2140151024
-(<lambda> pid=2086, ip=10.164.0.202) wandb:                  throughput/device_kind TPU v5 lite
-(<lambda> pid=2086, ip=10.164.0.202) wandb:            throughput/theoretical_flops 2.5216e+16
-(<lambda> pid=2086, ip=10.164.0.202) wandb: throughput/theoretical_flops_per_device 197000000000000.0
-(<lambda> pid=2086, ip=10.164.0.202) wandb: 
-(<lambda> pid=2086, ip=10.164.0.202) wandb: 🚀 View run vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1 at: https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2086, ip=10.164.0.202) wandb: ⭐️ View project at: https://wandb.ai/rui_li/marin-vlm
-(<lambda> pid=2086, ip=10.164.0.202) wandb: Synced 5 W&B file(s), 0 media file(s), 2 artifact file(s) and 0 other file(s)
-(<lambda> pid=2086, ip=10.164.0.202) wandb: Find logs at: ./wandb/run-20260211_131925-vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1/logs
-(<lambda> pid=2086, ip=10.164.0.202) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f66d81d8860>
-(<lambda> pid=2086, ip=10.164.0.202) Traceback (most recent call last):
-(<lambda> pid=2086, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=2086, ip=10.164.0.202)     conn.teardown(hooks.exit_code)
-(<lambda> pid=2086, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=2086, ip=10.164.0.202)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=2086, ip=10.164.0.202)     return future.result()
-(<lambda> pid=2086, ip=10.164.0.202)            ^^^^^^^^^^^^^^^
-(<lambda> pid=2086, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=2086, ip=10.164.0.202)     return self.__get_result()
-(<lambda> pid=2086, ip=10.164.0.202)            ^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=2086, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=2086, ip=10.164.0.202)     raise self._exception
-(<lambda> pid=2086, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=2086, ip=10.164.0.202)     return await fn()
-(<lambda> pid=2086, ip=10.164.0.202)            ^^^^^^^^^^
-(<lambda> pid=2086, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=2086, ip=10.164.0.202)     await self._client.close()
-(<lambda> pid=2086, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=2086, ip=10.164.0.202)     await self._writer.wait_closed()
-(<lambda> pid=2086, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=2086, ip=10.164.0.202)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=2086, ip=10.164.0.202) BrokenPipeError: [Errno 32] Broken pipe
-(run_on_pod_ray pid=2670, ip=10.164.0.10) Task error ray::<lambda>() (pid=2086, ip=10.164.0.202)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return func(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=2670, ip=10.164.0.10) ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2086, ip=10.164.0.202)
-(run_on_pod_ray pid=2670, ip=10.164.0.10) Failed 1 times. Continuing to retry.
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return func(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=2670, ip=10.164.0.10) ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2086, ip=10.164.0.202)
-(<lambda> pid=2086, ip=10.164.0.202) E0211 13:27:05.326665    2274 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=2086, ip=10.164.0.202) F0211 13:27:05.326691    2274 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=2086, ip=10.164.0.202) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=2086, ip=10.164.0.202) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
-(<lambda> pid=2087, ip=10.164.0.207) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/loader.py", line 136, in __init__ [repeated 6x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     super().__init__( [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     initial_example = blocking_wait(self.data_store.getitem_async(0)) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return asyncio.run(coro) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run [repeated 10x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return runner.run(main) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return self._loop.run_until_complete(task) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async [repeated 6x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return await dataset.getitem_async(dataset_index) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return (await self.get_batch([index]))[0] [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     result = self.fn(*self.args, **self.kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._start_pipeline(items_to_skip) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2569, in _start_pipeline [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._load_current_shard() [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._current_shard_data = list(self.source.open_shard(shard_name)) [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     table = pa.Table.from_batches( [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/_parquet.pyx", line 1777, in iter_batches [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 3x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10) Traceback (most recent call last): [repeated 2x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
-(<lambda> pid=2087, ip=10.164.0.178) Rate limited by HuggingFace Hub, retrying in 2.0s (attempt 1/20)
-(<lambda> pid=2087, ip=10.164.0.202) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 31x across cluster]
-(<lambda> pid=2087, ip=10.164.0.178) Rate limited by HuggingFace Hub, retrying in 9.0s (attempt 3/20) [repeated 64x across cluster]
-(autoscaler +30m57s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +30m57s) Resized to 23760 CPUs, 792 TPUs.
-(<lambda> pid=2087, ip=10.164.0.206) 2026-02-11T13:27:42 - 30 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
-(<lambda> pid=2087, ip=10.164.0.194) Rate limited by HuggingFace Hub, retrying in 8.9s (attempt 3/20)
-(<lambda> pid=2087, ip=10.164.0.202) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=2088, ip=10.164.0.190) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1.
-(<lambda> pid=2087, ip=10.164.0.202) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=2085, ip=10.164.0.186) wandb: Tracking run with wandb version 0.24.0
-(<lambda> pid=2085, ip=10.164.0.186) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=2085, ip=10.164.0.186) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/wandb/offline-run-20260211_132742-vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2087, ip=10.164.0.202) wandb: setting up run vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2087, ip=10.164.0.202) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=2087, ip=10.164.0.202) wandb: Resuming run vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2087, ip=10.164.0.202) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
-(<lambda> pid=2087, ip=10.164.0.202) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2086, ip=10.164.0.180) 2026-02-11T13:27:43 - 25 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:27:43 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1 vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2086, ip=10.164.0.204) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:27:45 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1 vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2087, ip=10.164.0.192) 2026-02-11T13:27:46 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=2088, ip=10.164.0.190) 2026-02-11T13:27:46 - 9 - levanter.checkpoint - checkpoint.py:605 - WARNING :: No checkpoints found in gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1/checkpoints
-(raylet, ip=10.164.15.213) [2026-02-11 13:23:20,263 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:27:45 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 63x across cluster]
-(<lambda> pid=2086, ip=10.164.0.200) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1. [repeated 30x across cluster]
-(<lambda> pid=2087, ip=10.164.0.202) wandb: Tracking run with wandb version 0.24.0 [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.200) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 30x across cluster]
-(<lambda> pid=2087, ip=10.164.0.202) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/wandb/run-20260211_132742-vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1 [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.204) 2026-02-11T13:27:45 - 22 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1 [repeated 61x across cluster]
-(<lambda> pid=2087, ip=10.164.0.202) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 31x across cluster]
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:27:46 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:- [repeated 31x across cluster]
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:27:46 - 0 - levanter.checkpoint - checkpoint.py:605 - WARNING :: No checkpoints found in gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1/checkpoints [repeated 31x across cluster]
-(raylet, ip=10.164.2.121) [2026-02-11 13:27:52,914 E 3121 3121] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 53x across cluster]
-(raylet, ip=10.164.2.127) [2026-02-11 13:27:59,350 E 3122 3122] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 10x across cluster]
-(raylet, ip=10.164.15.219) [2026-02-11 13:28:05,564 E 3125 3125] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 18x across cluster]
-(raylet, ip=10.164.2.111) [2026-02-11 13:28:12,240 E 3123 3123] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 20x across cluster]
-(raylet, ip=10.164.15.241) [2026-02-11 13:28:23,671 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 9x across cluster]
-(raylet, ip=10.164.15.240) [2026-02-11 13:28:32,035 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
-(autoscaler +33m5s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +33m5s) Resized to 23760 CPUs, 792 TPUs.
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:31:14 - 0 - levanter.data.image - image.py:2515 - INFO :: Initializing streaming dataset (step-based mode)...
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:31:14 - 0 - levanter.data.image - image.py:2525 - INFO :: Found 2004 total shards in 0.00s
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:31:14 - 0 - levanter.data.image - image.py:2534 - INFO :: Worker 0/32: assigned 63 shards (indices 0, 32, ...)
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:31:14 - 0 - levanter.data.image - image.py:3643 - INFO :: Built streaming dataset for train (train): streaming mode
-(<lambda> pid=2088, ip=10.164.0.196) 2026-02-11T13:31:15 - 17 - levanter.main.train_vlm - train_vlm.py:686 - INFO :: Using max_num_patches=0 from model config
-(<lambda> pid=2088, ip=10.164.0.196) 2026-02-11T13:31:15 - 17 - levanter.main.train_vlm - train_vlm.py:694 - INFO :: Using config-based image shape: C=3, H=384, W=384
-(<lambda> pid=2088, ip=10.164.0.196) 2026-02-11T13:31:15 - 17 - levanter.main.train_vlm - train_vlm.py:705 - INFO :: Using compute dtype <class 'jax.numpy.bfloat16'> for pixel values
-(<lambda> pid=2085, ip=10.164.0.188) 2026-02-11T13:31:15 - 1 - levanter.main.train_vlm - train_vlm.py:714 - INFO :: Using VLM checkpoint vocab size 151936 (tokenizer has 151669)
-(<lambda> pid=2085, ip=10.164.0.188) 2026-02-11T13:31:18 - 1 - levanter.main.train_vlm - train_vlm.py:757 - INFO :: Loading complete VLM from: gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544
-(<lambda> pid=2087, ip=10.164.0.205) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048
-(<lambda> pid=2085, ip=10.164.0.188) 2026-02-11T13:31:18 - 1 - levanter.compat.fsspec_safetensor - fsspec_safetensor.py:238 - INFO :: Reading 751 tensors from marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544/model.safetensors in 3 chunk(s) (total size: 4.28 GB)
-(<lambda> pid=2085, ip=10.164.0.188) 2026-02-11T13:31:18 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Reading marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544/model.safetensors -/4280403184 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=2090, ip=10.164.0.209) 2026-02-11T13:31:27 - 13 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Reading marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544/model.safetensors 4.28GB/4.28GB rate:566,398,822.8B/s remaining:00:00 elapsed:00:08 postfix:-
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:15 - 26 - levanter.data.image - image.py:2515 - INFO :: Initializing streaming dataset (step-based mode)... [repeated 31x across cluster]
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:15 - 26 - levanter.data.image - image.py:2525 - INFO :: Found 2004 total shards in 0.00s [repeated 31x across cluster]
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:15 - 26 - levanter.data.image - image.py:2534 - INFO :: Worker 26/32: assigned 62 shards (indices 26, 58, ...) [repeated 31x across cluster]
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:15 - 26 - levanter.data.image - image.py:3643 - INFO :: Built streaming dataset for train (train): streaming mode [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.180) 2026-02-11T13:31:15 - 25 - levanter.main.train_vlm - train_vlm.py:686 - INFO :: Using max_num_patches=0 from model config [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.180) 2026-02-11T13:31:15 - 25 - levanter.main.train_vlm - train_vlm.py:694 - INFO :: Using config-based image shape: C=3, H=384, W=384 [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.180) 2026-02-11T13:31:15 - 25 - levanter.main.train_vlm - train_vlm.py:705 - INFO :: Using compute dtype <class 'jax.numpy.bfloat16'> for pixel values [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.199) 2026-02-11T13:31:15 - 23 - levanter.main.train_vlm - train_vlm.py:714 - INFO :: Using VLM checkpoint vocab size 151936 (tokenizer has 151669) [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.199) 2026-02-11T13:31:18 - 23 - levanter.main.train_vlm - train_vlm.py:757 - INFO :: Loading complete VLM from: gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544 [repeated 31x across cluster]
-(<lambda> pid=2087, ip=10.164.0.202) `rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048 [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.199) 2026-02-11T13:31:18 - 23 - levanter.compat.fsspec_safetensor - fsspec_safetensor.py:238 - INFO :: Reading 751 tensors from marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544/model.safetensors in 3 chunk(s) (total size: 4.28 GB) [repeated 31x across cluster]
-(<lambda> pid=2086, ip=10.164.0.199) 2026-02-11T13:31:18 - 23 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Reading marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544/model.safetensors -/4280403184 rate:- remaining:? elapsed:00:00 postfix:- [repeated 31x across cluster]
-(<lambda> pid=2090, ip=10.164.0.209) 2026-02-11T13:31:27 - 13 - levanter.compat.hf_checkpoints - hf_checkpoints.py:719 - WARNING :: Model vocab size (151936) does not match tokenizer vocab size (151669). Using model vocab size (151936).
-(<lambda> pid=2090, ip=10.164.0.209) 2026-02-11T13:31:28 - 13 - levanter.compat.hf_checkpoints - hf_checkpoints.py:719 - WARNING :: Model vocab size (151936) does not match tokenizer vocab size (151669). Using model vocab size (151936).
-(<lambda> pid=2090, ip=10.164.0.209) 2026-02-11T13:31:29 - 13 - levanter.main.train_vlm - train_vlm.py:784 - INFO :: Loaded complete VLM weights (vision encoder + projector + LLM)
-(<lambda> pid=2090, ip=10.164.0.209) 2026-02-11T13:31:29 - 13 - levanter.main.train_vlm - train_vlm.py:813 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory.
-(<lambda> pid=2090, ip=10.164.0.209) 2026-02-11T13:31:29 - 13 - levanter.main.train_vlm - train_vlm.py:873 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16)
-(<lambda> pid=2088, ip=10.164.0.196) 2026-02-11T13:31:32 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Reading marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544/model.safetensors 4.28GB/4.28GB rate:367,065,644.0B/s remaining:00:00 elapsed:00:13 postfix:- [repeated 18x across cluster]
-(<lambda> pid=2088, ip=10.164.0.196) 2026-02-11T13:31:32 - 17 - levanter.compat.hf_checkpoints - hf_checkpoints.py:719 - WARNING :: Model vocab size (151936) does not match tokenizer vocab size (151669). Using model vocab size (151936). [repeated 36x across cluster]
-(<lambda> pid=2088, ip=10.164.0.196) 2026-02-11T13:31:34 - 17 - levanter.main.train_vlm - train_vlm.py:784 - INFO :: Loaded complete VLM weights (vision encoder + projector + LLM) [repeated 18x across cluster]
-(<lambda> pid=2088, ip=10.164.0.196) 2026-02-11T13:31:34 - 17 - levanter.main.train_vlm - train_vlm.py:813 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory. [repeated 18x across cluster]
-(<lambda> pid=2088, ip=10.164.0.196) 2026-02-11T13:31:34 - 17 - levanter.main.train_vlm - train_vlm.py:873 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16) [repeated 18x across cluster]
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:37 - 26 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Reading marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544/model.safetensors 4.28GB/4.28GB rate:261,063,267.8B/s remaining:00:00 elapsed:00:19 postfix:- [repeated 12x across cluster]
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:38 - 26 - levanter.compat.hf_checkpoints - hf_checkpoints.py:719 - WARNING :: Model vocab size (151936) does not match tokenizer vocab size (151669). Using model vocab size (151936). [repeated 24x across cluster]
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:39 - 26 - levanter.main.train_vlm - train_vlm.py:784 - INFO :: Loaded complete VLM weights (vision encoder + projector + LLM) [repeated 12x across cluster]
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:39 - 26 - levanter.main.train_vlm - train_vlm.py:813 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory. [repeated 12x across cluster]
-(<lambda> pid=2084, ip=10.164.0.201) 2026-02-11T13:31:39 - 26 - levanter.main.train_vlm - train_vlm.py:873 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16) [repeated 12x across cluster]
-(<lambda> pid=2086, ip=10.164.0.185) 2026-02-11T13:31:41 - 27 - levanter.data.image - image.py:2660 - INFO :: Loading shard 0: 0027_parquet
-(autoscaler +35m57s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +35m57s) Resized to 27480 CPUs, 916 TPUs.
-(autoscaler +36m49s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +36m49s) Resized to 27480 CPUs, 916 TPUs.
-(autoscaler +37m30s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +37m30s) Removing 32 nodes of type tpu_slice_v5e_128 (idle).
-(autoscaler +37m30s) Resized to 23640 CPUs, 788 TPUs.
-(<lambda> pid=2087, ip=10.164.0.202) 2026-02-11T13:34:34 - 0 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run...
-(<lambda> pid=2086, ip=10.164.0.185) 2026-02-11T13:31:38 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Reading marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544/model.safetensors 4.28GB/4.28GB rate:210,919,134.9B/s remaining:00:00 elapsed:00:20 postfix:-
-(<lambda> pid=2086, ip=10.164.0.185) 2026-02-11T13:31:39 - 27 - levanter.compat.hf_checkpoints - hf_checkpoints.py:719 - WARNING :: Model vocab size (151936) does not match tokenizer vocab size (151669). Using model vocab size (151936). [repeated 2x across cluster]
-(<lambda> pid=2086, ip=10.164.0.185) 2026-02-11T13:31:40 - 27 - levanter.main.train_vlm - train_vlm.py:784 - INFO :: Loaded complete VLM weights (vision encoder + projector + LLM)
-(<lambda> pid=2086, ip=10.164.0.185) 2026-02-11T13:31:40 - 27 - levanter.main.train_vlm - train_vlm.py:813 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory.
-(<lambda> pid=2086, ip=10.164.0.185) 2026-02-11T13:31:40 - 27 - levanter.main.train_vlm - train_vlm.py:873 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16)
-(<lambda> pid=2086, ip=10.164.0.198) 2026-02-11T13:31:41 - 24 - levanter.data.image - image.py:2660 - INFO :: Loading shard 0: 0024_parquet [repeated 31x across cluster]
-(<lambda> pid=2087, ip=10.164.0.202) wandb: updating run metadata
-(autoscaler +38m0s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +38m0s) Resized to 23640 CPUs, 788 TPUs.
-(<lambda> pid=2087, ip=10.164.0.202) wandb: uploading config.yaml
-(<lambda> pid=2087, ip=10.164.0.202) wandb: 
-(<lambda> pid=2087, ip=10.164.0.202) wandb: Run summary:
-(<lambda> pid=2087, ip=10.164.0.202) wandb:                                 backend tpu
-(<lambda> pid=2087, ip=10.164.0.202) wandb:                             num_devices 128
-(<lambda> pid=2087, ip=10.164.0.202) wandb:                               num_hosts 32
-(<lambda> pid=2087, ip=10.164.0.202) wandb:                         parameter_count 2140151024
-(<lambda> pid=2087, ip=10.164.0.202) wandb:                  throughput/device_kind TPU v5 lite
-(<lambda> pid=2087, ip=10.164.0.202) wandb:            throughput/theoretical_flops 2.5216e+16
-(<lambda> pid=2087, ip=10.164.0.202) wandb: throughput/theoretical_flops_per_device 197000000000000.0
-(<lambda> pid=2087, ip=10.164.0.202) wandb: 
-(<lambda> pid=2087, ip=10.164.0.202) wandb: 🚀 View run vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1 at: https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1
-(<lambda> pid=2087, ip=10.164.0.202) wandb: ⭐️ View project at: https://wandb.ai/rui_li/marin-vlm
-(<lambda> pid=2087, ip=10.164.0.202) wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
-(<lambda> pid=2087, ip=10.164.0.202) wandb: Find logs at: ./wandb/run-20260211_132742-vlm-official-qwen3-1.7b-round2-correct-mixed-128-2-5dada1/logs
-(run_on_pod_ray pid=2670, ip=10.164.0.10) Task error ray::<lambda>() (pid=2087, ip=10.164.0.202)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 4410, in __init__
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     super().__init__(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return asyncio.run(coro)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return runner.run(main)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return self._loop.run_until_complete(task)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return await dataset.getitem_async(dataset_index)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return (await self.get_batch([index]))[0]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     result = self.fn(*self.args, **self.kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._start_pipeline(items_to_skip)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2569, in _start_pipeline
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._load_current_shard()
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._current_shard_data = list(self.source.open_shard(shard_name))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     table = pa.Table.from_batches(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/_parquet.pyx", line 1777, in iter_batches
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
-(run_on_pod_ray pid=2670, ip=10.164.0.10) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
-(run_on_pod_ray pid=2670, ip=10.164.0.10) Traceback (most recent call last):
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return func(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=2670, ip=10.164.0.10) ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2087, ip=10.164.0.202)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 4410, in __init__
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     super().__init__(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return asyncio.run(coro)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return runner.run(main)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return self._loop.run_until_complete(task)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return await dataset.getitem_async(dataset_index)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return (await self.get_batch([index]))[0]
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     result = self.fn(*self.args, **self.kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._start_pipeline(items_to_skip)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2569, in _start_pipeline
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._load_current_shard()
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     self._current_shard_data = list(self.source.open_shard(shard_name))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     table = pa.Table.from_batches(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/_parquet.pyx", line 1777, in iter_batches
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
-(run_on_pod_ray pid=2670, ip=10.164.0.10) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
-(SliceActor pid=2013, ip=10.164.0.179) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=2087, ip=10.164.0.202)
-(<lambda> pid=2087, ip=10.164.0.202) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f71e047a020>
-(<lambda> pid=2087, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=2087, ip=10.164.0.202)     conn.teardown(hooks.exit_code)
-(<lambda> pid=2087, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=2087, ip=10.164.0.202)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=2087, ip=10.164.0.202)     return future.result()
-(<lambda> pid=2087, ip=10.164.0.202)            ^^^^^^^^^^^^^^^
-(<lambda> pid=2087, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=2087, ip=10.164.0.202)     return self.__get_result()
-(<lambda> pid=2087, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=2087, ip=10.164.0.202)     raise self._exception
-(<lambda> pid=2087, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=2087, ip=10.164.0.202)     return await fn()
-(<lambda> pid=2087, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=2087, ip=10.164.0.202)     await self._client.close()
-(<lambda> pid=2087, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=2087, ip=10.164.0.202)     await self._writer.wait_closed()
-(<lambda> pid=2087, ip=10.164.0.202)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=2087, ip=10.164.0.202)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=2087, ip=10.164.0.202) BrokenPipeError: [Errno 32] Broken pipe
-(<lambda> pid=2087, ip=10.164.0.202) E0211 13:34:37.418091    3564 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=2087, ip=10.164.0.202) F0211 13:34:37.418115    3564 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=2087, ip=10.164.0.202) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=2087, ip=10.164.0.202) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
-(run_on_pod_ray pid=2670, ip=10.164.0.10) Failed 2 times. Continuing to retry.
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return func(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=2670, ip=10.164.0.10) ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2087, ip=10.164.0.202)
-(run_on_pod_ray pid=2670, ip=10.164.0.10) Failed too many times
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     return func(*args, **kwargs)
-(run_on_pod_ray pid=2670, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=2670, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=2670, ip=10.164.0.10)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=2670, ip=10.164.0.10) ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2087, ip=10.164.0.202)
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10) Job 139700084103984 failed with message: ray::run_on_pod_ray() (pid=2670, ip=10.164.0.10)
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     raise problem or RuntimeError("TPU job failed too many times")
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/loader.py", line 136, in __init__ [repeated 8x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     super().__init__( [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     initial_example = blocking_wait(self.data_store.getitem_async(0)) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     return asyncio.run(coro) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run [repeated 13x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     return runner.run(main) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     return self._loop.run_until_complete(task) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async [repeated 8x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     return await dataset.getitem_async(dataset_index) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     return (await self.get_batch([index]))[0] [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     result = self.fn(*self.args, **self.kwargs) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     self._start_pipeline(items_to_skip) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2569, in _start_pipeline [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     self._load_current_shard() [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     self._current_shard_data = list(self.source.open_shard(shard_name)) [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     table = pa.Table.from_batches( [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "pyarrow/_parquet.pyx", line 1777, in iter_batches [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs [repeated 4x across cluster]
-(run_on_pod_ray pid=2670, ip=10.164.0.10) Traceback (most recent call last): [repeated 3x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray [repeated 2x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)                                                  ^^^^^^^^^^ [repeated 4x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 7x across cluster]
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_vlm pid=2669, ip=10.164.0.10) ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2087, ip=10.164.0.202)
-2026-02-11 13:34:43,401 WARNING cluster.py:350 -- Job 137882785950928 failed with message: ray::run_levanter_train_vlm() (pid=2669, ip=10.164.0.10)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     initial_example = blocking_wait(self.data_store.getitem_async(0))
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     return asyncio.run(coro)
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     return runner.run(main)
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     return self._loop.run_until_complete(task)
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async [repeated 2x across cluster]
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     return await dataset.getitem_async(dataset_index)
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     return (await self.get_batch([index]))[0]
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     result = self.fn(*self.args, **self.kwargs)
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     self._start_pipeline(items_to_skip)
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2567, in _start_pipeline
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     self._seek_to_item(items_to_skip)
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2607, in _seek_to_item
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     self._load_current_shard()
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     self._current_shard_data = list(self.source.open_shard(shard_name))
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)     table = pa.Table.from_batches(
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)             ^^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "pyarrow/_parquet.pyx", line 1777, in iter_batches
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10)   File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
+(run_levanter_train_vlm pid=2831, ip=10.164.0.10) pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-1.7b-round2-correct-mixed-128-0   -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-128 -- python experiments/VLM/demo_vlm_train_round2_eu_west4_128.py --force_run_failed true ^C
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ export RAY_AUTH_MODE=token
+export RAY_AUTH_TOKEN=$(cat ~/.ray/auth_token)
+export WANDB_API_KEY=REDACTED_WANDB_KEY
+uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-4b-stage2-correct-mixed-3  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py --force_run_failed true 
+Uninstalled 1 package in 1ms
+Installed 1 package in 90ms
+2026-02-11 22:37:20,239 - INFO - Creating SSH proxy chain through marin-eu-west4
+2026-02-11 22:37:20,239 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-eu-west4': RayPortMapping(dashboard_port=8268, gcs_port=6382, api_port=10004)}
+2026-02-11 22:37:20,243 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '34.6.60.99' (ED25519) to the list of known hosts.
+2026-02-11 22:37:21,245 - INFO - SSH tunnel not ready, retrying in 1s... (2/3)
+2026-02-11 22:37:22,540 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-02-11 22:37:23,141 - INFO - Submitting job with entrypoint:  python experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py --force_run_failed true
+2026-02-11 22:37:23,141 - INFO - Extras: 
+2026-02-11 22:37:23,141 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "EXP_NAME": "vlm-official-qwen3-4b-stage2-correct-mixed-3",
+    "HF_DATASETS_TRUST_REMOTE_CODE": "true",
+    "TPU_TYPE": "v5litepod-256",
+    "GIT_COMMIT": "5cbb768d9a6a22cb4abe5742432124e48dc63a22",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 393 packages in 22ms
+2026-02-11 22:37:23,204 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "EXP_NAME": "vlm-official-qwen3-4b-stage2-correct-mixed-3", "HF_DATASETS_TRUST_REMOTE_CODE": "true", "TPU_TYPE": "v5litepod-256", "GIT_COMMIT": "5cbb768d9a6a22cb4abe5742432124e48dc63a22", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_a49a633c4ec46bb8.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_private3", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-demo_vlm_train_round2_4b_eu_west4-20260211-223717  -- pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py --force_run_failed true
+2026-02-11 22:37:23,211 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
+2026-02-11 22:37:23,314 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
+2026-02-11 22:37:23,321 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
+2026-02-11 22:37:23,400 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
+2026-02-11 22:37:23,456 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
+2026-02-11 22:37:23,497 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
+2026-02-11 22:37:23,504 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
+2026-02-11 22:37:23,509 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
+2026-02-11 22:37:23,609 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
+2026-02-11 22:37:23,615 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
+2026-02-11 22:37:23,694 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
+2026-02-11 22:37:23,750 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
+2026-02-11 22:37:23,790 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
+2026-02-11 22:37:23,797 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
+2026-02-11 22:37:24,097 INFO dashboard_sdk.py:408 -- Package gcs://_ray_pkg_256526ec9f9af3c6.zip already exists, skipping upload.
+2026-02-11 22:37:24,402 - INFO - Job submitted with ID: ray-run-ruili-demo_vlm_train_round2_4b_eu_west4-20260211-223717
+2026-02-11 22:37:24,402 - INFO - Job URL: http://localhost:8268/#/jobs/ray-run-ruili-demo_vlm_train_round2_4b_eu_west4-20260211-223717
+2026-02-11 14:37:24,325 INFO job_manager.py:579 -- Runtime env is setting up.
+Running entrypoint for job ray-run-ruili-demo_vlm_train_round2_4b_eu_west4-20260211-223717: pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py --force_run_failed true
+Found existing installation: opencv-python-headless 4.13.0.92
+Uninstalling opencv-python-headless-4.13.0.92:
+  Successfully uninstalled opencv-python-headless-4.13.0.92
+Collecting opencv-python-headless
+  Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl.metadata (19 kB)
+Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl (60.4 MB)
+Installing collected packages: opencv-python-headless
+Successfully installed opencv-python-headless-4.13.0.92
+
+[notice] A new release of pip is available: 24.3.1 -> 26.0.1
+[notice] To update, run: pip install --upgrade pip
+2026-02-11 14:37:34,691 - INFO - Using cluster from FRAY_CLUSTER_SPEC=ray
+2026-02-11 14:37:34,817 INFO cluster.py:103 -- Created new namespace: fray_e970b6ca
+2026-02-11 14:37:34,817 INFO cluster.py:114 -- Set default job context to RayContext
+2026-02-11 14:37:34,817 INFO executor.py:719 -- ### Inspecting the 1 provided steps ###
+2026-02-11 14:37:34,821 INFO executor.py:727 -- ### Reading 1 statuses ###
+2026-02-11 14:37:34,821 INFO executor.py:737 -- ### Writing metadata ###
+2026-02-11 14:37:34,821 INFO executor.py:1104 -- Writing executor info to gs://marin-eu-west4/experiments/demo_vlm_train_round2_4b_eu_west4-b285df.json
+2026-02-11 14:37:34,821 INFO executor.py:1107 -- To view the experiment page, go to:
+2026-02-11 14:37:34,821 INFO executor.py:1108 -- 
+2026-02-11 14:37:34,822 INFO executor.py:1109 -- https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/demo_vlm_train_round2_4b_eu_west4-b285df.json
+2026-02-11 14:37:34,822 INFO executor.py:1110 -- 
+2026-02-11 14:37:35,242 INFO executor.py:740 -- ### Launching 1 steps ###
+2026-02-11 14:37:35,242 INFO executor.py:810 -- checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-3: <function run_levanter_train_vlm at 0x7218fe1387c0>
+2026-02-11 14:37:35,242 INFO executor.py:811 --   output_path = gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-3-fde097
+2026-02-11 14:37:35,242 INFO executor.py:812 --   config = {}
+2026-02-11 14:37:35,330 INFO executor.py:1142 -- [ray-marin-eu-west4-head-af1481f3-compute-125454305716032] Status checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-3: <function run_levanter_train_vlm at 0x7218fe1387c0>: RUNNING
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-4b-stage2-correct-mixed-4  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v
+5litepod-256 -- python experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py --force_run_failed true 
+Uninstalled 1 package in 1ms
+Installed 1 package in 94ms
+2026-02-11 23:38:49,563 - INFO - Creating SSH proxy chain through marin-eu-west4
+2026-02-11 23:38:49,563 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-eu-west4': RayPortMapping(dashboard_port=8268, gcs_port=6382, api_port=10004)}
+2026-02-11 23:38:49,568 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '34.6.60.99' (ED25519) to the list of known hosts.
+2026-02-11 23:38:50,570 - INFO - SSH tunnel not ready, retrying in 1s... (2/3)
+2026-02-11 23:38:51,865 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-02-11 23:38:52,464 - INFO - Submitting job with entrypoint:  python experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py --force_run_failed true
+2026-02-11 23:38:52,464 - INFO - Extras: 
+2026-02-11 23:38:52,464 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "EXP_NAME": "vlm-official-qwen3-4b-stage2-correct-mixed-4",
+    "HF_DATASETS_TRUST_REMOTE_CODE": "true",
+    "TPU_TYPE": "v5litepod-256",
+    "GIT_COMMIT": "5cbb768d9a6a22cb4abe5742432124e48dc63a22",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 393 packages in 21ms
+2026-02-11 23:38:52,527 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "EXP_NAME": "vlm-official-qwen3-4b-stage2-correct-mixed-4", "HF_DATASETS_TRUST_REMOTE_CODE": "true", "TPU_TYPE": "v5litepod-256", "GIT_COMMIT": "5cbb768d9a6a22cb4abe5742432124e48dc63a22", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_a49a633c4ec46bb8.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_private3", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-demo_vlm_train_round2_4b_eu_west4-20260211-233846  -- pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py --force_run_failed true
+2026-02-11 23:38:52,535 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
+2026-02-11 23:38:52,637 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
+2026-02-11 23:38:52,644 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
+2026-02-11 23:38:52,722 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
+2026-02-11 23:38:52,778 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
+2026-02-11 23:38:52,820 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
+2026-02-11 23:38:52,827 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
+2026-02-11 23:38:52,831 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
+2026-02-11 23:38:52,930 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
+2026-02-11 23:38:52,937 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
+2026-02-11 23:38:53,016 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
+2026-02-11 23:38:53,072 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
+2026-02-11 23:38:53,112 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
+2026-02-11 23:38:53,119 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
+2026-02-11 23:38:53,418 INFO dashboard_sdk.py:408 -- Package gcs://_ray_pkg_256526ec9f9af3c6.zip already exists, skipping upload.
+2026-02-11 23:38:53,722 - INFO - Job submitted with ID: ray-run-ruili-demo_vlm_train_round2_4b_eu_west4-20260211-233846
+2026-02-11 23:38:53,722 - INFO - Job URL: http://localhost:8268/#/jobs/ray-run-ruili-demo_vlm_train_round2_4b_eu_west4-20260211-233846
+2026-02-11 15:38:53,645 INFO job_manager.py:579 -- Runtime env is setting up.
+Running entrypoint for job ray-run-ruili-demo_vlm_train_round2_4b_eu_west4-20260211-233846: pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py --force_run_failed true
+Found existing installation: opencv-python-headless 4.13.0.92
+Uninstalling opencv-python-headless-4.13.0.92:
+  Successfully uninstalled opencv-python-headless-4.13.0.92
+Collecting opencv-python-headless
+  Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl.metadata (19 kB)
+Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl (60.4 MB)
+Installing collected packages: opencv-python-headless
+Successfully installed opencv-python-headless-4.13.0.92
+
+[notice] A new release of pip is available: 24.3.1 -> 26.0.1
+[notice] To update, run: pip install --upgrade pip
+2026-02-11 15:39:04,203 - INFO - Using cluster from FRAY_CLUSTER_SPEC=ray
+2026-02-11 15:39:04,330 INFO cluster.py:103 -- Created new namespace: fray_d8615363
+2026-02-11 15:39:04,330 INFO cluster.py:114 -- Set default job context to RayContext
+2026-02-11 15:39:04,331 INFO executor.py:719 -- ### Inspecting the 1 provided steps ###
+2026-02-11 15:39:04,334 INFO executor.py:727 -- ### Reading 1 statuses ###
+2026-02-11 15:39:04,334 INFO executor.py:737 -- ### Writing metadata ###
+2026-02-11 15:39:04,335 INFO executor.py:1104 -- Writing executor info to gs://marin-eu-west4/experiments/demo_vlm_train_round2_4b_eu_west4-23a49f.json
+2026-02-11 15:39:04,335 INFO executor.py:1107 -- To view the experiment page, go to:
+2026-02-11 15:39:04,335 INFO executor.py:1108 -- 
+2026-02-11 15:39:04,335 INFO executor.py:1109 -- https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/demo_vlm_train_round2_4b_eu_west4-23a49f.json
+2026-02-11 15:39:04,335 INFO executor.py:1110 -- 
+2026-02-11 15:39:04,615 INFO executor.py:740 -- ### Launching 1 steps ###
+2026-02-11 15:39:04,615 INFO executor.py:810 -- checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4: <function run_levanter_train_vlm at 0x7d24f6c6c7c0>
+2026-02-11 15:39:04,615 INFO executor.py:811 --   output_path = gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+2026-02-11 15:39:04,616 INFO executor.py:812 --   config = {}
+2026-02-11 15:39:04,679 INFO executor.py:1142 -- [ray-marin-eu-west4-head-af1481f3-compute-137600348669760] Status checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4: <function run_levanter_train_vlm at 0x7d24f6c6c7c0>: None
+2026-02-11 15:39:04,680 INFO executor.py:1163 -- [ray-marin-eu-west4-head-af1481f3-compute-137600348669760] Attempting to acquire lock for checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4: <function run_levanter_train_vlm at 0x7d24f6c6c7c0>
+2026-02-11 15:39:04,898 INFO executor.py:1166 -- [ray-marin-eu-west4-head-af1481f3-compute-137600348669760] Acquired lock for checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4: <function run_levanter_train_vlm at 0x7d24f6c6c7c0>
+2026-02-11 15:39:05,012 INFO cluster.py:149 -- Launching job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4
+2026-02-11 15:39:05,012 INFO cluster.py:278 -- Building environment for device: cpu/cpu
+2026-02-11 15:39:05,013 INFO cluster.py:283 -- Building environment with [], extras [] for job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4
+2026-02-11 15:39:05,013 INFO cluster.py:298 -- Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'JAX_PLATFORMS': 'cpu', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_d8615363'}}
+2026-02-11 15:39:05,013 INFO worker.py:1680 -- Using address 10.164.0.2:6379 set in the environment variable RAY_ADDRESS
+2026-02-11 15:39:05,016 INFO worker.py:1821 -- Connecting to existing Ray cluster at address: 10.164.0.2:6379...
+2026-02-11 15:39:05,027 INFO worker.py:1998 -- Connected to Ray cluster. View the dashboard at http://10.164.0.2:8265 
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Using provided namespace: fray_d8615363
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Set default job context to RayContext
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Launching job: train_vlm
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Building environment for device: tpu/v5litepod-256
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Building environment with [], extras ['tpu'] for job: train_vlm
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Resolved 393 packages in 4ms
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '5cbb768d9a6a22cb4abe5742432124e48dc63a22', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_d8615363', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Launching TPU job train_vlm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '5cbb768d9a6a22cb4abe5742432124e48dc63a22', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_d8615363', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
+(autoscaler +35s) Tip: use `ray status` to view detailed cluster status. To disable these messages, set RAY_SCHEDULER_EVENTS=0.
+(autoscaler +35s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +35s) Resized to 19680 CPUs, 656 TPUs.
+(autoscaler +2m46s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +2m46s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +5m21s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +5m21s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +8m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +8m2s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +10m8s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10m8s) Resized to 19800 CPUs, 660 TPUs.
+(raylet) The node with node id: bd50c3082dbc7acb15021a10424762c4489bf2a6b2007563d16bdc6e and address: 10.164.0.99 and node name: 10.164.0.99 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a    (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +10m54s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +10m54s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +12m6s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12m6s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +12m52s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12m52s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +13m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +13m28s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +13m53s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +13m53s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +14m13s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +14m13s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +14m34s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +14m34s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +15m15s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +15m15s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +16m11s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +16m11s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +18m15s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +18m15s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +18m15s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +22m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +22m28s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +23m9s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +23m9s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +23m9s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +26m25s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +26m25s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +28m9s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +28m9s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +30m24s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +30m24s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +31m0s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +31m0s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +32m6s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +32m6s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +32m32s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +32m32s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +33m7s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +33m7s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +33m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +33m28s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +35m33s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +35m33s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +35m33s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +38m33s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +38m33s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +38m59s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +38m59s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +39m19s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +39m19s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +39m45s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +39m45s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +40m36s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +40m36s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +41m7s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +41m7s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +41m27s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +41m27s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +41m48s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +41m48s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +42m8s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +42m8s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +42m29s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +42m29s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +47m28s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +47m28s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +49m35s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +49m35s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +51m46s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +51m46s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +53m37s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +53m37s) Resized to 19800 CPUs, 660 TPUs.
+(raylet) The node with node id: c82e933c3389cfd00d50d38d3ae8fd865a3420fc360fb25b08ed9c37 and address: 10.164.0.79 and node name: 10.164.0.79 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a    (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +55m23s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +55m23s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +55m23s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +57m38s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +57m38s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +58m14s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +58m14s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +58m49s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +58m49s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +59m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +59m10s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +59m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +59m31s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +59m52s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +59m52s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h32s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h32s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h1m8s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h1m8s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h1m29s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h1m29s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h2m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h2m10s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h2m51s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h2m51s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h7m58s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h7m58s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h7m58s) Resized to 19800 CPUs, 660 TPUs.
+(raylet) The node with node id: 72beaa0cbdadb44efd18fdaccadc8cc9829fb0100cb37c98eb98031f and address: 10.164.0.119 and node name: 10.164.0.119 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a  (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +1h10m13s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h10m13s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h12m14s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h12m14s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h14m16s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h14m16s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h16m22s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h16m22s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h18m23s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h18m23s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h20m38s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h20m38s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h20m38s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h22m58s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h22m58s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h23m18s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h23m18s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h23m40s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h23m40s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h24m5s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h24m5s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h24m56s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h24m56s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h25m32s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h25m32s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h26m12s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h26m12s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h26m54s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h26m54s) Resized to 19800 CPUs, 660 TPUs.
+(raylet) The node with node id: 3cd8a2f547d7fdc48c5aa3e69beb0d141ca0fe060705c6874f376045 and address: 10.164.0.5 and node name: 10.164.0.5 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a      (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(raylet) The node with node id: 18223a8573cb9db59057935f3403a3cb76069077e8941cc447f3334e and address: 10.164.0.28 and node name: 10.164.0.28 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a    (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) v5litepod-256 slices actor pool actor Actor(SliceActor, 0d61ea63da01fcac1fe229835e000000) failed to start: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     class_name: SliceActor
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     actor_id: 0d61ea63da01fcac1fe229835e000000
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     namespace: c88b056a-5e08-4c5b-b4c7-2eeffe81e653
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     ip: 10.164.0.61
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The actor died because its node has died. Node Id: 953164c1f1db31d4a0a487626e68ea938357175be16e66a2b4a9ec61
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     the actor's node was terminated unexpectedly: health check failed due to missing too many heartbeats
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The actor never ran - it was cancelled before it started running.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Traceback (most recent call last):
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 429, in _add_members_to_actor_pool
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     actor_info = ray.get(actor_info_awaitable, timeout=0)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     raise value
+(run_on_pod_ray pid=12074, ip=10.164.0.249) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     class_name: SliceActor
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     actor_id: 0d61ea63da01fcac1fe229835e000000
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     namespace: c88b056a-5e08-4c5b-b4c7-2eeffe81e653
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     ip: 10.164.0.61
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The actor died because its node has died. Node Id: 953164c1f1db31d4a0a487626e68ea938357175be16e66a2b4a9ec61
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     the actor's node was terminated unexpectedly: health check failed due to missing too many heartbeats
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The actor never ran - it was cancelled before it started running.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Failed to prune dead slices or create new actors
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Traceback (most recent call last):
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 806, in run_on_pod_ray
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     slice_pool_manager.scale_multislice(num_slices)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 510, in scale_multislice
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     self._scale_actor_pool(num_slices)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 482, in _scale_actor_pool
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     raise Exception(msg)
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Exception: v5litepod-256 slices actor pool wanted to scale to 1 actors, but scaled to 0 actors instead
+(autoscaler +1h29m30s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h29m30s) Resized to 19680 CPUs, 656 TPUs.
+(raylet) The node with node id: 4a0a833564d98ad0b03da0cbbb9f6ecdaef198105991b6ca1eac073c and address: 10.164.0.3 and node name: 10.164.0.3 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a      (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 63x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
+(autoscaler +1h29m51s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +1h29m51s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h29m51s) Resized to 12240 CPUs, 408 TPUs.
+(autoscaler +1h34m14s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h34m14s) Resized to 12240 CPUs, 408 TPUs.
+(autoscaler +1h35m16s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h35m16s) Resized to 12240 CPUs, 408 TPUs.
+(autoscaler +1h36m52s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h36m52s) Resized to 12240 CPUs, 408 TPUs.
+(autoscaler +1h37m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h37m28s) Resized to 12240 CPUs, 408 TPUs.
+(autoscaler +1h37m49s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h37m49s) Resized to 12240 CPUs, 408 TPUs.
+(autoscaler +1h38m29s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h38m29s) Resized to 12240 CPUs, 408 TPUs.
+(autoscaler +1h39m10s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h39m10s) Resized to 12240 CPUs, 408 TPUs.
+(autoscaler +1h39m31s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h39m31s) Resized to 12240 CPUs, 408 TPUs.
+(raylet, ip=10.164.0.77) [2026-02-11 17:18:55,389 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +1h40m7s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h40m7s) Resized to 12240 CPUs, 408 TPUs.
+(raylet, ip=10.164.0.170) [2026-02-11 17:19:45,266 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.195) [2026-02-11 17:19:45,269 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.91) [2026-02-11 17:19:53,014 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(autoscaler +1h44m27s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h44m27s) Resized to 12240 CPUs, 408 TPUs.
+(<lambda> pid=2153, ip=10.164.0.107) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=2085, ip=10.164.0.172) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=2086, ip=10.164.0.137) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=2088, ip=10.164.0.129) 2026-02-11T17:23:52 - 45 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=2084, ip=10.164.0.160) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 61x across cluster]
+(<lambda> pid=2085, ip=10.164.1.2) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=2153, ip=10.164.0.107) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1.
+(<lambda> pid=2085, ip=10.164.1.2) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=2087, ip=10.164.0.170) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=2087, ip=10.164.0.170) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=2087, ip=10.164.0.170) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/wandb/offline-run-20260211_172352-vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.1.2) wandb: setting up run vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.1.2) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=2085, ip=10.164.1.2) wandb: Syncing run vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.1.2) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
+(<lambda> pid=2085, ip=10.164.1.2) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.0.147) 2026-02-11T17:23:54 - 58 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.1.2) 2026-02-11T17:23:54 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2084, ip=10.164.0.105) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=2085, ip=10.164.1.2) 2026-02-11T17:23:56 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2086, ip=10.164.1.1) 2026-02-11T17:23:57 - 54 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=2153, ip=10.164.0.107) 2026-02-11T17:23:57 - 10 - levanter.checkpoint - checkpoint.py:605 - WARNING :: No checkpoints found in gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1/checkpoints
+(autoscaler +1h46m40s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h46m40s) Resized to 12240 CPUs, 408 TPUs.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Unknown error
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Traceback (most recent call last):
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     raise value
+(run_on_pod_ray pid=12074, ip=10.164.0.249) ray.exceptions.OwnerDiedError: Failed to retrieve object 4ec59e21ffafc29affffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) 
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*aee8f35f0d45c23fa0aa6fb35380bc8cba6081139a874c00107c61c0*` at IP address 10.164.0.111) for more information about the Python worker failure.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:25:58,767 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(<lambda> pid=2085, ip=10.164.1.2) 2026-02-11T17:23:56 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 127x across cluster]
+(<lambda> pid=2087, ip=10.164.0.171) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1. [repeated 62x across cluster]
+(<lambda> pid=2085, ip=10.164.1.2) wandb: Tracking run with wandb version 0.24.0 [repeated 63x across cluster]
+(<lambda> pid=2087, ip=10.164.0.171) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 62x across cluster]
+(<lambda> pid=2085, ip=10.164.1.2) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/wandb/run-20260211_172353-vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 [repeated 63x across cluster]
+(<lambda> pid=2086, ip=10.164.0.111) 2026-02-11T17:23:56 - 15 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 [repeated 125x across cluster]
+(<lambda> pid=2085, ip=10.164.1.2) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 63x across cluster]
+(<lambda> pid=2085, ip=10.164.1.2) 2026-02-11T17:23:57 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(<lambda> pid=2085, ip=10.164.1.2) 2026-02-11T17:23:57 - 0 - levanter.checkpoint - checkpoint.py:605 - WARNING :: No checkpoints found in gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1/checkpoints [repeated 63x across cluster]
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Failed 1 times. Continuing to retry.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Traceback (most recent call last):
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     raise value
+(run_on_pod_ray pid=12074, ip=10.164.0.249) ray.exceptions.OwnerDiedError: Failed to retrieve object 4ec59e21ffafc29affffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) 
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*aee8f35f0d45c23fa0aa6fb35380bc8cba6081139a874c00107c61c0*` at IP address 10.164.0.111) for more information about the Python worker failure.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) v5litepod-256 slices actor pool member ray-marin-eu-west4-worker-440c205b-tpu is dead or unavailable. Removing from actor pool. Error: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     class_name: SliceActor
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     actor_id: 7fbcccbe2dc83ff016961cdc5e000000
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     pid: 2012
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     namespace: c88b056a-5e08-4c5b-b4c7-2eeffe81e653
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     ip: 10.164.0.107
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The actor died because its node has died. Node Id: 8ca9c3be14de2dd28f2c8a714d7cb3d07973a1f2410529c00c8dbe79
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     the actor's node was terminated expectedly: received SIGTERM
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,723 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,730 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,731 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,731 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,732 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,733 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,734 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,737 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,741 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,742 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,743 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,748 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,754 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,760 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,760 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,761 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,762 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,764 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,767 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:26:00,769 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(<lambda> pid=2086, ip=10.164.0.111) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(raylet, ip=10.164.0.175) [2026-02-11 17:19:45,256 E 1066 1066] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(<lambda> pid=2085, ip=10.164.1.2) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=2085, ip=10.164.1.2) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=2085, ip=10.164.1.2) wandb: setting up run vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.1.2) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=2085, ip=10.164.1.2) wandb: Syncing run vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.1.2) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
+(<lambda> pid=2085, ip=10.164.1.2) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.1.2) 2026-02-11T17:23:54 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2085, ip=10.164.1.2) 2026-02-11T17:23:56 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=2086, ip=10.164.0.156) 2026-02-11T17:23:55 - 8 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 128x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1. [repeated 63x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) wandb: Tracking run with wandb version 0.24.0 [repeated 64x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 63x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/wandb/offline-run-20260211_172352-vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 [repeated 64x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) 2026-02-11T17:23:56 - 8 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 [repeated 126x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 64x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) 2026-02-11T17:23:57 - 8 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:- [repeated 64x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) 2026-02-11T17:23:57 - 8 - levanter.checkpoint - checkpoint.py:605 - WARNING :: No checkpoints found in gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1/checkpoints [repeated 64x across cluster]
+(<lambda> pid=2086, ip=10.164.0.156) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 63x across cluster]
+(raylet, ip=10.164.0.130) [2026-02-11 17:26:12,409 E 3340 3340] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
+(<lambda> pid=4753, ip=10.164.0.107) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(raylet, ip=10.164.0.156) [2026-02-11 17:26:13,271 E 3317 3317] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 10x across cluster]
+(<lambda> pid=4118, ip=10.164.0.164) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=4753, ip=10.164.0.107) Rate limited by HuggingFace Hub, retrying in 2.2s (attempt 1/20)
+(<lambda> pid=4112, ip=10.164.0.127) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 62x across cluster]
+(<lambda> pid=4114, ip=10.164.0.115) Rate limited by HuggingFace Hub, retrying in 4.7s (attempt 2/20) [repeated 125x across cluster]
+(<lambda> pid=4115, ip=10.164.0.124) Rate limited by HuggingFace Hub, retrying in 8.6s (attempt 3/20) [repeated 23x across cluster]
+(<lambda> pid=4105, ip=10.164.0.170) Rate limited by HuggingFace Hub, retrying in 4.1s (attempt 2/20) [repeated 44x across cluster]
+(<lambda> pid=4093, ip=10.164.0.100) Rate limited by HuggingFace Hub, retrying in 16.1s (attempt 4/20) [repeated 58x across cluster]
+(<lambda> pid=4105, ip=10.164.0.170) Rate limited by HuggingFace Hub, retrying in 16.1s (attempt 4/20) [repeated 8x across cluster]
+(<lambda> pid=4133, ip=10.164.0.171) 2026-02-11T17:27:45 - 21 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=4125, ip=10.164.0.159) Rate limited by HuggingFace Hub, retrying in 8.3s (attempt 3/20)
+(<lambda> pid=4123, ip=10.164.1.2) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=4114, ip=10.164.0.115) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1.
+(<lambda> pid=4133, ip=10.164.0.171) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=4133, ip=10.164.0.171) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=4133, ip=10.164.0.171) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/wandb/offline-run-20260211_172745-vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=4123, ip=10.164.1.2) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=4123, ip=10.164.1.2) wandb: setting up run vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=4123, ip=10.164.1.2) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=4123, ip=10.164.1.2) wandb: Resuming run vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=4123, ip=10.164.1.2) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin-vlm
+(<lambda> pid=4123, ip=10.164.1.2) wandb: 🚀 View run at https://wandb.ai/rui_li/marin-vlm/runs/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=4098, ip=10.164.0.98) 2026-02-11T17:27:46 - 30 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=4123, ip=10.164.1.2) 2026-02-11T17:27:46 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=4119, ip=10.164.0.86) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=4123, ip=10.164.1.2) 2026-02-11T17:27:49 - 0 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1
+(<lambda> pid=4119, ip=10.164.0.108) 2026-02-11T17:27:49 - 36 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=4111, ip=10.164.0.146) 2026-02-11T17:27:49 - 20 - levanter.checkpoint - checkpoint.py:605 - WARNING :: No checkpoints found in gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1/checkpoints
+(autoscaler +1h49m16s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h49m16s) Resized to 19800 CPUs, 660 TPUs.
+(autoscaler +1h51m18s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h51m18s) Resized to 19800 CPUs, 660 TPUs.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Unknown error
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Traceback (most recent call last):
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     raise value
+(run_on_pod_ray pid=12074, ip=10.164.0.249) ray.exceptions.OwnerDiedError: Failed to retrieve object e6b23e92a5db4c51ffffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) 
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*757052771dfd34edb416ca930331ed54894fbd91a2f7c9ad79a533c8*` at IP address 10.164.0.111) for more information about the Python worker failure.
+(<lambda> pid=4123, ip=10.164.1.2) 2026-02-11T17:27:48 - 0 - levanter.tracker.wandb - wandb.py:254 - INFO :: Setting wandb code_dir to . [repeated 127x across cluster]
+(<lambda> pid=4126, ip=10.164.0.160) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1. [repeated 62x across cluster]
+(<lambda> pid=4123, ip=10.164.1.2) wandb: Tracking run with wandb version 0.24.0 [repeated 63x across cluster]
+(<lambda> pid=4117, ip=10.164.0.154) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 62x across cluster]
+(<lambda> pid=4123, ip=10.164.1.2) wandb: Run data is saved locally in /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/wandb/run-20260211_172745-vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 [repeated 63x across cluster]
+(<lambda> pid=4135, ip=10.164.0.105) 2026-02-11T17:27:49 - 41 - levanter.tracker.wandb - wandb.py:228 - INFO :: Synced wandb run information from process 0: None vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1 [repeated 125x across cluster]
+(<lambda> pid=4123, ip=10.164.1.2) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 63x across cluster]
+(<lambda> pid=4123, ip=10.164.1.2) 2026-02-11T17:27:49 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/39062 rate:- remaining:? elapsed:00:00 postfix:- [repeated 63x across cluster]
+(<lambda> pid=4123, ip=10.164.1.2) 2026-02-11T17:27:49 - 0 - levanter.checkpoint - checkpoint.py:605 - WARNING :: No checkpoints found in gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4-080de1/checkpoints [repeated 63x across cluster]
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Failed 2 times. Continuing to retry.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Traceback (most recent call last):
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     raise value
+(run_on_pod_ray pid=12074, ip=10.164.0.249) ray.exceptions.OwnerDiedError: Failed to retrieve object e6b23e92a5db4c51ffffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) 
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*757052771dfd34edb416ca930331ed54894fbd91a2f7c9ad79a533c8*` at IP address 10.164.0.111) for more information about the Python worker failure.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Failed too many times
+(run_on_pod_ray pid=12074, ip=10.164.0.249) Traceback (most recent call last):
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     return func(*args, **kwargs)
+(run_on_pod_ray pid=12074, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=12074, ip=10.164.0.249)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=12074, ip=10.164.0.249)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=12074, ip=10.164.0.249)     raise value
+(run_on_pod_ray pid=12074, ip=10.164.0.249) ray.exceptions.OwnerDiedError: Failed to retrieve object e6b23e92a5db4c51ffffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) 
+(run_on_pod_ray pid=12074, ip=10.164.0.249) The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*757052771dfd34edb416ca930331ed54894fbd91a2f7c9ad79a533c8*` at IP address 10.164.0.111) for more information about the Python worker failure.
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) Job 140624928678000 failed with message: ray::run_on_pod_ray() (pid=12074, ip=10.164.0.249)
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249)     raise problem or RuntimeError("TPU job failed too many times")
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) 
+2026-02-11 17:30:26,392 WARNING cluster.py:350 -- Job 137597667142864 failed with message: ray::run_levanter_train_vlm() (pid=12000, ip=10.164.0.249)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
     cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/base.py", line 631, in wait
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/base.py", line 631, in wait
     return self._wait_single(job_id, raise_on_failure)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
     raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 139700084103984 failed with status failed and error: ray::run_on_pod_ray() (pid=2670, ip=10.164.0.10)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+RuntimeError: Job 140624928678000 failed with status failed and error: ray::run_on_pod_ray() (pid=12074, ip=10.164.0.249)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
     raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
                                                  ^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2087, ip=10.164.0.202)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main
-    train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 4410, in __init__
-    super().__init__(
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-    return await dataset.getitem_async(dataset_index)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-    return (await self.get_batch([index]))[0]
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch
-    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process
-    self._start_pipeline(items_to_skip)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2569, in _start_pipeline
-    self._load_current_shard()
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard
-    self._current_shard_data = list(self.source.open_shard(shard_name))
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row
-    table = pa.Table.from_batches(
-            ^^^^^^^^^^^^^^^^^^^^^^
-  File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches
-  File "pyarrow/_parquet.pyx", line 1777, in iter_batches
-  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
-pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
-2026-02-11 13:34:43,401 INFO executor.py:796 -- Waiting for 137882785950928 to finish for step checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-2
-2026-02-11 13:34:43,401 - INFO - Starting wait for job 137882785950928
-2026-02-11 13:34:43,402 WARNING cluster.py:350 -- Job 137882785950928 failed with message: ray::run_levanter_train_vlm() (pid=2669, ip=10.164.0.10)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
+ray.exceptions.OwnerDiedError: Failed to retrieve object e6b23e92a5db4c51ffffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+
+The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*757052771dfd34edb416ca930331ed54894fbd91a2f7c9ad79a533c8*` at IP address 10.164.0.111) for more information about the Python worker failure.
+2026-02-11 17:30:26,392 INFO executor.py:796 -- Waiting for 137597667142864 to finish for step checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-4
+2026-02-11 17:30:26,392 - INFO - Starting wait for job 137597667142864
+2026-02-11 17:30:26,392 WARNING cluster.py:350 -- Job 137597667142864 failed with message: ray::run_levanter_train_vlm() (pid=12000, ip=10.164.0.249)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
     cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/base.py", line 631, in wait
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/base.py", line 631, in wait
     return self._wait_single(job_id, raise_on_failure)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
     raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 139700084103984 failed with status failed and error: ray::run_on_pod_ray() (pid=2670, ip=10.164.0.10)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+RuntimeError: Job 140624928678000 failed with status failed and error: ray::run_on_pod_ray() (pid=12074, ip=10.164.0.249)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
     raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
                                                  ^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2087, ip=10.164.0.202)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main
-    train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 4410, in __init__
-    super().__init__(
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-    return await dataset.getitem_async(dataset_index)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-    return (await self.get_batch([index]))[0]
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch
-    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process
-    self._start_pipeline(items_to_skip)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2569, in _start_pipeline
-    self._load_current_shard()
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard
-    self._current_shard_data = list(self.source.open_shard(shard_name))
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row
-    table = pa.Table.from_batches(
-            ^^^^^^^^^^^^^^^^^^^^^^
-  File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches
-  File "pyarrow/_parquet.pyx", line 1777, in iter_batches
-  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
-pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
-2026-02-11 13:34:43,402 - INFO - Job 137882785950928 completed with status failed
+ray.exceptions.OwnerDiedError: Failed to retrieve object e6b23e92a5db4c51ffffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+
+The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*757052771dfd34edb416ca930331ed54894fbd91a2f7c9ad79a533c8*` at IP address 10.164.0.111) for more information about the Python worker failure.
+2026-02-11 17:30:26,392 - INFO - Job 137597667142864 completed with status failed
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/experiments/VLM/demo_vlm_train_round2_eu_west4_128.py", line 259, in <module>
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/experiments/VLM/demo_vlm_train_round2_4b_eu_west4.py", line 255, in <module>
     executor_main(steps=[vlm_training])
   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
     response = fn(cfg, *args, **kwargs)
                ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/marin/src/marin/execution/executor.py", line 743, in run
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/marin/src/marin/execution/executor.py", line 743, in run
     self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
     runner.wait()
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/marin/src/marin/execution/executor.py", line 207, in wait
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/marin/src/marin/execution/executor.py", line 207, in wait
     raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-RuntimeError: Job 137882785950928 failed: ray::run_levanter_train_vlm() (pid=2669, ip=10.164.0.10)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
+RuntimeError: Job 137597667142864 failed: ray::run_levanter_train_vlm() (pid=12000, ip=10.164.0.249)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
     cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/base.py", line 631, in wait
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/base.py", line 631, in wait
     return self._wait_single(job_id, raise_on_failure)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
     raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 139700084103984 failed with status failed and error: ray::run_on_pod_ray() (pid=2670, ip=10.164.0.10)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
+RuntimeError: Job 140624928678000 failed with status failed and error: ray::run_on_pod_ray() (pid=12074, ip=10.164.0.249)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
     raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
                                                  ^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ArrowNotImplementedError): ray::<lambda>() (pid=2087, ip=10.164.0.202)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/main/train_vlm.py", line 899, in main
-    train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 4410, in __init__
-    super().__init__(
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-    return await dataset.getitem_async(dataset_index)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-    return (await self.get_batch([index]))[0]
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2865, in get_batch
-    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2820, in _get_from_cache_or_process
-    self._start_pipeline(items_to_skip)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2569, in _start_pipeline
-    self._load_current_shard()
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 2663, in _load_current_shard
-    self._current_shard_data = list(self.source.open_shard(shard_name))
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_bcd2e6869510e156/lib/levanter/src/levanter/data/image.py", line 196, in open_shard_at_row
-    table = pa.Table.from_batches(
-            ^^^^^^^^^^^^^^^^^^^^^^
-  File "pyarrow/table.pxi", line 5028, in pyarrow.lib.Table.from_batches
-  File "pyarrow/_parquet.pyx", line 1777, in iter_batches
-  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
-pyarrow.lib.ArrowNotImplementedError: Nested data conversions not implemented for chunked array outputs
+ray.exceptions.OwnerDiedError: Failed to retrieve object e6b23e92a5db4c51ffffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+
+The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*757052771dfd34edb416ca930331ed54894fbd91a2f7c9ad79a533c8*` at IP address 10.164.0.111) for more information about the Python worker failure.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,803 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,806 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,814 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,815 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,819 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,819 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,820 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,820 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,823 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,823 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,826 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,827 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,828 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,831 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,833 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,836 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,836 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,837 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,838 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,841 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,842 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,843 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,845 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,847 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,849 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,850 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,854 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,854 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_on_pod_ray pid=12074, ip=10.164.0.249) [2026-02-11 17:30:26,857 E 12074 12111] normal_task_submitter.cc:804: Failed to cancel remote task: Disconnected: GRPC client is shut down.
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_256526ec9f9af3c6/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray [repeated 2x across cluster]
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249)                                                  ^^^^^^^^^^
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249)            ^^^^^^^^^^^^^^^^^^^^^
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) ray.exceptions.OwnerDiedError: Failed to retrieve object e6b23e92a5db4c51ffffffffffffffffffffffff5e00000001000000. To see information about where this ObjectRef was created in Python, set the environment variable RAY_record_ref_creation_sites=1 during `ray start` and `ray.init()`.
+(run_levanter_train_vlm pid=12000, ip=10.164.0.249) The object's owner has exited. This is the Python worker that first created the ObjectRef via `.remote()` or `ray.put()`. Check cluster logs (`/tmp/ray/session_latest/logs/*757052771dfd34edb416ca930331ed54894fbd91a2f7c9ad79a533c8*` at IP address 10.164.0.111) for more information about the Python worker failure.
 (base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 
