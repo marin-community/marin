@@ -17,14 +17,41 @@ logger = _logging_module.getLogger(__name__)
 
 
 def require_controller_url(ctx: click.Context) -> str:
-    """Get controller_url from context or raise a descriptive error.
+    """Get controller_url from context, establishing a tunnel lazily if needed.
 
-    Use this in commands that require a connection to the controller.
-    Provides clear error messages based on whether --config was provided.
+    On first call with a --config, this establishes the tunnel to the controller
+    and caches the result. Subsequent calls return the cached URL.
+    Commands that don't call this (e.g. ``cluster start``) never pay tunnel cost.
     """
     controller_url = ctx.obj.get("controller_url") if ctx.obj else None
     if controller_url:
         return controller_url
+
+    # Lazy tunnel establishment from config
+    config = ctx.obj.get("config") if ctx.obj else None
+    if config:
+        from iris.cluster.config import IrisConfig
+
+        iris_config = IrisConfig(config)
+        platform = iris_config.platform()
+
+        if iris_config.proto.controller.WhichOneof("controller") == "local":
+            from iris.cluster.controller.local import LocalController
+
+            controller = LocalController(iris_config.proto)
+            controller_address = controller.start()
+            ctx.call_on_close(controller.stop)
+        else:
+            controller_address = iris_config.controller_address()
+
+        # Establish tunnel and keep it alive for command duration
+        logger.info("Establishing tunnel to controller...")
+        tunnel_cm = platform.tunnel(address=controller_address)
+        tunnel_url = tunnel_cm.__enter__()
+        ctx.obj["controller_url"] = tunnel_url
+        # Clean up tunnel when context closes
+        ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
+        return tunnel_url
 
     config_file = ctx.obj.get("config_file") if ctx.obj else None
     if config_file:
@@ -70,35 +97,10 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
         ctx.obj["config"] = iris_config.proto
         ctx.obj["config_file"] = config_file
 
-    # Establish controller URL (either direct or via tunnel)
+    # Store direct controller URL; tunnel from config is established lazily
+    # in require_controller_url() so commands like ``cluster start`` don't block.
     if controller_url:
         ctx.obj["controller_url"] = controller_url
-    elif config_file:
-        # Establish controller URL from config using Platform abstraction.
-        iris_config = IrisConfig(ctx.obj["config"])
-        platform = iris_config.platform()
-
-        if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.controller.local import LocalController
-
-            controller = LocalController(iris_config.proto)
-            controller_address = controller.start()
-            ctx.call_on_close(controller.stop)
-        else:
-            controller_address = iris_config.controller_address()
-
-        # Establish tunnel and keep it alive for command duration
-        try:
-            logger.info("Establishing tunnel to controller...")
-            tunnel_cm = platform.tunnel(address=controller_address)
-            tunnel_url = tunnel_cm.__enter__()
-            ctx.obj["controller_url"] = tunnel_url
-            # Clean up tunnel when context closes
-            ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
-        except Exception as e:
-            # If tunnel fails (e.g., no controller VM), continue without controller_url
-            # Commands that need it will fail with clear error
-            logger.warning("Could not establish controller tunnel (timeout=5s): %s", e)
 
 
 # Register subcommand groups — imported at module level to ensure they are
