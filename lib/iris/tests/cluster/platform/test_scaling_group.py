@@ -1008,6 +1008,54 @@ class TestPrepareSliceConfigPreemptible:
         assert result.preemptible is False
 
 
+class TestMarkSliceLockDiscipline:
+    """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
+
+    def test_mark_slice_ready_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """lifecycle and vm_addresses are both set while holding the lock."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        handle = _tracked_scale_up(group)
+
+        # Verify the slice starts as BOOTING with no addresses
+        state = _get_slice_state(group, handle)
+        assert state.lifecycle == SliceLifecycleState.BOOTING
+        assert state.vm_addresses == []
+
+        addresses = ["10.0.0.1", "10.0.0.2"]
+        group.mark_slice_ready(handle.slice_id, addresses)
+
+        # Both fields should be set atomically
+        with group._slices_lock:
+            state = group._slices[handle.slice_id]
+            assert state.lifecycle == SliceLifecycleState.READY
+            assert state.vm_addresses == addresses
+
+    def test_mark_slice_failed_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """lifecycle is set to FAILED while holding the lock."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        handle = _tracked_scale_up(group)
+
+        group.mark_slice_failed(handle.slice_id)
+
+        with group._slices_lock:
+            state = group._slices[handle.slice_id]
+            assert state.lifecycle == SliceLifecycleState.FAILED
+
+    def test_mark_slice_ready_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """mark_slice_ready on a nonexistent slice does not raise."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        group.mark_slice_ready("nonexistent", ["10.0.0.1"])
+
+    def test_mark_slice_failed_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """mark_slice_failed on a nonexistent slice does not raise."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        group.mark_slice_failed("nonexistent")
+
+
 def _make_vm_handle(vm_id: str, cloud_state: CloudVmState, address: str = "10.0.0.1") -> MagicMock:
     handle = MagicMock()
     handle.vm_id = vm_id

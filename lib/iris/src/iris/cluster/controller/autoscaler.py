@@ -266,12 +266,18 @@ def bootstrap_slice_vms(
     threads: ThreadContainer,
     timeout: float = 600.0,
     poll_interval: float = 10.0,
+    boot_timeout: float = 1800.0,
 ) -> dict[str, str]:
     """Discover VMs and bootstrap each as it appears.
 
     Polls handle.describe() and spawns a bootstrap thread (via ThreadContainer)
     for each newly-seen VM. Returns bootstrap logs keyed by vm_id.
     Raises PlatformError if expected VM count isn't reached or any VM fails.
+
+    Args:
+        boot_timeout: Maximum time in seconds for all per-VM bootstrap threads
+            to complete after VM discovery. If any thread is still alive after
+            this deadline, raises PlatformError.
     """
     expected = _get_expected_vm_count(handle)
     seen: set[str] = set()
@@ -314,8 +320,14 @@ def bootstrap_slice_vms(
             )
         time.sleep(poll_interval)
 
+    join_deadline = time.time() + boot_timeout
     for t in spawned_threads:
-        t.join()
+        remaining = max(0, join_deadline - time.time())
+        t.join(timeout=Duration.from_seconds(remaining))
+        if t.is_alive:
+            raise PlatformError(
+                f"Slice {handle.slice_id}: bootstrap thread {t.name} " f"still alive after {boot_timeout}s boot timeout"
+            )
 
     logs: dict[str, str] = {}
     errors: list[tuple[str, Exception]] = []
@@ -451,12 +463,17 @@ class Autoscaler:
         """Reconcile all groups (discover existing slices from cloud).
 
         Called once at startup to recover state from a previous controller.
-        Each ScalingGroup queries its VmManager for existing slices.
+        Discovered slices are adopted and then bootstrapped in background threads,
+        following the same flow as newly created slices.
         """
         for group in self._groups.values():
             group.reconcile()
-            for slice_obj in group.slice_handles():
-                self._register_slice_vms(slice_obj, group.name)
+            for slice_handle in group.slice_handles():
+                self._register_slice_vms(slice_handle, group.name)
+                self._threads.spawn(
+                    target=lambda stop, h=slice_handle, g=group: self._bootstrap_slice_safe(h, g),
+                    name=f"bootstrap-reconciled-{slice_handle.slice_id}",
+                )
 
     def _log_action(
         self,

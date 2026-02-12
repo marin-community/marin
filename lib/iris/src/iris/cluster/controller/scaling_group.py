@@ -290,16 +290,16 @@ class ScalingGroup:
         """Mark a slice as READY with its VM addresses. Called after successful bootstrap."""
         with self._slices_lock:
             state = self._slices.get(slice_id)
-        if state is not None:
-            state.lifecycle = SliceLifecycleState.READY
-            state.vm_addresses = vm_addresses
+            if state is not None:
+                state.lifecycle = SliceLifecycleState.READY
+                state.vm_addresses = vm_addresses
 
     def mark_slice_failed(self, slice_id: str) -> None:
         """Mark a slice as FAILED. Called when bootstrap fails."""
         with self._slices_lock:
             state = self._slices.get(slice_id)
-        if state is not None:
-            state.lifecycle = SliceLifecycleState.FAILED
+            if state is not None:
+                state.lifecycle = SliceLifecycleState.FAILED
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.

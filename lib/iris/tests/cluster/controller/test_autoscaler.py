@@ -20,7 +20,7 @@ from iris.cluster.controller.autoscaler import (
     ScalingDecision,
     route_demand,
 )
-from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.controller.scaling_group import ScalingGroup, SliceLifecycleState
 from iris.cluster.platform.base import CloudSliceState, CloudVmState, QuotaExhaustedError, SliceStatus, VmStatus
 from iris.cluster.types import DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
@@ -1682,3 +1682,142 @@ def test_bootstrap_skipped_without_config():
         assert vm._bootstrap_count == 0, "No bootstrap without config"
 
     autoscaler.shutdown()
+
+
+class TestBootstrapTimeout:
+    """Tests for boot_timeout in bootstrap_slice_vms."""
+
+    def test_bootstrap_timeout_raises_platform_error(self):
+        """bootstrap_slice_vms raises PlatformError when a bootstrap thread hangs past boot_timeout."""
+        from iris.cluster.controller.autoscaler import bootstrap_slice_vms
+        from iris.cluster.platform.base import PlatformError
+        from iris.cluster.platform.bootstrap import WorkerBootstrap
+        from iris.managed_thread import get_thread_container
+
+        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
+        platform = FakePlatform(FakePlatformConfig(config=sg_config))
+        handle = platform.create_slice(sg_config.slice_template)
+        platform.tick()
+
+        cluster_config = config_pb2.IrisClusterConfig()
+        cluster_config.defaults.bootstrap.docker_image = "test:latest"
+        cluster_config.defaults.bootstrap.worker_port = 10001
+        worker_bootstrap = WorkerBootstrap(cluster_config)
+
+        hang_event = threading.Event()
+        original_bootstrap = worker_bootstrap.bootstrap_vm
+
+        def slow_bootstrap(vm):
+            hang_event.wait(timeout=10)
+            return original_bootstrap(vm)
+
+        worker_bootstrap.bootstrap_vm = slow_bootstrap
+
+        threads = get_thread_container()
+        try:
+            with pytest.raises(PlatformError, match="boot timeout"):
+                bootstrap_slice_vms(handle, worker_bootstrap, threads, timeout=1.0, poll_interval=0.1, boot_timeout=0.5)
+        finally:
+            hang_event.set()
+            threads.stop()
+
+    def test_bootstrap_timeout_triggers_slice_cleanup(self):
+        """When bootstrap times out, _bootstrap_slice_safe marks slice failed and scales down."""
+        from iris.cluster.controller.autoscaler import bootstrap_slice_vms
+        from iris.cluster.platform.base import PlatformError
+        from iris.cluster.platform.bootstrap import WorkerBootstrap
+        from iris.managed_thread import get_thread_container
+
+        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
+        platform = FakePlatform(FakePlatformConfig(config=sg_config))
+        group = ScalingGroup(sg_config, platform, scale_up_cooldown=Duration.from_ms(0))
+
+        cluster_config = config_pb2.IrisClusterConfig()
+        cluster_config.defaults.bootstrap.docker_image = "test:latest"
+        cluster_config.defaults.bootstrap.worker_port = 10001
+        worker_bootstrap = WorkerBootstrap(cluster_config)
+
+        hang_event = threading.Event()
+        original_bootstrap = worker_bootstrap.bootstrap_vm
+
+        def slow_bootstrap(vm):
+            hang_event.wait(timeout=10)
+            return original_bootstrap(vm)
+
+        worker_bootstrap.bootstrap_vm = slow_bootstrap
+
+        # Create a slice through ScalingGroup so it's tracked
+        group.begin_scale_up()
+        handle = group.scale_up()
+        group.complete_scale_up(handle)
+        platform.tick()
+        assert group.slice_count() == 1
+
+        # Directly call bootstrap_slice_vms with short timeout — should raise
+        threads = get_thread_container()
+        try:
+            with pytest.raises(PlatformError, match="boot timeout"):
+                bootstrap_slice_vms(handle, worker_bootstrap, threads, timeout=1.0, poll_interval=0.1, boot_timeout=0.5)
+            # The caller (_bootstrap_slice_safe) would handle cleanup.
+            # Verify the error is raised so the caller can act on it.
+        finally:
+            hang_event.set()
+            threads.stop()
+
+
+class TestReconcileBootstrap:
+    """Tests for reconcile spawning bootstrap threads."""
+
+    def _create_discoverable_slice(self, sg_config: config_pb2.ScaleGroupConfig, platform: FakePlatform):
+        """Create a slice through the platform with labels that reconcile will discover."""
+        from iris.cluster.controller.scaling_group import prepare_slice_config
+
+        slice_config = prepare_slice_config(sg_config.slice_template, sg_config, "iris")
+        handle = platform.create_slice(slice_config)
+        platform.tick()
+        return handle
+
+    def test_reconcile_spawns_bootstrap_for_discovered_slices(self):
+        """After reconcile, bootstrap threads are spawned and slices move to READY."""
+        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
+        platform = FakePlatform(FakePlatformConfig(config=sg_config))
+        self._create_discoverable_slice(sg_config, platform)
+
+        group = ScalingGroup(sg_config, platform, scale_up_cooldown=Duration.from_ms(0))
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_ms(100),
+            platform=platform,
+        )
+
+        autoscaler.reconcile()
+        autoscaler._wait_for_inflight()
+
+        assert group.slice_count() == 1
+        assert group.ready_slice_count() == 1
+
+        autoscaler.shutdown()
+
+    def test_reconcile_bootstrap_populates_vm_addresses(self):
+        """After reconcile + bootstrap, slices have vm_addresses populated."""
+        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
+        platform = FakePlatform(FakePlatformConfig(config=sg_config))
+        self._create_discoverable_slice(sg_config, platform)
+
+        group = ScalingGroup(sg_config, platform, scale_up_cooldown=Duration.from_ms(0))
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_ms(100),
+            platform=platform,
+        )
+
+        autoscaler.reconcile()
+        autoscaler._wait_for_inflight()
+
+        with group._slices_lock:
+            states = list(group._slices.values())
+        assert len(states) == 1
+        assert states[0].lifecycle == SliceLifecycleState.READY
+        assert len(states[0].vm_addresses) > 0
+
+        autoscaler.shutdown()

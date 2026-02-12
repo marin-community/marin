@@ -370,7 +370,7 @@ def vm_status(ctx, scale_group):
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:
-                all_ready = all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
+                all_ready = bool(si.vms) and all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
                 any_failed = any(vm.state in (vm_pb2.VM_STATE_FAILED, vm_pb2.VM_STATE_PREEMPTED) for vm in si.vms)
                 ss = "READY" if all_ready else ("FAILED" if any_failed else "PENDING")
                 click.echo(f"    {si.slice_id}: {ss}")
