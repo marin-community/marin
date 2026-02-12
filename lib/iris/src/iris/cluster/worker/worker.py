@@ -606,9 +606,7 @@ class Worker:
             return False
         return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
 
-    def profile_task(
-        self, task_id: str, duration_seconds: int = 10, rate_hz: int = 100, output_format: str = "flamegraph"
-    ) -> bytes:
+    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile a running task by delegating to its container handle."""
         attempt = self._get_current_attempt(task_id)
         if not attempt:
@@ -617,7 +615,7 @@ class Worker:
             raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
         if not attempt._container_handle:
             raise ValueError(f"Task {task_id} has no container handle")
-        return attempt._container_handle.profile(duration_seconds, rate_hz, output_format)
+        return attempt._container_handle.profile(duration_seconds, profile_type)
 
     def get_logs(
         self,

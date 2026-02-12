@@ -772,30 +772,65 @@ def cleanup(ctx, dry_run: bool):
 @debug.command()
 @click.argument("task_id")
 @click.option("--duration", default=10, help="Profiling duration in seconds")
-@click.option("--format", "fmt", type=click.Choice(["flamegraph", "speedscope", "raw"]), default="speedscope")
-@click.option("--rate", default=100, help="Sample rate in Hz")
+@click.option("--profiler", type=click.Choice(["cpu", "memory"]), default="cpu", help="Profiler type")
+@click.option("--format", "fmt", help="Output format (cpu: flamegraph|speedscope|raw, memory: flamegraph|table|stats)")
+@click.option("--rate", default=100, help="Sample rate in Hz (CPU profiling only)")
+@click.option("--leaks", is_flag=True, help="Focus on potential memory leaks (memory profiling only)")
 @click.option("--output", "-o", type=click.Path(), help="Output file path")
 @click.pass_context
-def profile(ctx, task_id: str, duration: int, fmt: str, rate: int, output: str | None):
-    """Profile a running task with py-spy and download the result."""
+def profile(ctx, task_id: str, duration: int, profiler: str, fmt: str | None, rate: int, leaks: bool, output: str | None):
+    """Profile a running task with py-spy (CPU) or memray (memory)."""
     controller_url = require_controller_url(ctx)
     client = ControllerServiceClientSync(controller_url, timeout_ms=(duration + 30) * 1000)
     try:
-        click.echo(f"Profiling {task_id} for {duration}s (format={fmt}, rate={rate}Hz)...")
+        # Build ProfileType based on profiler selection
+        if profiler == "cpu":
+            # Default CPU format: speedscope
+            if not fmt:
+                fmt = "speedscope"
+            format_map = {
+                "flamegraph": cluster_pb2.CpuProfile.FLAMEGRAPH,
+                "speedscope": cluster_pb2.CpuProfile.SPEEDSCOPE,
+                "raw": cluster_pb2.CpuProfile.RAW,
+            }
+            if fmt not in format_map:
+                click.echo(f"Invalid CPU format: {fmt}. Use flamegraph|speedscope|raw", err=True)
+                sys.exit(1)
+            profile_type = cluster_pb2.ProfileType(
+                cpu=cluster_pb2.CpuProfile(format=format_map[fmt], rate_hz=rate)
+            )
+            ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
+        else:  # memory
+            # Default memory format: flamegraph
+            if not fmt:
+                fmt = "flamegraph"
+            format_map = {
+                "flamegraph": cluster_pb2.MemoryProfile.FLAMEGRAPH,
+                "table": cluster_pb2.MemoryProfile.TABLE,
+                "stats": cluster_pb2.MemoryProfile.STATS,
+            }
+            if fmt not in format_map:
+                click.echo(f"Invalid memory format: {fmt}. Use flamegraph|table|stats", err=True)
+                sys.exit(1)
+            profile_type = cluster_pb2.ProfileType(
+                memory=cluster_pb2.MemoryProfile(format=format_map[fmt], leaks=leaks)
+            )
+            ext_map = {"flamegraph": "html", "table": "txt", "stats": "json"}
+
+        click.echo(f"Profiling {task_id} for {duration}s ({profiler} profiler, format={fmt})...")
         resp = client.profile_task(
             cluster_pb2.ProfileTaskRequest(
                 task_id=task_id,
                 duration_seconds=duration,
-                rate_hz=rate,
-                format=fmt,
+                profile_type=profile_type,
             )
         )
         if resp.error:
             click.echo(f"Error: {resp.error}", err=True)
             sys.exit(1)
-        ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
+
         ext = ext_map.get(fmt, "bin")
-        out_path = output or f"profile-{task_id.replace('/', '_')}.{ext}"
+        out_path = output or f"profile-{profiler}-{task_id.replace('/', '_')}.{ext}"
         Path(out_path).write_bytes(resp.profile_data)
         click.echo(f"Profile saved to {out_path} ({len(resp.profile_data)} bytes)")
     finally:

@@ -251,20 +251,37 @@ class ProcessContainer:
             self._exit_code = 137  # 128 + SIGKILL
 
 
-def _profile_stub(output_format: str) -> bytes:
-    """Return a minimal stub profile for when py-spy is unavailable."""
-    if output_format == "flamegraph":
+def _cpu_profile_stub(cpu_format: int) -> bytes:
+    """Return a minimal stub CPU profile for when py-spy is unavailable."""
+    from iris.rpc import cluster_pb2
+
+    if cpu_format == cluster_pb2.CpuProfile.FLAMEGRAPH:
         return (
             b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="50">'
             b'<text x="10" y="30" font-size="14">py-spy unavailable in local mode</text></svg>'
         )
-    elif output_format == "speedscope":
+    elif cpu_format == cluster_pb2.CpuProfile.SPEEDSCOPE:
         return (
             b'{"version":"0.1.0","$schema":"https://www.speedscope.app/file-format-schema.json",'
             b'"profiles":[],"shared":{"frames":[]}}'
         )
-    else:
+    else:  # RAW
         return b"py-spy unavailable in local mode\n"
+
+
+def _memory_profile_stub(memory_format: int) -> bytes:
+    """Return a minimal stub memory profile for when memray is unavailable."""
+    from iris.rpc import cluster_pb2
+
+    if memory_format == cluster_pb2.MemoryProfile.FLAMEGRAPH:
+        return (
+            b"<!DOCTYPE html><html><head><title>Memory Profile</title></head><body>"
+            b"<p>memray unavailable in local mode</p></body></html>"
+        )
+    elif memory_format == cluster_pb2.MemoryProfile.TABLE:
+        return b"memray unavailable in local mode\n"
+    else:  # STATS
+        return b'{"error": "memray unavailable in local mode"}'
 
 
 @dataclass
@@ -370,19 +387,40 @@ class ProcessContainerHandle:
         """Get resource usage statistics."""
         return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
 
-    def profile(self, duration_seconds: int = 10, rate_hz: int = 100, output_format: str = "flamegraph") -> bytes:
-        """Profile the running process using py-spy, with fallback stubs."""
+    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+        """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""
+        from iris.rpc import cluster_pb2
+
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
 
+        # Dispatch to CPU or memory profiling
+        if profile_type.HasField("cpu"):
+            return self._profile_cpu(duration_seconds, profile_type.cpu)
+        elif profile_type.HasField("memory"):
+            return self._profile_memory(duration_seconds, profile_type.memory)
+        else:
+            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+
+    def _profile_cpu(self, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile") -> bytes:
+        """Profile CPU using py-spy, with fallback stub."""
+        from iris.rpc import cluster_pb2
+
         pid = self._container._process.pid
+        rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 100
+
+        # Map protobuf enum to py-spy format strings
+        format_map = {
+            cluster_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
+            cluster_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),
+            cluster_pb2.CpuProfile.RAW: ("raw", "txt"),
+        }
+        py_spy_format, ext = format_map.get(cpu_config.format, ("flamegraph", "svg"))
 
         output_path = None
         try:
             import tempfile
 
-            ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
-            ext = ext_map.get(output_format, "svg")
             with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
                 output_path = f.name
 
@@ -396,7 +434,7 @@ class ProcessContainerHandle:
                 "--rate",
                 str(rate_hz),
                 "--format",
-                output_format,
+                py_spy_format,
                 "--output",
                 output_path,
             ]
@@ -414,7 +452,80 @@ class ProcessContainerHandle:
             if output_path is not None:
                 Path(output_path).unlink(missing_ok=True)
 
-        return _profile_stub(output_format)
+        return _cpu_profile_stub(cpu_config.format)
+
+    def _profile_memory(self, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile") -> bytes:
+        """Profile memory using memray, with fallback stub."""
+        from iris.rpc import cluster_pb2
+
+        pid = self._container._process.pid
+
+        # Map protobuf enum to memray reporter
+        format_map = {
+            cluster_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
+            cluster_pb2.MemoryProfile.TABLE: ("table", "txt"),
+            cluster_pb2.MemoryProfile.STATS: ("stats", "json"),
+        }
+        memray_reporter, ext = format_map.get(memory_config.format, ("flamegraph", "html"))
+
+        trace_path = None
+        output_path = None
+        try:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+                trace_path = f.name
+
+            # Step 1: Attach to process and record memory trace
+            attach_cmd = [
+                "memray",
+                "attach",
+                str(pid),
+                "--duration",
+                str(duration_seconds),
+                "--output",
+                trace_path,
+            ]
+            if memory_config.leaks:
+                attach_cmd.append("--aggregate")
+
+            result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
+            if result.returncode != 0:
+                raise RuntimeError(f"memray attach failed: {result.stderr}")
+
+            # Step 2: Transform binary trace to desired format
+            if memray_reporter == "flamegraph":
+                with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
+                    output_path = f.name
+                transform_cmd = ["memray", "flamegraph", "--force", "--output", output_path, trace_path]
+                if memory_config.leaks:
+                    transform_cmd.insert(2, "--leaks")
+                transform_result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
+                if transform_result.returncode != 0:
+                    raise RuntimeError(f"memray flamegraph failed: {transform_result.stderr}")
+                return Path(output_path).read_bytes()
+            elif memray_reporter in ["table", "stats"]:
+                transform_cmd = ["memray", memray_reporter, trace_path]
+                transform_result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
+                if transform_result.returncode != 0:
+                    raise RuntimeError(f"memray {memray_reporter} failed: {transform_result.stderr}")
+                return transform_result.stdout.encode("utf-8")
+            else:
+                raise RuntimeError(f"Unknown memray reporter: {memray_reporter}")
+
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError, RuntimeError):
+            logger.warning(
+                "memray profiling failed for PID %s; falling back to stub profile output",
+                pid,
+                exc_info=True,
+            )
+        finally:
+            if trace_path is not None:
+                Path(trace_path).unlink(missing_ok=True)
+            if output_path is not None:
+                Path(output_path).unlink(missing_ok=True)
+
+        return _memory_profile_stub(memory_config.format)
 
     def cleanup(self) -> None:
         """Kill the subprocess and clean up resources."""
