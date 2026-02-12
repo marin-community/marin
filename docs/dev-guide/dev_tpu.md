@@ -10,7 +10,7 @@ or if you want to run a long experiment and not worry about the TPU going away.
 
 - `allocate`: reserves a TPU VM and keeps it alive while the command runs. It also creates an SSH alias for the TPU and writes config to `~/.ssh/config` so you can connect easily.
 - `connect`: opens an interactive shell on the TPU.
-- `execute`: rsyncs local files to remote `~/marin/`, then runs one command.
+- `execute`: syncs local files to remote `~/marin/` (unless `--no-sync`), then runs one command.
 - `watch`: rsync + restart on local file changes.
 
 ## Prerequisites
@@ -100,7 +100,16 @@ Notes:
 
 ### 2) Fast inner loop without repeated sync
 
-`execute` always rsyncs first. For iterative profiling/tuning, SSH directly:
+For iterative profiling/tuning, either skip sync with `--no-sync` or SSH directly:
+
+```bash
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config infra/marin-us-east5-a.yaml \
+  --tpu-name "$TPU_NAME" \
+  execute --no-sync -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
+```
+
+Or SSH directly:
 
 ```bash
 ssh "dev-tpu-${TPU_NAME}"
@@ -158,7 +167,7 @@ Then rerun your command.
 
 ### `execute` feels slow
 
-It syncs files every time by design (using rsync). Use direct SSH for repeated runs.
+By default it syncs files before each run (using rsync). Use `--no-sync` or direct SSH for repeated runs.
 
 ## Reference examples
 
