@@ -24,7 +24,7 @@ from haliax.partitioning import ResourceMapping
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named, named_lm_example_from_grug
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -174,6 +174,14 @@ def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model
         return named_lm_example_from_grug(batch, Pos=Pos, batch_axis=EvalBatch)
 
     raise ValueError(f"GrugLmExample tokens must be rank-1 or rank-2 for eval, got rank={batch.tokens.ndim}")
+
+
+def _ensure_grug_lm_example(example: LmEvalExample) -> GrugLmExample:
+    if isinstance(example, GrugLmExample):
+        return example
+    if isinstance(example, LmExample):
+        return grug_lm_example_from_named(example)
+    raise TypeError(f"Unsupported eval example type: {type(example)}")
 
 
 def cb_tagged_lm_evaluate(
@@ -330,7 +338,10 @@ class TaggedEvaluator:
         mp: Optional[jmp.Policy] = None,
     ):
         self.EvalBatch = EvalBatch
-        self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
+        normalized_tagged_eval_sets: list[tuple[AsyncDataset[GrugLmExample], Sequence[str]]] = [
+            (dataset.map(_ensure_grug_lm_example), tags) for dataset, tags in tagged_eval_sets
+        ]
+        self.dataset = DomainTaggedDataset(normalized_tagged_eval_sets, max_examples_per_dataset)
         self.loader = DataLoader(
             self.dataset.as_async_dataset(),
             EvalBatch,
