@@ -51,6 +51,7 @@ import dataclasses
 import logging
 import math
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -227,12 +228,13 @@ def process_parquet_rows(
 
     skipped = len(table) - len(valid_indices) - mismatched
     n_valid = len(valid_indices)
-    threshold = int(n_valid * (1.0 - generation_ratio))
 
     logger.info(
-        "Processing %d valid rows (%d skipped, %d mismatched image/token count, threshold=%d)",
-        n_valid, skipped, mismatched, threshold,
+        "Processing %d valid rows (%d skipped, %d mismatched image/token count, generation_ratio=%.2f)",
+        n_valid, skipped, mismatched, generation_ratio,
     )
+
+    rng = random.Random(42)
 
     for rank, i in enumerate(valid_indices):
         messages = messages_col[i].as_py()
@@ -250,10 +252,10 @@ def process_parquet_rows(
         if dual_ordering:
             yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
             yield build_text_first_sequence(caption_ids, shifted_image_tokens, w_visual)
-        elif rank < threshold:
-            yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
-        else:
+        elif rng.random() < generation_ratio:
             yield build_text_first_sequence(caption_ids, shifted_image_tokens, w_visual)
+        else:
+            yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
 
         if (rank + 1) % 1000 == 0:
             logger.info("  ... processed %d/%d rows", rank + 1, n_valid)
