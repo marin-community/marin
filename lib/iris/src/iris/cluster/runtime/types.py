@@ -154,11 +154,18 @@ class ContainerHandle(Protocol):
         """Get resource usage statistics."""
         ...
 
-    def profile(self, duration_seconds: int = 10, rate_hz: int = 100, output_format: str = "flamegraph") -> bytes:
-        """Profile the running process using py-spy.
+    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+        """Profile the running process using py-spy (CPU) or memray (memory).
 
-        Returns raw profile output (SVG for flamegraph, JSON for speedscope, text for raw).
-        Raises RuntimeError if profiling fails or container is not running.
+        Args:
+            duration_seconds: How long to sample
+            profile_type: ProfileType message with oneof cpu/memory profiler config
+
+        Returns:
+            Raw profile output (SVG/HTML/JSON/text depending on profiler and format)
+
+        Raises:
+            RuntimeError: If profiling fails or container is not running
         """
         ...
 

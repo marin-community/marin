@@ -36,7 +36,7 @@ def _build_uv_sync_flags(extras: Sequence[str]) -> str:
 
 def _build_pip_install_args(pip_packages: Sequence[str]) -> str:
     """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
-    packages = ["cloudpickle", "py-spy", *list(pip_packages)]
+    packages = ["cloudpickle", "py-spy", "memray", *list(pip_packages)]
     # Use shlex.quote to safely escape each package spec for the shell.
     return " ".join(shlex.quote(pkg) for pkg in packages)
 

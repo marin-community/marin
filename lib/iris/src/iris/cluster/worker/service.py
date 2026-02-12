@@ -34,7 +34,7 @@ class TaskProvider(Protocol):
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
     def get_logs(self, task_id: str, start_line: int = 0, attempt_id: int = -1) -> list[cluster_pb2.Worker.LogEntry]: ...
     def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
-    def profile_task(self, task_id: str, duration_seconds: int, rate_hz: int, output_format: str) -> bytes: ...
+    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes: ...
 
 
 class WorkerServiceImpl:
@@ -176,21 +176,18 @@ class WorkerServiceImpl:
         request: cluster_pb2.ProfileTaskRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.ProfileTaskResponse:
-        """Profile a running task using py-spy."""
+        """Profile a running task using py-spy (CPU) or memray (memory)."""
         with rpc_error_handler("profile_task"):
             try:
+                # Validate profile_type
+                if not request.HasField("profile_type"):
+                    raise ValueError("profile_type is required")
+
                 data = self._provider.profile_task(
                     request.task_id,
                     duration_seconds=request.duration_seconds or 10,
-                    rate_hz=request.rate_hz or 100,
-                    output_format=request.format or "flamegraph",
+                    profile_type=request.profile_type,
                 )
-                return cluster_pb2.ProfileTaskResponse(
-                    profile_data=data,
-                    format=request.format or "flamegraph",
-                )
+                return cluster_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:
-                return cluster_pb2.ProfileTaskResponse(
-                    error=str(e),
-                    format=request.format or "flamegraph",
-                )
+                return cluster_pb2.ProfileTaskResponse(error=str(e))

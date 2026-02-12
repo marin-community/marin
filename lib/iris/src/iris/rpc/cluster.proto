@@ -27,17 +27,48 @@ message Empty {}
 
 // --- Profiling ---
 // Shared by both ControllerService and WorkerService (controller proxies to worker).
+
+// CPU profiling configuration (py-spy)
+message CpuProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;     // SVG flamegraph
+    SPEEDSCOPE = 2;     // JSON for speedscope viewer
+    RAW = 3;            // Text output
+  }
+  Format format = 1;
+  int32 rate_hz = 2;    // Sample rate (default: 100)
+}
+
+// Memory profiling configuration (memray)
+message MemoryProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;     // HTML flamegraph with memory timeline
+    TABLE = 2;          // Text summary table
+    STATS = 3;          // JSON statistics
+  }
+  Format format = 1;
+  bool leaks = 2;       // Focus on potential memory leaks
+}
+
+// Profile type selector
+message ProfileType {
+  oneof profiler {
+    CpuProfile cpu = 1;
+    MemoryProfile memory = 2;
+  }
+}
+
 message ProfileTaskRequest {
   string task_id = 1;
   int32 duration_seconds = 2;   // How long to sample (default: 10)
-  int32 rate_hz = 3;            // Sample rate (default: 100)
-  string format = 4;            // "flamegraph" (default), "speedscope", "raw"
+  ProfileType profile_type = 3;
 }
 
 message ProfileTaskResponse {
-  bytes profile_data = 1;       // SVG/JSON/text output
-  string format = 2;            // Echoed back
-  string error = 3;             // Non-empty if profiling failed
+  bytes profile_data = 1;       // SVG/JSON/HTML/text output
+  string error = 2;             // Non-empty if profiling failed
 }
 
 message ProcessLogRecord {

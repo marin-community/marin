@@ -1087,7 +1087,7 @@ class TestProfiling:
         request = cluster_pb2.ProfileTaskRequest(
             task_id=task_id,
             duration_seconds=2,
-            format="flamegraph",
+            profile_type=cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH)),
         )
         assert test_cluster._controller_client is not None
         response = test_cluster._controller_client.profile_task(request, timeout_ms=3000)
@@ -1112,15 +1112,20 @@ class TestProfiling:
 
         assert test_cluster._controller_client is not None
 
-        for fmt in ["flamegraph", "speedscope", "raw"]:
+        cpu_formats = [
+            ("flamegraph", cluster_pb2.CpuProfile.FLAMEGRAPH),
+            ("speedscope", cluster_pb2.CpuProfile.SPEEDSCOPE),
+            ("raw", cluster_pb2.CpuProfile.RAW),
+        ]
+        for name, fmt in cpu_formats:
             request = cluster_pb2.ProfileTaskRequest(
                 task_id=task_id,
                 duration_seconds=1,
-                format=fmt,
+                profile_type=cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=fmt)),
             )
             response = test_cluster._controller_client.profile_task(request, timeout_ms=3000)
-            assert len(response.profile_data) > 0, f"Format {fmt} returned empty data"
-            assert not response.error, f"Format {fmt} returned error: {response.error}"
+            assert len(response.profile_data) > 0, f"Format {name} returned empty data"
+            assert not response.error, f"Format {name} returned error: {response.error}"
 
         test_cluster.wait(job, timeout=test_cluster.wait_timeout)
 
@@ -1129,7 +1134,7 @@ class TestProfiling:
         request = cluster_pb2.ProfileTaskRequest(
             task_id="/nonexistent/task/0",
             duration_seconds=1,
-            format="flamegraph",
+            profile_type=cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH)),
         )
         assert test_cluster._controller_client is not None
         with pytest.raises(ConnectError):
