@@ -1,88 +1,80 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inspect a single row from an input parquet shard.
+"""Inspect records from the tokenized Levanter cache output.
 
-Downloads the shard and prints raw contents: messages, caption text, image token stats.
+Reads directly from the output cache produced by vlm_tokenize_captions.py
+and displays token breakdown, decoded text, and loss weights.
 
 Usage:
-    uv run experiments/unified/inspect_parquet_row.py --shard_index 0 --row_index 5
-    uv run experiments/unified/inspect_parquet_row.py --shard_index 0 --row_index 5 \
-        --input_path gs://marin-vlm/stage2_sharded_full_tokenized
+    uv run experiments/unified/inspect_parquet_row.py --row_index 5
+    uv run experiments/unified/inspect_parquet_row.py --row_index 0 \
+        --cache_path gs://marin-vlm/stage2_sharded_full_tokenized_llama3/train
 """
 
 import argparse
-import json
-import os
-import tempfile
 
-import pyarrow.parquet as pq
+import numpy as np
 
+from experiments.unified.unified_pretrain import UNIFIED_TOKENIZER_PATH
 from experiments.unified.vlm_tokenize_captions import (
+    ENDOFTEXT_ID,
+    VISION_END_ID,
+    VISION_START_ID,
     VISUAL_TOKEN_OFFSET,
-    extract_caption,
-    gcs_download,
 )
-from marin.utils import fsspec_glob
+
+
+def print_record(index, record, tok):
+    ids = record["input_ids"]
+    weights = record["loss_weights"]
+
+    n_total = len(ids)
+    n_visual = sum(1 for t in ids if t >= VISUAL_TOKEN_OFFSET)
+    n_text = sum(1 for t in ids if t < VISUAL_TOKEN_OFFSET and t not in (VISION_START_ID, VISION_END_ID, ENDOFTEXT_ID))
+
+    # Decode all non-visual tokens (text + special tokens like vision_start, vision_end, endoftext)
+    non_visual_ids = [int(t) for t in ids if t < VISUAL_TOKEN_OFFSET]
+    decoded_text = tok.decode(non_visual_ids)
+
+    # Determine ordering from token layout
+    if n_visual > 0 and ids[0] == VISION_START_ID:
+        ordering = "image-first (understanding)"
+    elif n_visual > 0:
+        ordering = "text-first (generation)"
+    else:
+        ordering = "text-only"
+
+    print(f"\n=== Record {index} ({n_total} tokens, {ordering}) ===")
+    print(f"  Visual tokens (>= {VISUAL_TOKEN_OFFSET}): {n_visual}")
+    print(f"  Text tokens: {n_text}")
+    print(f"  Special tokens: {n_total - n_visual - n_text}")
+    print(f"  Decoded text: {decoded_text}")
+    print(f"  Loss weights: min={weights.min():.2f}, max={weights.max():.2f}")
+    print(f"  First 10 tokens: {[int(t) for t in ids[:10]]}")
+    print(f"  First 10 weights: {[float(w) for w in weights[:10]]}")
+    print(f"  Last 10 tokens:  {[int(t) for t in ids[-10:]]}")
+    print(f"  Last 10 weights: {[float(w) for w in weights[-10:]]}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Inspect a single row from an input parquet shard.")
-    parser.add_argument("--shard_index", type=int, required=True, help="Index of the parquet shard")
-    parser.add_argument("--row_index", type=int, required=True, help="Row index within the shard")
-    parser.add_argument("--input_path", default="gs://marin-vlm/stage2_sharded_full_tokenized")
+    parser = argparse.ArgumentParser(description="Inspect records from tokenized Levanter cache.")
+    parser.add_argument("--row_index", type=int, required=True, help="Record index in the cache")
+    parser.add_argument("--cache_path", default="gs://marin-vlm/stage2_sharded_full_tokenized_llama3/train")
+    parser.add_argument("--tokenizer", default=UNIFIED_TOKENIZER_PATH)
     args = parser.parse_args()
 
-    # List shards and pick the one at shard_index
-    all_shards = sorted(fsspec_glob(f"{args.input_path}/train-*.parquet"))
-    print(f"Found {len(all_shards)} shards")
-    shard_path = all_shards[args.shard_index]
-    gcs_shard = shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
+    from levanter.compat.hf_checkpoints import load_tokenizer
+    from levanter.store.cache import TreeCache
 
-    # Download to temp
-    with tempfile.TemporaryDirectory() as tmp:
-        local = os.path.join(tmp, "shard.parquet")
-        gcs_download(gcs_shard, local)
-        table = pq.read_table(local)
+    print(f"Loading cache from {args.cache_path} ...")
+    exemplar = {"input_ids": np.zeros((0,), dtype=np.int32), "loss_weights": np.zeros((0,), dtype=np.float32)}
+    cache = TreeCache.load(args.cache_path, exemplar=exemplar)
+    print(f"Cache has {len(cache)} records")
 
-    print(f"Shard has {len(table)} rows, columns: {table.column_names}")
-
-    row_idx = args.row_index
-    messages = table.column("messages")[row_idx].as_py()
-    image_token_lists = table.column("image_tokens")[row_idx].as_py()
-
-    # Raw messages
-    print(f"\n=== Shard {args.shard_index}, Row {row_idx} ===")
-    print(f"\nMessages ({len(messages)} turns):")
-    for msg in messages:
-        role = msg["role"]
-        for part in msg["content"]:
-            if part["type"] == "text":
-                text = part["text"]
-                print(f"  [{role}] text: {text[:200]}{'...' if len(text) > 200 else ''}")
-            elif part["type"] == "image":
-                print(f"  [{role}] image")
-            else:
-                print(f"  [{role}] {part['type']}: {json.dumps(part)[:100]}")
-
-    # Caption extraction
-    caption = extract_caption(messages)
-    print(f"\nExtracted caption: {caption[:200] if caption else None}{'...' if caption and len(caption) > 200 else ''}")
-
-    # Image tokens
-    n_images = sum(1 for msg in messages for part in msg["content"] if part["type"] == "image")
-    print(f"\nImages in messages: {n_images}")
-    print(f"Image token lists: {len(image_token_lists)}")
-    if n_images != len(image_token_lists):
-        print(f"  *** MISMATCH: {n_images} images vs {len(image_token_lists)} token lists ***")
-
-    for img_i, tokens in enumerate(image_token_lists):
-        n_tok = len(tokens)
-        n_above = sum(1 for t in tokens if t >= VISUAL_TOKEN_OFFSET)
-        print(f"\n  Image {img_i}: {n_tok} tokens")
-        if tokens:
-            print(f"    ID range: [{min(tokens)}, {max(tokens)}]")
-            print(f"    Tokens >= {VISUAL_TOKEN_OFFSET} (already shifted?): {n_above}/{n_tok}")
+    tok = load_tokenizer(args.tokenizer)
+    record = cache[args.row_index]
+    print_record(args.row_index, record, tok)
 
 
 if __name__ == "__main__":
