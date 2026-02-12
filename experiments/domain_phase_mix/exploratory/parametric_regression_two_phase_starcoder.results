@@ -1,0 +1,19 @@
+Primary target: eval/paloma/dolma_100_programing_languages/bpb
+Best observed: 0.9086 at p0_sc=0.0000, p1_sc=0.2814
+
+Model            p0_starcoder p1_starcoder     pred_bpb
+--------------------------------------------------------
+PowerLaw               0.0005       0.1857       0.9026
+Linear                 0.0011       0.0026       0.8261
+LogLinear              0.0010       0.9970       0.8308
+LogNonLinear           0.0000       0.3969       1.0000
+
+Cross-validation (5-fold) R² on key metrics:
+Metric                                                 PowerLaw      Linear        LogLinear     LogNonLinear  
+---------------------------------------------------------------------------------------------------------------
+eval/paloma/dolma_100_programing_languages/bpb         0.7240        0.4373        0.1387        0.2115        
+eval/uncheatable_eval/github_python/bpb                0.7348        0.4152        0.2757        -0.1600       
+eval/loss                                              0.8550        0.2235        0.1234        0.0791        
+eval/paloma/c4_en/bpb                                  0.7079        0.1941        0.0991        0.0055        
+lm_eval/hellaswag_0shot/acc_norm                       0.8664        0.8697        -444.5400     -12526.3215   
+lm_eval/averages/macro_avg_acc                         0.6083        0.5208        -165.2739     -3669.8314    
