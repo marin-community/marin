@@ -56,7 +56,6 @@ class ModelConfig:
     """Custom base name for wandb runs."""
 
 
-
 class Evaluator(ABC):
     def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
         if resource_config is None:

@@ -1,9 +1,13 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
+
+# Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 
 
 @dataclass(frozen=True)

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Task configurations for Evalchemy-specific reasoning benchmarks.
@@ -26,31 +15,26 @@ as they require OPENAI_API_KEY. These could be added later if needed.
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 __all__ = [
-    # Math tasks
     "AIME24",
     "AIME25",
-    "AMC23",
-    "MATH500",
-    "HMMT",
-    # Code tasks
-    "HUMANEVAL_PLUS",
-    "MBPP_PLUS",
-    "LIVECODEBENCH",
-    "BIGCODEBENCH",
-    "CODEFORCES",
-    "CODEELO",
-    # Science tasks
-    "GPQA_DIAMOND",
-    "JEEBENCH",
-    # Reasoning tasks
     "ALICE_IN_WONDERLAND",
-    "HUMANITYS_LAST_EXAM",
-    # Task groups
-    "EVALCHEMY_MATH_TASKS",
+    "AMC23",
+    "BIGCODEBENCH",
+    "CODEELO",
+    "CODEFORCES",
     "EVALCHEMY_CODE_TASKS",
-    "EVALCHEMY_SCIENCE_TASKS",
-    "EVALCHEMY_REASONING_TASKS",
     "EVALCHEMY_CORE_TASKS",
+    "EVALCHEMY_MATH_TASKS",
+    "EVALCHEMY_REASONING_TASKS",
+    "EVALCHEMY_SCIENCE_TASKS",
+    "GPQA_DIAMOND",
+    "HMMT",
+    "HUMANEVAL_PLUS",
+    "HUMANITYS_LAST_EXAM",
+    "JEEBENCH",
+    "LIVECODEBENCH",
+    "MATH500",
+    "MBPP_PLUS",
 ]
 
 # =============================================================================

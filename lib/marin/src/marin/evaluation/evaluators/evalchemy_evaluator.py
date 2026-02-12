@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Evalchemy evaluator for reasoning benchmarks.
@@ -42,16 +31,15 @@ import shutil
 import subprocess
 import sys
 import traceback
-from typing import Sequence
+from collections.abc import Sequence
+from typing import ClassVar
 from urllib.parse import urlparse
 
-from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
+from fray.v1.cluster import ResourceConfig
 
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
-from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +47,11 @@ logger = logging.getLogger(__name__)
 EVALCHEMY_REPO = "https://github.com/mlfoundations/evalchemy.git"
 EVALCHEMY_COMMIT = "6ed674159b37f740f2353a86f596f49f6ac13c19"  # 2025-01-08
 
-# Wandb project name for evalchemy evaluations
-# Reads from WANDB_PROJECT env var, defaults to "marin"
-WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
 # These benchmarks run multiple repetitions with different seeds to compute
-# averaged accuracy, but this significantly increases evaluation time. 
-# For example, AIME25 defaults to n_repeat=10 
+# averaged accuracy, but this significantly increases evaluation time.
+# For example, AIME25 defaults to n_repeat=10
 # (https://github.com/mlfoundations/evalchemy/blob/main/eval/chat_benchmarks/AIME25/eval_instruct.py)
 N_REPEAT_BENCHMARK_PATHS = {
     "AIME25": "eval/chat_benchmarks/AIME25/eval_instruct.py",
@@ -82,7 +67,7 @@ def _extract_step_suffix(path: str) -> str:
     E.g., "gs://bucket/checkpoints/run/hf/step-7022/" -> "-step7022"
     E.g., "Qwen/Qwen2.5-7B-Instruct" -> ""
     """
-    match = re.search(r'step-(\d+)', path)
+    match = re.search(r"step-(\d+)", path)
     return f"-step{match.group(1)}" if match else ""
 
 
@@ -141,7 +126,7 @@ class EvalchemyEvaluator(Evaluator):
     CONFIG_CACHE_PATH: str = os.path.join(CACHE_PATH, "config_cache")
 
     # Config files needed for lm-eval (AutoConfig, tokenizer) but NOT model weights
-    CONFIG_FILES: list[str] = [
+    CONFIG_FILES: ClassVar[list[str]] = [
         "config.json",
         "tokenizer.json",
         "tokenizer_config.json",
@@ -186,21 +171,6 @@ class EvalchemyEvaluator(Evaluator):
         model = EvalchemyEvaluator._maybe_enable_streaming(model)
         model_name_or_path = model.path if model.path is not None else model.name
         return model_name_or_path, model
-
-    def get_runtime_env(self) -> dict:
-        """Returns the runtime environment for the Ray cluster."""
-        env_vars = {"HF_ALLOW_CODE_EVAL": "1"}
-        # Pass wandb env vars so that logging works on TPU nodes
-        wandb_api_key = os.environ.get("WANDB_API_KEY")
-        if wandb_api_key:
-            env_vars["WANDB_API_KEY"] = wandb_api_key
-        wandb_entity = os.environ.get("WANDB_ENTITY")
-        if wandb_entity:
-            env_vars["WANDB_ENTITY"] = wandb_entity
-        return build_runtime_env_for_packages(
-            extra=["evalchemy"],
-            env_vars=env_vars,
-        )
 
     def _log_results_to_wandb(
         self,
@@ -286,7 +256,7 @@ class EvalchemyEvaluator(Evaluator):
                 for task, metrics in results["results"].items():
                     if isinstance(metrics, dict):
                         for metric_name, metric_value in metrics.items():
-                            if isinstance(metric_value, (int, float)):
+                            if isinstance(metric_value, int | float):
                                 # Log with task prefix for clarity
                                 wandb.log({f"{task}/{metric_name}": metric_value})
 
@@ -330,6 +300,7 @@ class EvalchemyEvaluator(Evaluator):
         """Log lm-eval version for debugging."""
         try:
             import lm_eval
+
             logger.info(f"lm-eval version: {getattr(lm_eval, '__version__', 'unknown')}")
             logger.info(f"lm-eval location: {lm_eval.__file__}")
         except ImportError:
@@ -346,12 +317,16 @@ class EvalchemyEvaluator(Evaluator):
         logger.info(f"Cloning evalchemy from {EVALCHEMY_REPO} at commit {EVALCHEMY_COMMIT}")
         subprocess.run(
             ["git", "clone", EVALCHEMY_REPO, self.EVALCHEMY_PATH],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
         subprocess.run(
             ["git", "checkout", EVALCHEMY_COMMIT],
             cwd=self.EVALCHEMY_PATH,
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
         logger.info(f"Evalchemy cloned successfully to {self.EVALCHEMY_PATH}")
 
@@ -378,17 +353,12 @@ class EvalchemyEvaluator(Evaluator):
 
         path = os.path.join(self.EVALCHEMY_PATH, N_REPEAT_BENCHMARK_PATHS[task_name])
         if not os.path.exists(path):
-            logger.warning(f"Benchmark file not found: {path}")
-            return
+            raise RuntimeError(f"Benchmark file not found: {path}")
 
         content = self._read_file(path)
 
         # Replace n_repeat = N with the configured value
-        new_content = re.sub(
-            r'self\.n_repeat\s*=\s*\d+',
-            f'self.n_repeat = {n_repeat}',
-            content
-        )
+        new_content = re.sub(r"self\.n_repeat\s*=\s*\d+", f"self.n_repeat = {n_repeat}", content)
 
         if new_content != content:
             self._write_file(path, new_content)
@@ -420,7 +390,10 @@ except ImportError:
             self._write_file(path, content.replace(old, new))
             logger.info("Patched eval_tracker.py to handle different lm-eval versions")
         else:
-            logger.warning("Could not find expected import in eval_tracker.py - evalchemy may have changed")
+            raise RuntimeError(
+                "Could not find expected import in eval_tracker.py. "
+                f"Evalchemy commit {EVALCHEMY_COMMIT} may have changed - update the patch marker."
+            )
 
     def _patch_eval_py_imports(self) -> None:
         """Patch eval.py to add eval_logger to utils module if missing."""
@@ -432,7 +405,7 @@ except ImportError:
         if "# Patch utils.eval_logger" in content:
             return  # Already patched
 
-        patch = '''
+        patch = """
 # Patch utils.eval_logger for lm-eval compatibility
 if not hasattr(utils, 'eval_logger'):
     try:
@@ -441,13 +414,16 @@ if not hasattr(utils, 'eval_logger'):
     except ImportError:
         import logging as _logging
         utils.eval_logger = _logging.getLogger("lm-eval")
-'''
+"""
         marker = "from lm_eval.tasks import TaskManager as PretrainTaskManager"
         if marker in content:
             self._write_file(path, content.replace(marker, marker + patch))
             logger.info("Patched eval.py to handle different lm-eval versions")
         else:
-            logger.warning("Could not find TaskManager import in eval.py - evalchemy may have changed")
+            raise RuntimeError(
+                "Could not find TaskManager import in eval.py. "
+                f"Evalchemy commit {EVALCHEMY_COMMIT} may have changed - update the patch marker."
+            )
 
     def _patch_vllm_version(self) -> None:
         """Patch eval.py to handle vllm-tpu lacking package metadata."""
@@ -461,7 +437,7 @@ if not hasattr(utils, 'eval_logger'):
 
         # Version 0.8.2 is returned because lm-eval checks vllm version for feature compatibility.
         # vllm-tpu doesn't have package metadata, so we return a version that lm-eval accepts.
-        patch = '''
+        patch = """
 # Patch vllm version for vllm-tpu (lacks package metadata)
 def _patch_vllm_version():
     try:
@@ -475,13 +451,16 @@ def _patch_vllm_version():
     except Exception:
         pass
 _patch_vllm_version()
-'''
+"""
         marker = "from lm_eval.utils import sanitize_model_name, simple_parse_args_string"
         if marker in content:
             self._write_file(path, content.replace(marker, marker + "\n" + patch))
             logger.info("Patched eval.py to handle vllm-tpu version")
         else:
-            logger.warning("Could not find sanitize_model_name import in eval.py - evalchemy may have changed")
+            raise RuntimeError(
+                "Could not find sanitize_model_name import in eval.py. "
+                f"Evalchemy commit {EVALCHEMY_COMMIT} may have changed - update the patch marker."
+            )
 
     def _patch_vllm_seed_for_tpu(self) -> None:
         """
@@ -503,6 +482,7 @@ _patch_vllm_version()
 # Patch lm-eval vLLM seed handling for TPU (JAX doesn't support per-request seeds)
 def _patch_lmeval_vllm_seed():
     try:
+        import logging
         import lm_eval.models.vllm_causallms as vllm_module
         from vllm import SamplingParams
 
@@ -562,9 +542,9 @@ def _patch_lmeval_vllm_seed():
 
         VLLM._model_generate = _patched
         VLLM._tpu_seed_patched = True
-        print("Patched lm-eval VLLM to disable per-request seeds for TPU")
+        logging.getLogger("evalchemy").info("Patched lm-eval VLLM to disable per-request seeds for TPU")
     except Exception as e:
-        print(f"Warning: Could not patch lm-eval vllm seed: {e}")
+        logging.getLogger("evalchemy").warning(f"Could not patch lm-eval vllm seed: {e}")
 
 _patch_lmeval_vllm_seed()
 '''
@@ -573,7 +553,10 @@ _patch_lmeval_vllm_seed()
             self._write_file(path, content.replace(marker, marker + patch, 1))
             logger.info("Patched eval.py to disable per-request seeds for TPU")
         else:
-            logger.warning("Could not find _patch_vllm_version() call in eval.py - evalchemy may have changed")
+            raise RuntimeError(
+                "Could not find _patch_vllm_version() call in eval.py. "
+                f"Evalchemy commit {EVALCHEMY_COMMIT} may have changed - update the patch marker."
+            )
 
     def _patch_vllm_stat_logging(self) -> None:
         """
@@ -593,10 +576,11 @@ _patch_lmeval_vllm_seed()
         if "# Patch vLLM stat logging" in content:
             return  # Already patched
 
-        patch = '''
+        patch = """
 # Patch vLLM stat logging to show tokens/sec throughput during generation
 def _enable_vllm_stat_logging():
     try:
+        import logging
         from vllm import LLM
         _original_init = LLM.__init__
 
@@ -605,18 +589,21 @@ def _enable_vllm_stat_logging():
             return _original_init(self, *args, **kwargs)
 
         LLM.__init__ = _patched_init
-        print("Enabled vLLM throughput logging (disable_log_stats=False)")
+        logging.getLogger("evalchemy").info("Enabled vLLM throughput logging (disable_log_stats=False)")
     except Exception as e:
-        print(f"Warning: Could not enable vLLM stat logging: {e}")
+        logging.getLogger("evalchemy").warning(f"Could not enable vLLM stat logging: {e}")
 
 _enable_vllm_stat_logging()
-'''
+"""
         marker = "_patch_lmeval_vllm_seed()\n"
         if marker in content:
             self._write_file(path, content.replace(marker, marker + patch, 1))
             logger.info("Patched eval.py to enable vLLM throughput logging")
         else:
-            logger.warning("Could not find _patch_lmeval_vllm_seed() call in eval.py for stat logging patch")
+            raise RuntimeError(
+                "Could not find _patch_lmeval_vllm_seed() call in eval.py for stat logging patch. "
+                f"Evalchemy commit {EVALCHEMY_COMMIT} may have changed - update the patch marker."
+            )
 
     def _download_config_files_from_gcs(self, gcs_path: str) -> str:
         """
@@ -628,10 +615,7 @@ _enable_vllm_stat_logging()
         try:
             import fsspec
         except ImportError as e:
-            raise ImportError(
-                "fsspec is required for GCS model paths. "
-                "Install with: pip install fsspec gcsfs"
-            ) from e
+            raise ImportError("fsspec is required for GCS model paths. " "Install with: pip install fsspec gcsfs") from e
 
         path_hash = hashlib.md5(gcs_path.encode()).hexdigest()[:8]
         local_dir = os.path.join(self.CONFIG_CACHE_PATH, f"config_{path_hash}")
@@ -665,6 +649,7 @@ _enable_vllm_stat_logging()
         patch = f'''
 # Patch AutoConfig for GCS paths
 def _patch_autoconfig_for_gcs():
+    import logging
     from transformers import AutoConfig, AutoTokenizer
     _gcs = "{gcs_path}".rstrip("/")
     _local = "{local_config_dir}"
@@ -680,19 +665,19 @@ def _patch_autoconfig_for_gcs():
 
     def _config(cls, path, *a, **kw):
         if _normalize(path) == _gcs:
-            print(f"Redirecting AutoConfig from {{path}} to {{_local}}")
+            logging.getLogger("evalchemy").info(f"Redirecting AutoConfig from {{path}} to {{_local}}")
             return _orig_config(cls, _local, *a, **kw)
         return _orig_config(cls, path, *a, **kw)
 
     def _tokenizer(cls, path, *a, **kw):
         if _normalize(path) == _gcs:
-            print(f"Redirecting AutoTokenizer from {{path}} to {{_local}}")
+            logging.getLogger("evalchemy").info(f"Redirecting AutoTokenizer from {{path}} to {{_local}}")
             return _orig_tokenizer(cls, _local, *a, **kw)
         return _orig_tokenizer(cls, path, *a, **kw)
 
     AutoConfig.from_pretrained = classmethod(_config)
     AutoTokenizer.from_pretrained = classmethod(_tokenizer)
-    print(f"GCS patch installed: will redirect {{_gcs}} to {{_local}}")
+    logging.getLogger("evalchemy").info(f"GCS patch installed: will redirect {{_gcs}} to {{_local}}")
 
 _patch_autoconfig_for_gcs()
 '''
@@ -701,7 +686,10 @@ _patch_autoconfig_for_gcs()
             self._write_file(path, content.replace(marker, marker + "\n" + patch))
             logger.info("Patched eval.py to handle GCS model paths")
         else:
-            logger.warning("Could not find eval_logger marker in eval.py for GCS patch - evalchemy may have changed")
+            raise RuntimeError(
+                "Could not find eval_logger marker in eval.py for GCS patch. "
+                f"Evalchemy commit {EVALCHEMY_COMMIT} may have changed - update the patch marker."
+            )
 
     def _run_evalchemy_in_process(
         self,
@@ -811,6 +799,7 @@ _patch_autoconfig_for_gcs()
         gc.collect()
         try:
             import vllm.distributed
+
             if hasattr(vllm.distributed, "destroy_model_parallel"):
                 vllm.distributed.destroy_model_parallel()
                 logger.info("Destroyed vLLM model parallel state")
@@ -918,15 +907,9 @@ _patch_autoconfig_for_gcs()
                 # Apply task-specific patches (e.g., n_repeat for AIME benchmarks)
                 if eval_task.task_kwargs:
                     if "n_repeat" in eval_task.task_kwargs:
-                        self._patch_benchmark_n_repeat(
-                            eval_task.name,
-                            eval_task.task_kwargs["n_repeat"]
-                        )
+                        self._patch_benchmark_n_repeat(eval_task.name, eval_task.task_kwargs["n_repeat"])
 
-                result_dir = os.path.join(
-                    self.RESULTS_PATH,
-                    f"{eval_task.name}_{eval_task.num_fewshot}shot"
-                )
+                result_dir = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
                 os.makedirs(result_dir, exist_ok=True)
 
                 # Build model_args for vLLM initialization
@@ -973,13 +956,21 @@ _patch_autoconfig_for_gcs()
 
                 # Build evalchemy CLI command
                 cmd = [
-                    sys.executable, "-m", "eval.eval",
-                    "--model", "vllm",
-                    "--tasks", eval_task.name,
-                    "--model_args", model_args,
-                    "--batch_size", str(batch_size),
-                    "--output_path", result_dir,
-                    "--verbosity", "INFO",
+                    sys.executable,
+                    "-m",
+                    "eval.eval",
+                    "--model",
+                    "vllm",
+                    "--tasks",
+                    eval_task.name,
+                    "--model_args",
+                    model_args,
+                    "--batch_size",
+                    str(batch_size),
+                    "--output_path",
+                    result_dir,
+                    "--verbosity",
+                    "INFO",
                 ]
 
                 if eval_task.num_fewshot > 0:
@@ -1024,7 +1015,7 @@ _patch_autoconfig_for_gcs()
                     with open(error_file, "w") as f:
                         f.write(f"Command: {' '.join(cmd)}\n")
                         f.write(f"Return code: {returncode}\n")
-                        f.write(f"\n=== OUTPUT LOG ===\n")
+                        f.write("\n=== OUTPUT LOG ===\n")
                         f.write(log_contents)
 
                     # Surface the last portion of the log directly in the error
@@ -1083,20 +1074,23 @@ _patch_autoconfig_for_gcs()
         wandb_tags: list[str] | None = None,
     ) -> None:
         """Launch evaluation on Ray cluster with TPU resources."""
+        env_vars = {"HF_ALLOW_CODE_EVAL": "1"}
+        wandb_api_key = os.environ.get("WANDB_API_KEY")
+        if wandb_api_key:
+            env_vars["WANDB_API_KEY"] = wandb_api_key
+        wandb_entity = os.environ.get("WANDB_ENTITY")
+        if wandb_entity:
+            env_vars["WANDB_ENTITY"] = wandb_entity
 
-        def _run():
-            with remove_tpu_lockfile_on_exit():
-                import logging
-                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
-
-        job_request = JobRequest(
-            name="evalchemy-tpu-evaluation",
-            entrypoint=Entrypoint.from_callable(_run),
-            resources=resource_config or ResourceConfig(),
-            environment=EnvironmentConfig.create(extras=["evalchemy", "tpu", "vllm"]),
+        launch_evaluate_with_ray(
+            evaluator=self,
+            job_name="evalchemy-tpu-evaluation",
+            model=model,
+            evals=evals,
+            output_path=output_path,
+            resource_config=resource_config,
+            max_eval_instances=max_eval_instances,
+            wandb_tags=wandb_tags,
+            extras=("evalchemy", "tpu", "vllm"),
+            env_vars=env_vars,
         )
-
-        cluster = current_cluster()
-        job_id = cluster.launch(job_request)
-        cluster.wait(job_id, raise_on_failure=True)
