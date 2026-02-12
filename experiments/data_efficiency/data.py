@@ -536,6 +536,39 @@ wrap_nodoc_cpr8_shuffled_tokenized = tokenize_data_efficiency_dataset(
     "f73340b",
 )
 
+# cot data (cpr2)
+
+cot_cpr2_doc_sorted_tokenized = tokenize_data_efficiency_dataset(
+    "cot_cpr2_doc_sorted",
+    "konwoo/dclm-164k-cpr2-cot",
+    "4b8869e",
+)
+
+cot_cpr2_doc_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "cot_cpr2_doc_shuffled",
+    "konwoo/dclm-164k-cpr2-cot-shuffled",
+    "73a368b",
+)
+
+cot_cpr2_nodoc_sorted_tokenized = tokenize_data_efficiency_dataset(
+    "cot_cpr2_nodoc_sorted",
+    "konwoo/dclm-164k-cpr2-cot-nodoc",
+    "eadd4b3",
+)
+
+cot_cpr2_nodoc_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "cot_cpr2_nodoc_shuffled",
+    "konwoo/dclm-164k-cpr2-cot-nodoc-shuffled",
+    "b8ddc42",
+)
+
+cot_l16_cpr1_sorted_tokenized = tokenize_data_efficiency_dataset(
+    "cot_l16_cpr1_sorted",
+    "konwoo/dclm-164k-512cot-l16",
+    "a272507",
+)
+
+
 
 data_dict = {
     "dclm": dclm_tokenized,
@@ -633,4 +666,10 @@ data_dict = {
     # nodoc baselines
     "n8": wrap_nodoc_cpr8_tokenized,
     "n8s": wrap_nodoc_cpr8_shuffled_tokenized,
+    # cot data (cpr2)
+    "c2": cot_cpr2_doc_sorted_tokenized,
+    "c2s": cot_cpr2_doc_shuffled_tokenized,
+    "d2": cot_cpr2_nodoc_sorted_tokenized,
+    "d2s": cot_cpr2_nodoc_shuffled_tokenized,
+    "l16": cot_l16_cpr1_sorted_tokenized,
 }

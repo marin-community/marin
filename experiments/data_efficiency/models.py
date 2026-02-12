@@ -88,6 +88,7 @@ llama_3_2b_4096_config_qk_norm = dataclasses.replace(llama_3_2b_config_qk_norm, 
 
 
 LONGER_SEQ_LEN = 16_384
+llama_300m_8192_config = dataclasses.replace(llama_300m, max_seq_len=8192)
 llama_300m_16384_config = dataclasses.replace(llama_300m, max_seq_len=LONGER_SEQ_LEN)
 
 llama_3b_config = LlamaConfig(
@@ -210,6 +211,7 @@ gdn_600m_4096_config = _gdn_size(hidden_dim=1024, intermediate_dim=3584, num_lay
 model_dict = {
     "150m4k": llama_150m_4096_config,
     "300m4k": llama_300m_4096_config,
+    "300m8k": llama_300m_8192_config,
     "300m16k": llama_300m_16384_config,
     "600m4k": llama_600m_4096_config,
     "1_4b4k": llama_1_4b_4096_config,
