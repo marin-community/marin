@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum, auto
-import typing
+import dupekit
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
@@ -31,9 +31,6 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
-
-if typing.TYPE_CHECKING:
-    from dupekit import Bloom
 
 
 class DeconMode(StrEnum):
@@ -185,11 +182,10 @@ def build_filter(
     """
     Build a bloom filter from input dataset.
     """
-    from dupekit import Bloom
 
     def build_shard_bloom(records: Iterator[dict]) -> Iterator[bytes]:
         """Build bloom filter from a shard of records and yield serialized bytes."""
-        bf = Bloom(config.estimated_doc_count, config.false_positive_rate)
+        bf = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
 
         for record in records:
             text = record.get(config.text_field, "")
@@ -202,12 +198,12 @@ def build_filter(
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     def _merge_bloom(bloom_files: Iterator[str]):
-        merged_bloom = Bloom(config.estimated_doc_count, config.false_positive_rate)
+        merged_bloom = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
         for bloom_file_path in bloom_files:
             fs, path = fsspec.url_to_fs(bloom_file_path)
             with fs.open(path, "rb") as f:
                 bloom_bytes = f.read()
-            shard_bloom = Bloom.load_bytes(bloom_bytes)
+            shard_bloom = dupekit.Bloom.load_bytes(bloom_bytes)
             merged_bloom.update(shard_bloom)
         yield merged_bloom.save_bytes()
 
@@ -236,7 +232,9 @@ def build_filter(
     return merged_bloom[0]
 
 
-def calculate_paragraph_overlap(paragraph: str, bloom_filter: "Bloom", ngram_config: NGramConfig | None) -> float:
+def calculate_paragraph_overlap(
+    paragraph: str, bloom_filter: "dupekit.Bloom", ngram_config: NGramConfig | None
+) -> float:
     """
     Calculate overlap score for a paragraph against a bloom filter.
     """
@@ -263,7 +261,6 @@ def mark_duplicates_bloom(
     """
     Apply bloom filter to input data, marking duplicate spans.
     """
-    from dupekit import Bloom
 
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
@@ -275,7 +272,7 @@ def mark_duplicates_bloom(
         fs, path = fsspec.url_to_fs(bloom_path)
         with fs.open(path, "rb") as f:
             bloom_bytes = f.read()
-        bf = Bloom.load_bytes(bloom_bytes)
+        bf = dupekit.Bloom.load_bytes(bloom_bytes)
 
         # Process each record
         for record in records:
