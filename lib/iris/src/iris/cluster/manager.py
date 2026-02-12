@@ -10,8 +10,9 @@ Provides free functions for cluster lifecycle operations:
 
 from __future__ import annotations
 
-import concurrent.futures
 import logging
+import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
@@ -88,9 +89,13 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
     """Stop controller and all worker slices in parallel.
 
     First enumerates all terminate targets (controller VM + TPU slices), then
-    runs all gcloud delete calls concurrently via a thread pool. Applies a hard
-    timeout of TERMINATE_TIMEOUT_SECONDS — any operation still running after
-    that is logged at WARNING and abandoned.
+    runs all deletes concurrently via daemon threads.  Applies a hard timeout
+    of TERMINATE_TIMEOUT_SECONDS — any operation still running after that is
+    logged at WARNING and abandoned.
+
+    Daemon threads are used instead of ThreadPoolExecutor so that timed-out
+    threads don't block interpreter shutdown (Python's atexit handler for
+    ThreadPoolExecutor joins all worker threads indefinitely).
     """
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
@@ -104,28 +109,43 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
 
         logger.info("Terminating %d resource(s) in parallel", len(targets))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as executor:
-            future_to_name: dict[concurrent.futures.Future, str] = {executor.submit(fn): name for name, fn in targets}
+        results: dict[str, Exception | None] = {}
+        lock = threading.Lock()
 
-            done, not_done = concurrent.futures.wait(future_to_name, timeout=TERMINATE_TIMEOUT_SECONDS)
+        def _run(name: str, fn: Callable[[], None]) -> None:
+            try:
+                fn()
+            except Exception as exc:
+                with lock:
+                    results[name] = exc
+                return
+            with lock:
+                results[name] = None
 
-            for future in done:
-                name = future_to_name[future]
-                try:
-                    future.result()
-                except Exception:
-                    logger.exception("Failed to terminate %s", name)
-                    errors.append(name)
+        threads: dict[str, threading.Thread] = {}
+        for name, fn in targets:
+            t = threading.Thread(target=_run, args=(name, fn), daemon=True)
+            t.start()
+            threads[name] = t
 
-            for future in not_done:
-                name = future_to_name[future]
+        deadline = time.monotonic() + TERMINATE_TIMEOUT_SECONDS
+        for _name, t in threads.items():
+            remaining = max(0, deadline - time.monotonic())
+            t.join(timeout=remaining)
+
+        for name, t in threads.items():
+            if t.is_alive():
                 logger.warning(
                     "Termination of %s still running after %ds, giving up",
                     name,
                     TERMINATE_TIMEOUT_SECONDS,
                 )
-                future.cancel()
                 errors.append(f"timeout:{name}")
+            else:
+                exc = results.get(name)
+                if exc is not None:
+                    logger.exception("Failed to terminate %s", name, exc_info=exc)
+                    errors.append(name)
     finally:
         platform.shutdown()
 
