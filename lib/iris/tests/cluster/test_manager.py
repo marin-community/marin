@@ -22,8 +22,8 @@ class FakeSliceHandle:
         self._labels = labels or {}
         self._terminate_delay = terminate_delay
         self.terminated = False
-        # Event that unblocks a slow terminate, so tests don't hang waiting
-        # for ThreadPoolExecutor shutdown.
+        # Event that unblocks a slow terminate, so tests can release the
+        # daemon thread after stop_all returns.
         self._release = threading.Event()
 
     @property
@@ -119,8 +119,7 @@ def test_stop_all_timeout_logs_warning(caplog):
             with pytest.raises(RuntimeError, match="error"):
                 stop_all(config)
     finally:
-        # Unblock the thread so it can exit cleanly (shutdown(wait=False)
-        # leaves it running until the fake delay completes).
+        # Unblock the daemon thread so it can exit cleanly.
         slow_slice._release.set()
 
     assert any("still running" in record.message for record in caplog.records)
