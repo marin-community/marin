@@ -25,7 +25,7 @@ jobs:
       - name: Read review prompt
         id: prompt
         run: |
-          PROMPT=$(cat docs/recipes/github-pr-review.md | sed '1,/^## Review Prompt$/d')
+          PROMPT=$(cat docs/recipes/github-pr-review.md)
           echo "review_prompt<<EOF" >> "$GITHUB_OUTPUT"
           echo "$PROMPT" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"

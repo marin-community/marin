@@ -150,4 +150,4 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
         platform.shutdown()
 
     if errors:
-        raise RuntimeError(f"stop_all completed with {len(errors)} error(s): {', '.join(errors)}")
+        logger.error("Errors when stopping cluster: %s", errors)
