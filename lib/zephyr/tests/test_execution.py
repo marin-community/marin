@@ -181,6 +181,88 @@ def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     assert coord._completed_shards == 1
 
 
+def test_disk_chunk_write_uses_unique_temp_paths(tmp_path):
+    """Each DiskChunk.write() writes to a unique temp location, avoiding collisions."""
+    from zephyr.execution import DiskChunk
+
+    base_path = str(tmp_path / "chunk.pkl")
+    refs = [DiskChunk.write(base_path, [i]) for i in range(3)]
+
+    # All share the same canonical path
+    assert all(r.path == base_path for r in refs)
+
+    # Each written to a distinct UUID temp path
+    temps = [r.temp_path for r in refs]
+    assert len(set(temps)) == 3
+    for tp in temps:
+        assert ".tmp." in tp
+        assert Path(tp).exists()
+
+    # Canonical path is NOT written yet (coordinator does that)
+    assert not Path(base_path).exists()
+
+
+def test_coordinator_finalizes_and_cleans_up_chunks(tmp_path):
+    """Coordinator renames winning chunks to canonical paths and deletes stale ones."""
+    from zephyr.execution import DiskChunk, ResultChunk, Shard, ShardTask, TaskResult, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Worker A pulls task (attempt 0)
+    pulled_a = coord.pull_task("worker-A")
+    _task_a, attempt_a, _config = pulled_a
+
+    # Worker A writes a chunk (simulating slow completion)
+    stale_ref = DiskChunk.write(str(tmp_path / "stale-chunk.pkl"), [1, 2, 3])
+    assert Path(stale_ref.temp_path).exists()
+    assert not Path(stale_ref.path).exists()
+
+    # Heartbeat timeout re-queues the task
+    coord._last_seen["worker-A"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+
+    # Worker B pulls and completes the re-queued task (attempt 1)
+    pulled_b = coord.pull_task("worker-B")
+    _task_b, attempt_b, _config = pulled_b
+
+    winner_ref = DiskChunk.write(str(tmp_path / "winner-chunk.pkl"), [4, 5, 6])
+
+    coord.report_result(
+        "worker-B",
+        0,
+        attempt_b,
+        TaskResult(chunks=[ResultChunk(source_shard=0, target_shard=0, data=winner_ref)]),
+    )
+
+    # Worker A's stale result is rejected — its temp file should be cleaned up
+    coord.report_result(
+        "worker-A",
+        0,
+        attempt_a,
+        TaskResult(chunks=[ResultChunk(source_shard=0, target_shard=0, data=stale_ref)]),
+    )
+
+    # Winner's data was renamed to canonical path and is readable
+    assert Path(winner_ref.path).exists()
+    assert winner_ref.read() == [4, 5, 6]
+
+    # Stale worker's temp file was cleaned up
+    assert not Path(stale_ref.temp_path).exists()
+    assert coord._completed_shards == 1
+
+
 def test_chunk_streaming_low_memory(tmp_path):
     """Shard loads chunks one at a time from disk via iter_chunks.
 
@@ -192,7 +274,9 @@ def test_chunk_streaming_low_memory(tmp_path):
     refs = []
     for i in range(3):
         path = str(tmp_path / f"chunk-{i}.pkl")
-        refs.append(DiskChunk.write(path, [i * 10 + j for j in range(5)]))
+        chunk = DiskChunk.write(path, [i * 10 + j for j in range(5)])
+        chunk.finalize_write()
+        refs.append(chunk)
 
     shard = Shard(chunks=refs)
 
