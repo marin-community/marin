@@ -473,7 +473,7 @@ def main():
 
         for batch_start in range(0, len(parquet_files), batch_size):
             batch = parquet_files[batch_start:batch_start + batch_size]
-            local_dir = tempfile.mkdtemp(prefix="clean_batch_")
+            local_dir = tempfile.mkdtemp(prefix="clean_batch_", dir="/dev/shm")
 
             try:
                 # Step 1: Download batch from GCS to local
