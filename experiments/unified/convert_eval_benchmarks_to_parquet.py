@@ -596,9 +596,7 @@ class ImageNetConverter(BenchmarkConverter):
 
 BENCHMARK_REGISTRY: dict[str, BenchmarkConverter] = {
     # Understanding
-    "vqav2": VQAv2Converter(),
     "textvqa": TextVQAConverter(),
-    "gqa": GQAConverter(),
     "chartqa": ChartQAConverter(),
     "ai2d": AI2DConverter(),
     "mmmu": MMMUConverter(),
