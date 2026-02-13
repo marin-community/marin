@@ -405,7 +405,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((1,), (1,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(x_grad_tile_ref.dtype)
         x_write_future.start()
 
     @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
@@ -416,7 +416,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((1,), (1,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(x_grad_tile_ref.dtype)
         x_read_future.wait()
         x_grad_tile_ref[...] += res
         x_write_future.start()
@@ -433,7 +433,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((0,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(w_grad_tile_ref.dtype)
         w_write_future.start()
 
     @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
@@ -444,7 +444,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((0,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(w_grad_tile_ref.dtype)
         w_read_future.wait()
         w_grad_tile_ref[...] += res
         w_write_future.start()
@@ -526,13 +526,13 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
             pl.BlockSpec(memory_space=pltpu.HBM),  # w_grad_partial
         ],
         out_shape=[
-            jax.ShapeDtypeStruct(x.shape, dtype=jnp.float32),
-            jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=jnp.float32),
+            jax.ShapeDtypeStruct(x.shape, dtype=x.dtype),
+            jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=w.dtype),
         ],
         scratch_shapes=(
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # xw_scratch
-            pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=jnp.float32),  # x_grad_tile
-            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # w_grad_tile
+            pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=x.dtype),  # x_grad_tile
+            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=w.dtype),  # w_grad_tile
             pltpu.SemaphoreType.DMA,  # x_read_sem
             pltpu.SemaphoreType.DMA,  # w_read_sem
             pltpu.SemaphoreType.DMA,  # x_write_sem
