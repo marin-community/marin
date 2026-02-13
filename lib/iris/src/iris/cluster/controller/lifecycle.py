@@ -33,7 +33,7 @@ from typing import cast
 from iris.cluster.platform.base import Platform, StandaloneVmHandle, VmHandle
 from iris.cluster.platform.bootstrap import build_controller_bootstrap_script_from_config
 from iris.rpc import config_pb2
-from iris.time_utils import Duration, ExponentialBackoff
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,8 @@ def wait_healthy(
     after 60 seconds instead of waiting for full timeout.
     """
     logger.info("Starting health check (port=%d, timeout=%ds)", port, int(timeout))
-    start_time = time.monotonic()
+    dl = Deadline.from_seconds(timeout)
+    timer = Timer()
     backoff = ExponentialBackoff(
         initial=HEALTH_CHECK_BACKOFF_INITIAL,
         maximum=HEALTH_CHECK_BACKOFF_MAX,
@@ -160,7 +161,7 @@ def wait_healthy(
     while True:
         attempt += 1
         last_result = check_health(vm, port, container_name)
-        elapsed = time.monotonic() - start_time
+        elapsed = timer.elapsed_seconds()
 
         if last_result.healthy:
             logger.info("Health check succeeded after %d attempts (%.1fs)", attempt, elapsed)
@@ -181,12 +182,11 @@ def wait_healthy(
         else:
             consecutive_restarts = 0
 
-        if elapsed >= timeout:
+        if dl.expired():
             break
 
         interval = backoff.next_interval()
-        remaining = timeout - elapsed
-        time.sleep(min(interval, remaining))
+        time.sleep(min(interval, dl.remaining_seconds()))
 
     # Health check failed - log detailed diagnostics
     logger.error("=" * 60)

@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import unittest.mock
-
 import pytest
 
 from iris.cluster.controller.autoscaler import bootstrap_slice_vms
@@ -137,12 +135,8 @@ def test_bootstrap_slice_vms_timeout_raises():
     threads = ThreadContainer(name="test")
 
     try:
-        with unittest.mock.patch("iris.cluster.controller.autoscaler.time") as mock_time:
-            mock_time.time.side_effect = [0.0, 601.0]
-            mock_time.sleep.return_value = None
-
-            with pytest.raises(PlatformError, match="only 1/2 VMs appeared"):
-                bootstrap_slice_vms(handle, bootstrap, threads, timeout=600.0)
+        with pytest.raises(PlatformError, match="only 1/2 VMs appeared"):
+            bootstrap_slice_vms(handle, bootstrap, threads, timeout=0.01, poll_interval=0.001)
     finally:
         threads.stop()
 
