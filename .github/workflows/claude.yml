@@ -55,6 +55,12 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
+      - name: Install Playwright browsers
+        run: |
+          cd lib/iris
+          uv sync --group dev
+          uv run playwright install --with-deps chromium
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
