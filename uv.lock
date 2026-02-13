@@ -2363,23 +2363,20 @@ wheels = [
 
 [[package]]
 name = "google-benchmark"
-version = "1.9.4"
+version = "1.9.5"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "absl-py", marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/19/b8/6c8503eec09c486c15dfcc0031aea9f99a3366292cd034b5e15a7b6e19c2/google_benchmark-1.9.4.tar.gz", hash = "sha256:7e835235179eb0dd6efbd2f37d640ff662a4e6573ae0b1e1aad20ed071723683", size = 23021, upload-time = "2025-05-19T15:54:27.609Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/8c/82632a5540fb79c67c8ed144ba9c19639de3e50e4ec19ca635f8e1f7d7ca/google_benchmark-1.9.5.tar.gz", hash = "sha256:923952ea22e516ca0217311f3c7e5f24ce6916394319e6a595cb813b3aa61d37", size = 15476, upload-time = "2026-02-02T13:27:02.855Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b9/b9/a7caa910c4ccc3b9da82f7c3cb246440bcd5e715c01eeed7899ca3645295/google_benchmark-1.9.4-cp311-cp311-macosx_10_14_x86_64.whl", hash = "sha256:a50927c5875a2965a3a4ece16b2ad899d2a1a11c67da0afd73690c2e19bd8b86", size = 177755, upload-time = "2025-05-19T15:54:09.339Z" },
-    { url = "https://files.pythonhosted.org/packages/ff/91/76318b08b324b8e1ca231f9edc0a6e39ca0df8a67ba30804d93519568d2f/google_benchmark-1.9.4-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:1e8066d47927270f27fb131f92f0ef11aff75d6f8e287a8e61923993133de232", size = 167800, upload-time = "2025-05-19T15:54:11.552Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/4e/6f434546a39161b3db33efb9dce8c47fa724332f5fad8ed921b2f1c64d86/google_benchmark-1.9.4-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:522fbd4bc700194d254ea919876e3de3c5cd29884e17bd65d31f215ff815ecd8", size = 210581, upload-time = "2025-05-19T15:54:13.049Z" },
-    { url = "https://files.pythonhosted.org/packages/9b/91/35651bbf53df155d082b95ebc6e5b3059e6616eb6e052611355c512bec73/google_benchmark-1.9.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:044a5f228b3d3f4c977dccd0277fe8c7799a22d9da4c2d5e26e7999bcc2d3b13", size = 220957, upload-time = "2025-05-19T15:54:14.959Z" },
-    { url = "https://files.pythonhosted.org/packages/76/25/725cb0c76be788d2aa1e7c66cc0179a041ef32e8b485f934c3572fddc24c/google_benchmark-1.9.4-cp311-cp311-win_amd64.whl", hash = "sha256:b56c055fa93e928c485c3bb56b41a44e31bfe2001ef6a9555c913d2f858f95fa", size = 195001, upload-time = "2025-05-19T15:54:16.876Z" },
-    { url = "https://files.pythonhosted.org/packages/92/a3/cb6641e12fa7abae04b0ccc59bbac8df0f837ba7183ae7ae0904d20ec78f/google_benchmark-1.9.4-cp312-abi3-macosx_10_14_x86_64.whl", hash = "sha256:d560b4c4242a2958aa386a897afb4b873ea441d615ffc33bea939694a0eaa577", size = 176852, upload-time = "2025-05-19T15:54:19.271Z" },
-    { url = "https://files.pythonhosted.org/packages/f6/7c/04b41b179f046204dad09aad1ba5fb0716f8f6343318909e264d36b03c93/google_benchmark-1.9.4-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:2f1bc5d29d3c9dfc616ecc95f5e4f0aab00383c9756008820ba36b9be2e62744", size = 167035, upload-time = "2025-05-19T15:54:21.061Z" },
-    { url = "https://files.pythonhosted.org/packages/c2/44/2cb77d92c409e569cc75ba28837f24abdbc8301c04a2977ae3f5a91769b9/google_benchmark-1.9.4-cp312-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:806c58a69b977822990fb0501c1fc1c03342bb636e70fc3baa074aba28df9d88", size = 209634, upload-time = "2025-05-19T15:54:22.538Z" },
-    { url = "https://files.pythonhosted.org/packages/f9/d1/49cee9e95a0fed58547b7b6056b50eded014b196f0931b64154fed513057/google_benchmark-1.9.4-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:de2c94b90cbbe221b0cb0029872788cfe55eacc8165f9ef5f9bb523110813e3a", size = 220144, upload-time = "2025-05-19T15:54:24.476Z" },
-    { url = "https://files.pythonhosted.org/packages/42/88/07e4a8be8ac54aea1cb7140dcba5f0d83788fc0d040ef60c11bac0653def/google_benchmark-1.9.4-cp312-abi3-win_amd64.whl", hash = "sha256:9479274b49589a77f83ad052b25bf93b3050f00c71ab8bc4a3a57a7dbd978b57", size = 193416, upload-time = "2025-05-19T15:54:25.831Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/e1/3f12868e3327b4b1bb0bae2949c282d12b5d682f05b0299dc431a5d4c71b/google_benchmark-1.9.5-cp311-cp311-macosx_10_14_x86_64.whl", hash = "sha256:0fb0caaae5d27bfa980aa470de394faa5cc467553c6125f4394fb4e1ace49526", size = 169889, upload-time = "2026-02-02T13:26:50.325Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/fe/3efe420aa9831b312c8a8093ed85eeee38265e527717612e45a89e851ae7/google_benchmark-1.9.5-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:f62465213f4ac9428a19b0233891b6dc599e505fd8713c4e9785a6519e298e2f", size = 161153, upload-time = "2026-02-02T13:26:51.501Z" },
+    { url = "https://files.pythonhosted.org/packages/15/02/e87d6b3a3087597fccd465f615f3256ba1e70a0517797a0e6b2a19645ee0/google_benchmark-1.9.5-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3df88cc90f0d61e9fbd49ff2ec7d979d1540a75180f8398f793148f78c07ed02", size = 192637, upload-time = "2026-02-02T13:26:52.967Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/08/40198026a7c5b2721ee0fadc8a9c73c3187057f034b07156f1828739851b/google_benchmark-1.9.5-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:822663f8d44c8238aab461218f849c7a24aae3289aadc48cb667992cec106e22", size = 211765, upload-time = "2026-02-02T13:26:54.106Z" },
+    { url = "https://files.pythonhosted.org/packages/df/fe/f105fb10f854b7e88a570c3d7ed2fd08a01586820068be3040defb2ad6f4/google_benchmark-1.9.5-cp311-cp311-win_amd64.whl", hash = "sha256:65f94de5bf4dfcab85e31cb901227009cbdc5d651d7d66fbd0f636a57f16044b", size = 190697, upload-time = "2026-02-02T13:26:55.373Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/79/f69f30a233b066ee56e13424cdb82271f224cab45c2b966a7aab2afdd27d/google_benchmark-1.9.5-cp312-abi3-macosx_10_14_x86_64.whl", hash = "sha256:d28862c2c06e74457ecc407e45f25744de8fd1534504b56a26c1cde77363840b", size = 168936, upload-time = "2026-02-02T13:26:57.058Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/0e/7dc1d350a9b2269af65bdeab1eae23da2b56cbbfb42b1441a620de7abf34/google_benchmark-1.9.5-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:9d746a55ac17cbed4eaba4febe8e759634bbe13a67e42fa5608d928854590bfd", size = 160018, upload-time = "2026-02-02T13:26:58.096Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/29/373117eb27c60ff3a01770aacb79db8d84c97ab4e1f741cb5841df3b9d14/google_benchmark-1.9.5-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:33f7d8bb54ed401938af58150e12b6813d36199e58a2384ab4a17eeac1b57455", size = 191625, upload-time = "2026-02-02T13:26:59.199Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/64/2985a833a4679aeef07f0c357b321db838fa5a94abad2b4278a13e1b4000/google_benchmark-1.9.5-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0e0efb61240a01da61aaab0c943df96bb769ddbde501c72338d0b5f29751aa89", size = 210950, upload-time = "2026-02-02T13:27:00.225Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/d0/b6a49af3fd9e272cbf16e550ef962100ede41b6ace04ac988565e9262bf9/google_benchmark-1.9.5-cp312-abi3-win_amd64.whl", hash = "sha256:daf706babbb8a16e503712b22c8b48acab7ee22da6dde7914cd1153ecadd9d9b", size = 188817, upload-time = "2026-02-02T13:27:01.798Z" },
 ]
 
 [[package]]
@@ -2998,14 +2995,14 @@ wheels = [
 
 [[package]]
 name = "hypothesis"
-version = "6.151.2"
+version = "6.151.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sortedcontainers", marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/05/13/69648b6f8c41600ce922386f084f5921fef55912dc980ded8ff4948ea626/hypothesis-6.151.2.tar.gz", hash = "sha256:fc91f88a77074b31c7ab871eebab3d2e0210fd3095f1d1ecbd9440c1c6bc06d9", size = 475491, upload-time = "2026-01-26T06:45:41.447Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/d7/c40dcd401cc360d8d084e584ffb7ab17255fde22e2b9cf2b53bf25aed629/hypothesis-6.151.5.tar.gz", hash = "sha256:ae3a0622f9693e6b19c697777c2c266c02801f9769ab7c2c37b7ec83d4743783", size = 475923, upload-time = "2026-02-03T19:33:55.845Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/3b/a6b9ecf082dd4d736bb553f7d9ad907a64373f41d0b57eb0be21acf157ee/hypothesis-6.151.2-py3-none-any.whl", hash = "sha256:909d2b5f0dc80640561bb2c3859f3c56a52ed8d1cc589e5e6450362ced8c31a0", size = 542937, upload-time = "2026-01-26T06:45:39.133Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/d9/53a8b53e75279a953fae608bd01025d9afcf393406c0da1dda1b7f5693c5/hypothesis-6.151.5-py3-none-any.whl", hash = "sha256:c0e15c91fa0e67bc0295551ef5041bebad42753b7977a610cd7a6ec1ad04ef13", size = 543338, upload-time = "2026-02-03T19:33:54.583Z" },
 ]
 
 [[package]]
@@ -3801,7 +3798,7 @@ wheels = [
 
 [[package]]
 name = "keras"
-version = "3.13.1"
+version = "3.13.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
@@ -3813,9 +3810,9 @@ dependencies = [
     { name = "packaging" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0c/79/721253a7b1618487a901f08c913af7cf4f60caab764ef06bfc9702280b50/keras-3.13.1.tar.gz", hash = "sha256:670c726dfc9c357fe7ae5ef1c15d8f61ee7fbb40ae9a091a458ec6444a772480", size = 1154466, upload-time = "2026-01-14T18:58:26.809Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/09/e9/400582e5f3dbd815d2a373f7de7717dd1bc8349274e9ac1b9ac47410b123/keras-3.13.2.tar.gz", hash = "sha256:62f0123488ac87c929c988617e14f293f7bc993811837d08bb37eff77adc85a9", size = 1155875, upload-time = "2026-01-30T00:35:13.796Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/e5/8b40bada1f33f25deca7bad0e8c7ca6752f2b09e8018e2fc4693858dd662/keras-3.13.1-py3-none-any.whl", hash = "sha256:6593be2e9d057921cd0413b4552c05fe1df73ea4bb03a4f3ec94532077b3e508", size = 1512409, upload-time = "2026-01-14T18:58:24.769Z" },
+    { url = "https://files.pythonhosted.org/packages/28/b5/ea85873abc99dc64a7a27ff1a8dbfdc7dbb57d4e5d1a423abc11217af4f1/keras-3.13.2-py3-none-any.whl", hash = "sha256:14b2afc0f9c636cc295d28efc36aae42fc52e7b892c950eec33f3befe4d22fb5", size = 1513769, upload-time = "2026-01-30T00:35:09.664Z" },
 ]
 
 [[package]]
@@ -4656,6 +4653,7 @@ dependencies = [
     { name = "requests" },
     { name = "resiliparse" },
     { name = "s3fs" },
+    { name = "tfp-nightly", extra = ["jax"] },
     { name = "toml" },
     { name = "torch", version = "2.9.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-5-marin-cpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'darwin' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "torch", version = "2.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
@@ -4830,6 +4828,7 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2024" },
     { name = "sympy", marker = "extra == 'math'" },
     { name = "sympy", marker = "extra == 'rl'", specifier = ">=1.12.1,<1.14" },
+    { name = "tfp-nightly", extras = ["jax"] },
     { name = "toml" },
     { name = "torch", specifier = ">=2.7.0" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==2.9.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "marin", extra = "gpu" } },

@@ -80,16 +80,17 @@ class SweepSettings:
 # Edit this single object to tune the sweep.
 SWEEP = SweepSettings(
     # Common edits.
-    experiment_name="ref-sweep-qwen3-130m-vizier-v3",
+    experiment_name="ref-sweep-qwen3-130m-vizier-v5",
     num_loops=10,
-    suggestions_per_loop=10,
+    suggestions_per_loop=16,
     search_space={
-        "lr": (0.005, 0.03),
-        "beta1": (0.85, 0.999),
-        "adam_lr": (0.005, 0.03),
-        "beta2": (0.85, 0.999),
-        "epsilon": (1e-15, 1e-6),
-        "max_grad_norm": (0.1, 5.0),
+        "lr": (0.00005, 0.03),
+        "beta1": (0.5, 1.0),
+        "adam_lr": (0.00005, 0.03),
+        "beta2": (0.5, 1.0),
+        "epsilon": (1e-15, 1e-3),
+        "max_grad_norm": (0.1, 1.0),
+        "z_loss_weight": (1e-7, 0.1),
     },
     fixed_batch_size=64,
     target_tokens=1_000_000_000,
@@ -109,6 +110,7 @@ SWEEP = SweepSettings(
 SUGGESTIONS_FILENAME = "vizier_suggestions.json"
 UPDATE_FILENAME = "vizier_update.json"
 RESOURCE_FILENAME = "vizier_resource.json"
+OPTIMAL_FILENAME = "vizier_optimal.json"
 VIZIER_DB_FILENAME = "vizier.db"
 
 qwen3_130m = Qwen3Config(
@@ -160,6 +162,14 @@ class VizierUpdateConfig:
     mode: str
     output_path: str
     loop_index: int
+
+
+@dataclass(frozen=True)
+class VizierOptimalConfig:
+    study_id: str
+    study_resource_name: str
+    input_db_path: str
+    output_path: str
 
 
 def best_run(runs, mode="min"):
@@ -262,7 +272,7 @@ def _extract_adamh_hparams(suggestion: dict[str, object]) -> dict[str, float]:
     parameters = suggestion["parameters"]
     if not isinstance(parameters, Mapping):
         raise ValueError(f"Expected suggestion parameters mapping, got {type(parameters)!r}")
-    required = ("lr", "beta1", "adam_lr", "beta2", "epsilon", "max_grad_norm")
+    required = ("lr", "beta1", "adam_lr", "beta2", "epsilon", "max_grad_norm", "z_loss_weight")
     return {name: float(parameters[name]) for name in required}
 
 
@@ -394,6 +404,7 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
             f"beta2={hparams['beta2']}",
             f"eps={hparams['epsilon']}",
             f"mgn={hparams['max_grad_norm']}",
+            f"zloss={hparams['z_loss_weight']}",
             f"bs={batch_size}",
             f"trial={trial_id}",
             f"loop={config.loop_index}",
@@ -419,6 +430,7 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
             epsilon=hparams["epsilon"],
             max_grad_norm=hparams["max_grad_norm"],
         ),
+        z_loss_weight=hparams["z_loss_weight"],
     )
     pod_config = replace(base_pod_config, train_config=train_config)
 
@@ -491,6 +503,32 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
         json.dump({"study_resource_name": config.study_resource_name}, f, indent=2)
 
     _sync_vizier_db_to_gcs(local_db_path, output_db_path)
+
+
+def run_vizier_optimal(config: VizierOptimalConfig) -> None:
+    """Load the final Vizier study and report optimal trials."""
+    local_db_path = _local_vizier_db_path(config.study_id)
+    if not _sync_vizier_db_from_gcs(config.input_db_path, local_db_path):
+        raise FileNotFoundError(f"Could not load Vizier DB from: {config.input_db_path}")
+    _configure_vizier_local_db(local_db_path)
+
+    study = clients.Study.from_resource_name(config.study_resource_name)
+    optimal_trials = []
+    for optimal_trial in study.optimal_trials():
+        optimal_trial = optimal_trial.materialize()
+        print("Optimal Trial Suggestion and Objective:", optimal_trial.parameters, optimal_trial.final_measurement)
+        optimal_trials.append(
+            {
+                "trial_id": optimal_trial.id,
+                "parameters": _serialize_parameters(optimal_trial.parameters),
+                "final_measurement": str(optimal_trial.final_measurement),
+            }
+        )
+
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+    with fs.open(os.path.join(config.output_path, OPTIMAL_FILENAME), "w") as f:
+        json.dump({"optimal_trials": optimal_trials}, f, indent=2)
 
 
 def _build_suggest_step(
@@ -569,6 +607,23 @@ def _build_update_step(
     )
 
 
+def _build_optimal_step(
+    *,
+    input_db_path: str,
+    study_resource_name: str,
+) -> ExecutorStep:
+    return ExecutorStep(
+        name=f"{SWEEP.experiment_name}-optimal",
+        fn=run_vizier_optimal,
+        config=VizierOptimalConfig(
+            study_id=SWEEP.study_id,
+            study_resource_name=study_resource_name,
+            input_db_path=input_db_path,
+            output_path=this_output_path(),
+        ),
+    )
+
+
 if __name__ == "__main__":
     num_loops = SWEEP.num_loops
     if os.getenv("CI", None) is not None:
@@ -600,5 +655,10 @@ if __name__ == "__main__":
             suggestions_path=suggestions_path,
             training_steps=training_steps,
         )
-        executor_main(steps=[update_step])
         previous_update_step = update_step
+
+    optimal_step = _build_optimal_step(
+        input_db_path=previous_update_step / VIZIER_DB_FILENAME,
+        study_resource_name=SWEEP.study_resource_name,
+    )
+    executor_main(steps=[optimal_step])
