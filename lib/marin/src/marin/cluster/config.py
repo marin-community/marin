@@ -10,6 +10,8 @@ from pathlib import Path
 import jinja2
 import yaml
 
+from fray.v2.types import get_tpu_topology
+
 # Cluster configuration constants and templates
 LATEST = "20260129"  # The latest docker tag used for the clusters
 LATEST_VLLM = "20251209"
@@ -320,40 +322,31 @@ GENERATION_CONFIGS = {
         "runtime_version": "tpu-ubuntu2204-base",
         "base_worker": "8",
         "slices": [16, 32, 64, 128, 256, 512, 1024, 2048, 4096],
-        "num_tpus": 4,
-        "tpus_worker": 4,
     },
     "v5e": {
         "runtime_version": "v2-alpha-tpuv5-lite",
         "base_worker": "4",
         "slices": [8, 16, 32, 64, 128, 256],
-        "num_tpus": 4,
-        "tpus_worker": 1,
     },
     "v5p": {
         "runtime_version": "v2-alpha-tpuv5",
         "base_worker": "8",
         "slices": [8, 16, 32, 64, 128, 256, 512, 1024, 2048],
-        "num_tpus": 4,
-        "tpus_worker": 8,
     },
     "v6e": {
         "runtime_version": "v2-alpha-tpuv6e",
         "base_worker": "4",
         "slices": [8, 16, 32, 64, 128, 256],
-        "num_tpus": 4,
     },
     "v6e-serve": {
         "runtime_version": "v2-alpha-tpuv6e",
         "base_worker": "8",
         "slices": [],
-        "num_tpus": 8,
     },
     "v4-serve": {
         "runtime_version": "tpu-ubuntu2204-base",
         "base_worker": "16",
         "slices": [],
-        "num_tpus": 4,
     },
 }
 
@@ -364,14 +357,16 @@ def make_tpu_slice_config(generation: str, count: int, target_count: int) -> dic
 
     if "serve" in generation:
         slice_gen_name = generation.replace("-serve", "")
+    accelerator_type = f"{slice_gen_name}-{count}"
+    topology = get_tpu_topology(accelerator_type)
     name = f"tpu_slice_{generation}_{count}"
     return {
         name: {
             "min_workers": target_count,
             "max_workers": 1024,
-            "resources": {"CPU": 120, "TPU": GENERATION_CONFIGS[generation]["num_tpus"]},
+            "resources": {"CPU": 120, "TPU": topology.chips_per_vm},
             "node_config": {
-                "acceleratorType": f"{slice_gen_name}-{count}",
+                "acceleratorType": accelerator_type,
                 "runtimeVersion": GENERATION_CONFIGS[generation]["runtime_version"],
                 "schedulingConfig": {"preemptible": True},
             },
