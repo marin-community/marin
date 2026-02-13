@@ -2,15 +2,15 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Provision tmp-marin-* scratch buckets and configure TTL-based lifecycle rules.
+"""Provision marin-tmp-* scratch buckets and configure TTL-based lifecycle rules.
 
-This script is the sole owner of lifecycle configuration for tmp-marin-* buckets.
+This script is the sole owner of lifecycle configuration for marin-tmp-* buckets.
 Running it overwrites all existing lifecycle rules on each bucket.
 
 Usage:
     uv run infra/configure_temp_buckets.py              # apply to all buckets
     uv run infra/configure_temp_buckets.py --dry-run    # preview without applying
-    uv run infra/configure_temp_buckets.py --bucket tmp-marin-us-central2
+    uv run infra/configure_temp_buckets.py --bucket marin-tmp-us-central2
 """
 
 import json
@@ -26,13 +26,13 @@ logger = logging.getLogger(__name__)
 
 # Dedicated tmp buckets, one per region.
 BUCKETS: dict[str, str] = {
-    "tmp-marin-asia-northeast-1": "asia-northeast1",
-    "tmp-marin-us-central1": "us-central1",
-    "tmp-marin-us-central2": "us-central2",
-    "tmp-marin-eu-west4": "europe-west4",
-    "tmp-marin-us-west4": "us-west4",
-    "tmp-marin-us-east1": "us-east1",
-    "tmp-marin-us-east5": "us-east5",
+    "marin-tmp-asia-northeast-1": "asia-northeast1",
+    "marin-tmp-us-central1": "us-central1",
+    "marin-tmp-us-central2": "us-central2",
+    "marin-tmp-eu-west4": "europe-west4",
+    "marin-tmp-us-west4": "us-west4",
+    "marin-tmp-us-east1": "us-east1",
+    "marin-tmp-us-east5": "us-east5",
 }
 
 # Each TTL value N generates a lifecycle rule that deletes objects under the
@@ -107,7 +107,7 @@ def apply_lifecycle(bucket: str, rules: list[dict]) -> None:
     """Write lifecycle JSON to a temp file and apply it to the bucket.
 
     This overwrites all existing lifecycle rules — this script is the sole owner
-    of lifecycle configuration for tmp-marin-* buckets.
+    of lifecycle configuration for marin-tmp-* buckets.
     """
     lifecycle = {"rule": rules}
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
