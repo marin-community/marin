@@ -7,6 +7,7 @@ Example experiment for running Evalchemy reasoning benchmarks.
 Evalchemy (https://github.com/mlfoundations/evalchemy) provides specialized
 reasoning tasks including AIME24/25, MATH500, HumanEval+, MBPP+, and more.
 """
+import argparse
 
 from experiments.evals.evals import run_evalchemy_experiment
 from experiments.evals.evalchemy_task_configs import (
@@ -27,14 +28,12 @@ from fray.cluster import ResourceConfig
 #   Per-seed:  evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}
 #   Aggregate: evalchemy-{base_eval_run_name}[-step{N}]-{task}-avg{X}seeds
 # Step suffix is auto-extracted from each checkpoint path if it contains step-NNNN.
-CHECKPOINTS: dict[str, list[str]] = {
+#
+# These defaults are overridden when --exp_name and --checkpoint are provided via CLI.
+DEFAULT_CHECKPOINTS: dict[str, list[str]] = {
     "exp2262pt2-qwen2.5-7b-instruct-finetuned-ot4-30k-math-qwq-32b-32768tokens": [
         "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-234/",
     ],
-    # Here is another example with a publicly released checkpoint on HF:
-    # None: [
-    #     "Qwen/Qwen3-8B",
-    # ],
 }
 
 # Whether to auto-discover the latest checkpoint in a training run directory.
@@ -98,8 +97,18 @@ MAX_PARALLEL_JOBS = 3
 # Main Execution
 # =============================================================================
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run Evalchemy reasoning benchmarks")
+    parser.add_argument("--experiment", type=str, default=None, help="Base eval run name for output paths and wandb")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint path (GCS path or HF model name)")
+    args, remaining = parser.parse_known_args()
+
+    if args.checkpoint:
+        checkpoints = {args.experiment: [args.checkpoint]}
+    else:
+        parser.error("--checkpoint must be provided.")
+
     run_evalchemy_experiment(
-        checkpoints=CHECKPOINTS,
+        checkpoints=checkpoints,
         task_seed_groups=TASK_SEED_GROUPS,
         base_generation_params=BASE_GENERATION_PARAMS,
         resource_config=ResourceConfig.with_tpu("v5p-8"),
