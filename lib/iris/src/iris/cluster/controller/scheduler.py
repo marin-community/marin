@@ -246,15 +246,11 @@ class WorkerCapacity:
 
         job_device_type = get_device_type(res.device)
         if not device_compatible(job_device_type, self.device_type):
-            return RejectionReason(
-                kind="device_type", details={"need": job_device_type, "have": self.device_type}
-            )
+            return RejectionReason(kind="device_type", details={"need": job_device_type, "have": self.device_type})
 
         job_variant = get_device_variant(res.device)
         if job_variant and job_variant != "auto" and job_variant != self.device_variant:
-            return RejectionReason(
-                kind="device_variant", details={"need": job_variant, "have": self.device_variant}
-            )
+            return RejectionReason(kind="device_variant", details={"need": job_variant, "have": self.device_variant})
 
         if job_device_type == "gpu":
             gpu_count = get_gpu_count(res.device)
@@ -584,7 +580,8 @@ class Scheduler:
             workers_with_resources = sum(
                 1
                 for wid in matching_worker_ids
-                if wid not in context.scheduled_workers and context.capacities[wid].can_fit_job(job, check_building_limit=False) is None
+                if wid not in context.scheduled_workers
+                and context.capacities[wid].can_fit_job(job, check_building_limit=False) is None
             )
             if workers_with_resources > 0:
                 return TaskScheduleResult(
@@ -605,9 +602,10 @@ class Scheduler:
                     rejection = context.capacities[wid].can_fit_job(job, check_building_limit=False)
                     if rejection and rejection.kind == reason_kind:
                         if constraints:
+                            constraint_keys = [c.key for c in constraints]
                             return TaskScheduleResult(
                                 task=task,
-                                failure_reason=f"{rejection} ({count} worker(s) with constraints={[c.key for c in constraints]})",
+                                failure_reason=f"{rejection} ({count} worker(s) with constraints={constraint_keys})",
                             )
                         return TaskScheduleResult(task=task, failure_reason=str(rejection))
 
@@ -875,7 +873,7 @@ class Scheduler:
             # If this is the largest group, report why it doesn't have capacity
             if len(group_worker_ids) == best and rejection_reasons:
                 most_common = max(rejection_reasons.items(), key=lambda x: x[1])
-                reason_kind, count = most_common
+                reason_kind, _count = most_common
                 # Get a sample rejection reason for formatting
                 for wid in group_worker_ids:
                     rejection = context.capacities[wid].can_fit_job(job)
