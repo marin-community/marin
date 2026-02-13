@@ -189,7 +189,7 @@ train_config = SimpleVlmTrainConfig(
     min_lr_ratio=0.1,  # Final LR = 1% of peak LR
 
     # Full bfloat16: params and compute both in bfloat16 (saves memory)
-    mp="bfloat16",
+    mp="p=f32,c=bfloat16",
 
     # Streaming mode: double the default prefetch for better throughput
     streaming_max_buffered_batches=16,
@@ -201,7 +201,7 @@ train_config = SimpleVlmTrainConfig(
 
     # Load complete VLM weights from GCS HF checkpoint (vision encoder + projector + LLM)
     # This checkpoint contains trained weights from stage 1
-    vlm_checkpoint="gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-0-bef2eb/hf/vlm-official-qwen3-1.7b-round2-correct-0-bef2eb/step-39061",
+    vlm_checkpoint="gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-correct-mixed-128-4-55b851/hf/vlm-official-qwen3-1.7b-round2-correct-mixed-128-4-55b851/step-39061/",
     # vision_checkpoint and llm_checkpoint not needed when using vlm_checkpoint
 
     # New training stage - data starts from beginning
