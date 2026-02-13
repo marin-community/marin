@@ -82,7 +82,6 @@ class TaskAttemptConfig:
     ports: dict[str, int]
     workdir: Path
     cache_dir: Path
-    uv_cache_dir: Path
 
 
 def _get_host_ip() -> str:
@@ -230,7 +229,6 @@ class TaskAttempt:
         self.ports: dict[str, int] = config.ports
         self.workdir: Path | None = config.workdir
         self._cache_dir: Path = config.cache_dir
-        self._uv_cache_dir: Path = config.uv_cache_dir
         self._bundle_path: Path | None = None
 
         # Task state
@@ -476,6 +474,12 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
+        # Pre-create cache mount directories so Docker doesn't create them as root
+        uv_cache = self._cache_dir / "uv"
+        cargo_cache = self._cache_dir / "cargo"
+        uv_cache.mkdir(parents=True, exist_ok=True)
+        cargo_cache.mkdir(parents=True, exist_ok=True)
+
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=rt_ep,
@@ -484,7 +488,8 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=[
                 (str(self.workdir), "/app", "rw"),
-                (str(self._uv_cache_dir), "/uv/cache", "rw"),
+                (str(uv_cache), "/uv/cache", "rw"),
+                (str(cargo_cache), "/root/.cargo/registry", "rw"),
             ],
             task_id=self.task_id.to_wire(),
             job_id=job_id.to_wire(),
