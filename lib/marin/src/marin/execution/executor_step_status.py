@@ -150,14 +150,19 @@ class StatusFile:
     def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
         """Read LOCK file and its generation. Returns (0, None) if doesn't exist."""
         if self._is_gcs:
+            from google.api_core import exceptions
+
             client = storage.Client()
             bucket_name, blob_path = self._parse_gcs_path(self._lock_path)
             bucket = client.bucket(bucket_name)
             blob = bucket.get_blob(blob_path)
             if blob is None:
                 return (0, None)
-            data = json.loads(blob.download_as_string())
-            return (blob.generation, Lease(**data))
+            try:
+                data = json.loads(blob.download_as_string())
+                return (blob.generation, Lease(**data))
+            except exceptions.NotFound:
+                return (0, None)
         else:
             import fcntl
 
