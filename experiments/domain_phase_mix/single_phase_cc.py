@@ -144,19 +144,24 @@ SAMPLING_PARAMS = DirichletSamplingParams(
 # Predefined baselines for single-phase, 18-domain experiment.
 # Each entry is a list of weights for the 18 CC topics (in COMMON_CRAWL_TOPICS order).
 
-# UniMax baseline (Chung et al., 2023): uniform budget with epoch cap N=1.
-# Computed using the epoch target budget (total CC tokens); for no_epoch mode UniMax ≈ uniform.
-_unimax_domain_sizes = [
+# UniMax baseline (Chung et al., 2023): uniform budget with epoch cap N=5.
+# With N=5, no CC domain is capped (uniform share ~453B << 5*365B), so UniMax = uniform.
+_domain_sizes = [
     sum(DOLMA3_POOL_TOKEN_COUNTS_B[p] for p in get_common_crawl_partitions_by_topic(topic))
     for topic in COMMON_CRAWL_TOPICS
 ]
-_unimax_weights = compute_unimax_weights(_unimax_domain_sizes, sum(_unimax_domain_sizes), max_epochs=1.0)
+_unimax_weights = compute_unimax_weights(_domain_sizes, sum(_domain_sizes), max_epochs=5.0)
+
+# Proportional baseline: weights ∝ domain token count.
+_total_domain_size = sum(_domain_sizes)
+_proportional_weights = [s / _total_domain_size for s in _domain_sizes]
 
 BASELINES: list[list[float]] = [
     # Uniform across all topics
-    [1 / len(COMMON_CRAWL_TOPICS)] * len(COMMON_CRAWL_TOPICS),
+    # [1 / len(COMMON_CRAWL_TOPICS)] * len(COMMON_CRAWL_TOPICS),
     # UniMax (Chung et al., 2023)
     _unimax_weights,
+    _proportional_weights,
 ]
 
 

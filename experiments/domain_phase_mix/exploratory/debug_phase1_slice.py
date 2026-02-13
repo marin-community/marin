@@ -44,11 +44,18 @@ best_idx = df_slice[target].idxmin()
 best_row = df_slice.loc[best_idx]
 print(f"\nMinimum: p1_sc={best_row['phase_1_starcoder']:.4f}  bpb={best_row[target]:.4f}")
 
+# Epoch calculation for StarCoder in phase 1:
+#   epochs = phase_1_starcoder * TARGET_BUDGET * phase_1_fraction / STARCODER_TOKENS
+TARGET_BUDGET = 5_729_908_864_777  # Nemotron full token count
+STARCODER_TOKENS = 216_567_300_822  # StarCoder token count
+PHASE_1_FRACTION = 0.5
+EPOCH_MULTIPLIER = TARGET_BUDGET * PHASE_1_FRACTION / STARCODER_TOKENS  # ~13.2
+
 # Plot
 fig, ax = plt.subplots(figsize=(8, 5))
 ax.scatter(df_slice["phase_1_starcoder"], df_slice[target], s=40, zorder=5)
 ax.plot(df_slice["phase_1_starcoder"], df_slice[target], alpha=0.3, linestyle="--")
-ax.set_xlabel("phase_1_starcoder")
+ax.set_xlabel("phase_1_starcoder weight")
 ax.set_ylabel(target)
 ax.set_title(f"phase_0 = 100% nemotron_full (n={len(df_slice)})\n{target}")
 ax.axvline(
@@ -56,11 +63,16 @@ ax.axvline(
     color="red",
     alpha=0.4,
     linestyle=":",
-    label=f"min @ {best_row['phase_1_starcoder']:.3f}",
+    label=f"min @ {best_row['phase_1_starcoder']:.3f} ({best_row['phase_1_starcoder'] * EPOCH_MULTIPLIER:.1f} epochs)",
 )
 ax.legend()
+
+# Secondary x-axis showing StarCoder epochs
+secax = ax.secondary_xaxis("top", functions=(lambda w: w * EPOCH_MULTIPLIER, lambda e: e / EPOCH_MULTIPLIER))
+secax.set_xlabel("StarCoder epochs in phase 1")
+
 fig.tight_layout()
 
 out_path = script_dir / "debug_phase1_slice.png"
-fig.savefig(out_path, dpi=150)
+fig.savefig(out_path, dpi=300)
 print(f"\nSaved to {out_path}")
