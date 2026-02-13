@@ -64,15 +64,15 @@ def build_runtime_entrypoint(
     setup_commands = [
         "cd /app",
     ]
-    # Use --link-mode copy to avoid hardlink warnings when cache and workdir
-    # are on different filesystems (common with Docker bind mounts).
-    link_mode_flag = "--link-mode copy"
+    # Use --link-mode symlink to reference cached wheels directly from .venv,
+    # avoiding redundant installation. Symlinks work across bind mounts.
+    link_mode_flag = "--link-mode symlink"
     if uv_sync_flags:
         setup_commands.append(f"uv sync {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
     else:
         setup_commands.append(f"uv sync {link_mode_flag} {python_flag}".strip())
     if pip_install_args:
-        setup_commands.append(f"uv pip install {pip_install_args}")
+        setup_commands.append(f"uv pip install {link_mode_flag} {pip_install_args}")
     setup_commands.append("source .venv/bin/activate")
     setup_commands.append('echo "python=$(which python)"')
     setup_commands.append("python -c \"import sys; print('sys.path:', sys.path)\"")
