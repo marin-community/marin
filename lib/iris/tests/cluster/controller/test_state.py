@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller state management.
 
@@ -159,6 +148,7 @@ def submit_job(
     state: ControllerState,
     job_id: str,
     request: cluster_pb2.Controller.LaunchJobRequest,
+    timestamp_ms: int | None = None,
 ) -> list[ControllerTask]:
     """Submit a job via event and return tasks."""
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root(job_id)
@@ -167,7 +157,7 @@ def submit_job(
         JobSubmittedEvent(
             job_id=jid,
             request=request,
-            timestamp=Timestamp.now(),
+            timestamp=Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
         )
     )
     return state.get_job_tasks(jid)
@@ -286,6 +276,46 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
     assert job.state == cluster_pb2.JOB_STATE_KILLED
     for task in tasks:
         assert task.state == cluster_pb2.TASK_STATE_KILLED
+
+
+def test_cancelled_job_tasks_excluded_from_demand(job_request, worker_metadata):
+    """Regression test for issue #2777: Killed tasks with no attempts should not appear in demand entries."""
+    state = ControllerState()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test-job")
+    req.replicas = 3
+    tasks = submit_job(state, "j1", req)
+    job = state.get_job(JobName.root("j1"))
+
+    # Dispatch 1 task, leave 2 pending (these will have no attempts when killed)
+    dispatch_task(state, tasks[0], worker_id)
+
+    # Cancel job - pending tasks will be killed with no attempts
+    state.handle_event(
+        JobCancelledEvent(
+            job_id=JobName.root("j1"),
+            reason="User cancelled",
+        )
+    )
+
+    # Verify all tasks are killed
+    assert job.state == cluster_pb2.JOB_STATE_KILLED
+    for task in tasks:
+        assert task.state == cluster_pb2.TASK_STATE_KILLED
+
+    # Verify killed tasks are not schedulable (bug fix)
+    for task in tasks:
+        assert not task.can_be_scheduled(), f"Killed task {task.task_id} should not be schedulable"
+
+    # Verify no pending tasks appear in queue
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 0, "Killed tasks should not appear in pending queue"
+
+    # Verify no demand entries generated for killed job
+    demand_entries = compute_demand_entries(state)
+    assert len(demand_entries) == 0, "Killed job should not generate demand entries"
 
 
 # =============================================================================
@@ -1341,6 +1371,150 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
     demand = compute_demand_entries(state)
     assert len(demand) == 1
     assert demand[0].preemptible is None
+
+
+# =============================================================================
+# Depth-First Scheduling Priority Tests
+# =============================================================================
+
+
+def test_peek_pending_tasks_deeper_job_before_shallow(job_request):
+    """Depth-first priority: deeper jobs come before shallow ones in queue order."""
+    state = ControllerState()
+
+    # Submit root job and child job (both with 1 CPU)
+    submit_job(state, "root", job_request("root"), timestamp_ms=1000)
+    submit_job(state, "/root/child", job_request("child"), timestamp_ms=2000)
+
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 2
+    # Child (depth 2) should come first
+    assert pending[0].job_id == JobName.from_string("/root/child")
+    assert pending[1].job_id == JobName.root("root")
+
+
+def test_peek_pending_tasks_older_root_tree_preferred(job_request):
+    """At same depth, older root tree is preferred."""
+    state = ControllerState()
+
+    # Submit two root jobs at different timestamps
+    req_a = job_request("user-a-job")
+    submit_job(state, "user-a-job", req_a, timestamp_ms=1000)
+
+    req_b = job_request("user-b-job")
+    submit_job(state, "user-b-job", req_b, timestamp_ms=2000)
+
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 2
+    # user-a-job submitted first, should come first
+    assert pending[0].job_id == JobName.root("user-a-job")
+    assert pending[1].job_id == JobName.root("user-b-job")
+
+
+def test_peek_pending_tasks_child_of_older_tree_beats_newer_root(job_request):
+    """Child of older tree beats root of newer tree."""
+    state = ControllerState()
+
+    # Submit old tree
+    submit_job(state, "old-tree", job_request("old-tree"), timestamp_ms=1000)
+
+    # Submit new tree
+    submit_job(state, "new-tree", job_request("new-tree"), timestamp_ms=2000)
+
+    # Submit child of old tree (depth 2) after new tree
+    submit_job(state, "/old-tree/child", job_request("child"), timestamp_ms=3000)
+
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 3
+
+    # Expected order: child (depth 2), old-tree (depth 1, older), new-tree (depth 1, newer)
+    assert pending[0].job_id == JobName.from_string("/old-tree/child")
+    assert pending[1].job_id == JobName.root("old-tree")
+    assert pending[2].job_id == JobName.root("new-tree")
+
+
+def test_peek_pending_tasks_fifo_within_same_depth_and_tree(job_request):
+    """FIFO within same depth and tree."""
+    state = ControllerState()
+
+    # Submit parent first
+    submit_job(state, "tree", job_request("tree"), timestamp_ms=1000)
+
+    # Submit two children at different times
+    submit_job(state, "/tree/child-a", job_request("child-a"), timestamp_ms=2000)
+    submit_job(state, "/tree/child-b", job_request("child-b"), timestamp_ms=3000)
+
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 3
+
+    # Both children at depth 2, same root tree — child-a submitted first
+    child_tasks = [t for t in pending if t.job_id.parent == JobName.root("tree")]
+    assert len(child_tasks) == 2
+    assert child_tasks[0].job_id == JobName.from_string("/tree/child-a")
+    assert child_tasks[1].job_id == JobName.from_string("/tree/child-b")
+
+
+def test_child_job_inherits_root_submitted_at(job_request):
+    """Child job inherits root_submitted_at from parent."""
+    state = ControllerState()
+
+    # Submit parent at known time
+    parent_req = job_request("parent")
+    submit_job(state, "parent", parent_req, timestamp_ms=1000)
+    parent_job = state.get_job(JobName.root("parent"))
+    parent_submitted = parent_job.submitted_at
+
+    # Submit child later
+    child_req = job_request("child")
+    submit_job(state, "/parent/child", child_req, timestamp_ms=2000)
+    child_job = state.get_job(JobName.from_string("/parent/child"))
+
+    # Child's root_submitted_at should equal parent's
+    assert child_job.root_submitted_at == parent_submitted
+    assert child_job.root_submitted_at == parent_job.root_submitted_at
+
+
+def test_requeued_task_maintains_priority_position(job_request, worker_metadata):
+    """Requeued task maintains its priority position (deeper job still prioritized)."""
+    state = ControllerState()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Submit a deep job and a shallow job
+    submit_job(state, "/tree/deep", job_request("deep"), timestamp_ms=1000)
+    submit_job(state, "shallow", job_request("shallow"), timestamp_ms=2000)
+
+    # Initially: deep job comes first
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 2
+    assert pending[0].job_id == JobName.from_string("/tree/deep")
+    assert pending[1].job_id == JobName.root("shallow")
+
+    # Dispatch and fail the deep job's task (with retries enabled)
+    deep_req = job_request("deep")
+    deep_req.max_retries_failure = 1
+    deep_tasks = submit_job(state, "/tree/deep-retry", deep_req, timestamp_ms=3000)
+    submit_job(state, "shallow-2", job_request("shallow-2"), timestamp_ms=4000)
+
+    dispatch_task(state, deep_tasks[0], worker_id)
+    transition_task(state, deep_tasks[0].task_id, cluster_pb2.TASK_STATE_FAILED, error="Retriable failure")
+
+    # Verify task was requeued
+    assert deep_tasks[0].state == cluster_pb2.TASK_STATE_PENDING
+    assert deep_tasks[0].can_be_scheduled()
+
+    # Check queue order — requeued deep job should still come before shallow
+    pending = state.peek_pending_tasks()
+    deep_pending = [t for t in pending if t.job_id == JobName.from_string("/tree/deep-retry")]
+    shallow_pending = [t for t in pending if t.job_id == JobName.root("shallow-2")]
+
+    assert len(deep_pending) == 1
+    assert len(shallow_pending) == 1
+
+    # Find indices
+    deep_idx = pending.index(deep_pending[0])
+    shallow_idx = pending.index(shallow_pending[0])
+    assert deep_idx < shallow_idx, "Requeued deep task should still come before shallow task"
 
 
 # =============================================================================

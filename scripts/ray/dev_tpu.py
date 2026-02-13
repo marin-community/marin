@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Allocate a development TPU on a Ray cluster.
@@ -761,20 +750,22 @@ def setup_env(ctx):
 @click.argument("command", nargs=-1, required=True)
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())
 @click.option("--sync-path", default=".", help="Local path to sync")
+@click.option("--no-sync", is_flag=True, help="Skip syncing local files before running the command")
 @click.option("--env", "-e", multiple=True, help="Environment variables to forward (KEY=VALUE or KEY)")
 @click.option("--forward-all-env", is_flag=True, help="Forward all environment variables")
 @click.pass_context
-def execute(ctx, command, username, sync_path, env, forward_all_env):
+def execute(ctx, command, username, sync_path, no_sync, env, forward_all_env):
     """Execute a command on the development TPU.
 
     This command will:
-    1. Sync any local changes to the TPU
+    1. Sync any local changes to the TPU (unless --no-sync is passed)
     2. Execute the provided command in the /home/$USER/marin directory
     3. Return the exit code from the remote command
 
     Examples:
         uv run scripts/ray/dev_tpu.py execute -- uv run python train.py
         uv run scripts/ray/dev_tpu.py execute -- uv run pytest tests/ -v
+        uv run scripts/ray/dev_tpu.py execute --no-sync -- uv run pytest tests/ -v
     """
     if not username:
         username = getpass.getuser()
@@ -788,9 +779,11 @@ def execute(ctx, command, username, sync_path, env, forward_all_env):
         print(f"You need to run 'allocate --tpu-name {tpu_name}' first to set up the TPU", file=sys.stderr)
         sys.exit(1)
 
-    # Sync files
-    print(f"Syncing local changes to {host_alias}...")
-    sync_to_remote(host_alias, sync_path)
+    if no_sync:
+        print("Skipping file sync (--no-sync).")
+    else:
+        print(f"Syncing local changes to {host_alias}...")
+        sync_to_remote(host_alias, sync_path)
 
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)

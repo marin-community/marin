@@ -1,5 +1,12 @@
 # Iris Chaos Testing Framework
 
+> **Note:** This is the original design document. The chaos tests have been
+> consolidated into `lib/iris/tests/e2e/` alongside the other E2E tests.
+> See `lib/iris/AGENTS.md` for current test run commands.
+>
+> **All file paths and commands below are historical** — they reference the
+> original `tests/chaos/` layout. For current paths, see `tests/e2e/`.
+
 Multi-stage plan for building a chaos testing system that validates Iris resilience
 against distributed system failure modes.
 
@@ -10,8 +17,8 @@ The chaos framework is two things:
 1. **`iris.chaos` module** — global chaos rule registry: `enable_chaos()`, `chaos()`, `reset_chaos()`
 2. **Inline `chaos()` calls** — sprinkled at key points in production code (zero-cost when inactive)
 
-Tests use `ClusterManager` + `make_local_config()` + `IrisClient.remote()` — the same
-pattern as `screenshot-dashboard.py`. No E2ECluster.
+Tests use `connect_cluster()` + `make_local_config()` + `IrisClient.remote()` — the same
+pattern as the E2E test fixtures in `tests/e2e/conftest.py`. No E2ECluster.
 
 ## Stage 1: Core chaos module + infrastructure
 
@@ -154,7 +161,7 @@ if chaos("worker.task_monitor"):
     break
 ```
 
-All injection points are in `worker.py` because the local ClusterManager runs real
+All injection points are in `worker.py` because the local `connect_cluster()` runs real
 Worker instances in-process. We control everything.
 
 ### 1c. Create test infrastructure
@@ -167,7 +174,7 @@ import time
 import pytest
 from pathlib import Path
 from iris.chaos import reset_chaos
-from iris.cluster.manager import ClusterManager
+from iris.cluster.manager import connect_cluster
 from iris.cluster.config import make_local_config, load_config
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec
@@ -192,11 +199,10 @@ def _reset_chaos():
 
 @pytest.fixture
 def cluster():
-    """Boots a local cluster via ClusterManager, yields (url, client)."""
+    """Boots a local cluster via connect_cluster(), yields (url, client)."""
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         yield url, client
 
@@ -349,8 +355,8 @@ uv run pytest lib/iris/tests/chaos/test_rpc_failures.py -v
 **Validate: senior-engineer**
 
 All worker failures are injected via inline `chaos()` in `worker.py`. The local
-ClusterManager runs real Worker instances in-process, so we control everything
-through the chaos module — no need to reach into manager internals.
+`connect_cluster()` runs real Worker instances in-process, so we control everything
+through the chaos module — no need to reach into cluster internals.
 
 ### `lib/iris/tests/chaos/test_worker_failures.py`
 
@@ -544,12 +550,12 @@ uv run pytest lib/iris/tests/chaos/test_task_lifecycle.py -v
 
 ### `lib/iris/tests/chaos/test_vm_failures.py`
 
-These use `FakeVmManager` directly since they test the autoscaler layer.
+These use `FakePlatform` directly since they test the autoscaler layer.
 No `cluster` fixture needed.
 
 **Test 18** — VM creation fails with quota exceeded, retry after clearing.
 ```python
-from iris.tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig, FailureMode
+from iris.tests.cluster.platform.fakes import FakePlatform, FakePlatformConfig, FailureMode
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
@@ -557,20 +563,19 @@ from iris.time_utils import now_ms
 def test_quota_exceeded_retry():
     config = config_pb2.ScaleGroupConfig(
         name="test", accelerator_variant="v4-8",
-        min_slices=0, max_slices=3, zones=["us-central1-a"],
+        min_slices=0, max_slices=3,
     )
-    manager = FakeVmManager(FakeVmManagerConfig(config=config,
+    platform = FakePlatform(FakePlatformConfig(config=config,
                             failure_mode=FailureMode.QUOTA_EXCEEDED))
     try:
-        manager.create_vm_group()
+        platform.create_slice(config.slice_template, "test")
         assert False, "should have raised"
     except Exception:
         pass
-    manager.set_failure_mode(FailureMode.NONE)
-    group = manager.create_vm_group()
-    manager.tick(now_ms())
-    status = group.status()
-    assert any(vm.state == vm_pb2.VM_STATE_READY for vm in status.vms)
+    platform.set_failure_mode(FailureMode.NONE)
+    slice_handle = platform.create_slice(config.slice_template, "test")
+    vms = slice_handle.list_vms()
+    assert len(vms) > 0
 ```
 
 **Test 19** — VM boots but worker never initializes (stuck in INITIALIZING).
@@ -578,13 +583,12 @@ def test_quota_exceeded_retry():
 def test_vm_init_stuck():
     config = config_pb2.ScaleGroupConfig(
         name="stuck", accelerator_variant="v4-8",
-        min_slices=0, max_slices=3, zones=["us-central1-a"],
+        min_slices=0, max_slices=3,
     )
-    manager = FakeVmManager(FakeVmManagerConfig(config=config, init_delay_ms=999_999_999))
-    group = manager.create_vm_group()
-    manager.tick(now_ms())
-    status = group.status()
-    assert all(vm.state != vm_pb2.VM_STATE_READY for vm in status.vms)
+    platform = FakePlatform(FakePlatformConfig(config=config, init_delay_ms=999_999_999))
+    slice_handle = platform.create_slice(config.slice_template, "stuck")
+    vms = slice_handle.list_vms()
+    assert all(vm.status().state != "READY" for vm in vms)
 ```
 
 **Test 20** — VM preempted (terminated).
@@ -592,15 +596,15 @@ def test_vm_init_stuck():
 def test_vm_preempted():
     config = config_pb2.ScaleGroupConfig(
         name="preempt", accelerator_variant="v4-8",
-        min_slices=0, max_slices=3, zones=["us-central1-a"],
+        min_slices=0, max_slices=3,
     )
-    manager = FakeVmManager(FakeVmManagerConfig(config=config))
-    group = manager.create_vm_group()
-    manager.tick(now_ms())
-    assert any(vm.state == vm_pb2.VM_STATE_READY for vm in group.status().vms)
-    group.terminate()
-    status = group.status()
-    assert all(vm.state == vm_pb2.VM_STATE_TERMINATED for vm in status.vms)
+    platform = FakePlatform(FakePlatformConfig(config=config))
+    slice_handle = platform.create_slice(config.slice_template, "preempt")
+    vms = slice_handle.list_vms()
+    assert len(vms) > 0
+    slice_handle.terminate()
+    status = slice_handle.status()
+    assert status.state == "DELETING" or status.state == "UNKNOWN"
 ```
 
 ### Validation
@@ -680,9 +684,9 @@ uv run pytest lib/iris/tests/chaos/test_vm_failures.py -v
 | 15 | capacity_wait | (resource limits) | Full → free | SUCCEEDED |
 | 16 | scheduling_timeout | (impossible resources) | 2s timeout | UNSCHEDULABLE |
 | 17 | dispatch_delayed | controller.dispatch | 3s delay, 2 max | SUCCEEDED |
-| 18 | quota_exceeded_retry | (FakeVmManager) | Quota error | VM created |
-| 19 | vm_init_stuck | (FakeVmManager) | Infinite init | Not READY |
-| 20 | vm_preempted | (FakeVmManager) | Terminate | TERMINATED |
+| 18 | quota_exceeded_retry | (FakePlatform) | Quota error | Slice created |
+| 19 | vm_init_stuck | (FakePlatform) | Infinite init | Not READY |
+| 20 | vm_preempted | (FakePlatform) | Terminate | TERMINATED |
 
 ## Stage 7: Virtual time enhancement (optional)
 

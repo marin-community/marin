@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Iris cluster configuration loading and utilities.
 
@@ -22,6 +11,8 @@ Supports YAML config files for cluster management. This module provides:
 - IrisConfig high-level wrapper with component factories
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass, field
@@ -30,8 +21,9 @@ from pathlib import Path
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
+from iris.cluster.platform.bootstrap import WorkerBootstrap
 from iris.cluster.types import parse_memory_string
-from iris.cluster.vm.managed_vm import SshConfig
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
@@ -72,53 +64,33 @@ _ACCELERATOR_TYPE_MAP = {
     "tpu": "ACCELERATOR_TYPE_TPU",
 }
 
-_VM_TYPE_MAP = {
-    "tpu_vm": "VM_TYPE_TPU_VM",
-    "gce_vm": "VM_TYPE_GCE_VM",
-    "manual_vm": "VM_TYPE_MANUAL_VM",
-    "local_vm": "VM_TYPE_LOCAL_VM",
-}
+
+def _normalize_accelerator_type_field(d: dict) -> None:
+    """Normalize a single accelerator_type field from lowercase to proto enum format."""
+    accel_type = d.get("accelerator_type")
+    if isinstance(accel_type, str):
+        lower_type = accel_type.lower()
+        if lower_type in _ACCELERATOR_TYPE_MAP:
+            d["accelerator_type"] = _ACCELERATOR_TYPE_MAP[lower_type]
 
 
 def _normalize_accelerator_types(data: dict) -> None:
     """Convert lowercase accelerator_type values to proto enum format.
 
-    Modifies data in-place, converting values like "tpu" to "ACCELERATOR_TYPE_TPU".
-    This allows YAML configs to use the simpler lowercase format while maintaining
-    compatibility with protobuf's enum parsing.
+    Modifies data in-place, converting values like "tpu" to "ACCELERATOR_TYPE_TPU"
+    on both scale groups and their slice_templates.
     """
     if "scale_groups" not in data:
         return
 
     for sg_data in data["scale_groups"].values():
-        if sg_data is None:
+        if not sg_data:
             continue
-        if "accelerator_type" not in sg_data:
-            continue
+        _normalize_accelerator_type_field(sg_data)
 
-        accel_type = sg_data["accelerator_type"]
-        if isinstance(accel_type, str):
-            lower_type = accel_type.lower()
-            if lower_type in _ACCELERATOR_TYPE_MAP:
-                sg_data["accelerator_type"] = _ACCELERATOR_TYPE_MAP[lower_type]
-
-
-def _normalize_vm_types(data: dict) -> None:
-    """Convert lowercase vm_type values to proto enum format."""
-    if "scale_groups" not in data:
-        return
-
-    for sg_data in data["scale_groups"].values():
-        if sg_data is None:
-            continue
-        if "vm_type" not in sg_data:
-            continue
-
-        vm_type = sg_data["vm_type"]
-        if isinstance(vm_type, str):
-            lower_type = vm_type.lower()
-            if lower_type in _VM_TYPE_MAP:
-                sg_data["vm_type"] = _VM_TYPE_MAP[lower_type]
+        st = sg_data.get("slice_template")
+        if st:
+            _normalize_accelerator_type_field(st)
 
 
 def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
@@ -128,22 +100,15 @@ def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
             raise ValueError(f"Scale group '{name}' must set accelerator_type to cpu, gpu, or tpu.")
 
 
-def _validate_vm_types(config: config_pb2.IrisClusterConfig) -> None:
-    """Validate that scale groups have explicit vm_type."""
-    for name, sg_config in config.scale_groups.items():
-        if sg_config.vm_type == config_pb2.VM_TYPE_UNSPECIFIED:
-            raise ValueError(f"Scale group '{name}' must set vm_type to tpu_vm, gce_vm, manual_vm, or local_vm.")
-
-
 def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
-    """Validate that scale groups define per-VM resources and slice_size."""
+    """Validate that scale groups define per-VM resources and num_vms."""
     for name, sg_config in config.scale_groups.items():
         if not sg_config.HasField("resources"):
             raise ValueError(f"Scale group '{name}' must set resources.")
-        if not sg_config.HasField("slice_size"):
-            raise ValueError(f"Scale group '{name}' must set slice_size.")
-        if sg_config.slice_size <= 0:
-            raise ValueError(f"Scale group '{name}' has invalid slice_size={sg_config.slice_size}.")
+        if not sg_config.HasField("num_vms"):
+            raise ValueError(f"Scale group '{name}' must set num_vms.")
+        if sg_config.num_vms <= 0:
+            raise ValueError(f"Scale group '{name}' has invalid num_vms={sg_config.num_vms}.")
 
         resources = sg_config.resources
         if resources.cpu < 0:
@@ -156,6 +121,67 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid gpu_count={resources.gpu_count}.")
         if resources.tpu_count < 0:
             raise ValueError(f"Scale group '{name}' has invalid tpu_count={resources.tpu_count}.")
+
+
+def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate that every scale group has a slice_template with a platform set.
+
+    Each slice_template must declare a platform (gcp, manual, coreweave, local)
+    with valid platform-specific fields.
+    """
+    for name, sg_config in config.scale_groups.items():
+        if not sg_config.HasField("slice_template"):
+            raise ValueError(f"Scale group '{name}': slice_template is required.")
+
+        template = sg_config.slice_template
+        platform = template.WhichOneof("platform")
+        if platform is None:
+            raise ValueError(
+                f"Scale group '{name}': slice_template must have a platform (gcp, manual, coreweave, local)."
+            )
+
+        if platform == "gcp":
+            if not template.gcp.zone:
+                raise ValueError(f"Scale group '{name}': slice_template.gcp.zone must be non-empty.")
+            if not template.gcp.runtime_version:
+                raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
+        elif platform == "manual":
+            if not template.manual.hosts:
+                raise ValueError(f"Scale group '{name}': slice_template.manual.hosts must be non-empty.")
+        elif platform == "coreweave":
+            if not template.coreweave.region:
+                raise ValueError(f"Scale group '{name}': slice_template.coreweave.region must be non-empty.")
+        elif platform == "local":
+            pass
+
+    if config.platform.HasField("gcp") and config.platform.gcp.zones:
+        platform_zones = set(config.platform.gcp.zones)
+        for name, sg_config in config.scale_groups.items():
+            template = sg_config.slice_template
+            if template.WhichOneof("platform") == "gcp" and template.gcp.zone:
+                if template.gcp.zone not in platform_zones:
+                    raise ValueError(
+                        f"Scale group '{name}': zone '{template.gcp.zone}' is not in "
+                        f"platform.gcp.zones {sorted(platform_zones)}. "
+                        f"Add it to platform.gcp.zones."
+                    )
+
+
+def validate_config(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate cluster config.
+
+    Checks all scale groups for:
+    - Required fields (name, resources, num_vms)
+    - Enum fields are not UNSPECIFIED (accelerator_type)
+    - Resource values are non-negative
+    - Slice templates have required platform-specific fields
+
+    Raises:
+        ValueError: If any validation constraint is violated
+    """
+    _validate_accelerator_types(config)
+    _validate_scale_group_resources(config)
+    _validate_slice_templates(config)
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -295,6 +321,10 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
 
     merged.defaults.CopyFrom(result_defaults)
 
+    # Apply controller defaults
+    if not merged.controller.HasField("heartbeat_failure_threshold"):
+        merged.controller.heartbeat_failure_threshold = 10
+
     # Apply scale group defaults
     for group in merged.scale_groups.values():
         if not group.HasField("priority"):
@@ -336,18 +366,15 @@ def make_local_config(
     config.controller.local.port = 0  # auto-assign
     config.controller.bundle_prefix = ""  # LocalController will set temp path
 
-    # Transform all scale groups to local VMs
-    for sg in config.scale_groups.values():
-        sg.vm_type = config_pb2.VM_TYPE_LOCAL_VM
-
     # Apply local defaults (fast timings for testing)
     # Unconditionally use fast timings for local mode - this overrides any production timings
     # from DEFAULT_CONFIG that may have been applied during load_config()
     if not config.HasField("defaults"):
         config.defaults.CopyFrom(config_pb2.DefaultsConfig())
 
-    # Set fast worker timeout for local testing
-    config.controller.worker_timeout.CopyFrom(Duration.from_seconds(5).to_proto())
+    # Set fast controller timings for local testing
+    config.controller.worker_timeout.CopyFrom(Duration.from_seconds(1).to_proto())
+    config.controller.heartbeat_failure_threshold = 3
 
     # Set fast autoscaler timings for local testing
     config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
@@ -390,7 +417,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
             elif "name" not in sg_data:
                 sg_data["name"] = name
 
-    # Normalize platform/controller oneof sections when YAML uses null values.
+    # Normalize oneof sections when YAML uses null values.
     # PyYAML parses:
     #   platform:
     #     local:
@@ -404,15 +431,24 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
                 if oneof_key in data[section_key] and data[section_key][oneof_key] is None:
                     data[section_key][oneof_key] = {}
 
+    # Also normalize null oneof values inside slice_template blocks
+    if "scale_groups" in data:
+        for sg_data in data["scale_groups"].values():
+            if not sg_data:
+                continue
+            st = sg_data.get("slice_template")
+            if not st:
+                continue
+            for oneof_key in ("gcp", "manual", "local", "coreweave"):
+                if oneof_key in st and st[oneof_key] is None:
+                    st[oneof_key] = {}
+
     # Convert lowercase accelerator types to enum format
     _normalize_accelerator_types(data)
-    _normalize_vm_types(data)
 
     config = ParseDict(data, config_pb2.IrisClusterConfig())
     config = apply_defaults(config)
-    _validate_accelerator_types(config)
-    _validate_vm_types(config)
-    _validate_scale_group_resources(config)
+    validate_config(config)
 
     platform_kind = config.platform.WhichOneof("platform") if config.HasField("platform") else "unspecified"
     logger.info(
@@ -508,13 +544,14 @@ def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
 def get_ssh_config(
     cluster_config: config_pb2.IrisClusterConfig,
     group_name: str | None = None,
-) -> SshConfig:
+) -> config_pb2.SshConfig:
     """Get SSH config by merging cluster defaults with per-group overrides.
 
     Uses cluster_config.defaults.ssh for base settings:
     - user: "root"
+    - port: 22
     - connect_timeout: 30s
-    - key_file: None (passwordless/agent auth)
+    - key_file: "" (passwordless/agent auth)
 
     For manual providers, per-group overrides from scale_groups[*].manual take precedence.
 
@@ -524,34 +561,31 @@ def get_ssh_config(
             manual VM type, per-group SSH overrides will be applied.
 
     Returns:
-        SshConfig with all settings populated (using defaults where not specified).
+        config_pb2.SshConfig with all settings populated (using defaults where not specified).
     """
-    from iris.time_utils import Duration
-
     ssh = cluster_config.defaults.ssh
     user = ssh.user or DEFAULT_CONFIG.ssh.user
-    key_file = ssh.key_file or None
+    key_file = ssh.key_file or ""
+    port = ssh.port if ssh.HasField("port") and ssh.port > 0 else DEFAULT_SSH_PORT
     connect_timeout = (
-        Duration.from_proto(ssh.connect_timeout)
+        ssh.connect_timeout
         if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
-        else Duration.from_proto(DEFAULT_CONFIG.ssh.connect_timeout)
+        else DEFAULT_CONFIG.ssh.connect_timeout
     )
 
-    # Apply per-group overrides if group_name provided
+    # Apply per-group overrides if group uses manual slice_template
     if group_name and group_name in cluster_config.scale_groups:
         group_config = cluster_config.scale_groups[group_name]
-        if group_config.manual.hosts:
-            manual = group_config.manual
+        if group_config.HasField("slice_template") and group_config.slice_template.HasField("manual"):
+            manual = group_config.slice_template.manual
             if manual.ssh_user:
                 user = manual.ssh_user
             if manual.ssh_key_file:
                 key_file = manual.ssh_key_file
-    return SshConfig(
-        user=user,
-        key_file=key_file,
-        port=DEFAULT_SSH_PORT,
-        connect_timeout=connect_timeout,
-    )
+
+    result = config_pb2.SshConfig(user=user, key_file=key_file, port=port)
+    result.connect_timeout.CopyFrom(connect_timeout)
+    return result
 
 
 @dataclass
@@ -594,7 +628,7 @@ class IrisConfig:
         self._proto = apply_defaults(proto)
 
     @classmethod
-    def load(cls, config_path: Path | str) -> "IrisConfig":
+    def load(cls, config_path: Path | str) -> IrisConfig:
         """Load IrisConfig from YAML file.
 
         Args:
@@ -617,16 +651,14 @@ class IrisConfig:
         Returns:
             Platform implementation (GCP, Manual, or Local)
         """
-        from iris.cluster.vm.platform import create_platform
+        from iris.cluster.platform.factory import create_platform
 
         return create_platform(
             platform_config=self._proto.platform,
-            bootstrap_config=self._proto.defaults.bootstrap,
-            timeout_config=self._proto.defaults.timeouts,
             ssh_config=self._proto.defaults.ssh,
         )
 
-    def as_local(self) -> "IrisConfig":
+    def as_local(self) -> IrisConfig:
         """Create local variant of this config.
 
         Returns:
@@ -646,3 +678,57 @@ class IrisConfig:
         if bootstrap.HasField("controller_address"):
             return bootstrap.controller_address
         return ""
+
+
+def create_autoscaler(
+    platform,
+    autoscaler_config: config_pb2.AutoscalerConfig,
+    scale_groups: dict[str, config_pb2.ScaleGroupConfig],
+    label_prefix: str,
+    worker_bootstrap: WorkerBootstrap | None = None,
+    threads: ThreadContainer | None = None,
+):
+    """Create autoscaler from Platform and explicit config.
+
+    Args:
+        platform: Platform instance for creating/discovering slices
+        autoscaler_config: Autoscaler settings (already resolved with defaults)
+        scale_groups: Map of scale group name to config
+        label_prefix: Prefix for labels on managed resources
+        worker_bootstrap: WorkerBootstrap for initializing new VMs (None disables bootstrap)
+        threads: Thread container for background threads. Uses global default if not provided.
+
+    Returns:
+        Configured Autoscaler instance
+
+    Raises:
+        ValueError: If autoscaler_config has invalid timing values
+    """
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.controller.scaling_group import ScalingGroup
+
+    threads = threads or get_thread_container()
+
+    _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
+    _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
+
+    scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
+    scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
+
+    scaling_groups: dict[str, ScalingGroup] = {}
+    for name, group_config in scale_groups.items():
+        scaling_groups[name] = ScalingGroup(
+            config=group_config,
+            platform=platform,
+            label_prefix=label_prefix,
+            scale_up_cooldown=scale_up_delay,
+            scale_down_cooldown=scale_down_delay,
+        )
+        logger.info("Created scale group %s", name)
+
+    return Autoscaler.from_config(
+        scale_groups=scaling_groups,
+        config=autoscaler_config,
+        platform=platform,
+        worker_bootstrap=worker_bootstrap,
+    )
