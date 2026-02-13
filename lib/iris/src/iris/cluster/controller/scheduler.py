@@ -72,7 +72,9 @@ class RejectionReason:
             case RejectionKind.CPU:
                 return f"Insufficient CPU (need {self.details['need']}, available {self.details['have']})"
             case RejectionKind.MEMORY:
-                return f"Insufficient memory (need {self.details['need']}, available {self.details['have']})"
+                need_gb = self.details["need"] / (1024**3)
+                have_gb = self.details["have"] / (1024**3)
+                return f"Insufficient memory (need {need_gb:.1f}GB, available {have_gb:.1f}GB)"
             case RejectionKind.DEVICE_TYPE:
                 return f"Device type mismatch (need {self.details['need']}, worker has {self.details['have']})"
             case RejectionKind.DEVICE_VARIANT:
@@ -543,6 +545,7 @@ class Scheduler:
         self,
         task: ControllerTask,
         context: SchedulingContext,
+        collect_details: bool = False,
     ) -> TaskScheduleResult:
         """Attempt to schedule a single task.
 
@@ -552,6 +555,8 @@ class Scheduler:
         Args:
             task: The task to schedule
             context: Scheduling context with posting lists and capacities
+            collect_details: If True, collect detailed rejection reasons (expensive).
+                           If False (default), return generic failure with no details (fast).
 
         Returns:
             TaskScheduleResult with either worker assignment or failure reason
@@ -577,8 +582,23 @@ class Scheduler:
         # Use posting lists for fast constraint matching
         matching_worker_ids = context.matching_workers(constraints)
 
-        # Try to find a worker that can fit this task among matching workers
-        # Track both counts and a sample reason for each rejection kind
+        # Cheap mode: early exit on first rejection, no details
+        if not collect_details:
+            for worker_id in matching_worker_ids:
+                if worker_id in context.scheduled_workers:
+                    continue
+                capacity = context.capacities[worker_id]
+                rejection = capacity.can_fit_job(job)
+                if rejection is None:
+                    capacity.deduct(job)
+                    context.scheduled_workers.add(worker_id)
+                    return TaskScheduleResult(task=task, worker=capacity.worker)
+                # First rejection - exit early with no details
+                return TaskScheduleResult(task=task, failure_reason=None)
+            # No matching workers found
+            return TaskScheduleResult(task=task, failure_reason=None)
+
+        # Expensive mode: collect all rejection reasons with counts
         rejection_counts: dict[RejectionKind, int] = defaultdict(int)
         rejection_samples: dict[RejectionKind, RejectionReason] = {}
         for worker_id in matching_worker_ids:
@@ -815,7 +835,7 @@ class Scheduler:
     def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext:
         """Create a scheduling context for the given workers.
 
-        Exposed for dashboard use to query task schedule status.
+        Exposed for dashboard use to query job schedule status.
         """
         building_counts = self._count_building_tasks_per_worker()
         return SchedulingContext.from_workers(
@@ -824,92 +844,93 @@ class Scheduler:
             max_building_tasks=self._max_building_tasks_per_worker,
         )
 
-    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
-        """Get the current scheduling status of a task.
+    def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str:
+        """Get detailed diagnostics for why a job cannot be scheduled.
 
-        Used by the dashboard to show why a task is pending.
-        Caller provides the SchedulingContext so it can be reused across
-        multiple calls (e.g. when listing all tasks for a job).
+        This is expensive - it collects rejection reasons from all workers.
+        Only call this for displaying to users (e.g., job detail page).
+
+        Args:
+            job: The job to diagnose
+            context: Scheduling context with posting lists and capacities
+
+        Returns:
+            Human-readable string explaining why the job cannot be scheduled
         """
-        job = self._state.get_job(task.job_id)
-        if job and job.is_coscheduled:
-            return self._coscheduled_schedule_status(task, job, context)
+        if job.is_coscheduled:
+            return self._diagnose_coscheduled_job(job, context)
 
-        return self.try_schedule_task(task, context)
+        # For non-coscheduled jobs, check a representative task
+        # All tasks in a job are identical, so checking one is sufficient
+        tasks = self._state.get_job_tasks(job.job_id)
+        if not tasks:
+            return "No tasks found for job"
 
-    def _coscheduled_schedule_status(
-        self,
-        task: ControllerTask,
-        job: ControllerJob,
-        context: SchedulingContext,
-    ) -> TaskScheduleResult:
-        """Detailed scheduling status for a coscheduled task."""
+        # Use any schedulable task for diagnosis
+        task = next((t for t in tasks if t.can_be_scheduled()), None)
+        if not task:
+            return "No schedulable tasks (all tasks have non-terminal attempts)"
+
+        # Use expensive mode to collect detailed rejection reasons
+        result = self.try_schedule_task(task, context, collect_details=True)
+        return result.failure_reason or "Unknown scheduling failure"
+
+    def _diagnose_coscheduled_job(self, job: ControllerJob, context: SchedulingContext) -> str:
+        """Get detailed diagnostics for why a coscheduled job cannot be scheduled."""
         constraints = list(job.request.constraints)
         matching_ids = context.matching_workers(constraints)
         group_by = job.coscheduling_group_by
-        num_tasks = len(self._state.get_job_tasks(task.job_id))
+        num_tasks = len(self._state.get_job_tasks(job.job_id))
 
         if not matching_ids:
             constraint_keys = [c.key for c in constraints]
-            return TaskScheduleResult(
-                task=task,
-                failure_reason=f"No workers match constraints: {constraint_keys}",
-            )
+            return f"No workers match constraints: {constraint_keys}"
 
         if not group_by:
-            return self.try_schedule_task(task, context)
+            # Shouldn't happen for coscheduled jobs, but handle gracefully
+            tasks = self._state.get_job_tasks(job.job_id)
+            task = next((t for t in tasks if t.can_be_scheduled()), None)
+            if task:
+                result = self.try_schedule_task(task, context, collect_details=True)
+                return result.failure_reason or "Unknown scheduling failure"
+            return "No schedulable tasks"
 
         groups = context.workers_by_group(group_by, matching_ids)
 
         if not groups:
-            return TaskScheduleResult(
-                task=task,
-                failure_reason=(
-                    f"Coscheduling: {len(matching_ids)} workers match constraints but none have '{group_by}' attribute"
-                ),
-            )
+            return f"Coscheduling: {len(matching_ids)} workers match constraints but none have '{group_by}' attribute"
 
         best = max(len(wids) for wids in groups.values())
         if best < num_tasks:
-            return TaskScheduleResult(
-                task=task,
-                failure_reason=(
-                    f"Coscheduling: need {num_tasks} workers in same '{group_by}' group, largest group has {best}"
-                ),
-            )
+            return f"Coscheduling: need {num_tasks} workers in same '{group_by}' group, largest group has {best}"
 
         # Workers exist in theory, check capacity within each group
         for group_key, group_worker_ids in groups.items():
             # Count how many workers in this group have capacity
             available = []
-            rejection_reasons: dict[str, int] = defaultdict(int)
+            rejection_counts: dict[RejectionKind, int] = defaultdict(int)
+            rejection_samples: dict[RejectionKind, RejectionReason] = {}
             for worker_id in group_worker_ids:
                 rejection = context.capacities[worker_id].can_fit_job(job)
                 if rejection is None:
                     available.append(worker_id)
                 else:
-                    rejection_reasons[rejection.kind] += 1
-
-            if len(available) >= num_tasks:
-                # This group has capacity, but not scheduled yet - shouldn't happen
-                # Fall through to regular scheduling
-                return self.try_schedule_task(task, context)
+                    rejection_counts[rejection.kind] += 1
+                    if rejection.kind not in rejection_samples:
+                        rejection_samples[rejection.kind] = rejection
 
             # If this is the largest group, report why it doesn't have capacity
-            if len(group_worker_ids) == best and rejection_reasons:
-                most_common = max(rejection_reasons.items(), key=lambda x: x[1])
-                reason_kind, _count = most_common
-                # Get a sample rejection reason for formatting
-                for wid in group_worker_ids:
-                    rejection = context.capacities[wid].can_fit_job(job)
-                    if rejection and rejection.kind == reason_kind:
-                        return TaskScheduleResult(
-                            task=task,
-                            failure_reason=(
-                                f"Coscheduling: need {num_tasks} workers in '{group_by}' group '{group_key}', "
-                                f"only {len(available)} of {len(group_worker_ids)} have capacity ({rejection})"
-                            ),
-                        )
+            if len(group_worker_ids) == best and rejection_counts:
+                # Format all rejection reasons with counts
+                reason_lines = []
+                for kind in sorted(rejection_counts.keys(), key=lambda k: rejection_counts[k], reverse=True):
+                    count = rejection_counts[kind]
+                    sample = rejection_samples[kind]
+                    reason_lines.append(f"{sample} - {count} worker(s)")
+                reasons = "\n".join(reason_lines)
+                return (
+                    f"Coscheduling: need {num_tasks} workers in '{group_by}' group '{group_key}', "
+                    f"only {len(available)} of {len(group_worker_ids)} have capacity:\n{reasons}"
+                )
 
-        # Workers exist in theory, check capacity
-        return self.try_schedule_task(task, context)
+        return "Unable to schedule (no clear reason found)"

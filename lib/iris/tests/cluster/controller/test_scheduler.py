@@ -1351,14 +1351,14 @@ def test_scheduler_reports_device_variant_mismatch(scheduler, state, worker_meta
     )
     tasks = submit_job(state, "j1", req)
 
-    # Get scheduling status
+    # Get job-level scheduling diagnostics
     context = scheduler.create_scheduling_context(state.get_available_workers())
-    status = scheduler.task_schedule_status(tasks[0], context)
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
 
-    assert not status.success
-    assert "variant" in status.failure_reason.lower()
-    assert "v5litepod-32" in status.failure_reason
-    assert "v5litepod-16" in status.failure_reason
+    assert "variant" in diagnostics.lower()
+    assert "v5litepod-32" in diagnostics
+    assert "v5litepod-16" in diagnostics
 
 
 def test_scheduler_reports_tpu_count_exceeded(scheduler, state, worker_metadata):
@@ -1391,14 +1391,14 @@ def test_scheduler_reports_tpu_count_exceeded(scheduler, state, worker_metadata)
     )
     tasks = submit_job(state, "j1", req)
 
-    # Get scheduling status
+    # Get job-level scheduling diagnostics
     context = scheduler.create_scheduling_context(state.get_available_workers())
-    status = scheduler.task_schedule_status(tasks[0], context)
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
 
-    assert not status.success
-    assert "tpu" in status.failure_reason.lower()
-    assert "8" in status.failure_reason
-    assert "4" in status.failure_reason
+    assert "tpu" in diagnostics.lower()
+    assert "8" in diagnostics
+    assert "4" in diagnostics
 
 
 def test_scheduler_reports_device_type_mismatch(scheduler, state, worker_metadata):
@@ -1421,13 +1421,13 @@ def test_scheduler_reports_device_type_mismatch(scheduler, state, worker_metadat
     )
     tasks = submit_job(state, "j1", req)
 
-    # Get scheduling status
+    # Get job-level scheduling diagnostics
     context = scheduler.create_scheduling_context(state.get_available_workers())
-    status = scheduler.task_schedule_status(tasks[0], context)
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
 
-    assert not status.success
-    assert "device" in status.failure_reason.lower()
-    assert "tpu" in status.failure_reason.lower()
+    assert "device" in diagnostics.lower()
+    assert "tpu" in diagnostics.lower()
 
 
 def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worker_metadata):
@@ -1451,15 +1451,15 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worke
     req.coscheduling.group_by = "tpu-name"
     tasks = submit_job(state, "j1", req)
 
-    # Get scheduling status
+    # Get job-level scheduling diagnostics
     context = scheduler.create_scheduling_context(state.get_available_workers())
-    status = scheduler.task_schedule_status(tasks[0], context)
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
 
-    assert not status.success
     # Should mention it's a coscheduling issue with capacity details
-    assert "coscheduling" in status.failure_reason.lower() or "group" in status.failure_reason.lower()
+    assert "coscheduling" in diagnostics.lower() or "group" in diagnostics.lower()
     # Should indicate how many workers have capacity vs needed
-    assert "2" in status.failure_reason or "4" in status.failure_reason
+    assert "2" in diagnostics or "4" in diagnostics
 
 
 def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request, worker_metadata):
