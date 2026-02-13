@@ -7,8 +7,9 @@ Boots a local cluster via connect_cluster() + make_local_config() and provides
 a TestCluster dataclass that wraps the IrisClient and ControllerServiceClientSync
 with convenience methods for job submission, waiting, and status queries.
 
-The cluster fixture is module-scoped (expensive boot ~2-3s), while chaos state
-is reset per-test via an autouse fixture.
+The cluster fixture is function-scoped so each test gets a fresh cluster with no
+stale worker state or chaos bleed. Chaos state is also reset per-test via an
+autouse fixture.
 """
 
 import os
@@ -196,7 +197,7 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
     sg.slice_template.local.SetInParent()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def cluster():
     """Boots a local cluster. Yields a TestCluster with IrisClient and RPC access."""
     config = load_config(DEFAULT_CONFIG)
@@ -226,7 +227,7 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def multi_worker_cluster():
     """Boots a local cluster with 4 workers for distribution and concurrency tests.
 
@@ -340,7 +341,7 @@ def dashboard_goto(page, url: str) -> None:
     page.goto(url)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def browser():
     """Lazily launches a Chromium browser for Playwright-based tests.
 
