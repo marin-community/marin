@@ -34,7 +34,6 @@ import json
 import logging
 import socket
 import subprocess
-import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -48,6 +47,7 @@ from iris.cluster.platform.base import (
     SliceStatus,
     VmStatus,
 )
+from iris.cluster.platform.debug import wait_for_port
 from iris.cluster.platform.ssh import (
     GceSshConnection,
     GcloudSshConnection,
@@ -147,18 +147,6 @@ def _find_free_port(host: str = "127.0.0.1") -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((host, 0))
         return s.getsockname()[1]
-
-
-def _wait_for_port(port: int, host: str = "127.0.0.1", timeout: float = 30.0) -> bool:
-    """Wait for a port to become available on the given host."""
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1.0):
-                return True
-        except (ConnectionRefusedError, OSError, TimeoutError):
-            time.sleep(0.5)
-    return False
 
 
 # ============================================================================
@@ -816,7 +804,7 @@ def _gcp_tunnel(
     )
 
     try:
-        if not _wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
+        if not wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
             stderr = proc.stderr.read().decode() if proc.stderr else ""
             proc.terminate()
             proc.wait()

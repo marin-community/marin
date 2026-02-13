@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
@@ -22,6 +21,7 @@ from iris.cluster.controller.lifecycle import (
     stop_controller,
 )
 from iris.rpc import config_pb2
+from iris.time_utils import Deadline
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +128,9 @@ def stop_all(config: config_pb2.IrisClusterConfig) -> None:
             t.start()
             threads[name] = t
 
-        deadline = time.monotonic() + TERMINATE_TIMEOUT_SECONDS
+        dl = Deadline.from_seconds(TERMINATE_TIMEOUT_SECONDS)
         for _name, t in threads.items():
-            remaining = max(0, deadline - time.monotonic())
-            t.join(timeout=remaining)
+            t.join(timeout=dl.remaining_seconds())
 
         for name, t in threads.items():
             if t.is_alive():
