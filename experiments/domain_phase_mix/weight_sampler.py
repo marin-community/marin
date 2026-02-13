@@ -434,3 +434,55 @@ class WeightSampler:
             result[phase_name] = phase_data
 
         return result
+
+
+def compute_unimax_weights(
+    domain_sizes: list[float],
+    budget: float,
+    max_epochs: float = 1.0,
+) -> list[float]:
+    """Compute UniMax sampling weights (Chung et al., 2023, https://arxiv.org/abs/2304.09151).
+
+    Allocates budget as uniformly as possible across domains, but caps small domains
+    at max_epochs repetitions to prevent overfitting. Uncapped domains receive equal
+    shares of the remaining budget.
+
+    Args:
+        domain_sizes: Token count (or character count) for each domain.
+        budget: Total training budget to allocate.
+        max_epochs: Maximum number of epochs for any domain (default 1.0).
+
+    Returns:
+        Normalized sampling weights summing to 1.0.
+    """
+    n = len(domain_sizes)
+    if n == 0:
+        return []
+
+    sorted_indices = sorted(range(n), key=lambda i: domain_sizes[i])
+
+    allocations = [0.0] * n
+    remaining_budget = budget
+    remaining_count = n
+    allocated: set[int] = set()
+
+    for idx in sorted_indices:
+        size = domain_sizes[idx]
+        uniform_share = remaining_budget / remaining_count
+        max_allocation = max_epochs * size
+
+        if uniform_share > max_allocation:
+            # This domain hits the epoch cap
+            allocations[idx] = max_allocation
+            remaining_budget -= max_allocation
+            remaining_count -= 1
+            allocated.add(idx)
+        else:
+            # All remaining domains get uniform shares
+            for j_idx in sorted_indices:
+                if j_idx not in allocated:
+                    allocations[j_idx] = remaining_budget / remaining_count
+            break
+
+    total = sum(allocations)
+    return [a / total for a in allocations] if total > 0 else [1.0 / n] * n

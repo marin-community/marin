@@ -237,7 +237,6 @@ class MixtureExperiment:
         return lm_varying_mixture_data_config(
             components=all_components,
             weights_list=weights_list,
-            permutation_type="feistel",
             shuffle=True,
             mixture_block_size=self.mixture_block_size,
         )
