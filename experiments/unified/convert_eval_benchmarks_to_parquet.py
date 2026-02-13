@@ -148,7 +148,7 @@ class BenchmarkConverter:
 
     def load(self, max_rows: int | None = None) -> Dataset:
         """Load the dataset from HuggingFace."""
-        ds = load_dataset(self.hf_dataset_id, name=self.hf_config, split=self.hf_split)
+        ds = load_dataset(self.hf_dataset_id, name=self.hf_config, split=self.hf_split, trust_remote_code=True)
         if max_rows is not None:
             ds = ds.select(range(min(max_rows, len(ds))))
         return ds
@@ -255,7 +255,7 @@ class GQAConverter(BenchmarkConverter):
     def load(self, max_rows: int | None = None) -> Dataset:
         """Load both images and instructions configs and join them."""
         logger.info("Loading GQA images config (testdev_balanced_images)...")
-        images_ds = load_dataset(self.hf_dataset_id, "testdev_balanced_images", split=self.hf_split)
+        images_ds = load_dataset(self.hf_dataset_id, "testdev_balanced_images", split=self.hf_split, trust_remote_code=True)
 
         # Build image lookup: imageId -> PIL image
         logger.info("Building image lookup map (%d images)...", len(images_ds))
@@ -265,7 +265,7 @@ class GQAConverter(BenchmarkConverter):
         logger.info("Image map built with %d entries.", len(self._image_map))
 
         logger.info("Loading GQA instructions config (testdev_balanced_instructions)...")
-        instructions_ds = load_dataset(self.hf_dataset_id, "testdev_balanced_instructions", split=self.hf_split)
+        instructions_ds = load_dataset(self.hf_dataset_id, "testdev_balanced_instructions", split=self.hf_split, trust_remote_code=True)
 
         if max_rows is not None:
             instructions_ds = instructions_ds.select(range(min(max_rows, len(instructions_ds))))
@@ -499,7 +499,7 @@ class CIFAR10Converter(BenchmarkConverter):
         self._class_names: list[str] = []
 
     def load(self, max_rows: int | None = None) -> Dataset:
-        ds = load_dataset(self.hf_dataset_id, split=self.hf_split)
+        ds = load_dataset(self.hf_dataset_id, split=self.hf_split, trust_remote_code=True)
         self._class_names = ds.features["label"].names
 
         if self._n_per_class is not None:
@@ -556,7 +556,7 @@ class ImageNetConverter(BenchmarkConverter):
         self._class_names: list[str] = []
 
     def load(self, max_rows: int | None = None) -> Dataset:
-        ds = load_dataset(self.hf_dataset_id, split=self.hf_split, token=True)
+        ds = load_dataset(self.hf_dataset_id, split=self.hf_split, token=True, trust_remote_code=True)
         self._class_names = ds.features["label"].names
 
         if self._n_per_class is not None:
