@@ -13,6 +13,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from iris.cluster.controller.state import (
@@ -43,6 +44,18 @@ task assignments until existing tasks complete their build phase.
 """
 
 
+class RejectionKind(StrEnum):
+    """Types of reasons a job can be rejected from a worker."""
+
+    CPU = "cpu"
+    MEMORY = "memory"
+    DEVICE_TYPE = "device_type"
+    DEVICE_VARIANT = "device_variant"
+    GPU_COUNT = "gpu_count"
+    TPU_COUNT = "tpu_count"
+    BUILDING_LIMIT = "building_limit"
+
+
 @dataclass
 class RejectionReason:
     """Lazy-formatted rejection reason for scheduler diagnostics.
@@ -51,24 +64,24 @@ class RejectionReason:
     when the reason is never displayed (e.g., during successful scheduling).
     """
 
-    kind: str
+    kind: RejectionKind
     details: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         match self.kind:
-            case "cpu":
+            case RejectionKind.CPU:
                 return f"Insufficient CPU (need {self.details['need']}, available {self.details['have']})"
-            case "memory":
+            case RejectionKind.MEMORY:
                 return f"Insufficient memory (need {self.details['need']}, available {self.details['have']})"
-            case "device_type":
+            case RejectionKind.DEVICE_TYPE:
                 return f"Device type mismatch (need {self.details['need']}, worker has {self.details['have']})"
-            case "device_variant":
+            case RejectionKind.DEVICE_VARIANT:
                 return f"Device variant mismatch (need {self.details['need']}, worker has {self.details['have']})"
-            case "gpu_count":
+            case RejectionKind.GPU_COUNT:
                 return f"Insufficient GPUs (need {self.details['need']}, available {self.details['have']})"
-            case "tpu_count":
+            case RejectionKind.TPU_COUNT:
                 return f"Insufficient TPUs (need {self.details['need']}, available {self.details['have']})"
-            case "building_limit":
+            case RejectionKind.BUILDING_LIMIT:
                 return (
                     f"Worker at building task limit ({self.details['current']}/{self.details['max']} concurrent builds)"
                 )
@@ -231,35 +244,45 @@ class WorkerCapacity:
         # Check building task back-pressure first
         if not self.can_accept_building_task():
             return RejectionReason(
-                kind="building_limit",
+                kind=RejectionKind.BUILDING_LIMIT,
                 details={"current": self.building_task_count, "max": self.max_building_tasks},
             )
 
         res = job.request.resources
 
         if res.cpu > self.available_cpu:
-            return RejectionReason(kind="cpu", details={"need": res.cpu, "have": self.available_cpu})
+            return RejectionReason(kind=RejectionKind.CPU, details={"need": res.cpu, "have": self.available_cpu})
 
         if res.memory_bytes > self.available_memory:
-            return RejectionReason(kind="memory", details={"need": res.memory_bytes, "have": self.available_memory})
+            return RejectionReason(
+                kind=RejectionKind.MEMORY, details={"need": res.memory_bytes, "have": self.available_memory}
+            )
 
         job_device_type = get_device_type(res.device)
         if not device_compatible(job_device_type, self.device_type):
-            return RejectionReason(kind="device_type", details={"need": job_device_type, "have": self.device_type})
+            return RejectionReason(
+                kind=RejectionKind.DEVICE_TYPE, details={"need": job_device_type, "have": self.device_type}
+            )
 
         job_variant = get_device_variant(res.device)
         if job_variant and job_variant != "auto" and job_variant != self.device_variant:
-            return RejectionReason(kind="device_variant", details={"need": job_variant, "have": self.device_variant})
+            return RejectionReason(
+                kind=RejectionKind.DEVICE_VARIANT, details={"need": job_variant, "have": self.device_variant}
+            )
 
         if job_device_type == "gpu":
             gpu_count = get_gpu_count(res.device)
             if gpu_count > self.available_gpus:
-                return RejectionReason(kind="gpu_count", details={"need": gpu_count, "have": self.available_gpus})
+                return RejectionReason(
+                    kind=RejectionKind.GPU_COUNT, details={"need": gpu_count, "have": self.available_gpus}
+                )
 
         if job_device_type == "tpu":
             tpu_count = get_tpu_count(res.device)
             if tpu_count > self.available_tpus:
-                return RejectionReason(kind="tpu_count", details={"need": tpu_count, "have": self.available_tpus})
+                return RejectionReason(
+                    kind=RejectionKind.TPU_COUNT, details={"need": tpu_count, "have": self.available_tpus}
+                )
 
         return None
 
@@ -555,7 +578,9 @@ class Scheduler:
         matching_worker_ids = context.matching_workers(constraints)
 
         # Try to find a worker that can fit this task among matching workers
-        rejection_reasons: dict[str, int] = defaultdict(int)
+        # Track both counts and a sample reason for each rejection kind
+        rejection_counts: dict[RejectionKind, int] = defaultdict(int)
+        rejection_samples: dict[RejectionKind, RejectionReason] = {}
         for worker_id in matching_worker_ids:
             if worker_id in context.scheduled_workers:
                 continue
@@ -565,47 +590,49 @@ class Scheduler:
                 capacity.deduct(job)
                 context.scheduled_workers.add(worker_id)
                 return TaskScheduleResult(task=task, worker=capacity.worker)
-            rejection_reasons[rejection.kind] += 1
+            rejection_counts[rejection.kind] += 1
+            # Keep first sample of each rejection kind for formatting
+            if rejection.kind not in rejection_samples:
+                rejection_samples[rejection.kind] = rejection
 
         # No worker could fit the task - build detailed reason
         res = job.request.resources
 
-        # Report most common rejection reason
-        if rejection_reasons:
-            most_common = max(rejection_reasons.items(), key=lambda x: x[1])
-            reason_kind, count = most_common
-            # Get a sample rejection reason for formatting
-            for wid in matching_worker_ids:
-                if wid not in context.scheduled_workers:
-                    rejection = context.capacities[wid].can_fit_job(job)
-                    if rejection and rejection.kind == reason_kind:
-                        # For building limit, provide additional context
-                        if reason_kind == "building_limit":
-                            # Check if workers would otherwise have capacity
-                            workers_with_capacity = sum(
-                                1
-                                for check_wid in matching_worker_ids
-                                if check_wid not in context.scheduled_workers
-                                and context.capacities[check_wid].available_cpu >= res.cpu
-                                and context.capacities[check_wid].available_memory >= res.memory_bytes
-                            )
-                            if workers_with_capacity > 0:
-                                return TaskScheduleResult(
-                                    task=task,
-                                    failure_reason=(
-                                        f"Waiting for build slots: {count} worker(s) at building limit "
-                                        f"(max {self._max_building_tasks_per_worker} concurrent builds per worker), "
-                                        f"but have sufficient resources for this task"
-                                    ),
-                                )
+        # Report all rejection reasons with their counts
+        if rejection_counts:
+            # Special handling for building limit
+            if RejectionKind.BUILDING_LIMIT in rejection_counts:
+                # Check if workers would otherwise have capacity
+                workers_with_capacity = sum(
+                    1
+                    for check_wid in matching_worker_ids
+                    if check_wid not in context.scheduled_workers
+                    and context.capacities[check_wid].available_cpu >= res.cpu
+                    and context.capacities[check_wid].available_memory >= res.memory_bytes
+                )
+                if workers_with_capacity > 0:
+                    count = rejection_counts[RejectionKind.BUILDING_LIMIT]
+                    return TaskScheduleResult(
+                        task=task,
+                        failure_reason=(
+                            f"Waiting for build slots: {count} worker(s) at building limit "
+                            f"(max {self._max_building_tasks_per_worker} concurrent builds per worker), "
+                            f"but have sufficient resources for this task"
+                        ),
+                    )
 
-                        if constraints:
-                            constraint_keys = [c.key for c in constraints]
-                            return TaskScheduleResult(
-                                task=task,
-                                failure_reason=f"{rejection} ({count} worker(s) with constraints={constraint_keys})",
-                            )
-                        return TaskScheduleResult(task=task, failure_reason=str(rejection))
+            # Format all rejection reasons with counts
+            reason_lines = []
+            for kind in sorted(rejection_counts.keys(), key=lambda k: rejection_counts[k], reverse=True):
+                count = rejection_counts[kind]
+                sample = rejection_samples[kind]
+                reason_lines.append(f"{sample} - {count} worker(s)")
+
+            failure_reason = "\n".join(reason_lines)
+            if constraints:
+                constraint_keys = [c.key for c in constraints]
+                failure_reason = f"{failure_reason}\n(with constraints={constraint_keys})"
+            return TaskScheduleResult(task=task, failure_reason=failure_reason)
 
         if constraints:
             return TaskScheduleResult(
