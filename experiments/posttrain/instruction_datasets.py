@@ -675,6 +675,17 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens-n8-reformatted-selfconsistency",
         max_parallelism=32,
     ),
+    "marin-community/open-thoughts-4-30k-math-qwq-32b-annotated-32768-tokens": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwq-32b-annotated-32768-tokens",
+        revision="e2fabcd",
+        adapter=instruction_response_adapter(
+            instruction_column="instruction_seed",
+            response_column="generated_text",
+        ),
+        metadata_columns=["row_id", "_source", "__original_row_idx", "ms_id"],
+        name="marin-community/open-thoughts-4-30k-math-qwq-32b-annotated-32768-tokens",
+        max_parallelism=32,
+    ),
     # nvidia/OpenMathReasoning - CoT split (Chain of Thought reasoning)
     "nvidia/OpenMathReasoning/cot": InstructionDatasetConfig(
         hf_dataset_id="nvidia/OpenMathReasoning",
