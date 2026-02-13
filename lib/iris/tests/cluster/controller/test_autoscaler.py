@@ -1250,12 +1250,16 @@ class TestAutoscalerActionLogging:
         empty_autoscaler._wait_for_inflight()
 
         status = empty_autoscaler.get_status()
-        assert len(status.recent_actions) == 1
+        assert len(status.recent_actions) == 2
         action = status.recent_actions[0]
         assert action.action_type == "scale_up"
         assert action.scale_group == "test-group"
         assert action.slice_id != ""
         assert "demand" in action.reason
+        ready_action = status.recent_actions[1]
+        assert ready_action.action_type == "slice_ready"
+        assert ready_action.scale_group == "test-group"
+        assert "bootstrap completed" in ready_action.reason
 
     def test_action_log_records_quota_exceeded(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Verify quota exceeded events are logged."""
@@ -1288,9 +1292,9 @@ class TestAutoscalerActionLogging:
         autoscaler.notify_worker_failed(vm_address)
 
         status = autoscaler.get_status()
-        assert len(status.recent_actions) == 1
-        action = status.recent_actions[0]
-        assert action.action_type == "worker_failed"
+        actions_by_type = {a.action_type: a for a in status.recent_actions}
+        assert "worker_failed" in actions_by_type
+        action = actions_by_type["worker_failed"]
         assert action.scale_group == "test-group"
         assert action.slice_id == "slice-001"
         assert vm_address in action.reason

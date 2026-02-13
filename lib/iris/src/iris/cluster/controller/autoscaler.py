@@ -699,6 +699,9 @@ class Autoscaler:
                 e,
             )
             group.mark_slice_failed(handle.slice_id)
+            self._log_action(
+                "slice_failed", group.name, handle.slice_id, reason=f"bootstrap failed: {e}", status="failed"
+            )
             group.scale_down(handle.slice_id)
             self._unregister_slice_vms(handle.slice_id)
             group.record_failure()
@@ -720,6 +723,9 @@ class Autoscaler:
         if group:
             vm_addresses = [vm.internal_address for vm in handle.describe().vms]
             group.mark_slice_ready(handle.slice_id, vm_addresses)
+            self._log_action(
+                "slice_ready", scale_group, handle.slice_id, reason=f"bootstrap completed ({len(vm_addresses)} VMs)"
+            )
 
     def _register_slice_vms(
         self,
