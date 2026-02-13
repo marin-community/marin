@@ -59,17 +59,16 @@ jobs:
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
 
-          # Allow rebase and pre-commit operations
-          claude_args: '--allowed-tools "Bash(git *)" "Bash(./infra/pre-commit.py *)" "Bash(uv *)" "Bash(pytest *)" "Bash(gh *)" "Bash(python *)"'
-
-          custom_instructions: |
+          claude_args: |
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
+          prompt: |
             Always read and follow the guidelines in AGENTS.md before starting work.
 
             Before submitting any changes or creating PRs, you MUST:
@@ -77,4 +76,3 @@ jobs:
             2. Run `uv run pytest` on any tests relevant to your changes.
 
             In any follow-up comments on issues or PRs, state how you tested your changes (which tests you ran and their results).
-
