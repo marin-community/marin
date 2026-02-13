@@ -38,11 +38,23 @@ def build_device_env_vars(config: ContainerConfig) -> dict[str, str]:
         # We set the JAX distributed env vars explicitly below instead.
         env["TPU_SKIP_MDS_QUERY"] = "1"
 
+        # libtpu uses TPU_ACCELERATOR_TYPE to infer topology for pod slices.
+        if config.worker_metadata and config.worker_metadata.device.HasField("tpu"):
+            tpu_variant = config.worker_metadata.device.tpu.variant
+            if tpu_variant:
+                env["TPU_ACCELERATOR_TYPE"] = tpu_variant
+                # TPU_TYPE is the host-level name set at bootstrap and still
+                # used by Iris topology helpers.
+                env["TPU_TYPE"] = tpu_variant
+
         if config.worker_metadata:
             if config.worker_metadata.tpu_name:
                 env["TPU_NAME"] = config.worker_metadata.tpu_name
             if config.worker_metadata.tpu_worker_id:
                 env["TPU_WORKER_ID"] = config.worker_metadata.tpu_worker_id
+                # Alias variables used by some TPU runtimes and tooling.
+                env["WORKER_ID"] = config.worker_metadata.tpu_worker_id
+                env["CLOUD_TPU_TASK_ID"] = config.worker_metadata.tpu_worker_id
             if config.worker_metadata.tpu_worker_hostnames:
                 env["TPU_WORKER_HOSTNAMES"] = config.worker_metadata.tpu_worker_hostnames
                 # JAX multi-host coordination: coordinator is worker-0's IP with standard port.
