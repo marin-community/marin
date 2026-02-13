@@ -35,8 +35,13 @@ Usage:
 """
 
 import argparse
+import gc
 import json
 import logging
+import os
+import shutil
+import subprocess
+import tempfile
 import time
 from io import BytesIO
 from pathlib import Path
@@ -57,6 +62,36 @@ import sys
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 logger = logging.getLogger(__name__)
+
+
+def gcs_download(gcs_path: str, local_path: str):
+    """Download from GCS using gcloud storage cp (faster than gcsfs)."""
+    result = subprocess.run(
+        ["gcloud", "storage", "cp", "--quiet", gcs_path, local_path],
+        capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gcloud download failed: {result.stderr.strip()}")
+
+
+def gcs_upload(local_path: str, gcs_path: str):
+    """Upload to GCS using gcloud storage cp (faster than gcsfs)."""
+    result = subprocess.run(
+        ["gcloud", "storage", "cp", "--quiet", local_path, gcs_path],
+        capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gcloud upload failed: {result.stderr.strip()}")
+
+
+def gcs_rm(gcs_path: str):
+    """Delete from GCS using gcloud storage rm."""
+    result = subprocess.run(
+        ["gcloud", "storage", "rm", "--quiet", gcs_path],
+        capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gcloud rm failed: {result.stderr.strip()}")
 
 
 def list_parquet_files(data_path: str) -> List[str]:
@@ -305,30 +340,29 @@ def is_row_clean(row: Dict[str, Any], messages_key: str = "messages", images_key
 
 
 def clean_shard(
-    shard_path: str,
+    local_path: str,
     messages_key: str,
     images_key: str,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Clean a single parquet shard by removing rows with image_ref_but_no_images.
+    """Clean a single LOCAL parquet shard by removing bad rows.
 
-    Returns dict with stats: original_rows, cleaned_rows, removed_rows, cleaned_path.
+    Reads from local_path, writes cleaned file next to it with _cleaned suffix.
+    No GCS I/O — caller handles download/upload.
+
+    Returns dict with stats.
     """
-    import gcsfs
-    import os
-    import tempfile
-
     from datasets import Dataset
 
-    shard_name = Path(shard_path).stem
+    shard_name = Path(local_path).stem
     t0 = time.time()
 
-    # Read parquet
-    with fsspec.open(shard_path, "rb") as f:
-        table = pq.read_table(f)
+    # Read local parquet
+    table = pq.read_table(local_path)
 
     original_rows = len(table)
     rows_dict = table.to_pydict()
+    del table
 
     # Build boolean mask: True = keep, False = remove
     mask = []
@@ -354,40 +388,17 @@ def clean_shard(
         {k: rows_dict[k][i] for k in rows_dict}
         for i, m in enumerate(mask) if m
     ]
+    del rows_dict
 
     # Use HuggingFace Dataset.to_parquet() instead of pq.write_table().
     # pq.write_table() produces nested type encoding that training workers'
     # PyArrow version can't read. Dataset.to_parquet() uses the same encoding
     # as the original data pipeline (convert_llava_onevision_to_levanter.py).
     dataset = Dataset.from_list(clean_rows)
-
-    # Write to temp file, then upload to GCS (same pattern as convert script)
-    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-        tmp_path = tmp.name
-
-    try:
-        dataset.to_parquet(tmp_path)
-
-        if shard_path.startswith("gs://"):
-            gfs = gcsfs.GCSFileSystem()
-            # Write cleaned file with _cleaned suffix
-            cleaned_path = shard_path.replace(".parquet", "_cleaned.parquet")
-            gcs_cleaned_path = cleaned_path.replace("gs://", "")
-            gfs.put(tmp_path, gcs_cleaned_path)
-            # Delete original
-            gcs_original_path = shard_path.replace("gs://", "")
-            gfs.rm(gcs_original_path)
-        else:
-            cleaned_path = shard_path.replace(".parquet", "_cleaned.parquet")
-            import shutil
-            shutil.move(tmp_path, cleaned_path)
-            os.remove(shard_path)
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    cleaned_path = local_path.replace(".parquet", "_cleaned.parquet")
+    dataset.to_parquet(cleaned_path)
 
     del dataset, clean_rows
-    import gc
     gc.collect()
 
     return {
@@ -412,7 +423,8 @@ def main():
     parser.add_argument("--max_issues_per_shard", type=int, default=100, help="Max issues to report per shard")
     parser.add_argument("--clean", action="store_true", help="Clean mode: remove bad rows and re-upload parquet files")
     parser.add_argument("--dry_run", action="store_true", help="With --clean: only report what would be removed, don't modify files")
-    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for processing shards")
+    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for check mode")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for clean mode (download N, clean, upload N)")
     args = parser.parse_args()
 
     # List parquet files
@@ -437,53 +449,67 @@ def main():
         total_original = 0
         total_removed = 0
         total_cleaned = 0
+        done_count = 0
+        batch_size = args.batch_size
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        for batch_start in range(0, len(parquet_files), batch_size):
+            batch = parquet_files[batch_start:batch_start + batch_size]
+            local_dir = tempfile.mkdtemp(prefix="clean_batch_")
 
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {}
-            for shard_idx, shard_path in enumerate(parquet_files):
-                future = executor.submit(
-                    clean_shard, shard_path,
-                    messages_key=args.messages_key,
-                    images_key=args.images_key,
-                    dry_run=args.dry_run,
-                )
-                futures[future] = (shard_idx, shard_path)
+            try:
+                # Step 1: Download batch from GCS to local
+                local_paths = []
+                for gcs_path in batch:
+                    local_path = os.path.join(local_dir, Path(gcs_path).name)
+                    gcs_download(gcs_path, local_path)
+                    local_paths.append(local_path)
 
-            done_count = 0
-            for future in as_completed(futures):
-                done_count += 1
-                shard_idx, shard_path = futures[future]
-                global_shard_idx = args.start_shard + shard_idx
-                shard_name = Path(shard_path).stem
+                # Step 2: Clean locally + upload + delete original
+                for local_path, gcs_path in zip(local_paths, batch):
+                    done_count += 1
+                    shard_name = Path(gcs_path).stem
 
-                try:
-                    stats = future.result()
-                    total_original += stats["original_rows"]
-                    total_removed += stats["removed_rows"]
-                    total_cleaned += stats["cleaned_rows"]
+                    try:
+                        stats = clean_shard(
+                            local_path,
+                            messages_key=args.messages_key,
+                            images_key=args.images_key,
+                            dry_run=args.dry_run,
+                        )
+                        total_original += stats["original_rows"]
+                        total_removed += stats["removed_rows"]
+                        total_cleaned += stats["cleaned_rows"]
 
-                    if stats["removed_rows"] > 0:
+                        # Step 3: Upload cleaned file and delete original from GCS
+                        if not args.dry_run and stats["cleaned_path"]:
+                            gcs_cleaned_path = gcs_path.replace(".parquet", "_cleaned.parquet")
+                            gcs_upload(stats["cleaned_path"], gcs_cleaned_path)
+                            gcs_rm(gcs_path)
+
+                        if stats["removed_rows"] > 0:
+                            print(
+                                f"[{done_count}/{len(parquet_files)}] {mode_str} shard ({shard_name}): "
+                                f"{stats['original_rows']} -> {stats['cleaned_rows']} rows "
+                                f"(removed {stats['removed_rows']}) in {stats['elapsed']:.1f}s",
+                                flush=True,
+                            )
+                        else:
+                            print(
+                                f"[{done_count}/{len(parquet_files)}] {mode_str} shard ({shard_name}): "
+                                f"{stats['original_rows']} rows, no issues ({stats['elapsed']:.1f}s)",
+                                flush=True,
+                            )
+
+                    except Exception as e:
                         print(
-                            f"[{done_count}/{len(parquet_files)}] {mode_str} shard {global_shard_idx} ({shard_name}): "
-                            f"{stats['original_rows']} -> {stats['cleaned_rows']} rows "
-                            f"(removed {stats['removed_rows']}) in {stats['elapsed']:.1f}s",
+                            f"[{done_count}/{len(parquet_files)}] {mode_str} shard ({shard_name}): FAILED: {e}",
                             flush=True,
                         )
-                    else:
-                        print(
-                            f"[{done_count}/{len(parquet_files)}] {mode_str} shard {global_shard_idx} ({shard_name}): "
-                            f"{stats['original_rows']} rows, no issues ({stats['elapsed']:.1f}s)",
-                            flush=True,
-                        )
+                        logger.error(f"Failed to clean shard {gcs_path}: {e}")
 
-                except Exception as e:
-                    print(
-                        f"[{done_count}/{len(parquet_files)}] {mode_str} shard {global_shard_idx} ({shard_name}): FAILED: {e}",
-                        flush=True,
-                    )
-                    logger.error(f"Failed to clean shard {shard_path}: {e}")
+            finally:
+                # Step 4: Cleanup local temp dir
+                shutil.rmtree(local_dir, ignore_errors=True)
 
         print(f"\n{'=' * 70}")
         print(f"{'DRY RUN ' if args.dry_run else ''}CLEAN SUMMARY")
