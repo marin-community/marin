@@ -36,3 +36,4 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.prompt.outputs.review_prompt }}
           claude_args: '--max-turns 3'
+          allowed_bots: 'claude[bot]'
