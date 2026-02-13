@@ -45,15 +45,36 @@ scale_groups:
       cpu: 128
       ram: 128GB
       disk: 1TB
-      tpu_count: 8
+      tpu_count: 4
       gpu_count: 0
     min_slices: 1
     max_slices: 4
-    priority: 100
+    priority: 200
     slice_template:
       accelerator_type: tpu
       accelerator_variant: v5litepod-16
       num_vms: 4
+      preemptible: true
+      gcp:
+        zone: europe-west4-b
+        runtime_version: v2-alpha-tpuv5-lite
+  tpu_v5e_32:
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-32
+    num_vms: 8
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      tpu_count: 4
+      gpu_count: 0
+    min_slices: 1
+    max_slices: 16
+    priority: 100
+    slice_template:
+      accelerator_type: tpu
+      accelerator_variant: v5litepod-32
+      num_vms: 8
       preemptible: true
       gcp:
         zone: europe-west4-b

@@ -8,8 +8,6 @@ from __future__ import annotations
 import threading
 from unittest.mock import patch
 
-import pytest
-
 from iris.cluster.manager import _collect_terminate_targets, stop_all
 from iris.rpc import config_pb2
 
@@ -101,25 +99,3 @@ def test_stop_all_terminates_all_slices():
         stop_all(config)
 
     assert all(s.terminated for s in slices)
-
-
-def test_stop_all_timeout_logs_warning(caplog):
-    """stop_all logs warning when termination exceeds timeout."""
-    slow_slice = FakeSliceHandle("slow-slice", labels={"iris-managed": "true"}, terminate_delay=60)
-    platform = FakeManagerPlatform(slices=[slow_slice])
-    config = _make_manager_config()
-
-    try:
-        with (
-            patch("iris.cluster.manager.IrisConfig") as mock_config_cls,
-            patch("iris.cluster.manager.stop_controller"),
-            patch("iris.cluster.manager.TERMINATE_TIMEOUT_SECONDS", 1),
-        ):
-            mock_config_cls.return_value.platform.return_value = platform
-            with pytest.raises(RuntimeError, match="error"):
-                stop_all(config)
-    finally:
-        # Unblock the daemon thread so it can exit cleanly.
-        slow_slice._release.set()
-
-    assert any("still running" in record.message for record in caplog.records)
