@@ -13,6 +13,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from iris.cluster.controller.state import (
     ControllerJob,
@@ -40,6 +41,39 @@ When many tasks start simultaneously, their setup commands (uv sync, pip install
 can overwhelm the worker. This limit provides back-pressure by deferring new
 task assignments until existing tasks complete their build phase.
 """
+
+
+@dataclass
+class RejectionReason:
+    """Lazy-formatted rejection reason for scheduler diagnostics.
+
+    The message is only formatted when converted to string, avoiding cost
+    when the reason is never displayed (e.g., during successful scheduling).
+    """
+
+    kind: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def __str__(self) -> str:
+        match self.kind:
+            case "cpu":
+                return f"Insufficient CPU (need {self.details['need']}, available {self.details['have']})"
+            case "memory":
+                return f"Insufficient memory (need {self.details['need']}, available {self.details['have']})"
+            case "device_type":
+                return f"Device type mismatch (need {self.details['need']}, worker has {self.details['have']})"
+            case "device_variant":
+                return f"Device variant mismatch (need {self.details['need']}, worker has {self.details['have']})"
+            case "gpu_count":
+                return f"Insufficient GPUs (need {self.details['need']}, available {self.details['have']})"
+            case "tpu_count":
+                return f"Insufficient TPUs (need {self.details['need']}, available {self.details['have']})"
+            case "building_limit":
+                return (
+                    f"Worker at building task limit ({self.details['current']}/{self.details['max']} concurrent builds)"
+                )
+            case _:
+                return f"Unknown rejection: {self.kind}"
 
 
 def device_compatible(job_device_type: str, worker_device_type: str) -> bool:
@@ -185,40 +219,54 @@ class WorkerCapacity:
         """
         return self.building_task_count < self.max_building_tasks
 
-    def can_fit_job(self, job: ControllerJob, *, check_building_limit: bool = True) -> bool:
+    def can_fit_job(self, job: ControllerJob, *, check_building_limit: bool = True) -> RejectionReason | None:
         """Check if this capacity can fit the job's resource requirements.
 
         Args:
             job: The job to check
             check_building_limit: If True, also check building task limit
+
+        Returns:
+            None if job fits, otherwise RejectionReason with lazy-formatted details
         """
         # Check building task back-pressure
         if check_building_limit and not self.can_accept_building_task():
-            return False
+            return RejectionReason(
+                kind="building_limit",
+                details={"current": self.building_task_count, "max": self.max_building_tasks},
+            )
 
         res = job.request.resources
 
         if res.cpu > self.available_cpu:
-            return False
+            return RejectionReason(kind="cpu", details={"need": res.cpu, "have": self.available_cpu})
 
         if res.memory_bytes > self.available_memory:
-            return False
+            return RejectionReason(kind="memory", details={"need": res.memory_bytes, "have": self.available_memory})
 
         job_device_type = get_device_type(res.device)
         if not device_compatible(job_device_type, self.device_type):
-            return False
+            return RejectionReason(
+                kind="device_type", details={"need": job_device_type, "have": self.device_type}
+            )
 
         job_variant = get_device_variant(res.device)
         if job_variant and job_variant != "auto" and job_variant != self.device_variant:
-            return False
+            return RejectionReason(
+                kind="device_variant", details={"need": job_variant, "have": self.device_variant}
+            )
 
-        if job_device_type == "gpu" and get_gpu_count(res.device) > self.available_gpus:
-            return False
+        if job_device_type == "gpu":
+            gpu_count = get_gpu_count(res.device)
+            if gpu_count > self.available_gpus:
+                return RejectionReason(kind="gpu_count", details={"need": gpu_count, "have": self.available_gpus})
 
-        if job_device_type == "tpu" and get_tpu_count(res.device) > self.available_tpus:
-            return False
+        if job_device_type == "tpu":
+            tpu_count = get_tpu_count(res.device)
+            if tpu_count > self.available_tpus:
+                return RejectionReason(kind="tpu_count", details={"need": tpu_count, "have": self.available_tpus})
 
-        return True
+        return None
 
     def deduct(self, job: ControllerJob) -> None:
         """Deduct job's resources from available capacity."""
@@ -513,6 +561,7 @@ class Scheduler:
 
         # Try to find a worker that can fit this task among matching workers
         workers_at_building_limit = 0
+        rejection_reasons: dict[str, int] = defaultdict(int)
         for worker_id in matching_worker_ids:
             if worker_id in context.scheduled_workers:
                 continue
@@ -520,10 +569,12 @@ class Scheduler:
             if not capacity.can_accept_building_task():
                 workers_at_building_limit += 1
                 continue
-            if capacity.can_fit_job(job, check_building_limit=False):
+            rejection = capacity.can_fit_job(job, check_building_limit=False)
+            if rejection is None:
                 capacity.deduct(job)
                 context.scheduled_workers.add(worker_id)
                 return TaskScheduleResult(task=task, worker=capacity.worker)
+            rejection_reasons[rejection.kind] += 1
 
         # No worker could fit the task - build detailed reason
         res = job.request.resources
@@ -533,8 +584,7 @@ class Scheduler:
             workers_with_resources = sum(
                 1
                 for wid in matching_worker_ids
-                if wid not in context.scheduled_workers
-                and context.capacities[wid].can_fit_job(job, check_building_limit=False)
+                if wid not in context.scheduled_workers and context.capacities[wid].can_fit_job(job, check_building_limit=False) is None
             )
             if workers_with_resources > 0:
                 return TaskScheduleResult(
@@ -544,6 +594,22 @@ class Scheduler:
                         f"(max {self._max_building_tasks_per_worker} concurrent builds per worker)"
                     ),
                 )
+
+        # Report most common rejection reason
+        if rejection_reasons:
+            most_common = max(rejection_reasons.items(), key=lambda x: x[1])
+            reason_kind, count = most_common
+            # Get a sample rejection reason for formatting
+            for wid in matching_worker_ids:
+                if wid not in context.scheduled_workers:
+                    rejection = context.capacities[wid].can_fit_job(job, check_building_limit=False)
+                    if rejection and rejection.kind == reason_kind:
+                        if constraints:
+                            return TaskScheduleResult(
+                                task=task,
+                                failure_reason=f"{rejection} ({count} worker(s) with constraints={[c.key for c in constraints]})",
+                            )
+                        return TaskScheduleResult(task=task, failure_reason=str(rejection))
 
         if constraints:
             return TaskScheduleResult(
@@ -682,7 +748,9 @@ class Scheduler:
         # but we still need to check resource capacity (CPU, memory, GPU). These are
         # orthogonal: a worker can match constraints but lack available resources.
         for group_key, group_worker_ids in groups.items():
-            available = [worker_id for worker_id in group_worker_ids if context.capacities[worker_id].can_fit_job(job)]
+            available = [
+                worker_id for worker_id in group_worker_ids if context.capacities[worker_id].can_fit_job(job) is None
+            ]
 
             if len(available) < num_tasks:
                 continue
@@ -786,6 +854,39 @@ class Scheduler:
                     f"Coscheduling: need {num_tasks} workers in same '{group_by}' group, largest group has {best}"
                 ),
             )
+
+        # Workers exist in theory, check capacity within each group
+        for group_key, group_worker_ids in groups.items():
+            # Count how many workers in this group have capacity
+            available = []
+            rejection_reasons: dict[str, int] = defaultdict(int)
+            for worker_id in group_worker_ids:
+                rejection = context.capacities[worker_id].can_fit_job(job)
+                if rejection is None:
+                    available.append(worker_id)
+                else:
+                    rejection_reasons[rejection.kind] += 1
+
+            if len(available) >= num_tasks:
+                # This group has capacity, but not scheduled yet - shouldn't happen
+                # Fall through to regular scheduling
+                return self.try_schedule_task(task, context)
+
+            # If this is the largest group, report why it doesn't have capacity
+            if len(group_worker_ids) == best and rejection_reasons:
+                most_common = max(rejection_reasons.items(), key=lambda x: x[1])
+                reason_kind, count = most_common
+                # Get a sample rejection reason for formatting
+                for wid in group_worker_ids:
+                    rejection = context.capacities[wid].can_fit_job(job)
+                    if rejection and rejection.kind == reason_kind:
+                        return TaskScheduleResult(
+                            task=task,
+                            failure_reason=(
+                                f"Coscheduling: need {num_tasks} workers in '{group_by}' group '{group_key}', "
+                                f"only {len(available)} of {len(group_worker_ids)} have capacity ({rejection})"
+                            ),
+                        )
 
         # Workers exist in theory, check capacity
         return self.try_schedule_task(task, context)
