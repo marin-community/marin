@@ -11,8 +11,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Maximum bundle size in bytes (100 MB)
-MAX_BUNDLE_SIZE_BYTES = 100 * 1024 * 1024
+# Maximum bundle size in bytes (25 MB)
+MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
 EXCLUDE_EXTENSIONS = {".mov", ".pyc"}
 

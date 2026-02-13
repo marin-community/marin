@@ -40,8 +40,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_TRANSACTION_LIMIT = 50
 DEFAULT_MAX_TOTAL_LINES = 10000
 
-# Maximum bundle size in bytes (100 MB) - matches client-side limit
-MAX_BUNDLE_SIZE_BYTES = 100 * 1024 * 1024
+# Maximum bundle size in bytes (25 MB) - matches client-side limit
+MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
 # Log fetching configuration
 LOG_FETCH_MAX_WORKERS = 16  # Max parallel worker connections
