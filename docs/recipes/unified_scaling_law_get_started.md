@@ -15,15 +15,15 @@ Scaling law 分析依赖「已完成训练且写出指标」的 run。在跑 uni
 | **M3** | 多模态数据 tokenization（text + TokLIP visual） | 已有起点：`experiments/unified/vlm_tokenize_captions.py`；需能产出可训练的 cache |
 | **M4** | 稳定多模态训练管道 | 训练需写 `tracker_metrics.jsonl`，且 summary 含 `throughput/total_tokens`、`throughput/total_gflops`、`parameter_count` 及选定的 eval 指标 key |
 
-**结论**：要「get started」做 unified 的 scaling law 分析，**最少**需要：  
-- 一条可跑通的多模态训练 pipeline（Levanter 或等价），且  
+**结论**：要「get started」做 unified 的 scaling law 分析，**最少**需要：
+- 一条可跑通的多模态训练 pipeline（Levanter 或等价），且
 - 该 pipeline 在结束时写入与现有 LLM isoflop 兼容的 metrics（见下节）。
 
 ---
 
 ## 2. 训练 Run 需要写出哪些指标
 
-现有 scaling 分析从 **`tracker_metrics.jsonl`** 里读每条记录的 `config` 和 `summary`。  
+现有 scaling 分析从 **`tracker_metrics.jsonl`** 里读每条记录的 `config` 和 `summary`。
 `experiments/isoflop_sweep.transform_levanter_metrics` 依赖的 **summary 字段**包括：
 
 | 字段 | 含义 | 用于 |
@@ -47,8 +47,8 @@ Unified 场景下你可以：
 ### Step 1：确认训练输出与 run 命名
 
 - 每个 unified 训练 run 的**输出目录**里要有 **`tracker_metrics.jsonl`**（可由 WandB backfill 生成，见 `eval_metrics_reader.read_eval_records`）。
-- 若希望和现有 isoflop 工具链一致，run 的**目录名**建议带出「预算 + 模型规模 + batch + 实验名」，例如：  
-  `unified-{budget}-N{params}-B{batch}-{experiment_name}`  
+- 若希望和现有 isoflop 工具链一致，run 的**目录名**建议带出「预算 + 模型规模 + batch + 实验名」，例如：
+  `unified-{budget}-N{params}-B{batch}-{experiment_name}`
   这样可以用类似 `parse_isoflop_run_name` 的逻辑从路径解析出 `label`，用于分组拟合（见 Step 3）。
 
 ### Step 2：准备训练 run 路径列表
@@ -154,9 +154,9 @@ candidate = predict_optimal_config(
 
 ## 6. 小结：最小可行路径
 
-1. **确保**：有一条 unified 训练 pipeline，且写出 `tracker_metrics.jsonl`，summary 含 `throughput/total_tokens`、`throughput/total_gflops`、`parameter_count` 和至少一个 eval 指标 key。  
-2. **实现**：Unified 的 run 名解析 + `transform_unified_metrics`（或复用 `transform_levanter_metrics` 并统一 key）。  
-3. **运行**：`read_eval_records` → transform → `fit_scaling_laws` → 写 `isoflop_analysis_result.json`（可封装成一步 `run_unified_isoflop_analysis_step`）。  
+1. **确保**：有一条 unified 训练 pipeline，且写出 `tracker_metrics.jsonl`，summary 含 `throughput/total_tokens`、`throughput/total_gflops`、`parameter_count` 和至少一个 eval 指标 key。
+2. **实现**：Unified 的 run 名解析 + `transform_unified_metrics`（或复用 `transform_levanter_metrics` 并统一 key）。
+3. **运行**：`read_eval_records` → transform → `fit_scaling_laws` → 写 `isoflop_analysis_result.json`（可封装成一步 `run_unified_isoflop_analysis_step`）。
 4. **扩展**：需要「预测最优配置并启动训练」时，实现 Unified 的 `ScalingRecipe`（及可选 `ModelConfiguration`），再用 `predict_optimal_config` + 现有 TPU/训练入口。
 
 参考实现：**`experiments/isoflop_sweep.run_isoflop_analysis_step`** 和 **`experiments/exp2166_scaling_ladder_analysis.py`**。

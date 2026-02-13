@@ -231,7 +231,10 @@ def process_parquet_rows(
 
     logger.info(
         "Processing %d valid rows (%d skipped, %d mismatched image/token count, generation_ratio=%.2f)",
-        n_valid, skipped, mismatched, generation_ratio,
+        n_valid,
+        skipped,
+        mismatched,
+        generation_ratio,
     )
 
     rng = random.Random(42)
