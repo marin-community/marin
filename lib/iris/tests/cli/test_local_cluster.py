@@ -7,7 +7,7 @@ Uses ``iris cluster start --local`` through Click's test runner, then submits
 a job through the IrisClient to verify the full stack works.
 """
 
-import re
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -93,33 +93,38 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
 
     # Capture the LocalController instance so we can get the address and stop it
     captured_controller: list[LocalController] = []
+    controller_ready = threading.Event()
     original_start = LocalController.start
 
     def patched_start(self):
         captured_controller.append(self)
-        return original_start(self)
+        result = original_start(self)
+        controller_ready.set()
+        return result
 
-    with patch.object(LocalController, "start", patched_start):
-        result = runner.invoke(
-            iris,
-            ["--config", str(cluster_config_file), "cluster", "start", "--local"],
-        )
+    # Run CLI in a background thread because `cluster start --local` blocks
+    # until the controller is stopped.
+    invoke_result: list = []
 
-    assert result.exit_code == 0, f"CLI failed: {result.output}"
-    assert "Controller started at" in result.output
+    def run_cli():
+        with patch.object(LocalController, "start", patched_start):
+            invoke_result.append(
+                runner.invoke(
+                    iris,
+                    ["--config", str(cluster_config_file), "cluster", "start", "--local"],
+                )
+            )
+
+    cli_thread = threading.Thread(target=run_cli, daemon=True)
+    cli_thread.start()
+
+    assert controller_ready.wait(timeout=10), "Controller didn't start in time"
     assert len(captured_controller) == 1
 
     controller = captured_controller[0]
     try:
-        # Extract the address from the CLI output
-        address = None
-        for line in result.output.splitlines():
-            m = re.search(r"Controller started at (http://\S+)", line)
-            if m:
-                address = m.group(1)
-                break
-        if not address:
-            pytest.fail(f"Could not find controller address in CLI output:\n{result.output}")
+        address = controller.discover()
+        assert address is not None
 
         _wait_for_workers(address)
 
@@ -139,3 +144,9 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     finally:
         controller.stop()
+        cli_thread.join(timeout=5)
+
+    assert invoke_result, "CLI did not return"
+    result = invoke_result[0]
+    assert result.exit_code == 0, f"CLI failed: {result.output}"
+    assert "Controller started at" in result.output

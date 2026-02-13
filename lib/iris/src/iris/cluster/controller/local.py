@@ -14,6 +14,7 @@ Provides:
 from __future__ import annotations
 
 import tempfile
+import threading
 from pathlib import Path
 from typing import Protocol
 
@@ -126,8 +127,10 @@ class LocalController:
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
+        self._stopped = threading.Event()
 
     def start(self) -> str:
+        self._stopped = threading.Event()
         # Create temp dir for controller's bundle storage
         self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_")
         bundle_dir = Path(self._temp_dir.name) / "bundles"
@@ -167,6 +170,7 @@ class LocalController:
         return self._controller.url
 
     def stop(self) -> None:
+        self._stopped.set()
         if self._controller:
             self._controller.stop()
             self._controller = None
@@ -178,6 +182,10 @@ class LocalController:
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None
+
+    def wait(self) -> None:
+        """Block until stop() is called."""
+        self._stopped.wait()
 
     def restart(self) -> str:
         self.stop()
