@@ -167,6 +167,8 @@ BASELINES: list[tuple[list[float], list[float]]] = [
     ([0.9725, 0.0275], [0.6874, 0.3126]),
     # RegMix-optimized, leaves=63
     ([0.9347, 0.0653], [0.6536, 0.3464]),
+    # Power Law optimized
+    ([1, 0], [0.814, 0.186])
 ]
 
 
