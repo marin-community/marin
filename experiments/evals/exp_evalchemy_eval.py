@@ -8,6 +8,7 @@ Evalchemy (https://github.com/mlfoundations/evalchemy) provides specialized
 reasoning tasks including AIME24/25, MATH500, HumanEval+, MBPP+, and more.
 """
 import argparse
+import sys
 
 from experiments.evals.evals import run_evalchemy_experiment
 from experiments.evals.evalchemy_task_configs import (
@@ -101,6 +102,7 @@ if __name__ == "__main__":
     parser.add_argument("--experiment", type=str, default=None, help="Base eval run name for output paths and wandb")
     parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint path (GCS path or HF model name)")
     args, remaining = parser.parse_known_args()
+    sys.argv = [sys.argv[0]] + remaining
 
     if args.checkpoint:
         checkpoints = {args.experiment: [args.checkpoint]}
