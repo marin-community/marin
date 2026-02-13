@@ -1538,8 +1538,8 @@ class ControllerState:
         """Kill all running siblings when a coscheduled task fails terminally.
 
         For multi-host TPU jobs, if one host fails the other hosts cannot continue
-        because collective operations will timeout. We immediately mark all running
-        siblings as WORKER_FAILED (terminal, with no retries) so they can be cleaned up.
+        because collective operations will timeout. We mark siblings terminal and
+        release their worker resources in one pass.
         """
         for sibling_id in self._tasks_by_job.get(job.job_id, []):
             if sibling_id == trigger_task.task_id:
@@ -1551,9 +1551,8 @@ class ControllerState:
 
             sibling_old = sibling.state
 
-            # Set preemption count so that after handle_attempt_result increments it,
-            # the sibling becomes terminal (is_finished() returns True). This prevents
-            # _mark_remaining_tasks_killed from overwriting the state (it skips finished tasks).
+            # Exhaust preemption budget so that after handle_attempt_result
+            # increments the counter, the sibling is terminal.
             sibling.preemption_count = sibling.max_retries_preemption
 
             sibling.handle_attempt_result(
@@ -1561,6 +1560,7 @@ class ControllerState:
                 error=f"Coscheduled sibling {trigger_task.task_id} failed",
             )
             job.on_task_transition(sibling_old, sibling.state)
+            self._cleanup_task_resources(sibling, job, txn)
             txn.tasks_to_kill.add(sibling_id)
             txn.log(
                 "coscheduled_sibling_killed",
