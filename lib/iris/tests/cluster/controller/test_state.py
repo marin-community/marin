@@ -278,6 +278,46 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
         assert task.state == cluster_pb2.TASK_STATE_KILLED
 
 
+def test_cancelled_job_tasks_excluded_from_demand(job_request, worker_metadata):
+    """Regression test for issue #2777: Killed tasks with no attempts should not appear in demand entries."""
+    state = ControllerState()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test-job")
+    req.replicas = 3
+    tasks = submit_job(state, "j1", req)
+    job = state.get_job(JobName.root("j1"))
+
+    # Dispatch 1 task, leave 2 pending (these will have no attempts when killed)
+    dispatch_task(state, tasks[0], worker_id)
+
+    # Cancel job - pending tasks will be killed with no attempts
+    state.handle_event(
+        JobCancelledEvent(
+            job_id=JobName.root("j1"),
+            reason="User cancelled",
+        )
+    )
+
+    # Verify all tasks are killed
+    assert job.state == cluster_pb2.JOB_STATE_KILLED
+    for task in tasks:
+        assert task.state == cluster_pb2.TASK_STATE_KILLED
+
+    # Verify killed tasks are not schedulable (bug fix)
+    for task in tasks:
+        assert not task.can_be_scheduled(), f"Killed task {task.task_id} should not be schedulable"
+
+    # Verify no pending tasks appear in queue
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 0, "Killed tasks should not appear in pending queue"
+
+    # Verify no demand entries generated for killed job
+    demand_entries = compute_demand_entries(state)
+    assert len(demand_entries) == 0, "Killed job should not generate demand entries"
+
+
 # =============================================================================
 # Worker Failure Cascade Tests
 # =============================================================================
