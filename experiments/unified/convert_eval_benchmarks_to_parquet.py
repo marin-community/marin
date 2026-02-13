@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 MC_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
 # Default rows per output shard (eval datasets are smaller than training)
-DEFAULT_ROWS_PER_SHARD = 500
+DEFAULT_ROWS_PER_SHARD = 5000
 
 # Batch size for processing large datasets (VQAv2)
 BATCH_SIZE = 10_000
@@ -69,6 +69,8 @@ def extract_image_bytes(image) -> bytes | None:
     if image is None:
         return None
     if hasattr(image, "tobytes"):
+        if image.mode not in ("RGB", "RGBA", "L", "LA", "P"):
+            image = image.convert("RGB")
         buf = io.BytesIO()
         image.save(buf, format="PNG")
         result = buf.getvalue()
