@@ -1,9 +1,13 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
+
+# Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 
 
 @dataclass(frozen=True)
@@ -16,6 +20,9 @@ class EvalTaskConfig:
 
     task_alias: str | None = None
     """Alias for the task name."""
+
+    task_kwargs: dict | None = None
+    """Additional keyword arguments specifically for this task."""
 
 
 @dataclass(frozen=True)
@@ -91,3 +98,7 @@ class EvaluationConfig:
     """
     Tags to add to the wandb run.
     """
+
+    base_eval_run_name: str | None = None
+    """Custom base name for wandb runs. If set, wandb runs will be named
+    evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
