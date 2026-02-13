@@ -6,13 +6,6 @@ Example experiment for running Evalchemy reasoning benchmarks.
 
 Evalchemy (https://github.com/mlfoundations/evalchemy) provides specialized
 reasoning tasks including AIME24/25, MATH500, HumanEval+, MBPP+, and more.
-
-Usage:
-    # Single run (1 seed):
-    python experiments/evals/exp_evalchemy_eval.py
-
-    # Multiple seeds with aggregation:
-    # Set SEEDS to [42, 43, 44, ...] for multiple iterations
 """
 
 from experiments.evals.evals import run_evalchemy_experiment
