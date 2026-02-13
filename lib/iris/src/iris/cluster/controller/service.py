@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_TRANSACTION_LIMIT = 50
 DEFAULT_MAX_TOTAL_LINES = 10000
 
+# Maximum bundle size in bytes (100 MB) - matches client-side limit
+MAX_BUNDLE_SIZE_BYTES = 100 * 1024 * 1024
+
 # Log fetching configuration
 LOG_FETCH_MAX_WORKERS = 16  # Max parallel worker connections
 LOG_FETCH_DEFAULT_TIMEOUT_MS = 10_000  # 10s default if no deadline from client
@@ -202,6 +205,16 @@ class ControllerServiceImpl:
             # Handle bundle_blob: upload to bundle store, then replace blob
             # with the resulting GCS path (preserving all other fields).
             if request.bundle_blob:
+                # Validate bundle size
+                bundle_size = len(request.bundle_blob)
+                if bundle_size > MAX_BUNDLE_SIZE_BYTES:
+                    bundle_size_mb = bundle_size / (1024 * 1024)
+                    max_size_mb = MAX_BUNDLE_SIZE_BYTES / (1024 * 1024)
+                    raise ConnectError(
+                        Code.INVALID_ARGUMENT,
+                        f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
+                    )
+
                 bundle_path = self._bundle_store.write_bundle(job_id.to_wire(), request.bundle_blob)
 
                 new_request = cluster_pb2.Controller.LaunchJobRequest()

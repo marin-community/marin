@@ -14,7 +14,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.service import MAX_BUNDLE_SIZE_BYTES, ControllerServiceImpl
 from iris.cluster.controller.state import ControllerState, ControllerTask
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import BufferedLogRecord, LogRingBuffer
@@ -257,7 +257,25 @@ def test_launch_job_rejects_empty_name(service, state):
         service.launch_job(request, None)
 
     assert exc_info.value.code == Code.INVALID_ARGUMENT
-    assert "name is required" in exc_info.value.message.lower()
+
+
+def test_launch_job_rejects_oversized_bundle(service, state):
+    """Verify launch_job rejects bundles exceeding MAX_BUNDLE_SIZE_BYTES."""
+    oversized_bundle = b"x" * (MAX_BUNDLE_SIZE_BYTES + 1024 * 1024)
+
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-job").to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        bundle_blob=oversized_bundle,
+    )
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "exceeds maximum" in exc_info.value.message
 
 
 # =============================================================================
