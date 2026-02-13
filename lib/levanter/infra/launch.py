@@ -41,7 +41,7 @@ def main():
     cli.add_arg(parser, config, ["--node_count"], default=1, type=int)
     cli.add_arg(parser, config, ["--version"], default=None)
     cli.add_arg(parser, config, ["--zone"], default=None, type=str, required=False)
-    cli.add_arg(parser, config, ["--retries"], default=10, type=int)
+    cli.add_arg(parser, config, ["--retries"], default=0, type=int)
     cli.add_arg(parser, config, ["--run_id"], default=cli.default_run_id(), type=str)
     cli.add_arg(parser, config, ["--docker_registry"], default="gcp", choices=["gcp", "ghcr"])
     cli.add_arg(parser, config, ["--github_user"], type=str)
