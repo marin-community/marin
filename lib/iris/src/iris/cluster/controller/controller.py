@@ -78,6 +78,8 @@ def compute_demand_entries(state: ControllerState) -> list:
         job = state.get_job(job_id)
         if not job:
             continue
+        if job.is_finished():
+            continue
 
         device = job.request.resources.device
         device_type = get_device_type_enum(device)

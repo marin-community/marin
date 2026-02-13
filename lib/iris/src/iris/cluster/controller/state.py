@@ -457,9 +457,11 @@ class ControllerTask:
         """Check if task is ready to be scheduled.
 
         A task can be scheduled if:
-        - It has no attempts yet (fresh task), or
+        - It has no attempts yet (fresh task) AND is not in a terminal state, or
         - Its current attempt is terminal AND it should retry
         """
+        if self.state in TERMINAL_TASK_STATES:
+            return False
         if not self.attempts:
             return True
         return self.attempts[-1].is_terminal() and not self.is_finished()
