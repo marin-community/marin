@@ -273,13 +273,37 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
         (*batch axes, sequence_length).
         """
+        base_loss, aux_loss = self.compute_next_token_loss_terms(
+            example,
+            key=key,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+        )
+
+        return base_loss + aux_loss
+
+    def compute_next_token_loss_terms(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> tuple[jnp.ndarray | NamedArray, NamedArray | float]:
+        """Compute (base CE loss, aux loss) for next-token prediction."""
         activations = self.activations(example.tokens, example.attn_mask, key=key)
 
-        aux_loss = 0
+        aux_loss: NamedArray | float = 0
         if isinstance(activations, tuple):
             activations, aux_loss = activations
 
-        loss = maybe_fused_next_token_loss(
+        base_loss = maybe_fused_next_token_loss(
             self.Pos,
             self.Embed,
             self.Vocab,
@@ -294,4 +318,4 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             logit_soft_cap=logit_soft_cap,
         )
 
-        return loss + aux_loss
+        return base_loss, aux_loss

@@ -73,7 +73,9 @@ def main(config: LoraLmConfig):
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_fn(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key)
+        base_loss, aux_loss = model.compute_next_token_loss_terms(example, key=key)
+        total_loss = base_loss + aux_loss
+        return total_loss, {"base_loss": base_loss, "aux_loss": aux_loss, "total_loss": total_loss}
 
     with Trainer(config.trainer, optimizer, loss_fn=loss_fn) as trainer:  # type: ignore[arg-type]
         # how we shard parameters across devices
