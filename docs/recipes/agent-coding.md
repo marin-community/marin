@@ -147,7 +147,7 @@ These existing design docs demonstrate the spec format at different scales:
   examples. Multi-phase implementation plan.
 - [`docs/recipes/design_doc.md`](design_doc.md) — The design doc template
   itself, with an embedded example (step execution timing).
-- [`.agents/projects/grugformer.md`](../../.agents/projects/grugformer.md) —
+- `.agents/projects/grugformer.md` —
   Project-level working agreement defining principles and conventions for an
   ongoing body of work.
 
