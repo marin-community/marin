@@ -37,23 +37,10 @@ from fray.cluster import ResourceConfig
 CHECKPOINTS: dict[str, list[str]] = {
     "exp2262pt2-qwen2.5-7b-instruct-finetuned-ot4-30k-math-qwq-32b-32768tokens": [
         "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-234/",
-        "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-468/",
-        "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-702/",
-        "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-936/",
-        "gs://marin-us-central1/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-1170/",
-        "gs://marin-us-central1/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-1404/",
-        "gs://marin-us-central1/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-1638/",
-        "gs://marin-us-central1/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-1872/",
     ],
-    # "exp2262pt2a-qwen2.5-7b-instruct-finetuned-ot4-30k-math-qwen3-32b-32768tokens": [
-    #     "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-234/",
-    #     "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-468/",
-    #     "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-702/",
-    #     "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-936/",
-    #     "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1170/",
-    #     "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1404/",
-    #     "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1638/",
-    #     "gs://marin-us-central1/checkpoints/exp2262pt2a_sft_qwen2pt5_ot4_30k_math_qwen3_32b_32768tokens-56d459/hf/step-1872/",
+    # Here is another example with a publicly released checkpoint on HF:
+    # None: [
+    #     "open-thoughts/OpenThinker3-7B",
     # ],
 }
 
@@ -112,7 +99,7 @@ ENGINE_KWARGS = {
 # call. Set to None to run all eval steps in a single executor_main call.
 # WARNING: Setting this value higher will cause many jobs to be launched in parallel.
 #          Please be mindful of other users sharing the cluster.
-MAX_PARALLEL_JOBS = 30
+MAX_PARALLEL_JOBS = 3
 
 # =============================================================================
 # Main Execution
