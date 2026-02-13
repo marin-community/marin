@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pandas", "numpy", "scipy", "scikit-learn", "matplotlib"]
@@ -56,11 +70,14 @@ def get_features(df):
         "weights": np.column_stack([p0_sc, p1_sc]),
         "mixed": np.column_stack([p0_sc, p1_sc, np.log(sc_ep1 + EPS)]),
         "mixed_both": np.column_stack([p0_sc, p1_sc, np.log(sc_ep0 + EPS), np.log(sc_ep1 + EPS)]),
-        "log_all": np.column_stack([
-            np.log(sc_ep0 + EPS), np.log(sc_ep1 + EPS),
-            np.log(df["phase_0_nemotron_epochs"].values + EPS),
-            np.log(df["phase_1_nemotron_epochs"].values + EPS),
-        ]),
+        "log_all": np.column_stack(
+            [
+                np.log(sc_ep0 + EPS),
+                np.log(sc_ep1 + EPS),
+                np.log(df["phase_0_nemotron_epochs"].values + EPS),
+                np.log(df["phase_1_nemotron_epochs"].values + EPS),
+            ]
+        ),
     }
 
 
@@ -81,9 +98,9 @@ def fit_powerlaw(X_tr, y_tr):
         result = np.full(len(X), params[-1])
         for i in range(n_terms):
             b = i * (n_feat + 2)
-            raw = params[b] + X @ params[b+1:b+1+n_feat]
+            raw = params[b] + X @ params[b + 1 : b + 1 + n_feat]
             inner = _softplus(raw) + 0.1
-            result += inner ** (-params[b+1+n_feat])
+            result += inner ** (-params[b + 1 + n_feat])
         return result
 
     def loss(params):
@@ -100,8 +117,9 @@ def fit_powerlaw(X_tr, y_tr):
             bounds += [(None, None)] + [(None, None)] * n_feat + [(0.01, 3.0)]
         bounds.append((None, None))
         try:
-            res = minimize(loss, np.array(p0), method="L-BFGS-B", bounds=bounds,
-                           options={"maxiter": 2000, "ftol": 1e-12})
+            res = minimize(
+                loss, np.array(p0), method="L-BFGS-B", bounds=bounds, options={"maxiter": 2000, "ftol": 1e-12}
+            )
             if res.fun < best_loss:
                 best_loss, best_params = res.fun, res.x
         except Exception:
@@ -118,14 +136,16 @@ def fit_linear(X_tr, y_tr):
 
 def fit_quadratic(X_tr, y_tr):
     n_feat = X_tr.shape[1]
+
     def _build(X):
         parts = [np.ones((len(X), 1)), X]
         for i in range(n_feat):
-            parts.append(X[:, i:i+1] ** 2)
+            parts.append(X[:, i : i + 1] ** 2)
         for i in range(n_feat):
-            for j in range(i+1, n_feat):
+            for j in range(i + 1, n_feat):
                 parts.append((X[:, i] * X[:, j]).reshape(-1, 1))
         return np.hstack(parts)
+
     X_aug = _build(X_tr)
     coef, _, _, _ = np.linalg.lstsq(X_aug, y_tr, rcond=None)
     return lambda X: _build(X) @ coef
@@ -223,8 +243,10 @@ for feat_name, X_feat in feature_sets.items():
         metrics = cv_metrics(fit_fn, X_feat, y)
         all_results[(feat_name, model_name)] = metrics
 
-        print(f"{feat_name:<25} {model_name:<14} {metrics['R²']:>7.4f} {metrics['R²_std']:>5.3f}  "
-              f"{metrics['RMSE']:>7.4f} {metrics['Spearman']:>9.4f} {metrics['RMSE_bottom']:>9.4f}")
+        print(
+            f"{feat_name:<25} {model_name:<14} {metrics['R²']:>7.4f} {metrics['R²_std']:>5.3f}  "
+            f"{metrics['RMSE']:>7.4f} {metrics['Spearman']:>9.4f} {metrics['RMSE_bottom']:>9.4f}"
+        )
 
 
 # -------------------------------------------------------------------------
@@ -252,7 +274,7 @@ X_mixed_both = feature_sets["mixed_both"]
 pred_pl_w = fit_powerlaw(X_weights, y)
 pred_quad_w = fit_quadratic(X_weights, y)
 pred_gp_w, _, _ = fit_gp_matern(X_weights, y)
-pred_quad_mixed, = [fit_quadratic(X_mixed, y)]
+(pred_quad_mixed,) = [fit_quadratic(X_mixed, y)]
 pred_quad_mixed_both = fit_quadratic(X_mixed_both, y)
 pred_gp_mixed, _, _ = fit_gp_matern(X_mixed, y)
 pred_gp_mixed_both, _, _ = fit_gp_matern(X_mixed_both, y)
@@ -265,15 +287,21 @@ y_actual = df_slice[TARGET].values
 
 p1_grid = np.linspace(0.001, 0.999, 300)  # avoid exact 0/1 for log
 X_w_grid = np.column_stack([np.zeros(300), p1_grid])
-X_mixed_grid = np.column_stack([
-    np.zeros(300), p1_grid,
-    np.log(SC_EPOCH_MULT * p1_grid + EPS),
-])
-X_mixed_both_grid = np.column_stack([
-    np.zeros(300), p1_grid,
-    np.full(300, np.log(EPS)),
-    np.log(SC_EPOCH_MULT * p1_grid + EPS),
-])
+X_mixed_grid = np.column_stack(
+    [
+        np.zeros(300),
+        p1_grid,
+        np.log(SC_EPOCH_MULT * p1_grid + EPS),
+    ]
+)
+X_mixed_both_grid = np.column_stack(
+    [
+        np.zeros(300),
+        p1_grid,
+        np.full(300, np.log(EPS)),
+        np.log(SC_EPOCH_MULT * p1_grid + EPS),
+    ]
+)
 
 # Models to plot
 plot_models = [
@@ -332,15 +360,21 @@ print(f"  {'Actual best':25s}: p1_sc={x_actual[np.argmin(y_actual)]:.4f}, bpb={y
 print("\nFull 2D optimal (1M samples):")
 rng = np.random.default_rng(123)
 X_rand_w = np.column_stack([rng.uniform(0, 1, 500_000), rng.uniform(0, 1, 500_000)])
-X_rand_mixed = np.column_stack([
-    X_rand_w[:, 0], X_rand_w[:, 1],
-    np.log(SC_EPOCH_MULT * X_rand_w[:, 1] + EPS),
-])
-X_rand_mixed_both = np.column_stack([
-    X_rand_w[:, 0], X_rand_w[:, 1],
-    np.log(SC_EPOCH_MULT * X_rand_w[:, 0] + EPS),
-    np.log(SC_EPOCH_MULT * X_rand_w[:, 1] + EPS),
-])
+X_rand_mixed = np.column_stack(
+    [
+        X_rand_w[:, 0],
+        X_rand_w[:, 1],
+        np.log(SC_EPOCH_MULT * X_rand_w[:, 1] + EPS),
+    ]
+)
+X_rand_mixed_both = np.column_stack(
+    [
+        X_rand_w[:, 0],
+        X_rand_w[:, 1],
+        np.log(SC_EPOCH_MULT * X_rand_w[:, 0] + EPS),
+        np.log(SC_EPOCH_MULT * X_rand_w[:, 1] + EPS),
+    ]
+)
 k = 128
 
 for name, pred_fn, X_rand in [

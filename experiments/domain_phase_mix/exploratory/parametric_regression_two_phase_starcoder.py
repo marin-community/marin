@@ -95,22 +95,18 @@ class ParametricRegressor(ABC):
     """Base class for parametric regression models."""
 
     @abstractmethod
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "ParametricRegressor":
-        ...
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "ParametricRegressor": ...
 
     @abstractmethod
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        ...
+    def predict(self, X: np.ndarray) -> np.ndarray: ...
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
     @property
     @abstractmethod
-    def n_params(self) -> int:
-        ...
+    def n_params(self) -> int: ...
 
 
 # ---------------------------------------------------------------------------
@@ -199,13 +195,16 @@ class PowerLawRegressor(ParametricRegressor):
                 bounds.append((None, None))  # alpha
                 bounds.append((None, None))  # beta_0
                 bounds.append((None, None))  # beta_1
-                bounds.append((0.01, 3.0))   # gamma
+                bounds.append((0.01, 3.0))  # gamma
             bounds.append((None, None))  # c
 
             try:
                 res = minimize(
-                    self._loss, p0, args=(X, y),
-                    method="L-BFGS-B", bounds=bounds,
+                    self._loss,
+                    p0,
+                    args=(X, y),
+                    method="L-BFGS-B",
+                    bounds=bounds,
                     options={"maxiter": 2000, "ftol": 1e-12},
                 )
                 if res.fun < best_loss:
@@ -318,7 +317,9 @@ class LogLinearRegressor(ParametricRegressor):
 
                 try:
                     res = minimize(
-                        self._loss, p0, args=(X, y, delta),
+                        self._loss,
+                        p0,
+                        args=(X, y, delta),
                         method="L-BFGS-B",
                         options={"maxiter": 2000, "ftol": 1e-12},
                     )
@@ -366,9 +367,7 @@ class LogNonLinearRegressor(ParametricRegressor):
         B = params[3]
         interaction = X[:, 0] * X[:, 1]
         return (
-            np.exp(np.clip(log_c, -20, 20))
-            + np.exp(np.clip(X @ t, -20, 20))
-            + np.exp(np.clip(B * interaction, -20, 20))
+            np.exp(np.clip(log_c, -20, 20)) + np.exp(np.clip(X @ t, -20, 20)) + np.exp(np.clip(B * interaction, -20, 20))
         )
 
     @staticmethod
@@ -400,7 +399,9 @@ class LogNonLinearRegressor(ParametricRegressor):
 
                 try:
                     res = minimize(
-                        self._loss, p0, args=(X, y, delta),
+                        self._loss,
+                        p0,
+                        args=(X, y, delta),
                         method="L-BFGS-B",
                         options={"maxiter": 2000, "ftol": 1e-12},
                     )
@@ -432,7 +433,11 @@ def cross_validate(
     """K-fold CV. Returns dict with models and per-fold metrics."""
     kfold = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
     results: dict[str, list] = {
-        "models": [], "spearman": [], "pearson": [], "mse": [], "mae": [],
+        "models": [],
+        "spearman": [],
+        "pearson": [],
+        "mse": [],
+        "mae": [],
     }
 
     for train_idx, val_idx in kfold.split(X):
@@ -499,7 +504,9 @@ def plot_heatmap(
 
     fig.add_trace(
         go.Heatmap(
-            z=pred, x=g0, y=g1,
+            z=pred,
+            x=g0,
+            y=g1,
             colorscale=colorscale,
             colorbar=dict(title=dict(text=target_col.replace("/", "/<br>"), font=dict(size=10))),
             hovertemplate="p0_sc=%{x:.3f}<br>p1_sc=%{y:.3f}<br>pred=%{z:.4f}<extra></extra>",
@@ -508,23 +515,32 @@ def plot_heatmap(
 
     fig.add_trace(
         go.Scatter(
-            x=p0, y=p1, mode="markers",
+            x=p0,
+            y=p1,
+            mode="markers",
             marker=dict(
-                size=8, color=vals, colorscale=colorscale,
-                cmin=float(pred.min()), cmax=float(pred.max()),
-                line=dict(width=1.5, color="white"), showscale=False,
+                size=8,
+                color=vals,
+                colorscale=colorscale,
+                cmin=float(pred.min()),
+                cmax=float(pred.max()),
+                line=dict(width=1.5, color="white"),
+                showscale=False,
             ),
             text=[
                 f"run_id={int(rid)}<br>p0_sc={x:.3f}<br>p1_sc={y:.3f}<br>actual={v:.4f}"
                 for rid, x, y, v in zip(run_ids, p0, p1, vals)
             ],
-            hoverinfo="text", name="Training runs",
+            hoverinfo="text",
+            name="Training runs",
         )
     )
 
     fig.add_trace(
         go.Scatter(
-            x=[opt_p0], y=[opt_p1], mode="markers",
+            x=[opt_p0],
+            y=[opt_p1],
+            mode="markers",
             marker=dict(size=14, symbol="star", color="red", line=dict(width=1, color="darkred")),
             name=f"Predicted opt: ({opt_p0:.3f}, {opt_p1:.3f}) = {opt_val:.4f}",
             hoverinfo="name",
@@ -533,7 +549,9 @@ def plot_heatmap(
 
     fig.add_trace(
         go.Scatter(
-            x=[p0[best_idx]], y=[p1[best_idx]], mode="markers",
+            x=[p0[best_idx]],
+            y=[p1[best_idx]],
+            mode="markers",
             marker=dict(size=10, color="rgba(0,0,0,0)", line=dict(width=2.5, color="red")),
             name=f"Best observed: {vals[best_idx]:.4f}",
             hoverinfo="name",
@@ -545,10 +563,16 @@ def plot_heatmap(
         xaxis=dict(title="Phase 0 StarCoder weight", range=[0, 1], constrain="domain"),
         yaxis=dict(title="Phase 1 StarCoder weight", range=[0, 1], scaleanchor="x", scaleratio=1),
         legend=dict(
-            yanchor="top", y=0.99, xanchor="right", x=0.99,
-            font=dict(size=10), bgcolor="rgba(255,255,255,0.8)",
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            font=dict(size=10),
+            bgcolor="rgba(255,255,255,0.8)",
         ),
-        width=800, height=700, margin=dict(l=60, r=20, t=50, b=60),
+        width=800,
+        height=700,
+        margin=dict(l=60, r=20, t=50, b=60),
     )
 
     safe_name = target_col.replace("/", "_").replace(" ", "_")
@@ -573,9 +597,7 @@ def main():
     print(f"Total runs in CSV: {len(df)}")
     print(f"Completed runs: {len(df_complete)}")
 
-    available_targets = [
-        c for c in TARGET_COLS if c in df_complete.columns and df_complete[c].notna().sum() > 0
-    ]
+    available_targets = [c for c in TARGET_COLS if c in df_complete.columns and df_complete[c].notna().sum() > 0]
     missing = set(TARGET_COLS) - set(available_targets)
     if missing:
         print(f"Missing metrics (skipped): {missing}")
@@ -642,8 +664,10 @@ def main():
             print(f"{target_col:<55} {sp_str:<18} {pe_str:<18} {rmse_str:<12} {r2_str:<12}")
 
             summary[(tag, target_col)] = {
-                "spearman": sp_mean, "pearson": pe_mean,
-                "rmse": rmse_mean, "r2": r2,
+                "spearman": sp_mean,
+                "pearson": pe_mean,
+                "rmse": rmse_mean,
+                "r2": r2,
             }
 
         # Heatmaps for key metrics (fit on full data)

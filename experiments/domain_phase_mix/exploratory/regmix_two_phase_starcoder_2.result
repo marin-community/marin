@@ -18,22 +18,22 @@ Saving models to /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_ph
 CROSS-VALIDATION RESULTS
 ======================================================================
 
-Metric                                                  Spearman r           Pearson r           
+Metric                                                  Spearman r           Pearson r
 -----------------------------------------------------------------------------------------------
-eval/paloma/dolma_100_programing_languages/bpb          0.9437 +/- 0.0329    0.9672 +/- 0.0326   
-eval/uncheatable_eval/github_python/bpb                 0.9068 +/- 0.0470    0.9748 +/- 0.0250   
-eval/uncheatable_eval/github_cpp/bpb                    0.8903 +/- 0.0977    0.9726 +/- 0.0267   
-eval/loss                                               0.9741 +/- 0.0171    0.9117 +/- 0.1076   
-eval/paloma/c4_en/bpb                                   0.9530 +/- 0.0308    0.8757 +/- 0.0987   
-eval/paloma/dolma-v1_5/bpb                              0.9797 +/- 0.0093    0.9072 +/- 0.1092   
-lm_eval/code2text_python_0shot/smoothed_bleu_4          N/A (constant)       N/A (constant)      
-lm_eval/code2text_java_0shot/smoothed_bleu_4            N/A (constant)       N/A (constant)      
-lm_eval/code2text_go_0shot/smoothed_bleu_4              -0.0552 +/- 0.1764   -0.1613 +/- 0.1563  
-lm_eval/arc_challenge/acc_norm                          0.1535 +/- 0.2901    0.1442 +/- 0.3015   
-lm_eval/hellaswag_0shot/acc_norm                        0.8200 +/- 0.0330    0.8546 +/- 0.0697   
-lm_eval/piqa/acc                                        0.4116 +/- 0.3373    0.6277 +/- 0.3042   
-lm_eval/boolq/acc                                       0.2104 +/- 0.2740    0.1450 +/- 0.3008   
-lm_eval/averages/macro_avg_acc                          0.4931 +/- 0.0783    0.6016 +/- 0.1500   
+eval/paloma/dolma_100_programing_languages/bpb          0.9437 +/- 0.0329    0.9672 +/- 0.0326
+eval/uncheatable_eval/github_python/bpb                 0.9068 +/- 0.0470    0.9748 +/- 0.0250
+eval/uncheatable_eval/github_cpp/bpb                    0.8903 +/- 0.0977    0.9726 +/- 0.0267
+eval/loss                                               0.9741 +/- 0.0171    0.9117 +/- 0.1076
+eval/paloma/c4_en/bpb                                   0.9530 +/- 0.0308    0.8757 +/- 0.0987
+eval/paloma/dolma-v1_5/bpb                              0.9797 +/- 0.0093    0.9072 +/- 0.1092
+lm_eval/code2text_python_0shot/smoothed_bleu_4          N/A (constant)       N/A (constant)
+lm_eval/code2text_java_0shot/smoothed_bleu_4            N/A (constant)       N/A (constant)
+lm_eval/code2text_go_0shot/smoothed_bleu_4              -0.0552 +/- 0.1764   -0.1613 +/- 0.1563
+lm_eval/arc_challenge/acc_norm                          0.1535 +/- 0.2901    0.1442 +/- 0.3015
+lm_eval/hellaswag_0shot/acc_norm                        0.8200 +/- 0.0330    0.8546 +/- 0.0697
+lm_eval/piqa/acc                                        0.4116 +/- 0.3373    0.6277 +/- 0.3042
+lm_eval/boolq/acc                                       0.2104 +/- 0.2740    0.1450 +/- 0.3008
+lm_eval/averages/macro_avg_acc                          0.4931 +/- 0.0783    0.6016 +/- 0.1500
 
 ======================================================================
 OPTIMIZING MIXTURE WEIGHTS

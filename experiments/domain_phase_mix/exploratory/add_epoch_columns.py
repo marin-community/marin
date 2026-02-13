@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pandas"]
@@ -54,9 +68,8 @@ print(f"Saved with epoch columns to {csv_path.name}")
 
 # Show some examples
 completed = df[df["status"] == "completed"]
-print(f"\nEpoch ranges (completed runs):")
-for col in ["phase_0_starcoder_epochs", "phase_1_starcoder_epochs",
-            "total_starcoder_epochs", "total_nemotron_epochs"]:
+print("\nEpoch ranges (completed runs):")
+for col in ["phase_0_starcoder_epochs", "phase_1_starcoder_epochs", "total_starcoder_epochs", "total_nemotron_epochs"]:
     vals = completed[col]
     print(f"  {col}: [{vals.min():.3f}, {vals.max():.3f}]")
 
@@ -66,5 +79,9 @@ best_idx = completed[target].idxmin()
 best = completed.loc[best_idx]
 print(f"\nBest run for {target} (bpb={best[target]:.4f}):")
 print(f"  p0_sc={best['phase_0_starcoder']:.4f}, p1_sc={best['phase_1_starcoder']:.4f}")
-print(f"  sc_epochs: phase_0={best['phase_0_starcoder_epochs']:.3f}, phase_1={best['phase_1_starcoder_epochs']:.3f}, total={best['total_starcoder_epochs']:.3f}")
-print(f"  nem_epochs: phase_0={best['phase_0_nemotron_epochs']:.3f}, phase_1={best['phase_1_nemotron_epochs']:.3f}, total={best['total_nemotron_epochs']:.3f}")
+print(
+    f"  sc_epochs: phase_0={best['phase_0_starcoder_epochs']:.3f}, phase_1={best['phase_1_starcoder_epochs']:.3f}, total={best['total_starcoder_epochs']:.3f}"
+)
+print(
+    f"  nem_epochs: phase_0={best['phase_0_nemotron_epochs']:.3f}, phase_1={best['phase_1_nemotron_epochs']:.3f}, total={best['total_nemotron_epochs']:.3f}"
+)

@@ -26,11 +26,11 @@ LogNonLinear (pred=1.0000):
   Baseline format: ([0.3422, 0.3028, 0.3550], [0.9987, 0.0010, 0.0003], [0.3352, 0.3491, 0.3157])
 
 Cross-validation (5-fold) R² on key metrics:
-Metric                                            PowerLaw      Linear        LogLinear     LogNonLinear  
+Metric                                            PowerLaw      Linear        LogLinear     LogNonLinear
 ----------------------------------------------------------------------------------------------------------
-eval/loss                                         0.9393        0.7640        0.7871        -80.9078      
-eval/paloma/c4_en/bpb                             0.8623        0.7389        0.7755        -2207.5505    
-lm_eval/hellaswag_0shot/acc_norm                  0.8349        0.8423        0.8420        -64047.2926   
-lm_eval/arc_challenge/acc_norm                    0.5004        0.5194        0.5175        -27478.1995   
-lm_eval/piqa/acc                                  0.5753        0.5977        0.5984        -36472.5918   
-lm_eval/averages/macro_avg_acc                    0.5977        0.6299        0.6263        -34349.5885   
+eval/loss                                         0.9393        0.7640        0.7871        -80.9078
+eval/paloma/c4_en/bpb                             0.8623        0.7389        0.7755        -2207.5505
+lm_eval/hellaswag_0shot/acc_norm                  0.8349        0.8423        0.8420        -64047.2926
+lm_eval/arc_challenge/acc_norm                    0.5004        0.5194        0.5175        -27478.1995
+lm_eval/piqa/acc                                  0.5753        0.5977        0.5984        -36472.5918
+lm_eval/averages/macro_avg_acc                    0.5977        0.6299        0.6263        -34349.5885

@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pandas", "numpy", "scipy", "scikit-learn", "matplotlib"]
@@ -52,9 +66,9 @@ def fit_powerlaw(X, y, n_terms=2, n_restarts=200, seed=42):
         result = np.full(len(X), params[-1])
         for i in range(n_terms):
             b = 4 * i
-            raw = params[b] + X @ params[b+1:b+3]
+            raw = params[b] + X @ params[b + 1 : b + 3]
             inner = _softplus(raw) + 0.1
-            result += inner ** (-params[b+3])
+            result += inner ** (-params[b + 3])
         return result
 
     def loss(params):
@@ -71,8 +85,7 @@ def fit_powerlaw(X, y, n_terms=2, n_restarts=200, seed=42):
             bounds += [(None, None), (None, None), (None, None), (0.01, 3.0)]
         bounds.append((None, None))
         try:
-            res = minimize(loss, p0, method="L-BFGS-B", bounds=bounds,
-                           options={"maxiter": 2000, "ftol": 1e-12})
+            res = minimize(loss, p0, method="L-BFGS-B", bounds=bounds, options={"maxiter": 2000, "ftol": 1e-12})
             if res.fun < best_loss:
                 best_loss, best_params = res.fun, res.x
         except Exception:
@@ -91,12 +104,12 @@ def fit_linear(X, y):
 def fit_quadratic(X, y):
     """y = intercept + b @ x + x^T A x  (quadratic in features)"""
     x0, x1 = X[:, 0], X[:, 1]
-    X_aug = np.column_stack([np.ones(len(X)), x0, x1, x0**2, x1**2, x0*x1])
+    X_aug = np.column_stack([np.ones(len(X)), x0, x1, x0**2, x1**2, x0 * x1])
     coef, _, _, _ = np.linalg.lstsq(X_aug, y, rcond=None)
 
     def predict(Xnew):
         x0n, x1n = Xnew[:, 0], Xnew[:, 1]
-        return np.column_stack([np.ones(len(Xnew)), x0n, x1n, x0n**2, x1n**2, x0n*x1n]) @ coef
+        return np.column_stack([np.ones(len(Xnew)), x0n, x1n, x0n**2, x1n**2, x0n * x1n]) @ coef
 
     return predict, coef
 
@@ -104,20 +117,41 @@ def fit_quadratic(X, y):
 def fit_cubic(X, y):
     """y = full cubic polynomial in features"""
     x0, x1 = X[:, 0], X[:, 1]
-    X_aug = np.column_stack([
-        np.ones(len(X)), x0, x1,
-        x0**2, x1**2, x0*x1,
-        x0**3, x1**3, x0**2*x1, x0*x1**2,
-    ])
+    X_aug = np.column_stack(
+        [
+            np.ones(len(X)),
+            x0,
+            x1,
+            x0**2,
+            x1**2,
+            x0 * x1,
+            x0**3,
+            x1**3,
+            x0**2 * x1,
+            x0 * x1**2,
+        ]
+    )
     coef, _, _, _ = np.linalg.lstsq(X_aug, y, rcond=None)
 
     def predict(Xnew):
         x0n, x1n = Xnew[:, 0], Xnew[:, 1]
-        return np.column_stack([
-            np.ones(len(Xnew)), x0n, x1n,
-            x0n**2, x1n**2, x0n*x1n,
-            x0n**3, x1n**3, x0n**2*x1n, x0n*x1n**2,
-        ]) @ coef
+        return (
+            np.column_stack(
+                [
+                    np.ones(len(Xnew)),
+                    x0n,
+                    x1n,
+                    x0n**2,
+                    x1n**2,
+                    x0n * x1n,
+                    x0n**3,
+                    x1n**3,
+                    x0n**2 * x1n,
+                    x0n * x1n**2,
+                ]
+            )
+            @ coef
+        )
 
     return predict, coef
 
@@ -184,12 +218,16 @@ pred_gp, gp_model = fit_gp(X, y)
 print(f"\nPowerLaw params: {pl_params}")
 for i in range(2):
     b = 4 * i
-    print(f"  Term {i}: alpha={pl_params[b]:.4f}, beta=[{pl_params[b+1]:.4f}, {pl_params[b+2]:.4f}], gamma={pl_params[b+3]:.4f}")
+    print(
+        f"  Term {i}: alpha={pl_params[b]:.4f}, beta=[{pl_params[b+1]:.4f}, {pl_params[b+2]:.4f}], gamma={pl_params[b+3]:.4f}"
+    )
 print(f"  c={pl_params[-1]:.4f}")
 
 # Quadratic coefficients
-print(f"\nQuadratic coefs: intercept={quad_coef[0]:.4f}, b0={quad_coef[1]:.4f}, b1={quad_coef[2]:.4f}, "
-      f"x0²={quad_coef[3]:.4f}, x1²={quad_coef[4]:.4f}, x0*x1={quad_coef[5]:.4f}")
+print(
+    f"\nQuadratic coefs: intercept={quad_coef[0]:.4f}, b0={quad_coef[1]:.4f}, b1={quad_coef[2]:.4f}, "
+    f"x0²={quad_coef[3]:.4f}, x1²={quad_coef[4]:.4f}, x0*x1={quad_coef[5]:.4f}"
+)
 
 # Slice: phase_0_starcoder = 0 (nemotron_full = 1.0)
 p1_grid = np.linspace(0, 1, 200)
@@ -212,7 +250,7 @@ ax.plot(p1_grid, pred_quad(X_slice), label="Quadratic", linewidth=2)
 ax.plot(p1_grid, pred_cubic(X_slice), label="Cubic", linewidth=2, linestyle="-.")
 gp_mean, gp_std = gp_model.predict(X_slice, return_std=True)
 ax.plot(p1_grid, gp_mean, label="GP(Matern)", linewidth=2, linestyle=":")
-ax.fill_between(p1_grid, gp_mean - 2*gp_std, gp_mean + 2*gp_std, alpha=0.15, color="purple")
+ax.fill_between(p1_grid, gp_mean - 2 * gp_std, gp_mean + 2 * gp_std, alpha=0.15, color="purple")
 ax.set_xlabel("phase_1_starcoder")
 ax.set_ylabel(TARGET)
 ax.set_title("Slice: phase_0 = 100% nemotron_full")
@@ -226,7 +264,7 @@ ax.plot(p1_grid, pred_powerlaw(X_slice), label="PowerLaw", linewidth=2)
 ax.plot(p1_grid, pred_quad(X_slice), label="Quadratic", linewidth=2)
 ax.plot(p1_grid, pred_cubic(X_slice), label="Cubic", linewidth=2, linestyle="-.")
 ax.plot(p1_grid, gp_mean, label="GP(Matern)", linewidth=2, linestyle=":")
-ax.fill_between(p1_grid, gp_mean - 2*gp_std, gp_mean + 2*gp_std, alpha=0.15, color="purple")
+ax.fill_between(p1_grid, gp_mean - 2 * gp_std, gp_mean + 2 * gp_std, alpha=0.15, color="purple")
 ax.set_xlabel("phase_1_starcoder")
 ax.set_ylabel(TARGET)
 ax.set_title("Zoomed: minimum region")
@@ -244,8 +282,12 @@ print(f"\nSaved {out_path}")
 # Find optimal p1_starcoder for each model (on slice)
 # -------------------------------------------------------------------------
 print("\nOptimal phase_1_starcoder (at phase_0=100% nemotron):")
-for name, pred_fn in [("PowerLaw", pred_powerlaw), ("Linear", pred_linear),
-                       ("Quadratic", pred_quad), ("Cubic", pred_cubic)]:
+for name, pred_fn in [
+    ("PowerLaw", pred_powerlaw),
+    ("Linear", pred_linear),
+    ("Quadratic", pred_quad),
+    ("Cubic", pred_cubic),
+]:
     preds = pred_fn(X_slice)
     best_idx = np.argmin(preds)
     print(f"  {name:15s}: p1_sc={p1_grid[best_idx]:.4f}, pred_bpb={preds[best_idx]:.4f}")
@@ -264,8 +306,7 @@ rng = np.random.default_rng(123)
 X_rand = np.column_stack([rng.uniform(0, 1, 1_000_000), rng.uniform(0, 1, 1_000_000)])
 k = 128
 
-for name, pred_fn in [("PowerLaw", pred_powerlaw), ("Quadratic", pred_quad),
-                       ("Cubic", pred_cubic)]:
+for name, pred_fn in [("PowerLaw", pred_powerlaw), ("Quadratic", pred_quad), ("Cubic", pred_cubic)]:
     preds = pred_fn(X_rand)
     top_k = np.argsort(preds)[:k]
     opt = np.mean(X_rand[top_k], axis=0)

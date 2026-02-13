@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pandas", "numpy", "scipy", "scikit-learn", "matplotlib"]
@@ -31,7 +45,11 @@ from scipy.optimize import minimize
 from sklearn.model_selection import KFold
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import (
-    Matern, RBF, WhiteKernel, ConstantKernel, RationalQuadratic,
+    Matern,
+    RBF,
+    WhiteKernel,
+    ConstantKernel,
+    RationalQuadratic,
 )
 from sklearn.preprocessing import StandardScaler
 
@@ -72,17 +90,28 @@ def make_features(df):
     feature_sets = {
         "weights [p0_sc, p1_sc]": np.column_stack([p0_sc, p1_sc]),
         "epochs [sc0, sc1, nem0, nem1]": np.column_stack([sc_ep0, sc_ep1, nem_ep0, nem_ep1]),
-        "log_epochs [all 4]": np.column_stack([
-            np.log(sc_ep0 + EPS), np.log(sc_ep1 + EPS),
-            np.log(nem_ep0 + EPS), np.log(nem_ep1 + EPS),
-        ]),
-        "log_sc_epochs [sc0, sc1]": np.column_stack([
-            np.log(sc_ep0 + EPS), np.log(sc_ep1 + EPS),
-        ]),
+        "log_epochs [all 4]": np.column_stack(
+            [
+                np.log(sc_ep0 + EPS),
+                np.log(sc_ep1 + EPS),
+                np.log(nem_ep0 + EPS),
+                np.log(nem_ep1 + EPS),
+            ]
+        ),
+        "log_sc_epochs [sc0, sc1]": np.column_stack(
+            [
+                np.log(sc_ep0 + EPS),
+                np.log(sc_ep1 + EPS),
+            ]
+        ),
         "log_sc_total [1D]": np.log(sc_total + EPS).reshape(-1, 1),
-        "mixed [p0_sc, p1_sc, log_sc1]": np.column_stack([
-            p0_sc, p1_sc, np.log(sc_ep1 + EPS),
-        ]),
+        "mixed [p0_sc, p1_sc, log_sc1]": np.column_stack(
+            [
+                p0_sc,
+                p1_sc,
+                np.log(sc_ep1 + EPS),
+            ]
+        ),
     }
     return feature_sets
 
@@ -104,9 +133,9 @@ def fit_quadratic(X_tr, y_tr):
     # Build quadratic features: 1 + linear + squared + cross terms
     parts = [np.ones((len(X_tr), 1)), X_tr]
     for i in range(n_feat):
-        parts.append(X_tr[:, i:i+1] ** 2)
+        parts.append(X_tr[:, i : i + 1] ** 2)
     for i in range(n_feat):
-        for j in range(i+1, n_feat):
+        for j in range(i + 1, n_feat):
             parts.append((X_tr[:, i] * X_tr[:, j]).reshape(-1, 1))
     X_aug = np.hstack(parts)
     coef, _, _, _ = np.linalg.lstsq(X_aug, y_tr, rcond=None)
@@ -114,9 +143,9 @@ def fit_quadratic(X_tr, y_tr):
     def predict(X):
         p = [np.ones((len(X), 1)), X]
         for i in range(n_feat):
-            p.append(X[:, i:i+1] ** 2)
+            p.append(X[:, i : i + 1] ** 2)
         for i in range(n_feat):
-            for j in range(i+1, n_feat):
+            for j in range(i + 1, n_feat):
                 p.append((X[:, i] * X[:, j]).reshape(-1, 1))
         return np.hstack(p) @ coef
 
@@ -199,9 +228,11 @@ def fit_epoch_powerlaw_2term(X_tr, y_tr):
 
     def model(sc, nem, params):
         A_sc, a_sc, b_sc, A_nem, a_nem, b_nem, C = params
-        return (A_sc * (sc + np.abs(a_sc) + 0.01) ** (-np.abs(b_sc))
-                + A_nem * (nem + np.abs(a_nem) + 0.01) ** (-np.abs(b_nem))
-                + C)
+        return (
+            A_sc * (sc + np.abs(a_sc) + 0.01) ** (-np.abs(b_sc))
+            + A_nem * (nem + np.abs(a_nem) + 0.01) ** (-np.abs(b_nem))
+            + C
+        )
 
     def loss(params):
         pred = model(sc, nem, params)
@@ -211,8 +242,12 @@ def fit_epoch_powerlaw_2term(X_tr, y_tr):
     best_loss, best_params = np.inf, None
     for _ in range(500):
         p0 = [
-            rng.uniform(0.1, 3), rng.uniform(0.01, 1), rng.uniform(0.1, 1.5),
-            rng.uniform(0.1, 3), rng.uniform(0.01, 1), rng.uniform(0.1, 1.5),
+            rng.uniform(0.1, 3),
+            rng.uniform(0.01, 1),
+            rng.uniform(0.1, 1.5),
+            rng.uniform(0.1, 3),
+            rng.uniform(0.01, 1),
+            rng.uniform(0.1, 1.5),
             y_tr.mean() + rng.normal(0, 0.1),
         ]
         try:
@@ -223,8 +258,10 @@ def fit_epoch_powerlaw_2term(X_tr, y_tr):
             continue
 
     A_sc, a_sc, b_sc, A_nem, a_nem, b_nem, C = best_params
-    print(f"    2TermPL params: A_sc={A_sc:.4f}, a_sc={np.abs(a_sc):.4f}, b_sc={np.abs(b_sc):.4f}, "
-          f"A_nem={A_nem:.4f}, a_nem={np.abs(a_nem):.4f}, b_nem={np.abs(b_nem):.4f}, C={C:.4f}")
+    print(
+        f"    2TermPL params: A_sc={A_sc:.4f}, a_sc={np.abs(a_sc):.4f}, b_sc={np.abs(b_sc):.4f}, "
+        f"A_nem={A_nem:.4f}, a_nem={np.abs(a_nem):.4f}, b_nem={np.abs(b_nem):.4f}, C={C:.4f}"
+    )
 
     def predict(X):
         return model(X[:, 0], X[:, 1], best_params)
@@ -285,27 +322,31 @@ print("\n--- Special models ---")
 
 # 1. Epoch power law on total starcoder epochs (1D)
 sc_total = df["total_starcoder_epochs"].values.reshape(-1, 1)
-print(f"  EpochPowerLaw [sc_total, 1D]:", end=" ", flush=True)
+print("  EpochPowerLaw [sc_total, 1D]:", end=" ", flush=True)
 mean_r2, std_r2 = cv_r2(fit_epoch_powerlaw, sc_total, y)
 results[("sc_total [1D]", "EpochPowerLaw")] = (mean_r2, std_r2)
 print(f"R² = {mean_r2:.4f} ± {std_r2:.4f}")
 
 # 2. Two-term epoch power law on [sc_total, nem_total]
-epoch_totals = np.column_stack([
-    df["total_starcoder_epochs"].values,
-    df["total_nemotron_epochs"].values,
-])
-print(f"  2TermEpochPL [sc_total, nem_total]:", end=" ", flush=True)
+epoch_totals = np.column_stack(
+    [
+        df["total_starcoder_epochs"].values,
+        df["total_nemotron_epochs"].values,
+    ]
+)
+print("  2TermEpochPL [sc_total, nem_total]:", end=" ", flush=True)
 mean_r2, std_r2 = cv_r2(fit_epoch_powerlaw_2term, epoch_totals, y)
 results[("epoch_totals [2D]", "2TermEpochPL")] = (mean_r2, std_r2)
 print(f"R² = {mean_r2:.4f} ± {std_r2:.4f}")
 
 # 3. Epoch power law on per-phase starcoder epochs
-sc_per_phase = np.column_stack([
-    df["phase_0_starcoder_epochs"].values,
-    df["phase_1_starcoder_epochs"].values,
-])
-print(f"  2TermEpochPL [sc_ep0, sc_ep1]:", end=" ", flush=True)
+sc_per_phase = np.column_stack(
+    [
+        df["phase_0_starcoder_epochs"].values,
+        df["phase_1_starcoder_epochs"].values,
+    ]
+)
+print("  2TermEpochPL [sc_ep0, sc_ep1]:", end=" ", flush=True)
 mean_r2, std_r2 = cv_r2(fit_epoch_powerlaw_2term, sc_per_phase, y)
 results[("sc_per_phase [2D]", "2TermEpochPL")] = (mean_r2, std_r2)
 print(f"R² = {mean_r2:.4f} ± {std_r2:.4f}")
@@ -333,8 +374,9 @@ print("\n\nFitting best models on full data for visualization...")
 p0_sc = df["phase_0_starcoder"].values
 p1_sc = df["phase_1_starcoder"].values
 X_weights = np.column_stack([p0_sc, p1_sc])
-X_log_sc = np.column_stack([np.log(df["phase_0_starcoder_epochs"].values + EPS),
-                             np.log(df["phase_1_starcoder_epochs"].values + EPS)])
+X_log_sc = np.column_stack(
+    [np.log(df["phase_0_starcoder_epochs"].values + EPS), np.log(df["phase_1_starcoder_epochs"].values + EPS)]
+)
 
 # Fit on full data
 pred_gp_weights = fit_gp_matern(X_weights, y)
@@ -358,15 +400,19 @@ y_actual = df_slice[TARGET].values
 # Create prediction grid for slice
 p1_grid = np.linspace(0, 1, 200)
 X_w_grid = np.column_stack([np.zeros(200), p1_grid])
-X_log_sc_grid = np.column_stack([
-    np.full(200, np.log(EPS)),  # log(0 + eps)
-    np.log(SC_EPOCH_MULT * p1_grid + EPS),
-])
+X_log_sc_grid = np.column_stack(
+    [
+        np.full(200, np.log(EPS)),  # log(0 + eps)
+        np.log(SC_EPOCH_MULT * p1_grid + EPS),
+    ]
+)
 sc_total_grid = (SC_EPOCH_MULT * p1_grid).reshape(-1, 1)
-epoch_totals_grid = np.column_stack([
-    SC_EPOCH_MULT * p1_grid,
-    NEM_EPOCH_MULT * np.ones(200),  # nemotron is 0.5 * 1.0 = 0.5 in phase_0
-])
+epoch_totals_grid = np.column_stack(
+    [
+        SC_EPOCH_MULT * p1_grid,
+        NEM_EPOCH_MULT * np.ones(200),  # nemotron is 0.5 * 1.0 = 0.5 in phase_0
+    ]
+)
 
 fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 

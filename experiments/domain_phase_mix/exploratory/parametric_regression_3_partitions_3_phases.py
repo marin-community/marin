@@ -68,11 +68,7 @@ N_FEATURES = N_DOMAINS * N_PHASES
 DOMAIN_NAMES = ["nemotron_full", "dolmino", "openthoughts_sft"]
 PHASE_NAMES = ["phase_0", "phase_1", "phase_2"]
 
-FEATURE_COLS = [
-    f"{phase}_{domain}"
-    for phase in PHASE_NAMES
-    for domain in DOMAIN_NAMES
-]
+FEATURE_COLS = [f"{phase}_{domain}" for phase in PHASE_NAMES for domain in DOMAIN_NAMES]
 
 TARGET_COLS = [
     "eval/loss",
@@ -111,22 +107,18 @@ class ParametricRegressor(ABC):
     """Base class for parametric regression models."""
 
     @abstractmethod
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "ParametricRegressor":
-        ...
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "ParametricRegressor": ...
 
     @abstractmethod
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        ...
+    def predict(self, X: np.ndarray) -> np.ndarray: ...
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
     @property
     @abstractmethod
-    def n_params(self) -> int:
-        ...
+    def n_params(self) -> int: ...
 
 
 # ---------------------------------------------------------------------------
@@ -217,8 +209,11 @@ class PowerLawRegressor(ParametricRegressor):
 
             try:
                 res = minimize(
-                    self._loss, p0, args=(X, y),
-                    method="L-BFGS-B", bounds=bounds,
+                    self._loss,
+                    p0,
+                    args=(X, y),
+                    method="L-BFGS-B",
+                    bounds=bounds,
                     options={"maxiter": 2000, "ftol": 1e-12},
                 )
                 if res.fun < best_loss:
@@ -320,7 +315,9 @@ class LogLinearRegressor(ParametricRegressor):
 
                 try:
                     res = minimize(
-                        self._loss, p0, args=(X, y, delta),
+                        self._loss,
+                        p0,
+                        args=(X, y, delta),
                         method="L-BFGS-B",
                         options={"maxiter": 2000, "ftol": 1e-12},
                     )
@@ -412,7 +409,9 @@ class LogNonLinearRegressor(ParametricRegressor):
 
                 try:
                     res = minimize(
-                        self._loss, p0, args=(X, y, delta),
+                        self._loss,
+                        p0,
+                        args=(X, y, delta),
                         method="L-BFGS-B",
                         options={"maxiter": 2000, "ftol": 1e-12},
                     )
@@ -444,7 +443,11 @@ def cross_validate(
     """K-fold CV. Returns dict with models and per-fold metrics."""
     kfold = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
     results: dict[str, list] = {
-        "models": [], "spearman": [], "pearson": [], "mse": [], "mae": [],
+        "models": [],
+        "spearman": [],
+        "pearson": [],
+        "mse": [],
+        "mae": [],
     }
 
     for train_idx, val_idx in kfold.split(X):
@@ -595,9 +598,7 @@ def plot_ternary(
     pred = model.predict(X_grid)
 
     # Training run data for overlay
-    run_phase_weights = df_complete[
-        [f"{PHASE_NAMES[phase_idx]}_{d}" for d in DOMAIN_NAMES]
-    ].values
+    run_phase_weights = df_complete[[f"{PHASE_NAMES[phase_idx]}_{d}" for d in DOMAIN_NAMES]].values
     actual_vals = df_complete[target_col].values
     run_ids = df_complete["run_id"].values
 
@@ -611,7 +612,9 @@ def plot_ternary(
     # Contour/scatter over the simplex grid
     fig.add_trace(
         go.Scatterternary(
-            a=grid[:, 0], b=grid[:, 1], c=grid[:, 2],
+            a=grid[:, 0],
+            b=grid[:, 1],
+            c=grid[:, 2],
             mode="markers",
             marker=dict(
                 size=3,
@@ -668,7 +671,9 @@ def plot_ternary(
     # Mark predicted optimum
     fig.add_trace(
         go.Scatterternary(
-            a=[opt_phase[0]], b=[opt_phase[1]], c=[opt_phase[2]],
+            a=[opt_phase[0]],
+            b=[opt_phase[1]],
+            c=[opt_phase[2]],
             mode="markers",
             marker=dict(size=14, symbol="star", color="red", line=dict(width=1, color="darkred")),
             name=f"Predicted opt: ({opt_phase[0]:.3f}, {opt_phase[1]:.3f}, {opt_phase[2]:.3f})",
@@ -695,17 +700,16 @@ def plot_ternary(
     for p in range(N_PHASES):
         if p != phase_idx:
             w = optimal_mixture[p * N_DOMAINS : (p + 1) * N_DOMAINS]
-            fixed_phases_text.append(
-                f"{PHASE_NAMES[p]}: [{', '.join(f'{v:.3f}' for v in w)}]"
-            )
+            fixed_phases_text.append(f"{PHASE_NAMES[p]}: [{', '.join(f'{v:.3f}' for v in w)}]")
     subtitle = f"Fixed: {'; '.join(fixed_phases_text)}"
 
     fig.update_layout(
         title=dict(
-            text=f"{target_col} ({model.name}) — {PHASE_NAMES[phase_idx]}<br><br>"
-                 f"<sub>{subtitle}</sub>",
+            text=f"{target_col} ({model.name}) — {PHASE_NAMES[phase_idx]}<br><br>" f"<sub>{subtitle}</sub>",
             font=dict(size=14),
-            x=0.5, xanchor="center", y=0.98,
+            x=0.5,
+            xanchor="center",
+            y=0.98,
         ),
         ternary=dict(
             aaxis=dict(title=DOMAIN_NAMES[0], min=0),
@@ -713,10 +717,16 @@ def plot_ternary(
             caxis=dict(title=DOMAIN_NAMES[2], min=0),
         ),
         legend=dict(
-            yanchor="top", y=0.99, xanchor="right", x=0.99,
-            font=dict(size=9), bgcolor="rgba(255,255,255,0.8)",
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            font=dict(size=9),
+            bgcolor="rgba(255,255,255,0.8)",
         ),
-        width=800, height=700, margin=dict(l=60, r=60, t=100, b=60),
+        width=800,
+        height=700,
+        margin=dict(l=60, r=60, t=100, b=60),
     )
 
     safe_target = target_col.replace("/", "_").replace(" ", "_")
@@ -736,6 +746,7 @@ def plot_ternary(
 # ---------------------------------------------------------------------------
 def main():
     import sys
+
     sys.stdout.reconfigure(line_buffering=True)
 
     script_dir = Path(__file__).parent
@@ -747,9 +758,7 @@ def main():
     print(f"Total runs (excl. 90000): {len(df)}")
     print(f"Completed runs: {len(df_complete)}")
 
-    available_targets = [
-        c for c in TARGET_COLS if c in df_complete.columns and df_complete[c].notna().sum() > 0
-    ]
+    available_targets = [c for c in TARGET_COLS if c in df_complete.columns and df_complete[c].notna().sum() > 0]
     missing = set(TARGET_COLS) - set(available_targets)
     if missing:
         print(f"Missing metrics (skipped): {missing}")
@@ -821,8 +830,10 @@ def main():
             print(f"{target_col:<50} {sp_str:<18} {pe_str:<18} {rmse_str:<12} {r2_str:<12}")
 
             summary[(tag, target_col)] = {
-                "spearman": sp_mean, "pearson": pe_mean,
-                "rmse": rmse_mean, "r2": r2,
+                "spearman": sp_mean,
+                "pearson": pe_mean,
+                "rmse": rmse_mean,
+                "r2": r2,
             }
 
     # ========================================================================
@@ -871,8 +882,12 @@ def main():
             print(f"    Plotting: {target_col}")
             for phase_idx in range(N_PHASES):
                 plot_ternary(
-                    full_model_vis, target_col, phase_idx,
-                    opt_mix_vis, df_complete, output_dir,
+                    full_model_vis,
+                    target_col,
+                    phase_idx,
+                    opt_mix_vis,
+                    df_complete,
+                    output_dir,
                 )
 
     # ========================================================================
@@ -897,11 +912,19 @@ def main():
     # COMPARISON SUMMARY
     # ========================================================================
     model_names = [model_cls(**kw).name for model_cls, kw in model_defs]
-    key_targets = [t for t in available_targets if t in [
-        "eval/loss", "eval/paloma/c4_en/bpb",
-        "lm_eval/hellaswag_0shot/acc_norm", "lm_eval/averages/macro_avg_acc",
-        "lm_eval/arc_challenge/acc_norm", "lm_eval/piqa/acc",
-    ]]
+    key_targets = [
+        t
+        for t in available_targets
+        if t
+        in [
+            "eval/loss",
+            "eval/paloma/c4_en/bpb",
+            "lm_eval/hellaswag_0shot/acc_norm",
+            "lm_eval/averages/macro_avg_acc",
+            "lm_eval/arc_challenge/acc_norm",
+            "lm_eval/piqa/acc",
+        ]
+    ]
 
     print("\n" + "=" * 70)
     print("COMPARISON SUMMARY (Spearman r, higher = better)")

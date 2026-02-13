@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pandas", "matplotlib"]
@@ -37,7 +51,13 @@ ax.plot(df_slice["phase_1_starcoder"], df_slice[target], alpha=0.3, linestyle="-
 ax.set_xlabel("phase_1_starcoder")
 ax.set_ylabel(target)
 ax.set_title(f"phase_0 = 100% nemotron_full (n={len(df_slice)})\n{target}")
-ax.axvline(best_row["phase_1_starcoder"], color="red", alpha=0.4, linestyle=":", label=f"min @ {best_row['phase_1_starcoder']:.3f}")
+ax.axvline(
+    best_row["phase_1_starcoder"],
+    color="red",
+    alpha=0.4,
+    linestyle=":",
+    label=f"min @ {best_row['phase_1_starcoder']:.3f}",
+)
 ax.legend()
 fig.tight_layout()
 
