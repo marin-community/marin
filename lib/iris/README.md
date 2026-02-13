@@ -8,19 +8,20 @@ Distributed job orchestration replacing Ray with simpler primitives.
 
 ```bash
 # Start controller VM (runs autoscaler internally)
-uv run iris cluster --config=examples/eu-west4.yaml start
+uv run iris --config=examples/eu-west4.yaml cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
-uv run iris cluster --config=examples/eu-west4.yaml start --local
+# Dashboard is available at the printed URL; press Ctrl+C to stop.
+uv run iris --config=examples/eu-west4.yaml cluster start --local
 
 # Check cluster status
-uv run iris cluster --config=examples/eu-west4.yaml status
+uv run iris --config=examples/eu-west4.yaml cluster status
 
 # Validate cluster with test jobs (establishes SSH tunnel automatically)
-uv run iris cluster --config=examples/eu-west4.yaml debug validate
+uv run iris --config=examples/eu-west4.yaml cluster debug validate
 
 # Stop cluster (controller + all worker slices, terminated in parallel; 60s timeout)
-uv run iris cluster --config=examples/eu-west4.yaml stop
+uv run iris --config=examples/eu-west4.yaml cluster stop
 ```
 
 ### Submit a Job
@@ -217,34 +218,34 @@ The controller will **fail at startup** if `bundle_prefix` is not configured.
 
 ## CLI Reference
 
-**Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml job run ...` or `iris cluster --config cluster.yaml start`).
+**Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml cluster start` or `iris --config cluster.yaml job run ...`).
 
 ### Cluster Commands
 
 ```bash
-# Start/stop/restart controller VM (--config on cluster group)
-iris cluster --config=cluster.yaml start
-iris cluster --config=cluster.yaml start --local   # Local cluster for testing
-iris cluster --config=cluster.yaml stop
-iris cluster --config=cluster.yaml restart
-iris cluster --config=cluster.yaml reload           # Rebuild images + redeploy on existing VMs
-iris cluster --config=cluster.yaml status
+# Start/stop/restart controller VM
+iris --config=cluster.yaml cluster start
+iris --config=cluster.yaml cluster start --local   # Local cluster for testing
+iris --config=cluster.yaml cluster stop
+iris --config=cluster.yaml cluster restart
+iris --config=cluster.yaml cluster reload           # Rebuild images + redeploy on existing VMs
+iris --config=cluster.yaml cluster status
 ```
 
 ### Controller Subcommands
 
 ```bash
 # Controller-specific operations
-iris cluster --config=... controller start          # Boot controller GCE VM
-iris cluster --config=... controller status          # Controller status
+iris --config=... cluster controller start          # Boot controller GCE VM
+iris --config=... cluster controller status          # Controller status
 ```
 
 ### VM Operations (via controller RPC)
 
 ```bash
 # VM status and logs (always via controller)
-iris cluster vm --controller-url=http://localhost:10000 status
-iris cluster vm --controller-url=http://localhost:10000 logs VM_ID
+iris --controller-url=http://localhost:10000 cluster vm status
+iris --controller-url=http://localhost:10000 cluster vm logs VM_ID
 ```
 
 ### Image Builds
@@ -258,20 +259,23 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 ### Dashboard & Debugging
 
 ```bash
-iris cluster --config=... dashboard
-iris cluster --config=... dashboard --port 8080
+# Remote clusters: opens SSH tunnel to controller dashboard
+iris --config=... cluster dashboard
+iris --config=... cluster dashboard --port 8080
+
+# Local clusters: dashboard is at the URL printed by `cluster start --local`
 ```
 
 ### Debug cluster status
 ```bash
-iris cluster --config=... debug discover         # Find controller VM
-iris cluster --config=... debug health           # Health check
-iris cluster --config=... debug autoscaler-status
-iris cluster --config=... debug bootstrap-logs   # VM startup logs
-iris cluster --config=... debug show-task-logs JOB_ID
-iris cluster --config=... debug validate         # Run test TPU jobs
-iris cluster --config=... debug cleanup          # Dry-run by default
-iris cluster --config=... debug cleanup --no-dry-run
+iris --config=... cluster debug discover         # Find controller VM
+iris --config=... cluster debug health           # Health check
+iris --config=... cluster debug autoscaler-status
+iris --config=... cluster debug bootstrap-logs   # VM startup logs
+iris --config=... cluster debug show-task-logs JOB_ID
+iris --config=... cluster debug validate         # Run test TPU jobs
+iris --config=... cluster debug cleanup          # Dry-run by default
+iris --config=... cluster debug cleanup --no-dry-run
 ```
 
 ### Job Management
