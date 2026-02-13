@@ -1325,6 +1325,143 @@ def test_scheduler_child_of_older_tree_beats_newer_root(scheduler, state, job_re
     assert result.assignments[2][0].job_id == JobName.root("new-tree")
 
 
+# =============================================================================
+# Error Message Tests
+# =============================================================================
+
+
+def test_scheduler_reports_device_variant_mismatch(scheduler, state, worker_metadata):
+    """Scheduler reports device variant mismatch in error message."""
+    # Worker with v5litepod-16
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.variant = "v5litepod-16"
+    register_worker(state, "w1", "addr", meta)
+
+    # Job requesting v5litepod-32
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-32", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    assert "variant" in diagnostics.lower()
+    assert "v5litepod-32" in diagnostics
+    assert "v5litepod-16" in diagnostics
+
+
+def test_scheduler_reports_tpu_count_exceeded(scheduler, state, worker_metadata):
+    """Scheduler reports TPU count exceeded in error message."""
+    # Worker with 4 TPU chips
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    register_worker(state, "w1", "addr1", meta)
+
+    # Job requesting 8 TPU chips
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=8)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    assert "tpu" in diagnostics.lower()
+    assert "8" in diagnostics
+    assert "4" in diagnostics
+
+
+def test_scheduler_reports_device_type_mismatch(scheduler, state, worker_metadata):
+    """Scheduler reports device type mismatch in error message."""
+    # CPU-only worker
+    meta = worker_metadata()
+    register_worker(state, "w1", "addr", meta)
+
+    # Job requesting TPU
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    assert "device" in diagnostics.lower()
+    assert "tpu" in diagnostics.lower()
+
+
+def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worker_metadata):
+    """Scheduler reports detailed coscheduling capacity issues."""
+    # Create 4 workers but only 2 have sufficient CPU
+    for i in range(4):
+        cpu = 4 if i < 2 else 1  # First 2 have 4 CPU, last 2 have only 1
+        meta = worker_metadata(cpu=cpu)
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    # Coscheduled job requiring 4 replicas, 2 CPUs each
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    # Should mention it's a coscheduling issue with capacity details
+    assert "coscheduling" in diagnostics.lower() or "group" in diagnostics.lower()
+    # Should indicate how many workers have capacity vs needed
+    assert "2" in diagnostics or "4" in diagnostics
+
+
 def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request, worker_metadata):
     """Scheduler respects FIFO within same depth and tree."""
     register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))

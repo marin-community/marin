@@ -21,11 +21,11 @@ from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEv
 from iris.cluster.controller.scheduler import (
     Scheduler,
     SchedulingContext,
-    TaskScheduleResult,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
     HEARTBEAT_FAILURE_THRESHOLD,
+    ControllerJob,
     ControllerState,
     ControllerTask,
     ControllerWorker,
@@ -472,12 +472,13 @@ class Controller:
         if txn.tasks_to_kill:
             self.kill_tasks_on_workers(txn.tasks_to_kill)
 
-    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
-        """Get the current scheduling status of a task (for dashboard display).
+    def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext:
+        """Create a scheduling context for the given workers."""
+        return self._scheduler.create_scheduling_context(workers)
 
-        Delegates to the internal scheduler.
-        """
-        return self._scheduler.task_schedule_status(task, context)
+    def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str:
+        """Get detailed diagnostics for why a job cannot be scheduled."""
+        return self._scheduler.get_job_scheduling_diagnostics(job, context)
 
     def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
         """Buffer kill requests for delivery via next heartbeat.
