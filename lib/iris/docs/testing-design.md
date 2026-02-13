@@ -148,8 +148,8 @@ For Docker-specific tests, we keep a separate fixture based on `E2ECluster`:
 
 ```python
 @pytest.fixture(scope="module")
-def docker_cluster(shared_uv_cache):
-    with E2ECluster(use_docker=True, uv_cache_dir=shared_uv_cache) as cluster:
+def docker_cluster(shared_cache):
+    with E2ECluster(use_docker=True, cache_dir=shared_cache) as cluster:
         yield cluster
 ```
 
@@ -365,8 +365,8 @@ that only manifests inside real containers:
 pytestmark = [pytest.mark.e2e, pytest.mark.docker]
 
 @pytest.fixture(scope="module")
-def docker_cluster(shared_uv_cache):
-    with E2ECluster(use_docker=True, uv_cache_dir=shared_uv_cache) as cluster:
+def docker_cluster(shared_cache):
+    with E2ECluster(use_docker=True, cache_dir=shared_cache) as cluster:
         yield cluster
 
 def test_oom_detection(docker_cluster):

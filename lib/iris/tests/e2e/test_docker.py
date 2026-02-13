@@ -26,19 +26,19 @@ def unique_name(prefix: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def shared_uv_cache(tmp_path_factory) -> Path:
-    """Session-scoped uv cache so Python/packages are only downloaded once."""
-    return tmp_path_factory.mktemp("iris_uv_cache")
+def shared_cache(tmp_path_factory) -> Path:
+    """Session-scoped cache so uv/cargo/bundles are only downloaded once."""
+    return tmp_path_factory.mktemp("iris_cache")
 
 
 @pytest.fixture(scope="module")
-def docker_cluster(shared_uv_cache):
-    with E2ECluster(use_docker=True, uv_cache_dir=shared_uv_cache) as cluster:
+def docker_cluster(shared_cache):
+    with E2ECluster(use_docker=True, cache_dir=shared_cache) as cluster:
         yield cluster
 
 
 @pytest.fixture(scope="module")
-def tpu_sim_cluster(shared_uv_cache):
+def tpu_sim_cluster(shared_cache):
     """Docker cluster with simulated TPU metadata for JAX coordination tests.
 
     Each worker gets a TPUSimEnvironmentProvider which populates tpu_worker_hostnames,
@@ -48,7 +48,7 @@ def tpu_sim_cluster(shared_uv_cache):
     with E2ECluster(
         num_workers=2,
         use_docker=True,
-        uv_cache_dir=shared_uv_cache,
+        cache_dir=shared_cache,
         env_provider_factory=lambda i, n: TPUSimEnvironmentProvider(i, n),
     ) as cluster:
         yield cluster

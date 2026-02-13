@@ -87,7 +87,8 @@ class E2ECluster:
     Args:
         num_workers: Number of workers to create.
         use_docker: If True, use Docker containers instead of subprocesses.
-        uv_cache_dir: Shared uv cache directory for Docker tests.
+        cache_dir: Shared cache directory for Docker tests (uv, cargo, bundles).
+            When None, a fresh temp directory is created per cluster.
         env_provider_factory: Optional factory for creating per-worker
             EnvironmentProviders. Signature: (worker_id, num_workers) -> provider.
             Use TPUSimEnvironmentProvider for TPU simulation tests.
@@ -97,12 +98,12 @@ class E2ECluster:
         self,
         num_workers: int = 1,
         use_docker: bool = False,
-        uv_cache_dir: Path | None = None,
+        cache_dir: Path | None = None,
         env_provider_factory: EnvProviderFactory | None = None,
     ):
         self._num_workers = num_workers
         self._use_docker = use_docker
-        self._uv_cache_dir = uv_cache_dir
+        self._cache_dir = cache_dir
         self._env_provider_factory = env_provider_factory
         self._controller: LocalController | Controller | None = None
         self._controller_port: int | None = None
@@ -133,8 +134,8 @@ class E2ECluster:
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
         bundle_dir.mkdir()
-        cache_path = temp_path / "cache"
-        cache_path.mkdir()
+        cache_path = self._cache_dir if self._cache_dir else temp_path / "cache"
+        cache_path.mkdir(exist_ok=True)
 
         fake_bundle = temp_path / "fake_bundle"
         fake_bundle.mkdir()
@@ -170,7 +171,6 @@ class E2ECluster:
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),
-                uv_cache_dir=self._uv_cache_dir,
             )
             env_provider = None
             if self._env_provider_factory:
