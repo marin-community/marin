@@ -219,18 +219,17 @@ class WorkerCapacity:
         """
         return self.building_task_count < self.max_building_tasks
 
-    def can_fit_job(self, job: ControllerJob, *, check_building_limit: bool = True) -> RejectionReason | None:
+    def can_fit_job(self, job: ControllerJob) -> RejectionReason | None:
         """Check if this capacity can fit the job's resource requirements.
 
         Args:
             job: The job to check
-            check_building_limit: If True, also check building task limit
 
         Returns:
             None if job fits, otherwise RejectionReason with lazy-formatted details
         """
-        # Check building task back-pressure
-        if check_building_limit and not self.can_accept_building_task():
+        # Check building task back-pressure first
+        if not self.can_accept_building_task():
             return RejectionReason(
                 kind="building_limit",
                 details={"current": self.building_task_count, "max": self.max_building_tasks},
@@ -556,16 +555,12 @@ class Scheduler:
         matching_worker_ids = context.matching_workers(constraints)
 
         # Try to find a worker that can fit this task among matching workers
-        workers_at_building_limit = 0
         rejection_reasons: dict[str, int] = defaultdict(int)
         for worker_id in matching_worker_ids:
             if worker_id in context.scheduled_workers:
                 continue
             capacity = context.capacities[worker_id]
-            if not capacity.can_accept_building_task():
-                workers_at_building_limit += 1
-                continue
-            rejection = capacity.can_fit_job(job, check_building_limit=False)
+            rejection = capacity.can_fit_job(job)
             if rejection is None:
                 capacity.deduct(job)
                 context.scheduled_workers.add(worker_id)
@@ -575,23 +570,6 @@ class Scheduler:
         # No worker could fit the task - build detailed reason
         res = job.request.resources
 
-        # Check if the issue is building limit vs resource capacity
-        if workers_at_building_limit > 0:
-            workers_with_resources = sum(
-                1
-                for wid in matching_worker_ids
-                if wid not in context.scheduled_workers
-                and context.capacities[wid].can_fit_job(job, check_building_limit=False) is None
-            )
-            if workers_with_resources > 0:
-                return TaskScheduleResult(
-                    task=task,
-                    failure_reason=(
-                        f"Waiting for build slots: {workers_at_building_limit} worker(s) at building limit "
-                        f"(max {self._max_building_tasks_per_worker} concurrent builds per worker)"
-                    ),
-                )
-
         # Report most common rejection reason
         if rejection_reasons:
             most_common = max(rejection_reasons.items(), key=lambda x: x[1])
@@ -599,8 +577,28 @@ class Scheduler:
             # Get a sample rejection reason for formatting
             for wid in matching_worker_ids:
                 if wid not in context.scheduled_workers:
-                    rejection = context.capacities[wid].can_fit_job(job, check_building_limit=False)
+                    rejection = context.capacities[wid].can_fit_job(job)
                     if rejection and rejection.kind == reason_kind:
+                        # For building limit, provide additional context
+                        if reason_kind == "building_limit":
+                            # Check if workers would otherwise have capacity
+                            workers_with_capacity = sum(
+                                1
+                                for check_wid in matching_worker_ids
+                                if check_wid not in context.scheduled_workers
+                                and context.capacities[check_wid].available_cpu >= res.cpu
+                                and context.capacities[check_wid].available_memory >= res.memory_bytes
+                            )
+                            if workers_with_capacity > 0:
+                                return TaskScheduleResult(
+                                    task=task,
+                                    failure_reason=(
+                                        f"Waiting for build slots: {count} worker(s) at building limit "
+                                        f"(max {self._max_building_tasks_per_worker} concurrent builds per worker), "
+                                        f"but have sufficient resources for this task"
+                                    ),
+                                )
+
                         if constraints:
                             constraint_keys = [c.key for c in constraints]
                             return TaskScheduleResult(
