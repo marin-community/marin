@@ -22,27 +22,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Read review prompt
+        id: prompt
+        run: |
+          PROMPT=$(cat docs/recipes/github-pr-review.md | sed '1,/^## Review Prompt$/d')
+          echo "review_prompt<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$PROMPT" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude Review
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            Review this PR. Be extremely terse. No emoji. No fluff.
-
-            Format your review as:
-            1. A 1-2 line description of what the PR does and whether it fulfills its stated objectives.
-            2. Tight bullets (if any) for:
-               - Bugs or correctness issues
-               - Violations of AGENTS.md or coding guidelines
-               - Functionality that diverges from the PR description or linked issue
-
-            If the PR is clean, say so in one line and stop.
-
-            Do NOT comment on:
-            - Formatting, import order, or linting (handled by pre-commit)
-            - Style preferences or naming opinions
-            - Missing docstrings or comments
-            - Generic best-practice advice
-
-            Only flag issues you are confident about. If you are unsure, skip it.
+          prompt: ${{ steps.prompt.outputs.review_prompt }}
           claude_args: '--max-turns 3'
