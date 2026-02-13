@@ -921,6 +921,63 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
         assert task.task_id in txn.tasks_to_kill
 
 
+def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
+    """Coscheduled sibling cascade must free committed resources on surviving workers.
+
+    Regression test: previously, _cascade_coscheduled_failure marked siblings
+    terminal but never called _cleanup_task_resources, leaking committed_cpu/mem
+    on workers and permanently blocking future scheduling.
+    """
+    state = ControllerState()
+
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="leak-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    tasks = submit_job(state, "j-leak", req)
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    # Verify resources are committed before failure
+    for i in range(4):
+        w = state.get_worker(WorkerId(f"w{i}"))
+        assert w.committed_cpu == 2
+        assert len(w.running_tasks) == 1
+
+    # Fail task-0 terminally → cascade kills siblings on w1, w2, w3
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=tasks[0].task_id,
+            new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
+            error="OOM",
+        )
+    )
+
+    # All surviving workers (w1..w3) must have resources fully released
+    for i in range(1, 4):
+        w = state.get_worker(WorkerId(f"w{i}"))
+        assert w.committed_cpu == 0, f"w{i} has leaked committed_cpu={w.committed_cpu}"
+        assert w.committed_mem == 0, f"w{i} has leaked committed_mem={w.committed_mem}"
+        assert len(w.running_tasks) == 0, f"w{i} has phantom running_tasks={w.running_tasks}"
+
+    # w0 should also be clean (task-0 was the trigger, cleaned up by _on_task_state_changed)
+    w0 = state.get_worker(WorkerId("w0"))
+    assert w0.committed_cpu == 0
+    assert len(w0.running_tasks) == 0
+
+
 def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
     """WORKER_FAILED also triggers sibling kill when retries exhausted."""
     state = ControllerState()
