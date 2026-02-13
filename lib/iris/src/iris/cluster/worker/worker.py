@@ -44,6 +44,7 @@ class WorkerConfig:
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
     uv_cache_dir: Path | None = None
+    cargo_cache_dir: Path | None = None
 
 
 class Worker:
@@ -71,6 +72,13 @@ class Worker:
         else:
             self._uv_cache_dir = self._cache_dir / "uv-cache"
         self._uv_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use external cargo_cache_dir if provided, otherwise create inside cache_dir
+        if config.cargo_cache_dir:
+            self._cargo_cache_dir = config.cargo_cache_dir
+        else:
+            self._cargo_cache_dir = self._cache_dir / "cargo"
+        self._cargo_cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
@@ -391,6 +399,7 @@ class Worker:
             workdir=workdir,
             cache_dir=self._cache_dir,
             uv_cache_dir=self._uv_cache_dir,
+            cargo_cache_dir=self._cargo_cache_dir,
         )
 
         attempt = TaskAttempt(

@@ -83,6 +83,7 @@ class TaskAttemptConfig:
     workdir: Path
     cache_dir: Path
     uv_cache_dir: Path
+    cargo_cache_dir: Path
 
 
 def _get_host_ip() -> str:
@@ -231,6 +232,7 @@ class TaskAttempt:
         self.workdir: Path | None = config.workdir
         self._cache_dir: Path = config.cache_dir
         self._uv_cache_dir: Path = config.uv_cache_dir
+        self._cargo_cache_dir: Path = config.cargo_cache_dir
         self._bundle_path: Path | None = None
 
         # Task state
@@ -485,6 +487,7 @@ class TaskAttempt:
             mounts=[
                 (str(self.workdir), "/app", "rw"),
                 (str(self._uv_cache_dir), "/uv/cache", "rw"),
+                (str(self._cargo_cache_dir), "/root/.cargo/registry", "rw"),
             ],
             task_id=self.task_id.to_wire(),
             job_id=job_id.to_wire(),

@@ -64,9 +64,9 @@ def build_runtime_entrypoint(
     setup_commands = [
         "cd /app",
     ]
-    # Use --link-mode copy to avoid hardlink warnings when cache and workdir
-    # are on different filesystems (common with Docker bind mounts).
-    link_mode_flag = "--link-mode copy"
+    # Use --link-mode symlink to avoid reinstalling .venv on every attempt.
+    # Symlinks work fine across bind mounts (unlike hardlinks which are filesystem-specific).
+    link_mode_flag = "--link-mode symlink"
     if uv_sync_flags:
         setup_commands.append(f"uv sync {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
     else:
