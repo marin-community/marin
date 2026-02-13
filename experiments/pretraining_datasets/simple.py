@@ -177,6 +177,20 @@ downloads = {
             override_output_path="raw/proof-pile-2-f1b1d8",
         ).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
     ),
+    "nemotron_pretraining_code_v1": (
+        ExecutorStep(
+            name="raw/Nemotron-Pretraining-Code-v1",
+            fn=download_hf,
+            config=DownloadConfig(
+                hf_dataset_id="nvidia/Nemotron-Pretraining-Code-v1",
+                revision="01393d3",
+                hf_urls_glob=["Synthetic-Code/*.parquet", "README.md", "LICENSE.md"],
+                gcs_output_path=this_output_path(),
+                wait_for_completion=True,
+            ),
+            override_output_path="raw/Nemotron-Pretraining-Code-v1-01393d3",
+        ).cd("Synthetic-Code")
+    ),
     "the_pile_openwebtext2": (
         ExecutorStep(
             name="raw/the_pile_openwebtext2",
@@ -229,6 +243,11 @@ tokenized = {
         downloads["proofpile_2"],
         tokenizer=llama3_tokenizer,
         override_path="tokenized/proofpile_2-4a35c7/",
+    ),
+    "nemotron_pretraining_code_v1": _tokenize_simple(
+        "nemotron-pretraining-code-v1",
+        downloads["nemotron_pretraining_code_v1"],
+        tokenizer=llama3_tokenizer,
     ),
     "slimpajama_6b": _tokenize_simple(
         "SlimPajama-6B",
