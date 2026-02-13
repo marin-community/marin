@@ -419,8 +419,30 @@ def _pick_free_port(host: str) -> int:
 
 
 def _detect_tpu_environment() -> bool:
-    """Detects whether the TPU environment variable TPU_NAME is set and non-empty."""
-    return bool(os.environ.get("TPU_NAME"))
+    """Detect whether we are running in a TPU environment."""
+    if os.environ.get("TPU_NAME"):
+        return True
+    if os.environ.get("TPU_WORKER_ID"):
+        return True
+    if os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS"):
+        return True
+    jax_platforms = os.environ.get("JAX_PLATFORMS", "")
+    if jax_platforms:
+        platforms = [platform.strip().lower() for platform in jax_platforms.split(",") if platform.strip()]
+        if "tpu" in platforms:
+            return True
+    pjrt_device = os.environ.get("PJRT_DEVICE")
+    if pjrt_device and pjrt_device.strip().lower() == "tpu":
+        return True
+    try:
+        import jax  # Optional dependency; only import if environment hints were missing.
+    except ModuleNotFoundError:
+        return False
+    try:
+        return bool(jax.devices("tpu"))
+    except Exception:
+        return False
+    return False
 
 
 def _detect_nvidia_gpu_environment() -> bool:
