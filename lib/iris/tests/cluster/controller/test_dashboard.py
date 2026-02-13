@@ -89,7 +89,8 @@ def scheduler(state):
 def service(state, scheduler):
     controller_mock = Mock()
     controller_mock.wake = Mock()
-    controller_mock.task_schedule_status = scheduler.task_schedule_status
+    controller_mock.create_scheduling_context = scheduler.create_scheduling_context
+    controller_mock.get_job_scheduling_diagnostics = scheduler.get_job_scheduling_diagnostics
     controller_mock.autoscaler = None  # No autoscaler by default
     return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
@@ -105,7 +106,8 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler):
     """Service with autoscaler enabled for tests."""
     controller_mock = Mock()
     controller_mock.wake = Mock()
-    controller_mock.task_schedule_status = scheduler.task_schedule_status
+    controller_mock.create_scheduling_context = scheduler.create_scheduling_context
+    controller_mock.get_job_scheduling_diagnostics = scheduler.get_job_scheduling_diagnostics
     controller_mock.autoscaler = mock_autoscaler  # Enable autoscaler
     return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
@@ -589,7 +591,10 @@ def test_get_task_logs_error_for_unassigned_task(client, state, job_request):
 
 
 def test_coscheduling_failure_reason_no_workers(client, state):
-    """Pending coscheduled tasks report diagnostic reason when no workers match constraints."""
+    """Pending coscheduled job reports diagnostic reason when no workers match constraints.
+
+    Diagnostics are on the job-level (via GetJobStatus), not per-task in ListTasks.
+    """
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
         entrypoint=_make_test_entrypoint(),
@@ -607,18 +612,17 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     )
     submit_job(state, "cosched-job", request)
 
-    resp = rpc_post(client, "ListTasks", {"jobId": JobName.root("cosched-job").to_wire()})
-    tasks = resp.get("tasks", [])
-    assert len(tasks) == 2
-
-    # All tasks should have a pending_reason explaining no workers match
-    for t in tasks:
-        reason = t.get("pendingReason", "")
-        assert "no workers match constraints" in reason.lower(), f"Expected constraint failure reason, got: {reason}"
+    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("cosched-job").to_wire()})
+    job = resp.get("job", {})
+    reason = job.get("pendingReason", "")
+    assert "no workers match constraints" in reason.lower(), f"Expected constraint failure reason, got: {reason}"
 
 
 def test_coscheduling_failure_reason_insufficient_group(client, state, make_worker_metadata):
-    """Pending coscheduled tasks report diagnostic when group is too small."""
+    """Pending coscheduled job reports diagnostic when group is too small.
+
+    Diagnostics are on the job-level (via GetJobStatus), not per-task in ListTasks.
+    """
     # Register 2 workers with tpu-name=my-tpu
     for i in range(2):
         meta = make_worker_metadata()
@@ -644,14 +648,11 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     )
     submit_job(state, "big-cosched", request)
 
-    resp = rpc_post(client, "ListTasks", {"jobId": JobName.root("big-cosched").to_wire()})
-    tasks = resp.get("tasks", [])
-    assert len(tasks) == 4
-
-    for t in tasks:
-        reason = t.get("pendingReason", "")
-        assert "need 4" in reason, f"Expected 'need 4' in reason, got: {reason}"
-        assert "largest group has 2" in reason, f"Expected 'largest group has 2' in reason, got: {reason}"
+    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("big-cosched").to_wire()})
+    job = resp.get("job", {})
+    reason = job.get("pendingReason", "")
+    assert "need 4" in reason, f"Expected 'need 4' in reason, got: {reason}"
+    assert "largest group has 2" in reason, f"Expected 'largest group has 2' in reason, got: {reason}"
 
 
 # =============================================================================

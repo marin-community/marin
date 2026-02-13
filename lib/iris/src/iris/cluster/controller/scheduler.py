@@ -497,7 +497,7 @@ class SchedulingResult:
     """Result of a scheduling cycle - pure data, no state mutation.
 
     Only contains successful assignments and timed-out tasks.
-    Failure details are available via task_schedule_status() for dashboard use.
+    Failure details are available via get_job_scheduling_diagnostics() for dashboard use.
     """
 
     assignments: list[tuple[ControllerTask, ControllerWorker]] = field(default_factory=list)
