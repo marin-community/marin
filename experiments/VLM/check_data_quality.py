@@ -45,6 +45,7 @@ import tempfile
 import time
 from io import BytesIO
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 import fsspec
@@ -64,14 +65,32 @@ sys.stderr.reconfigure(line_buffering=True)
 logger = logging.getLogger(__name__)
 
 
+def _parse_gcs_path(gcs_path: str):
+    """Parse gs://bucket/key into (bucket, key)."""
+    assert gcs_path.startswith("gs://"), f"Not a GCS path: {gcs_path}"
+    path = gcs_path[len("gs://"):]
+    bucket, key = path.split("/", 1)
+    return bucket, key
+
+
+# Lazy-initialized GCS client (shared across threads, thread-safe)
+_gcs_client = None
+
+def _get_gcs_client():
+    global _gcs_client
+    if _gcs_client is None:
+        from google.cloud import storage
+        _gcs_client = storage.Client()
+    return _gcs_client
+
+
 def gcs_download(gcs_path: str, local_path: str):
-    """Download from GCS using gcloud storage cp (faster than gcsfs)."""
-    result = subprocess.run(
-        ["gcloud", "storage", "cp", "--quiet", gcs_path, local_path],
-        capture_output=True, text=True, timeout=300,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"gcloud download failed: {result.stderr.strip()}")
+    """Download from GCS using google-cloud-storage (fast, no subprocess overhead)."""
+    client = _get_gcs_client()
+    bucket_name, key = _parse_gcs_path(gcs_path)
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(key)
+    blob.download_to_filename(local_path)
 
 
 def gcs_upload(local_path: str, gcs_path: str):
@@ -458,14 +477,27 @@ def main():
 
             try:
                 # Step 1: Download batch from GCS to local
-                local_paths = []
-                for gcs_path in batch:
-                    local_path = os.path.join(local_dir, Path(gcs_path).name)
-                    gcs_download(gcs_path, local_path)
-                    local_paths.append(local_path)
+                batch_idx = batch_start // batch_size + 1
+                total_batches = (len(parquet_files) + batch_size - 1) // batch_size
+                print(f"\n--- Batch {batch_idx}/{total_batches}: downloading {len(batch)} shards ---", flush=True)
+                t_batch_dl = time.time()
+
+                # Download all files in batch with a single gcloud command (built-in parallelism)
+                cmd = ["gcloud", "storage", "cp"] + list(batch) + [local_dir + "/"]
+                proc = subprocess.Popen(cmd)
+                ret = proc.wait(timeout=1200)
+                if ret != 0:
+                    raise RuntimeError(f"gcloud batch download failed (exit code {ret})")
+
+                local_paths_with_gcs = [
+                    (os.path.join(local_dir, Path(gcs_path).name), gcs_path)
+                    for gcs_path in batch
+                ]
+                total_size_mb = sum(os.path.getsize(lp) for lp, _ in local_paths_with_gcs) / (1024 * 1024)
+                print(f"  Batch download: {len(batch)} files ({total_size_mb:.0f}MB) in {time.time()-t_batch_dl:.1f}s", flush=True)
 
                 # Step 2: Clean locally + upload + delete original
-                for local_path, gcs_path in zip(local_paths, batch):
+                for local_path, gcs_path in local_paths_with_gcs:
                     done_count += 1
                     shard_name = Path(gcs_path).stem
 
@@ -570,8 +602,6 @@ def main():
             "issues": shard_issues,
             "elapsed": time.time() - t0,
         }
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {}
