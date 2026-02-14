@@ -59,25 +59,25 @@ jobs:
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
 
-          # Allow rebase and pre-commit operations
-          claude_args: '--allowed-tools "Bash(git *)" "Bash(./infra/pre-commit.py *)" "Bash(uv *)" "Bash(pytest *)" "Bash(gh *)" "Bash(python *)"'
-
-          custom_instructions: |
+          claude_args: |
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
+          prompt: |
             Always read and follow the guidelines in AGENTS.md before starting work.
 
-            When working on issues, ALWAYS create a new branch for your changes and open a pull request.
-            Use `gh pr create` to create the PR once your changes are ready.
-
-            Before submitting any changes or creating PRs, you MUST:
-            1. Run `./infra/pre-commit.py --all-files --fix` and ensure all checks pass.
-            2. Run `uv run pytest` on any tests relevant to your changes.
-
+            You always have the ability to commit and push your changes.
+            Use your MCP tools if available, falling back to `git` and `gh` (which you have authorization for) if needed.
+            
+            Before submitting any changes:
+            1. Run `./infra/pre-commit.py --all-files --fix` and fix any issues.
+            2. Run `uv run pytest` on tests relevant to your changes.
+            
+            Report on the test status when you provide an update.
+            Always commit and push changes, even if you couldn't get the tests to pass.
             In any follow-up comments on issues or PRs, state how you tested your changes (which tests you ran and their results).
-
