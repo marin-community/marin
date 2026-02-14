@@ -166,6 +166,7 @@ class IrisJobHandle:
         except Exception:
             if raise_on_failure:
                 raise
+            logger.warning("Job %s failed with exception (raise_on_failure=False)", self.job_id, exc_info=True)
         return self.status()
 
     def terminate(self) -> None:
