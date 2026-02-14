@@ -56,6 +56,11 @@ def build_device_env_vars(config: ContainerConfig) -> dict[str, str]:
                 env["WORKER_ID"] = config.worker_metadata.tpu_worker_id
                 env["CLOUD_TPU_TASK_ID"] = config.worker_metadata.tpu_worker_id
             if config.worker_metadata.tpu_worker_hostnames:
+                if not config.worker_metadata.tpu_worker_id:
+                    raise ValueError(
+                        "TPU worker metadata is incomplete: TPU_WORKER_ID is required "
+                        "when TPU_WORKER_HOSTNAMES is set."
+                    )
                 env["TPU_WORKER_HOSTNAMES"] = config.worker_metadata.tpu_worker_hostnames
                 # JAX multi-host coordination: coordinator is worker-0's IP with standard port.
                 # JAX reads JAX_COORDINATOR_ADDRESS directly. For num_processes and process_id
@@ -64,7 +69,7 @@ def build_device_env_vars(config: ContainerConfig) -> dict[str, str]:
                 hostnames = config.worker_metadata.tpu_worker_hostnames.split(",")
                 env["JAX_COORDINATOR_ADDRESS"] = f"{hostnames[0]}:8476"
                 env["JAX_NUM_PROCESSES"] = str(len(hostnames))
-                env["JAX_PROCESS_ID"] = config.worker_metadata.tpu_worker_id or "0"
+                env["JAX_PROCESS_ID"] = config.worker_metadata.tpu_worker_id
             if config.worker_metadata.tpu_chips_per_host_bounds:
                 env["TPU_CHIPS_PER_HOST_BOUNDS"] = config.worker_metadata.tpu_chips_per_host_bounds
             logger.info("TPU device env vars (with metadata): %s", env)
