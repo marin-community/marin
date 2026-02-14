@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   review:
     if: >-
@@ -11,6 +15,7 @@ jobs:
       github.event.pull_request.author_association == 'MEMBER' ||
       github.event.pull_request.author_association == 'COLLABORATOR'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
@@ -26,9 +31,9 @@ jobs:
         id: prompt
         run: |
           PROMPT=$(cat docs/recipes/github-pr-review.md)
-          echo "review_prompt<<EOF" >> "$GITHUB_OUTPUT"
+          echo "review_prompt<<PROMPT_DELIMITER" >> "$GITHUB_OUTPUT"
           echo "$PROMPT" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "PROMPT_DELIMITER" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Review
         uses: anthropics/claude-code-action@v1
