@@ -262,7 +262,61 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
     logger.info("Tokenization done: %d batches, %d records total", batch_count, record_count)
 
 
-def tokenize(config: TokenizeConfigBase):
+@dataclasses.dataclass(frozen=True)
+class TokenizedMetadata:
+    tokenizer: str
+    # NOTE: can't use UrlDatasetSourceConfig because it's not serializable ;(
+    raw_source_config: dict | None = None
+    format_choice: str | None = None
+    train_path: str | None = None
+    validation_path: str | None = None
+
+    def get_source_config(self) -> UrlDatasetSourceConfig:
+        # NOTE: this is so ugly! Using pydantic doesn't help here because UrlDatasetSourceConfig nor the format
+        # dataclass are serializable.
+        if self.raw_source_config is None:
+            raise ValueError("No source config found in metadata")
+        assert self.format_choice is not None
+        return UrlDatasetSourceConfig(
+            **self.raw_source_config
+            | {"format": LmDatasetFormatBase.get_choice_class(self.format_choice)(**self.raw_source_config["format"])}
+        )
+
+
+# TODO: remove ` tokenize` and `TokenizeConfig`
+def tokenize_fn(
+    train_paths: list[str],  # path to training data
+    validation_paths: list[str],  # path to validation data
+    cache_path: str,  # base path to save the tokenized files
+    tokenizer: str,  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
+    tags: list[str] | None = None,  # tags to be added to config
+    sample_count: int | None = None,
+    format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
+    window_size_bytes: int = 10_000_000_000,
+    allow_test_in_train: bool = False,
+    zephyr_num_cpus: int = 2,
+    zephyr_memory: int = 32 * 1024**3,  # 32GB
+) -> TokenizedMetadata:
+    tags = tags or []
+    # TODO: remove the config based tokenize?
+    return tokenize(
+        TokenizeConfig(
+            train_paths=train_paths,
+            validation_paths=validation_paths,
+            cache_path=cache_path,
+            tokenizer=tokenizer,
+            tags=tags,
+            sample_count=sample_count,
+            format=format,
+            window_size_bytes=window_size_bytes,
+            allow_test_in_train=allow_test_in_train,
+            zephyr_num_cpus=zephyr_num_cpus,
+            zephyr_memory=zephyr_memory,
+        )
+    )
+
+
+def tokenize(config: TokenizeConfigBase) -> TokenizedMetadata:
     """Tokenize datasets using zephyr pipeline.
 
     Processes train and validation splits separately, writing to Levanter cache format.
@@ -299,7 +353,7 @@ def tokenize(config: TokenizeConfigBase):
     if not train_paths and not validation_paths:
         raise ValueError("No input files specified. Nothing to do.")
 
-    def run_pipeline(ctx: ZephyrContext, paths: list[str], split_name: str) -> None:
+    def run_pipeline(ctx: ZephyrContext, paths: list[str], split_name: str) -> str:
         prefix = os.path.join(config.cache_path, split_name)
         ledger_path = os.path.join(prefix, "shard_ledger.json")
 
@@ -309,7 +363,7 @@ def tokenize(config: TokenizeConfigBase):
                 split_name,
                 ledger_path,
             )
-            return
+            return prefix
 
         # Use local backend for lightweight file stats - no remote workers needed
         with ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan") as local_ctx:
@@ -368,16 +422,28 @@ def tokenize(config: TokenizeConfigBase):
         with fsspec.open(stats_path, "w") as f:
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
+        return prefix
+
     with ZephyrContext(
         resources=ResourceConfig(ram="16g", disk="16g"),
         max_workers=min(128, len(train_paths) + len(validation_paths)),
         name="tokenize",
     ) as ctx:
+        train_path, validation_path = None, None
         if train_paths:
-            run_pipeline(ctx, train_paths, "train")
+            train_path = run_pipeline(ctx, train_paths, "train")
 
         if validation_paths:
-            run_pipeline(ctx, validation_paths, "validation")
+            validation_path = run_pipeline(ctx, validation_paths, "validation")
+
+    return TokenizedMetadata(
+        tokenizer=config.tokenizer,
+        raw_source_config=dataclasses.asdict(config.as_lm_dataset_source_config(config.cache_path)),
+        # TODO: why is this so difficult!???
+        format_choice=config.format.get_choice_name(type(config.format)),
+        train_path=train_path,
+        validation_path=validation_path,
+    )
 
 
 @draccus.wrap()

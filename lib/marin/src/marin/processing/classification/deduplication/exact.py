@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from functools import partial
 from marin.processing.classification.deduplication.dedup_commons import (
     DedupConfig,
+    DedupMetadata,
     DedupMode,
     _collect_input_files,
     _compute_dedup_stats,
@@ -26,7 +27,7 @@ from zephyr.dataset import Dataset
 logger = logging.getLogger(__name__)
 
 
-def dedup_exact_paragraph(config: DedupConfig):
+def dedup_exact_paragraph(config: DedupConfig) -> DedupMetadata:
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
     _init_wandb(config)
@@ -101,10 +102,16 @@ def dedup_exact_paragraph(config: DedupConfig):
     if wandb.run:
         wandb.finish()
 
-    return {"success": True, "mode": str(DedupMode.EXACT_PARAGRAPH)} | exact_cnts.to_dict()
+    return DedupMetadata(
+        mode=DedupMode.EXACT_PARAGRAPH,
+        parent_path=config.output_path,
+        data_path=f"{config.output_path}/data",
+        metadata_path=f"{config.output_path}/metadata",
+        stats=exact_cnts.to_dict(),
+    )
 
 
-def dedup_exact_document(config: DedupConfig):
+def dedup_exact_document(config: DedupConfig) -> DedupMetadata:
     """Exact document deduplication: identify duplicate documents based on full text hash"""
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
@@ -187,4 +194,10 @@ def dedup_exact_document(config: DedupConfig):
     if wandb.run:
         wandb.finish()
 
-    return {"success": True, "mode": str(DedupMode.EXACT_DOCUMENT)} | exact_cnts.to_dict()
+    return DedupMetadata(
+        mode=DedupMode.EXACT_DOCUMENT,
+        parent_path=config.output_path,
+        data_path=f"{config.output_path}/data",
+        metadata_path=f"{config.output_path}/metadata",
+        stats=exact_cnts.to_dict(),
+    )
