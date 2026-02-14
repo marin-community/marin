@@ -8,7 +8,7 @@ Execution constraints:
 - Use at most 2 analysis passes:
   1) Diff-first scan for risk areas
   2) Targeted file checks only where risk is detected
-- Prefer `gh pr diff` first; only open full files when necessary to confirm a concrete issue.
+- Prefer a PR diff tool first (for example, `gh pr diff` when available); only open full files when necessary to confirm a concrete issue.
 - If no high-confidence issues are found after these passes, stop.
 
 Scope:
