@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 This file represents the best practices for each stage of the pipeline.
@@ -25,6 +14,7 @@ from functools import lru_cache
 from typing import Any
 
 import jmp
+from fray.v2 import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -38,17 +28,8 @@ from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
-
-from experiments.evals.task_configs import (
-    CORE_TASKS,
-    convert_to_levanter_task_config,
-)
-from experiments.llama import compute_num_parameters
-from experiments.paloma import paloma_tokenized
-from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.simple_train_config import SimpleTrainConfig
+from levanter.utils.mesh import MeshConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
@@ -59,6 +40,20 @@ from marin.execution.executor import (
     this_output_path,
     unwrap_versioned_value,
 )
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
+from marin.training.training import (
+    TrainLmOnPodConfig,
+    run_levanter_train_lm,
+)
+
+from experiments.evals.task_configs import (
+    CORE_TASKS,
+    convert_to_levanter_task_config,
+)
+from experiments.llama import compute_num_parameters
+from experiments.paloma import paloma_tokenized
+from experiments.simple_sft_config import SimpleSFTConfig
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.processing.tokenize import (
     HfDatasetSpec,
     TokenizeConfig,
@@ -66,11 +61,6 @@ from marin.processing.tokenize import (
     add_validation_sets_to_mixture,
     lm_data_config,
     tokenize,
-)
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
-from marin.training.training import (
-    TrainLmOnPodConfig,
-    run_levanter_train_lm,
 )
 
 logger = logging.getLogger("ray")
@@ -178,6 +168,14 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
+        resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+        pip_dependency_groups=["cpu"],
+        env_vars={
+            "TRANSFORMERS_NO_TORCH": "1",
+            "TRANSFORMERS_NO_TORCHVISION": "1",
+            "USE_TORCH": "0",
+            "TORCH_DISABLE_GLOBAL_DEPS": "1",
+        },
     )
 
 
@@ -545,7 +543,6 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
-            permutation_type="feistel",
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """High-level client with automatic job hierarchy and namespace-based actor discovery.
 
@@ -282,7 +271,7 @@ class Job:
     def wait(
         self,
         timeout: float = 300.0,
-        poll_interval: float = 2.0,
+        poll_interval: float = 5.0,
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
@@ -326,7 +315,7 @@ class Job:
         for efficient incremental fetching.
         """
         since_ms = 0
-        stream_interval = Duration.from_seconds(min(0.2, poll_interval))
+        stream_interval = Duration.from_seconds(poll_interval)
         deadline = Deadline.from_seconds(timeout)
 
         while True:
@@ -578,6 +567,7 @@ class IrisClient:
         if workspace is not None:
             creator = BundleCreator(workspace)
             bundle_blob = creator.create_bundle()
+            logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,

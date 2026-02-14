@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Controller RPC service implementation handling job, task, and worker operations.
 
@@ -36,7 +25,7 @@ from iris.cluster.controller.events import (
     JobSubmittedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import SchedulingContext, TaskScheduleResult
+from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
@@ -130,8 +119,12 @@ class SchedulerProtocol(Protocol):
         """Send KILL RPCs to workers for tasks that were running."""
         ...
 
-    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
-        """Get the current scheduling status of a task (for dashboard display)."""
+    def create_scheduling_context(self, workers: list) -> SchedulingContext:
+        """Create a scheduling context for the given workers."""
+        ...
+
+    def get_job_scheduling_diagnostics(self, job, context: SchedulingContext) -> str:
+        """Get detailed diagnostics for why a job cannot be scheduled."""
         ...
 
     @property
@@ -290,6 +283,15 @@ class ControllerServiceImpl:
                 proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
             task_statuses.append(proto_task_status)
 
+        # Get scheduling diagnostics for pending jobs
+        pending_reason = ""
+        if job.state == cluster_pb2.JOB_STATE_PENDING:
+            # Create scheduling context once for all tasks
+            workers = self._state.list_all_workers()
+            sched_context = self._scheduler.create_scheduling_context(workers)
+            # Get job-level diagnostics (expensive but only for detail view)
+            pending_reason = self._scheduler.get_job_scheduling_diagnostics(job, sched_context)
+
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -300,6 +302,7 @@ class ControllerServiceImpl:
             preemption_count=total_preemption_count,
             tasks=task_statuses,
             name=job.request.name if job.request else "",
+            pending_reason=pending_reason,
         )
         if job.request:
             proto_job_status.resources.CopyFrom(job.request.resources)
@@ -461,11 +464,42 @@ class ControllerServiceImpl:
 
         all_jobs.sort(key=sort_key, reverse=reverse)
 
+        # Build parent -> children map to keep families together during pagination
+        children_by_parent: dict[str, list[cluster_pb2.JobStatus]] = {}
+        job_by_name = {job.name: job for job in all_jobs}
+
+        for job in all_jobs:
+            # Extract parent name from hierarchical job name (e.g., "/a/b/c" -> "/a/b")
+            if job.name and "/" in job.name:
+                last_slash = job.name.rfind("/")
+                if last_slash > 0:
+                    parent_name = job.name[:last_slash]
+                    if parent_name in job_by_name:
+                        if parent_name not in children_by_parent:
+                            children_by_parent[parent_name] = []
+                        children_by_parent[parent_name].append(job)
+
         # Pagination (limit=0 means return all jobs)
         offset = max(request.offset, 0)
         if request.limit > 0:
             limit = min(request.limit, 500)
+
+            # Include jobs in the requested range
             paginated_jobs = all_jobs[offset : offset + limit]
+
+            # Extend pagination to include all children of any parent in this page
+            # This ensures parent-child groups stay together even when pagination would split them
+            included_names = {job.name for job in paginated_jobs}
+            additional_children = []
+
+            for job in paginated_jobs:
+                if job.name in children_by_parent:
+                    for child in children_by_parent[job.name]:
+                        if child.name not in included_names:
+                            additional_children.append(child)
+                            included_names.add(child.name)
+
+            paginated_jobs.extend(additional_children)
             has_more = offset + limit < total_count
         else:
             paginated_jobs = all_jobs[offset:]
@@ -534,10 +568,6 @@ class ControllerServiceImpl:
             for job in self._state.list_all_jobs():
                 tasks.extend(self._state.get_job_tasks(job.job_id))
 
-        # Build scheduling context once for all pending-task diagnostics
-        workers = self._state.get_available_workers()
-        sched_context = SchedulingContext.from_workers(workers)
-
         task_statuses = []
         for task in tasks:
             # Look up worker address
@@ -547,13 +577,12 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
-            # Add scheduling diagnostics for pending tasks
+            # Don't add scheduling diagnostics in list view - too expensive
+            # Users should check job detail page for scheduling diagnostics
             pending_reason = ""
             can_be_scheduled = False
             if task.state == cluster_pb2.TASK_STATE_PENDING:
                 can_be_scheduled = task.can_be_scheduled()
-                schedule_status = self._scheduler.task_schedule_status(task, sched_context)
-                pending_reason = schedule_status.failure_reason or ""
 
             # Use attempt timestamps since task-level timestamps are not set
             current_attempt = task.current_attempt
@@ -1030,6 +1059,43 @@ class ControllerServiceImpl:
             last_timestamp_ms=last_timestamp_ms,
             truncated=truncated,
         )
+
+    # --- Profiling ---
+
+    def profile_task(
+        self,
+        request: cluster_pb2.ProfileTaskRequest,
+        ctx: RequestContext,
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Profile a running task by proxying to its worker."""
+        with rpc_error_handler("profile_task"):
+            try:
+                task_name = JobName.from_wire(request.task_id)
+                task_name.require_task()
+            except ValueError as exc:
+                raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+            task = self._state.get_task(task_name)
+            if not task:
+                raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+
+            worker_id = task.worker_id
+            if not worker_id:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+
+            worker = self._state.get_worker(worker_id)
+            if not worker or not worker.healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+
+            timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
+            worker_client = WorkerServiceClientSync(f"http://{worker.address}")
+            try:
+                resp = worker_client.profile_task(request, timeout_ms=timeout_ms)
+                return cluster_pb2.ProfileTaskResponse(
+                    profile_data=resp.profile_data,
+                    error=resp.error,
+                )
+            finally:
+                worker_client.close()
 
     # --- Transactions ---
 

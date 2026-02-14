@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for task scheduler.
 
@@ -1273,3 +1262,226 @@ def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_
     assert len(result.assignments) == 1
     assert result.assignments[0][0] == tasks[0]
     assert result.assignments[0][1].worker_id == WorkerId("w-ondemand")
+
+
+# =============================================================================
+# Depth-First Scheduling Priority Assignment Tests
+# =============================================================================
+
+
+def test_scheduler_assigns_deeper_job_before_shallow(scheduler, state, job_request, worker_metadata):
+    """Scheduler assigns deeper jobs before shallow ones when both fit."""
+    # Worker with enough resources for both jobs
+    register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    # Submit root job and child job (both with 1 CPU)
+    submit_job(state, "root", job_request("root", cpu=1))
+    submit_job(state, "/root/child", job_request("child", cpu=1))
+
+    # Run scheduler
+    result = schedule_until_done(scheduler, state)
+
+    # Both tasks assigned, child first
+    assert len(result.assignments) == 2
+    assert result.assignments[0][0].job_id == JobName.from_string("/root/child")
+    assert result.assignments[1][0].job_id == JobName.root("root")
+
+
+def test_scheduler_assigns_older_root_tree_first(scheduler, state, job_request, worker_metadata):
+    """At same depth, scheduler assigns older root tree first."""
+    register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    # Submit two root jobs
+    submit_job(state, "user-a-job", job_request("user-a-job", cpu=1))
+    submit_job(state, "user-b-job", job_request("user-b-job", cpu=1))
+
+    result = schedule_until_done(scheduler, state)
+
+    assert len(result.assignments) == 2
+    # user-a-job submitted first
+    assert result.assignments[0][0].job_id == JobName.root("user-a-job")
+    assert result.assignments[1][0].job_id == JobName.root("user-b-job")
+
+
+def test_scheduler_child_of_older_tree_beats_newer_root(scheduler, state, job_request, worker_metadata):
+    """Child of older tree is assigned before root of newer tree."""
+    register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    # Submit old tree
+    submit_job(state, "old-tree", job_request("old-tree", cpu=1))
+
+    # Submit new tree
+    submit_job(state, "new-tree", job_request("new-tree", cpu=1))
+
+    # Submit child of old tree
+    submit_job(state, "/old-tree/child", job_request("child", cpu=1))
+
+    result = schedule_until_done(scheduler, state)
+
+    assert len(result.assignments) == 3
+    # Order: child (depth 2), old-tree (depth 1, older), new-tree (depth 1, newer)
+    assert result.assignments[0][0].job_id == JobName.from_string("/old-tree/child")
+    assert result.assignments[1][0].job_id == JobName.root("old-tree")
+    assert result.assignments[2][0].job_id == JobName.root("new-tree")
+
+
+# =============================================================================
+# Error Message Tests
+# =============================================================================
+
+
+def test_scheduler_reports_device_variant_mismatch(scheduler, state, worker_metadata):
+    """Scheduler reports device variant mismatch in error message."""
+    # Worker with v5litepod-16
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.variant = "v5litepod-16"
+    register_worker(state, "w1", "addr", meta)
+
+    # Job requesting v5litepod-32
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-32", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    assert "variant" in diagnostics.lower()
+    assert "v5litepod-32" in diagnostics
+    assert "v5litepod-16" in diagnostics
+
+
+def test_scheduler_reports_tpu_count_exceeded(scheduler, state, worker_metadata):
+    """Scheduler reports TPU count exceeded in error message."""
+    # Worker with 4 TPU chips
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    register_worker(state, "w1", "addr1", meta)
+
+    # Job requesting 8 TPU chips
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=8)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    assert "tpu" in diagnostics.lower()
+    assert "8" in diagnostics
+    assert "4" in diagnostics
+
+
+def test_scheduler_reports_device_type_mismatch(scheduler, state, worker_metadata):
+    """Scheduler reports device type mismatch in error message."""
+    # CPU-only worker
+    meta = worker_metadata()
+    register_worker(state, "w1", "addr", meta)
+
+    # Job requesting TPU
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    assert "device" in diagnostics.lower()
+    assert "tpu" in diagnostics.lower()
+
+
+def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worker_metadata):
+    """Scheduler reports detailed coscheduling capacity issues."""
+    # Create 4 workers but only 2 have sufficient CPU
+    for i in range(4):
+        cpu = 4 if i < 2 else 1  # First 2 have 4 CPU, last 2 have only 1
+        meta = worker_metadata(cpu=cpu)
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    # Coscheduled job requiring 4 replicas, 2 CPUs each
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    # Should mention it's a coscheduling issue with capacity details
+    assert "coscheduling" in diagnostics.lower() or "group" in diagnostics.lower()
+    # Should indicate how many workers have capacity vs needed
+    assert "2" in diagnostics or "4" in diagnostics
+
+
+def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request, worker_metadata):
+    """Scheduler respects FIFO within same depth and tree."""
+    register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    # Submit parent
+    submit_job(state, "tree", job_request("tree", cpu=1))
+
+    # Submit two children
+    submit_job(state, "/tree/child-a", job_request("child-a", cpu=1))
+    submit_job(state, "/tree/child-b", job_request("child-b", cpu=1))
+
+    result = schedule_until_done(scheduler, state)
+
+    assert len(result.assignments) == 3
+
+    # Find child assignments
+    child_assignments = [
+        (task, worker) for task, worker in result.assignments if task.job_id.parent == JobName.root("tree")
+    ]
+    assert len(child_assignments) == 2
+    # child-a submitted first
+    assert child_assignments[0][0].job_id == JobName.from_string("/tree/child-a")
+    assert child_assignments[1][0].job_id == JobName.from_string("/tree/child-b")

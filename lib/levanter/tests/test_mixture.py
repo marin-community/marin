@@ -1,11 +1,14 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Sequence
+
 import jax
 import numpy as np
 import pytest
 
 from levanter.data import ListAsyncDataset, MixtureDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import StopStrategy, rescale_mixture_schedule_for_batch_schedule
 from levanter.schedule import BatchSchedule, ScheduleStep
 
@@ -14,9 +17,6 @@ def datasets():
     ds1 = ListAsyncDataset([1, 2, 3, 4, 5])
     ds2 = ListAsyncDataset([10, 20, 30, 40, 50])
     ds3 = ListAsyncDataset([100, 200, 300, 400, 500])
-    ds1.finalize()
-    ds2.finalize()
-    ds3.finalize()
     return {"ds1": ds1, "ds2": ds2, "ds3": ds3}
 
 
@@ -30,6 +30,17 @@ def block_size():
 
 def key():
     return jax.random.PRNGKey(42)
+
+
+class InfiniteCounterDataset(AsyncDataset[int]):
+    async def async_len(self) -> int:
+        raise ValueError("Infinite dataset has no length")
+
+    def is_finite(self) -> bool:
+        return False
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[int]:
+        return [1000 + idx for idx in indices]
 
 
 @pytest.mark.asyncio
@@ -53,18 +64,77 @@ async def test_mixture_dataset_get_batch():
 async def test_mixture_dataset_block_assignments():
     mixture_ds = MixtureDataset(datasets(), weights(), 10, key=key())
 
-    block_assignment = await mixture_ds._get_block(0)
+    block_assignment = mixture_ds._get_block(0)
     assert block_assignment is not None
     assert len(block_assignment) == 10
 
 
-@pytest.mark.skip
 @pytest.mark.asyncio
 async def test_mixture_dataset_stop_strategy_first():
-    mixture_ds = MixtureDataset(datasets(), weights(), 10, key=key, stop_strategy=StopStrategy.FIRST_STOP_STRATEGY)
+    mixture_ds = MixtureDataset(
+        datasets(),
+        weights(),
+        10,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.FIRST_STOP_STRATEGY,
+    )
 
-    with pytest.raises(NotImplementedError):
-        await mixture_ds.async_len()
+    assert mixture_ds.is_finite()
+    assert await mixture_ds.async_len() == 5
+    assert await mixture_ds.get_batch([0, 1, 2, 3, 4]) == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_stop_strategy_all():
+    mixture_ds = MixtureDataset(
+        datasets(),
+        weights(),
+        10,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.ALL_STOP_STRATEGY,
+    )
+
+    assert mixture_ds.is_finite()
+    assert await mixture_ds.async_len() == 29
+    assert await mixture_ds.getitem_async(10) == 1  # wraparound of ds1
+    assert await mixture_ds.getitem_async(28) == 500
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_all_strategy_can_exhaust_before_tail_stage():
+    staged_weights = [(0, {"ds1": 0.5, "ds2": 0.5}), (20, {"ds1": 1.0, "ds2": 0.0})]
+    dses = {"ds1": ListAsyncDataset([1, 2, 3, 4, 5]), "ds2": ListAsyncDataset([10, 20, 30, 40, 50])}
+    mixture_ds = MixtureDataset(
+        dses,
+        staged_weights,
+        10,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.ALL_STOP_STRATEGY,
+    )
+
+    assert mixture_ds.is_finite()
+    assert await mixture_ds.async_len() == 10
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_first_strategy_exhausts_before_tail_stage():
+    staged_weights = [(0, {"finite": 1.0, "infinite": 0.0}), (10, {"finite": 0.0, "infinite": 1.0})]
+    dses = {"finite": ListAsyncDataset([1, 2, 3, 4, 5]), "infinite": InfiniteCounterDataset()}
+    mixture_ds = MixtureDataset(
+        dses,
+        staged_weights,
+        10,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.FIRST_STOP_STRATEGY,
+    )
+
+    assert mixture_ds.is_finite()
+    assert await mixture_ds.async_len() == 5
+    assert await mixture_ds.get_batch([0, 1, 2, 3, 4]) == [1, 2, 3, 4, 5]
 
 
 @pytest.mark.asyncio
@@ -146,6 +216,22 @@ async def test_mixture_dataset_remap_indices():
 
 
 @pytest.mark.asyncio
+async def test_mixture_dataset_restart_rejects_empty_finite_dataset():
+    dses = {"empty": ListAsyncDataset([]), "full": ListAsyncDataset([10, 20, 30])}
+    mixture_ds = MixtureDataset(
+        dses,
+        {"empty": 0.5, "full": 0.5},
+        block_size=4,
+        key=key(),
+        randomize_blocks=False,
+        stop_strategy=StopStrategy.RESTART_STRATEGY,
+    )
+
+    with pytest.raises(ValueError, match="empty finite dataset"):
+        await mixture_ds.get_batch([0])
+
+
+@pytest.mark.asyncio
 async def test_mixture_dataset_respects_weights():
     w = weights()
     mixture_ds = MixtureDataset(datasets(), w, block_size(), key=key())
@@ -171,12 +257,12 @@ async def test_mixture_dataset_respects_weights():
 async def test_mixture_dataset_randomizes_blocks():
     mixture_ds = MixtureDataset(datasets(), weights(), block_size=10, key=key())
 
-    block_assignment_1 = await mixture_ds._get_block(0)
-    block_assignment_2 = await mixture_ds._get_block(0)
+    block_assignment_1 = mixture_ds._get_block(0)
+    block_assignment_2 = mixture_ds._get_block(0)
 
     assert np.all(block_assignment_1 == block_assignment_2), "Block assignments should be randomized"
 
-    block_assignment_3 = await mixture_ds._get_block(1)
+    block_assignment_3 = mixture_ds._get_block(1)
     assert not np.all(block_assignment_1 == block_assignment_3), "Block assignments should be randomized"
 
 

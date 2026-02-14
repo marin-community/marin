@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Unified worker managing all components and lifecycle."""
 
@@ -54,7 +43,6 @@ class WorkerConfig:
     worker_id: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
-    uv_cache_dir: Path | None = None
 
 
 class Worker:
@@ -75,13 +63,6 @@ class Worker:
             raise ValueError("WorkerConfig.cache_dir is required")
         self._cache_dir = config.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Use external uv_cache_dir if provided, otherwise create inside cache_dir
-        if config.uv_cache_dir:
-            self._uv_cache_dir = config.uv_cache_dir
-        else:
-            self._uv_cache_dir = self._cache_dir / "uv-cache"
-        self._uv_cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
@@ -244,7 +225,7 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Get VM address from probe (injected by ManagedVm bootstrap via IRIS_VM_ADDRESS)
+        # Get VM address from probe (injected by Platform bootstrap via IRIS_VM_ADDRESS)
         # For non-cloud workers, use host:port as both worker_id and vm_address
         vm_address = metadata.vm_address
         if not vm_address:
@@ -401,7 +382,6 @@ class Worker:
             ports=ports,
             workdir=workdir,
             cache_dir=self._cache_dir,
-            uv_cache_dir=self._uv_cache_dir,
         )
 
         attempt = TaskAttempt(
@@ -425,12 +405,10 @@ class Worker:
             attempt.run()
 
         def _stop_task() -> None:
-            attempt.should_stop = True
-            if attempt.container_id:
-                try:
-                    self._runtime.kill(attempt.container_id, force=True)
-                except RuntimeError:
-                    pass
+            try:
+                attempt.stop(force=True)
+            except RuntimeError:
+                pass
 
         mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id_wire}", on_stop=_stop_task)
         attempt.thread = mt._thread
@@ -618,6 +596,17 @@ class Worker:
         if not current:
             return False
         return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
+
+    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+        """Profile a running task by delegating to its container handle."""
+        attempt = self._get_current_attempt(task_id)
+        if not attempt:
+            raise ValueError(f"Task {task_id} not found")
+        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
+            raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
+        if not attempt._container_handle:
+            raise ValueError(f"Task {task_id} has no container handle")
+        return attempt._container_handle.profile(duration_seconds, profile_type)
 
     def get_logs(
         self,

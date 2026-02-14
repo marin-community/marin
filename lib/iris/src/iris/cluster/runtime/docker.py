@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Docker runtime with cgroups v2 resource limits and BuildKit image caching.
 
@@ -29,12 +18,21 @@ import re
 import shlex
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.runtime.profile import (
+    build_memray_attach_cmd,
+    build_memray_transform_cmd,
+    build_pyspy_cmd,
+    resolve_cpu_spec,
+    resolve_memory_spec,
+)
 from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, ImageInfo
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -340,6 +338,95 @@ exec {quoted_cmd}
             return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
 
+    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+        """Profile the running process using py-spy (CPU) or memray (memory)."""
+
+        container_id = self._run_container_id
+        if not container_id:
+            raise RuntimeError("Cannot profile: no running container")
+
+        profile_id = uuid.uuid4().hex[:8]
+
+        # Dispatch to CPU or memory profiling based on profile_type
+        if profile_type.HasField("cpu"):
+            return self._profile_cpu(container_id, duration_seconds, profile_type.cpu, profile_id)
+        elif profile_type.HasField("memory"):
+            return self._profile_memory(container_id, duration_seconds, profile_type.memory, profile_id)
+        else:
+            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+
+    def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
+
+    def _docker_read_file(self, container_id: str, path: str) -> bytes:
+        result = self._docker_exec(container_id, ["cat", path], capture_output=True, timeout=5)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to read {path}: {result.stderr}")
+        return result.stdout
+
+    def _docker_rm_files(self, container_id: str, paths: list[str]) -> None:
+        self._docker_exec(container_id, ["rm", "-f", *paths], capture_output=True, timeout=10)
+
+    def _profile_cpu(
+        self, container_id: str, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile", profile_id: str
+    ) -> bytes:
+        """Profile CPU using py-spy."""
+        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
+        output_path = f"/tmp/profile-cpu-{profile_id}.{spec.ext}"
+        cmd = build_pyspy_cmd(spec, py_spy_bin="/app/.venv/bin/py-spy", output_path=output_path)
+
+        logger.info(
+            "CPU profiling container %s for %ds (format=%s, rate=%dHz)",
+            container_id,
+            duration_seconds,
+            spec.py_spy_format,
+            spec.rate_hz,
+        )
+        try:
+            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
+            if result.returncode != 0:
+                raise RuntimeError(f"py-spy failed: {result.stderr}")
+            return self._docker_read_file(container_id, output_path)
+        finally:
+            self._docker_rm_files(container_id, [output_path])
+
+    def _profile_memory(
+        self, container_id: str, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile", profile_id: str
+    ) -> bytes:
+        """Profile memory using memray."""
+        spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")
+        memray_bin = "/app/.venv/bin/memray"
+        trace_path = f"/tmp/memray-trace-{profile_id}.bin"
+        output_path = f"/tmp/memray-output-{profile_id}.{spec.ext}"
+
+        attach_cmd = build_memray_attach_cmd(spec, memray_bin, trace_path)
+        transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
+
+        logger.info(
+            "Memory profiling container %s for %ds (format=%s, leaks=%s)",
+            container_id,
+            duration_seconds,
+            spec.reporter,
+            spec.leaks,
+        )
+        try:
+            result = self._docker_exec(
+                container_id, attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"memray attach failed: {result.stderr}")
+
+            result = self._docker_exec(container_id, transform_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
+
+            if spec.output_is_file:
+                return self._docker_read_file(container_id, output_path)
+            else:
+                return result.stdout.encode("utf-8")
+        finally:
+            self._docker_rm_files(container_id, [trace_path, output_path])
+
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""
         if self._run_container_id:
@@ -380,6 +467,7 @@ exec {quoted_cmd}
             cmd.append("--add-host=host.docker.internal:host-gateway")
 
         cmd.extend(["--cap-drop", "ALL"])
+        cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_resources:

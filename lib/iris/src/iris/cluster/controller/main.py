@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Click-based CLI for the Iris controller daemon."""
 
@@ -22,6 +11,7 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.time_utils import Duration
 
@@ -58,9 +48,10 @@ def serve(
     When --config is provided, the controller runs an integrated autoscaler
     that provisions/terminates VM slices based on pending task demand.
     """
-    from iris.cluster.vm.autoscaler import Autoscaler
-    from iris.cluster.vm.config import create_autoscaler, load_config
-    from iris.cluster.vm.platform import create_platform
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.config import load_config, create_autoscaler
+    from iris.cluster.platform.bootstrap import WorkerBootstrap
+    from iris.cluster.platform.factory import create_platform
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -68,6 +59,7 @@ def serve(
 
     # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
+    cluster_config = None
     if config_file:
         logger.info("Loading cluster config from %s", config_file)
         try:
@@ -83,20 +75,22 @@ def serve(
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
 
         try:
-            # Create platform with explicit config sections
             platform = create_platform(
                 platform_config=cluster_config.platform,
-                bootstrap_config=cluster_config.defaults.bootstrap,
-                timeout_config=cluster_config.defaults.timeouts,
                 ssh_config=cluster_config.defaults.ssh,
             )
             logger.info("Platform created")
 
-            # Create autoscaler using platform
+            worker_bootstrap = (
+                WorkerBootstrap(cluster_config) if cluster_config.defaults.bootstrap.docker_image else None
+            )
+
             autoscaler = create_autoscaler(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
+                label_prefix=cluster_config.platform.label_prefix or "iris",
+                worker_bootstrap=worker_bootstrap,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
@@ -112,15 +106,28 @@ def serve(
     else:
         logger.info("No cluster config provided, autoscaler disabled")
 
+    # Use worker_timeout from cluster config if available
+    if cluster_config and cluster_config.controller.worker_timeout.milliseconds > 0:
+        effective_timeout = Duration.from_proto(cluster_config.controller.worker_timeout)
+    else:
+        effective_timeout = Duration.from_seconds(worker_timeout)
+
+    heartbeat_failure_threshold = (
+        cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
+    )
+
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
-    logger.info("Configuration: scheduler_interval=%.2fs worker_timeout=%.2fs", scheduler_interval, worker_timeout)
+    logger.info(
+        "Configuration: scheduler_interval=%.2fs worker_timeout=%.0fms", scheduler_interval, effective_timeout.to_ms()
+    )
 
     config = ControllerConfig(
         host=host,
         port=port,
         bundle_prefix=bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
-        worker_timeout=Duration.from_seconds(worker_timeout),
+        worker_timeout=effective_timeout,
+        heartbeat_failure_threshold=heartbeat_failure_threshold,
     )
 
     try:

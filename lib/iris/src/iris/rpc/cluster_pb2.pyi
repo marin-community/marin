@@ -76,6 +76,68 @@ class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class CpuProfile(_message.Message):
+    __slots__ = ("format", "rate_hz")
+    class Format(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        FORMAT_UNSPECIFIED: _ClassVar[CpuProfile.Format]
+        FLAMEGRAPH: _ClassVar[CpuProfile.Format]
+        SPEEDSCOPE: _ClassVar[CpuProfile.Format]
+        RAW: _ClassVar[CpuProfile.Format]
+    FORMAT_UNSPECIFIED: CpuProfile.Format
+    FLAMEGRAPH: CpuProfile.Format
+    SPEEDSCOPE: CpuProfile.Format
+    RAW: CpuProfile.Format
+    FORMAT_FIELD_NUMBER: _ClassVar[int]
+    RATE_HZ_FIELD_NUMBER: _ClassVar[int]
+    format: CpuProfile.Format
+    rate_hz: int
+    def __init__(self, format: _Optional[_Union[CpuProfile.Format, str]] = ..., rate_hz: _Optional[int] = ...) -> None: ...
+
+class MemoryProfile(_message.Message):
+    __slots__ = ("format", "leaks")
+    class Format(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        FORMAT_UNSPECIFIED: _ClassVar[MemoryProfile.Format]
+        FLAMEGRAPH: _ClassVar[MemoryProfile.Format]
+        TABLE: _ClassVar[MemoryProfile.Format]
+        STATS: _ClassVar[MemoryProfile.Format]
+    FORMAT_UNSPECIFIED: MemoryProfile.Format
+    FLAMEGRAPH: MemoryProfile.Format
+    TABLE: MemoryProfile.Format
+    STATS: MemoryProfile.Format
+    FORMAT_FIELD_NUMBER: _ClassVar[int]
+    LEAKS_FIELD_NUMBER: _ClassVar[int]
+    format: MemoryProfile.Format
+    leaks: bool
+    def __init__(self, format: _Optional[_Union[MemoryProfile.Format, str]] = ..., leaks: _Optional[bool] = ...) -> None: ...
+
+class ProfileType(_message.Message):
+    __slots__ = ("cpu", "memory")
+    CPU_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_FIELD_NUMBER: _ClassVar[int]
+    cpu: CpuProfile
+    memory: MemoryProfile
+    def __init__(self, cpu: _Optional[_Union[CpuProfile, _Mapping]] = ..., memory: _Optional[_Union[MemoryProfile, _Mapping]] = ...) -> None: ...
+
+class ProfileTaskRequest(_message.Message):
+    __slots__ = ("task_id", "duration_seconds", "profile_type")
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    DURATION_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    duration_seconds: int
+    profile_type: ProfileType
+    def __init__(self, task_id: _Optional[str] = ..., duration_seconds: _Optional[int] = ..., profile_type: _Optional[_Union[ProfileType, _Mapping]] = ...) -> None: ...
+
+class ProfileTaskResponse(_message.Message):
+    __slots__ = ("profile_data", "error")
+    PROFILE_DATA_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    profile_data: bytes
+    error: str
+    def __init__(self, profile_data: _Optional[bytes] = ..., error: _Optional[str] = ...) -> None: ...
+
 class ProcessLogRecord(_message.Message):
     __slots__ = ("timestamp", "level", "logger_name", "message")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]

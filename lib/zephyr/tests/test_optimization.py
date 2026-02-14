@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for operation fusion optimization via compute_plan."""
 
@@ -97,7 +86,7 @@ def test_fused_execution_with_batch():
     Note: Batching happens per-shard. Since each input item becomes its own shard,
     and filtering may reduce items per shard, batches may not span across shards.
     """
-    from zephyr import Backend
+    from zephyr.execution import ZephyrContext
 
     # Use a flat_map to create multiple items in a single shard
     ds = (
@@ -108,7 +97,8 @@ def test_fused_execution_with_batch():
         .window(2)  # [[6, 8], [10, 12]]
     )
 
-    result = list(Backend.execute(ds))
+    with ZephyrContext(name="test_fusion") as ctx:
+        result = list(ctx.execute(ds))
     assert result == [[6, 8], [10, 12]]
 
 
