@@ -15,7 +15,7 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
-from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
@@ -32,15 +32,15 @@ from iris.cluster.controller.state import (
     HeartbeatSnapshot,
 )
 from iris.cluster.types import (
+    PREEMPTIBLE_ATTRIBUTE_KEY,
     JobName,
     VmWorkerStatus,
     VmWorkerStatusMap,
-    PREEMPTIBLE_ATTRIBUTE_KEY,
     get_device_type_enum,
     get_device_variant,
 )
-from iris.cluster.controller.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
+from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff, RateLimiter
@@ -182,8 +182,11 @@ class ControllerConfig:
     Uses fsspec for storage, so supports both GCS and local filesystems. For distributed deployments,
     use a GCS path so workers can download bundles."""
 
-    scheduler_interval_seconds: float = 0.5
-    """How often to run the scheduling loop (in seconds)."""
+    scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
+    """How often to run the scheduling loop."""
+
+    heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
+    """How often to send heartbeats to workers."""
 
     worker_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
     """How long without worker heartbeats before declaring a worker unavailable."""
@@ -348,7 +351,7 @@ class Controller:
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""
         while not stop_event.is_set():
-            self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
+            self._wake_event.wait(timeout=self._config.scheduler_interval.to_seconds())
             self._wake_event.clear()
 
             if stop_event.is_set():
@@ -361,7 +364,7 @@ class Controller:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
         don't stall scheduling or heartbeats."""
         while not stop_event.is_set():
-            stop_event.wait(timeout=self._config.scheduler_interval_seconds)
+            stop_event.wait(timeout=self._config.autoscaler_interval.to_seconds())
             if stop_event.is_set():
                 break
             try:
@@ -372,7 +375,7 @@ class Controller:
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
         while not stop_event.is_set():
-            self._heartbeat_event.wait(timeout=self._config.scheduler_interval_seconds)
+            self._heartbeat_event.wait(timeout=self._config.heartbeat_interval.to_seconds())
             self._heartbeat_event.clear()
             if stop_event.is_set():
                 break
