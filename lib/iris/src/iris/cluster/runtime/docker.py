@@ -71,14 +71,6 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     return flags
 
 
-def _build_device_env_vars(config: ContainerConfig) -> dict[str, str]:
-    """Build device-specific environment variables for the container.
-
-    Delegates to the shared build_device_env_vars in env.py.
-    """
-    return build_device_env_vars(config)
-
-
 def _detect_mount_user(mounts: list[tuple[str, str, str]]) -> str | None:
     """Detect user to run container as based on bind mount ownership.
 
@@ -458,7 +450,7 @@ exec {quoted_cmd}
                 cmd.extend(["--memory", f"{memory_mb}m"])
 
         # Build combined environment
-        device_env = _build_device_env_vars(config) if include_resources else {}
+        device_env = build_device_env_vars(config) if include_resources else {}
         combined_env = {**device_env, **config.env}
 
         for k, v in combined_env.items():
