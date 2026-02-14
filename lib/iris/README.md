@@ -199,7 +199,10 @@ When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers
 **Environment variables:**
 - `JAX_PLATFORMS=tpu,cpu` - JAX platform configuration
 - `PJRT_DEVICE=TPU` - PJRT runtime device
+- `TPU_SKIP_MDS_QUERY=1` - force JAX to use explicit TPU worker metadata in containers
+- `TPU_ACCELERATOR_TYPE`, `TPU_TYPE` - TPU accelerator variant (for libtpu/JAX topology init)
 - `TPU_NAME`, `TPU_WORKER_ID`, `TPU_WORKER_HOSTNAMES`, `TPU_CHIPS_PER_HOST_BOUNDS` - TPU metadata from host
+- `JAX_COORDINATOR_ADDRESS`, `JAX_NUM_PROCESSES`, `JAX_PROCESS_ID` - explicit JAX distributed coordination
 
 This enables JAX and other TPU-aware frameworks to initialize correctly inside job containers.
 
