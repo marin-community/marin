@@ -1462,6 +1462,86 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worke
     assert "2" in diagnostics or "4" in diagnostics
 
 
+def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state):
+    """Two coscheduled TPU jobs cannot use the same TPU group simultaneously.
+
+    Each worker in the group has 4 TPU chips and the job requests all 4,
+    so once job 1 occupies the group, job 2 must wait until job 1 completes.
+    """
+    # Create 4 workers in tpu-group "tpu-a", each with 4 TPU chips
+    for i in range(4):
+        meta = cluster_pb2.WorkerMetadata(
+            hostname=f"tpu-worker-{i}",
+            ip_address="127.0.0.1",
+            cpu_count=10,
+            memory_bytes=10 * 1024**3,
+            disk_bytes=10 * 1024**3,
+            tpu_name="v5litepod-16",
+        )
+        device = cluster_pb2.DeviceConfig()
+        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+        meta.device.CopyFrom(device)
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    tpu_resource = cluster_pb2.ResourceSpecProto(
+        cpu=1,
+        memory_bytes=1024**3,
+        device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+    )
+
+    # Job 1: coscheduled across all 4 workers
+    req1 = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job-1",
+        entrypoint=_make_test_entrypoint(),
+        resources=tpu_resource,
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=4,
+    )
+    req1.coscheduling.group_by = "tpu-name"
+    tasks1 = submit_job(state, "j1", req1)
+
+    # Schedule and commit job 1
+    result1 = schedule_until_done(scheduler, state)
+    assert len(result1.assignments) == 4
+    for task in tasks1:
+        transition_task_to_running(state, task)
+
+    # Job 2: same shape, should be blocked because TPU chips are exhausted
+    req2 = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job-2",
+        entrypoint=_make_test_entrypoint(),
+        resources=tpu_resource,
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=4,
+    )
+    req2.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j2", req2)
+
+    result2 = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+    assert len(result2.assignments) == 0
+
+    # Complete all job 1 tasks
+    for task in tasks1:
+        state.handle_event(
+            TaskStateChangedEvent(
+                task_id=task.task_id,
+                new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                attempt_id=task.current_attempt_id,
+            )
+        )
+
+    # Job 2 should now be schedulable
+    result3 = schedule_until_done(scheduler, state)
+    assert len(result3.assignments) == 4
+    assigned_jobs = {task.job_id for task, _ in result3.assignments}
+    assert assigned_jobs == {JobName.root("j2")}
+
+
 def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request, worker_metadata):
     """Scheduler respects FIFO within same depth and tree."""
     register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
