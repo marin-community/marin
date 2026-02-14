@@ -28,6 +28,7 @@ from haliax.state_dict import from_torch_compatible_state_dict
 
 import levanter
 from levanter import callbacks
+from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, save_hf_checkpoint_callback
 from levanter.data.image import (
     ImageDataLoader,
@@ -513,6 +514,11 @@ class TrainVLMConfig:
     epoch: int = 0
     """Number of epochs to train. If 0, train indefinitely until num_train_steps is reached."""
 
+    # Levanter checkpoint initialization
+    initialize_from_checkpoint_path: Optional[str] = None
+    """If provided, will initialize model weights from this Levanter checkpoint path, resetting step to 0.
+    Use this for loading from a previous training run's Levanter checkpoint while starting a new training stage."""
+
     # Streaming mode performance tuning
     streaming_max_buffered_batches: int = 4
     """Maximum buffered batches in streaming mode (default: 4). Increase for better throughput."""
@@ -735,6 +741,13 @@ def main(config: TrainVLMConfig):
                 frozen_parts.append("LLM")
             logger.info(f"Freezing {' and '.join(frozen_parts)} - only projector will be trained")
             logger.info("Note: Freezing is implemented via gradient zeroing during training.")
+
+        if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
+            logger.info(f"Initializing from Levanter checkpoint: {config.initialize_from_checkpoint_path}")
+            state = load_checkpoint(state, config.initialize_from_checkpoint_path)
+            # Reset step to 0 - we're just initializing weights for a new training stage
+            state = dataclasses.replace(state, step=jnp.array(0))
+            logger.info("Loaded Levanter checkpoint and reset step to 0")
 
         if int(state.step) == 0:
             if config.initialize_from_hf:
