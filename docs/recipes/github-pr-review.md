@@ -16,11 +16,12 @@ Scope:
   - Bugs or correctness issues
   - Violations of AGENTS.md or coding guidelines
   - Functionality divergence from the PR description or linked issue
+- If a specification exists (issue description, design doc, acceptance criteria, or inline requirements), verify the code adheres to it and flag concrete mismatches.
 - Ignore formatting, import order, lint/style preferences, naming opinions, missing docstrings/comments, and generic best-practice advice.
 
 Output contract:
 - Return exactly one final review.
-- Keep total output under 12 lines.
+- Keep output compact and high-signal.
 - Use this format only:
 
 1. `<1-2 lines: what the PR changes and whether it meets objectives>`
