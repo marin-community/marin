@@ -771,6 +771,9 @@ class LmDataConfig:
                         os.path.join(cache_root, split), component.format, self.the_tokenizer, self.enforce_eos
                     )
                 except FileNotFoundError:
+                    if split != "train":
+                        logger.warning(f"No {split} cache found for component {name}, skipping")
+                        continue
                     raise ValueError(f"No source and no cache found for component {name} split {split}")
                 continue
 

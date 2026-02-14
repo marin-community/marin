@@ -52,6 +52,11 @@ VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
 UNIFIED_TOKENIZER_PATH = "gs://marin-vlm/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm/unified_pretraining_cache"
+UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
+
+# Eval benchmark categories (used for tagging in eval metrics)
+UNDERSTANDING_BENCHMARKS = {"textvqa", "chartqa", "ai2d", "mmmu"}
+GENERATION_BENCHMARKS = {"cifar10_small", "cifar10", "imagenet_small", "imagenet"}
 
 
 # --- Extended Tokenizer Creation ---
@@ -105,6 +110,8 @@ def unified_data_config(
     text_weight: float = 0.7,
     multimodal_weight: float = 0.3,
     multimodal_cache_path: str = UNIFIED_CACHE_PATH,
+    eval_benchmarks: list[str] | None = None,
+    eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
@@ -112,6 +119,9 @@ def unified_data_config(
         text_weight: Scaling factor applied to each Nemotron split's weight (controls r1).
         multimodal_weight: Weight for the multimodal caption data component.
         multimodal_cache_path: GCS path to the pre-built multimodal Levanter cache.
+        eval_benchmarks: List of eval benchmark names to include as validation-only
+            components (train_weight=0.0). Set to None to disable eval.
+        eval_cache_path: GCS path to eval benchmark Levanter caches.
     """
     # Text: use existing Llama3-tokenized Nemotron caches (no re-tokenization needed)
     nemotron_steps = tokenize_nemotron()
@@ -122,8 +132,10 @@ def unified_data_config(
 
     # Multimodal: pre-built cache with per-token loss weights.
     # pack=True to avoid wasting compute padding short sequences (~600 tokens) to 4096.
+    # NOTE: cache_dir should NOT include the split suffix — Levanter's build_caches()
+    # appends /{split} automatically (e.g., cache_dir/train, cache_dir/validation).
     multimodal_component = DatasetComponent(
-        cache_dir=f"{multimodal_cache_path}/train",
+        cache_dir=multimodal_cache_path,
         format=PrebuiltLmDatasetFormat(
             input_ids_key="input_ids",
             loss_weights_key="loss_weights",
@@ -133,6 +145,27 @@ def unified_data_config(
 
     components = {**text_components, "multimodal_captions": multimodal_component}
     weights = {**text_weights, "multimodal_captions": multimodal_weight}
+
+    # Eval benchmarks: weight 0.0 → eval-only (not used in training data).
+    # Levanter's validation_sets() loads these for periodic eval during training.
+    if eval_benchmarks is not None:
+        for bench in eval_benchmarks:
+            tags = ["eval"]
+            if bench in UNDERSTANDING_BENCHMARKS:
+                tags.append("understanding")
+            elif bench in GENERATION_BENCHMARKS:
+                tags.append("generation")
+
+            components[f"eval_{bench}"] = DatasetComponent(
+                cache_dir=f"{eval_cache_path}/{bench}",
+                format=PrebuiltLmDatasetFormat(
+                    input_ids_key="input_ids",
+                    loss_weights_key="loss_weights",
+                ),
+                pack=True,
+                tags=tags,
+            )
+            weights[f"eval_{bench}"] = 0.0
 
     return LmDataConfig(
         tokenizer=UNIFIED_TOKENIZER_PATH,
@@ -186,10 +219,28 @@ unified_4b_train = SimpleTrainConfig(
 # lives on GCS and must be created first via create_unified_tokenizer().
 
 
-def make_unified_0_6b(text_weight: float = 0.7, multimodal_weight: float = 0.3):
+DEFAULT_EVAL_BENCHMARKS = [
+    "textvqa",
+    "chartqa",
+    "ai2d",
+    "mmmu",
+    "cifar10_small",
+    "imagenet_small",
+]
+
+
+def make_unified_0_6b(
+    text_weight: float = 0.7,
+    multimodal_weight: float = 0.3,
+    eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
+):
     return default_train(
         name="unified-qwen3-0.6b",
-        tokenized=unified_data_config(text_weight=text_weight, multimodal_weight=multimodal_weight),
+        tokenized=unified_data_config(
+            text_weight=text_weight,
+            multimodal_weight=multimodal_weight,
+            eval_benchmarks=eval_benchmarks,
+        ),
         model_config=qwen3_0_6b,
         train_config=unified_0_6b_train,
         tags=["unified", "scaling", "qwen3", "0.6b"],
@@ -198,10 +249,18 @@ def make_unified_0_6b(text_weight: float = 0.7, multimodal_weight: float = 0.3):
     )
 
 
-def make_unified_1_7b(text_weight: float = 0.7, multimodal_weight: float = 0.3):
+def make_unified_1_7b(
+    text_weight: float = 0.7,
+    multimodal_weight: float = 0.3,
+    eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
+):
     return default_train(
         name="unified-qwen3-1.7b",
-        tokenized=unified_data_config(text_weight=text_weight, multimodal_weight=multimodal_weight),
+        tokenized=unified_data_config(
+            text_weight=text_weight,
+            multimodal_weight=multimodal_weight,
+            eval_benchmarks=eval_benchmarks,
+        ),
         model_config=qwen3_1_7b,
         train_config=unified_1_7b_train,
         tags=["unified", "scaling", "qwen3", "1.7b"],
@@ -210,10 +269,18 @@ def make_unified_1_7b(text_weight: float = 0.7, multimodal_weight: float = 0.3):
     )
 
 
-def make_unified_4b(text_weight: float = 0.7, multimodal_weight: float = 0.3):
+def make_unified_4b(
+    text_weight: float = 0.7,
+    multimodal_weight: float = 0.3,
+    eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
+):
     return default_train(
         name="unified-qwen3-4b",
-        tokenized=unified_data_config(text_weight=text_weight, multimodal_weight=multimodal_weight),
+        tokenized=unified_data_config(
+            text_weight=text_weight,
+            multimodal_weight=multimodal_weight,
+            eval_benchmarks=eval_benchmarks,
+        ),
         model_config=qwen3_4b,
         train_config=unified_4b_train,
         tags=["unified", "scaling", "qwen3", "4b"],

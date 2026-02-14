@@ -72,7 +72,7 @@ def extract_image_bytes(image) -> bytes | None:
         if image.mode not in ("RGB", "RGBA", "L", "LA", "P"):
             image = image.convert("RGB")
         buf = io.BytesIO()
-        image.save(buf, format="PNG")
+        image.save(buf, format="PNG", compress_level=1)
         result = buf.getvalue()
         buf.close()
         return result
@@ -697,6 +697,9 @@ def convert_benchmark(
             continue
 
         rows.append(row)
+
+        if (i + 1) % 500 == 0:
+            logger.info("  processed %d/%d rows (%d skipped)", i + 1, len(ds), skipped)
 
         if len(rows) >= rows_per_shard:
             local_path, num_rows = write_eval_shard(rows, shard_idx, output_dir, converter.name)
