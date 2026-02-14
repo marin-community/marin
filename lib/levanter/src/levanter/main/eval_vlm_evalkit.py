@@ -744,6 +744,10 @@ def main(config: EvalVLMEvalKitConfig):
                 dataset_name = dataset.dataset_name
                 logger.info(f"Dataset {dataset_name} has {len(dataset)} samples")
 
+                # Set up dump_image for custom prompts (VLMEvalKit sets this before build_prompt)
+                if hasattr(vlm_model, 'set_dump_image'):
+                    vlm_model.set_dump_image(dataset.dump_image)
+
                 # Limit examples if specified
                 data = dataset.data
                 if config.max_examples is not None and len(data) > config.max_examples:

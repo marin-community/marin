@@ -30,12 +30,14 @@ Example usage:
 """
 
 import logging
+import string
 from io import BytesIO
 from typing import List, Optional, Union
 
 import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
+import pandas as pd
 from PIL import Image
 
 import haliax as hax
@@ -103,6 +105,7 @@ class LevanterVLM(BaseModel):
             temperature: Sampling temperature (0.0 for greedy).
             vlm_batch_size: Number of requests to process in parallel.
         """
+        super().__init__()
         self.model = levanter_model
         self.tokenizer = tokenizer
         self.image_processor = image_processor
@@ -329,6 +332,63 @@ class LevanterVLM(BaseModel):
             unpad_indices=unpad_indices_na,
             num_unpadded_features=num_unpadded_features,
         )
+
+    def use_custom_prompt(self, dataset):
+        """Use custom prompts for MCQ and Y/N datasets to improve parse accuracy."""
+        try:
+            from vlmeval.dataset import DATASET_TYPE
+            dataset_type = DATASET_TYPE(dataset)
+            return dataset_type in ('MCQ', 'Y/N')
+        except Exception:
+            return False
+
+    def build_prompt(self, line, dataset=None):
+        """Build explicit-format prompts that match VLMEvalKit's parser expectations.
+
+        Uses the same prompt format as InternVL/Eagle/Janus/Parrot models:
+        - MCQ: "Answer with the option's letter from the given choices directly."
+        - Y/N: "Please answer Yes or No directly."
+        """
+        from vlmeval.dataset import DATASET_TYPE
+
+        assert self.use_custom_prompt(dataset)
+        tgt_path = self.dump_image(line, dataset)
+
+        question = line['question']
+        dataset_type = DATASET_TYPE(dataset)
+
+        if dataset_type == 'MCQ':
+            options = {
+                cand: line[cand]
+                for cand in string.ascii_uppercase
+                if cand in line and not pd.isna(line[cand])
+            }
+            options_prompt = ''
+            for key, item in options.items():
+                options_prompt += f'{key}. {item}\n'
+
+            hint = line['hint'] if ('hint' in line and not pd.isna(line['hint'])) else None
+            prompt = f'Hint: {hint}\n' if hint is not None else ''
+            prompt += f'{question}\n'
+            if len(options):
+                prompt += f"{options_prompt}\nAnswer with the option's letter from the given choices directly."
+            else:
+                prompt += 'Answer the question directly.'
+
+        elif dataset_type == 'Y/N':
+            prompt = f'{question}\nPlease answer Yes or No directly.'
+
+        else:
+            prompt = question
+
+        # Build message list with images and text
+        msgs = []
+        if isinstance(tgt_path, list):
+            msgs.extend([dict(type='image', value=p) for p in tgt_path])
+        else:
+            msgs.append(dict(type='image', value=tgt_path))
+        msgs.append(dict(type='text', value=prompt))
+        return msgs
 
     def generate_inner(self, msgs: List[dict], dataset: Optional[str] = None) -> str:
         """Generate a response for the given multimodal messages.
