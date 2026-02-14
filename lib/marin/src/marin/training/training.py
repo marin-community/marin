@@ -159,7 +159,41 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     return replace(config, train_config=inner_config)
 
 
-def run_levanter_train_lm(config: TrainLmOnPodConfig):
+@dataclass(frozen=True)
+class LevanterTrainMetadata:
+    # TODO: what methods or attributes should be included here?
+    ...
+
+
+# TODO: remove run_levanter_train_lm and TrainLmOnPodConfig
+def run_levanter_train_lm_fn(
+    train_config: train_lm.TrainLmConfig,
+    resources: ResourceConfig,
+    output_path: str | None = None,
+    # Base output directory to be used for training, mainly for use with executor framework.
+    impute_run_id_from_output_path: bool = True,
+    # If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
+    # Note that trainer.id and the RUN_ID env variable take precedence, in that order.
+    allow_out_of_region: tuple[str, ...] = (),
+    # Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions.
+    env_vars: dict[str, str] | None = None,
+    # Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY).
+    auto_build_caches: bool = False,
+) -> LevanterTrainMetadata:
+    return run_levanter_train_lm(
+        TrainLmOnPodConfig(
+            train_config=train_config,
+            resources=resources,
+            output_path=output_path,
+            impute_run_id_from_output_path=impute_run_id_from_output_path,
+            allow_out_of_region=allow_out_of_region,
+            env_vars=env_vars,
+            auto_build_caches=auto_build_caches,
+        )
+    )
+
+
+def run_levanter_train_lm(config: TrainLmOnPodConfig) -> LevanterTrainMetadata:
     """
     Run the Levanter training main function on a Ray cluster.
 
@@ -232,6 +266,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
+    return LevanterTrainMetadata()
 
 
 def _doublecheck_paths(config: TrainLmOnPodConfig):

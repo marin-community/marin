@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
+from marin.execution.artifact import PathsMetadata
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
@@ -310,7 +311,27 @@ def process_file_shard(*, shard, filters: list[FilterConfig], input_base: str, f
             yield doc
 
 
-def consolidate(config: ConsolidateConfig):
+# TODO: remove `condolidate` and `ConsolidateConfig`
+def consolidate_fn(
+    input_path: str,
+    output_path: str,
+    filters: list[FilterConfig],
+    filetype: str = "jsonl.gz",
+) -> PathsMetadata:
+    """Consolidate documents by applying filters based on attributes.
+
+    The output is written to Parquet files in the specified output path.
+    """
+    config = ConsolidateConfig(
+        input_path=input_path,
+        output_path=output_path,
+        filters=filters,
+        filetype=filetype,
+    )
+    return consolidate(config)
+
+
+def consolidate(config) -> PathsMetadata:
     """
     Consolidate documents by applying filters based on attributes.
 
@@ -334,3 +355,4 @@ def consolidate(config: ConsolidateConfig):
         )
 
     logger.info(f"Consolidation complete. Wrote {len(results)} output files")
+    return PathsMetadata(parent_path=config.output_path, paths=list(results))

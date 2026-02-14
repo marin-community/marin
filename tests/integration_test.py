@@ -37,13 +37,35 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def _html_to_md_with_config(cfg: SimpleHtmlToMdConfig):
+    """Wrapper: unpack SimpleHtmlToMdConfig into the individual-arg html_to_md."""
+    return html_to_md(
+        input_path=cfg.input_path,
+        output_path=cfg.output_path,
+        extract_method=cfg.extract_method,
+        config=cfg.config,
+    )
+
+
+def _train_with_config(cfg: TrainFasttextClassifierConfig):
+    """Wrapper: unpack TrainFasttextClassifierConfig into the individual-arg train."""
+    return train(
+        datasets=cfg.datasets,
+        output_path=cfg.output_path,
+        fasttext_args=cfg.fasttext_args,
+        seed=cfg.seed,
+        val_frac=cfg.val_frac,
+        memory=cfg.memory,
+    )
+
+
 def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Transform HTML to text
 
     transform_hq_data_step = ExecutorStep(
         name=os.path.join(prefix, "hq-transformed"),
-        fn=html_to_md,
+        fn=_html_to_md_with_config,
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "pos"),
             output_path=this_output_path(),
@@ -54,7 +76,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     transform_lq_data_step = ExecutorStep(
         name=os.path.join(prefix, "lq-transformed"),
-        fn=html_to_md,
+        fn=_html_to_md_with_config,
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "neg"),
             output_path=this_output_path(),
@@ -68,7 +90,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     train_quality_step = ExecutorStep(
         name=os.path.join(prefix, "quality-classifier"),
-        fn=train,
+        fn=_train_with_config,
         config=TrainFasttextClassifierConfig(
             datasets=[
                 DatasetConfig(
