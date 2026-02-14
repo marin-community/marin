@@ -104,10 +104,14 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
         addr = os.environ.get("JAX_COORDINATOR_ADDRESS", "")
         proc_id = os.environ.get("JAX_PROCESS_ID", "")
         num_procs = os.environ.get("JAX_NUM_PROCESSES", "")
+        tpu_accelerator_type = os.environ.get("TPU_ACCELERATOR_TYPE", "")
+        tpu_type = os.environ.get("TPU_TYPE", "")
 
         print(f"JAX_COORDINATOR_ADDRESS={addr}")
         print(f"JAX_PROCESS_ID={proc_id}")
         print(f"JAX_NUM_PROCESSES={num_procs}")
+        print(f"TPU_ACCELERATOR_TYPE={tpu_accelerator_type}")
+        print(f"TPU_TYPE={tpu_type}")
 
         if not addr:
             raise ValueError("JAX_COORDINATOR_ADDRESS not set")
@@ -115,6 +119,14 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
             raise ValueError("JAX_PROCESS_ID not set")
         if not num_procs:
             raise ValueError("JAX_NUM_PROCESSES not set")
+        if not tpu_accelerator_type:
+            raise ValueError("TPU_ACCELERATOR_TYPE not set")
+        if not tpu_type:
+            raise ValueError("TPU_TYPE not set")
+        if tpu_accelerator_type != tpu_type:
+            raise ValueError(
+                "TPU_ACCELERATOR_TYPE and TPU_TYPE must match " f"(got {tpu_accelerator_type!r} vs {tpu_type!r})"
+            )
 
         # This is the exact parsing that JAX does in distributed.py:107
         try:

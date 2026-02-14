@@ -2,15 +2,26 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, ready_for_review, reopened, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:
     if: >-
-      github.event.pull_request.author_association == 'OWNER' ||
-      github.event.pull_request.author_association == 'MEMBER' ||
-      github.event.pull_request.author_association == 'COLLABORATOR'
+      (
+        github.event.pull_request.author_association == 'OWNER' ||
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'COLLABORATOR'
+      ) &&
+      (
+        github.event.action != 'labeled' ||
+        github.event.label.name == 'claude-review'
+      )
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
@@ -18,21 +29,29 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Read review prompt
         id: prompt
         run: |
           PROMPT=$(cat docs/recipes/github-pr-review.md)
-          echo "review_prompt<<EOF" >> "$GITHUB_OUTPUT"
+          echo "review_prompt<<PROMPT_DELIMITER" >> "$GITHUB_OUTPUT"
           echo "$PROMPT" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "PROMPT_DELIMITER" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Review
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: ${{ steps.prompt.outputs.review_prompt }}
-          claude_args: '--max-turns 3'
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            ${{ steps.prompt.outputs.review_prompt }}
+          claude_args: |
+            --max-turns 12
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+          allowed_bots: 'claude[bot]'
