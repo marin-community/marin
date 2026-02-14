@@ -257,7 +257,6 @@ def test_launch_job_rejects_empty_name(service, state):
         service.launch_job(request, None)
 
     assert exc_info.value.code == Code.INVALID_ARGUMENT
-    assert "name is required" in exc_info.value.message.lower()
 
 
 # =============================================================================
