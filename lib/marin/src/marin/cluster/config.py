@@ -234,7 +234,8 @@ CONFIGS = {
         "tpu_generation": "v5p",
         "min_workers": 8,
         "worker_targets": {
-            "v5p-64": 4,
+            "v5p-8": 8,
+            "v5p-64": 0,
             "v5p-2048": 0,
         },
     },
