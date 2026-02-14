@@ -260,7 +260,9 @@ class GQAConverter(BenchmarkConverter):
     def load(self, max_rows: int | None = None) -> Dataset:
         """Load both images and instructions configs and join them."""
         logger.info("Loading GQA images config (testdev_balanced_images)...")
-        images_ds = load_dataset(self.hf_dataset_id, "testdev_balanced_images", split=self.hf_split, trust_remote_code=True)
+        images_ds = load_dataset(
+            self.hf_dataset_id, "testdev_balanced_images", split=self.hf_split, trust_remote_code=True
+        )
 
         # Build image lookup: imageId -> PIL image
         logger.info("Building image lookup map (%d images)...", len(images_ds))
@@ -270,7 +272,9 @@ class GQAConverter(BenchmarkConverter):
         logger.info("Image map built with %d entries.", len(self._image_map))
 
         logger.info("Loading GQA instructions config (testdev_balanced_instructions)...")
-        instructions_ds = load_dataset(self.hf_dataset_id, "testdev_balanced_instructions", split=self.hf_split, trust_remote_code=True)
+        instructions_ds = load_dataset(
+            self.hf_dataset_id, "testdev_balanced_instructions", split=self.hf_split, trust_remote_code=True
+        )
 
         if max_rows is not None:
             instructions_ds = instructions_ds.select(range(min(max_rows, len(instructions_ds))))
@@ -568,11 +572,39 @@ class ImageNetConverter(BenchmarkConverter):
         self._class_names: list[str] = []
 
     def load(self, max_rows: int | None = None) -> Dataset:
-        ds = load_dataset(self.hf_dataset_id, split=self.hf_split, token=True, trust_remote_code=True)
-        self._class_names = ds.features["label"].names
+        # Stream to avoid downloading the entire dataset (~147GB train split).
+        # HuggingFace downloads ALL splits by default; streaming only fetches
+        # the requested split's data on-the-fly.
+        stream = load_dataset(
+            self.hf_dataset_id,
+            split=self.hf_split,
+            token=True,
+            trust_remote_code=True,
+            streaming=True,
+        )
+        self._class_names = stream.features["label"].names
 
         if self._n_per_class is not None:
-            ds = class_balanced_sample(ds, "label", self._n_per_class)
+            # Class-balanced sampling with early stopping
+            n_classes = len(self._class_names)
+            target_total = n_classes * self._n_per_class
+            class_counts: dict[int, int] = {}
+            collected = []
+
+            for item in stream:
+                label = item["label"]
+                if class_counts.get(label, 0) < self._n_per_class:
+                    collected.append(item)
+                    class_counts[label] = class_counts.get(label, 0) + 1
+                    if len(collected) >= target_total:
+                        break
+
+            logger.info("Streamed %d class-balanced samples (%d classes)", len(collected), len(class_counts))
+            ds = Dataset.from_list(collected)
+        else:
+            # Collect all validation examples
+            collected = list(stream)
+            ds = Dataset.from_list(collected)
 
         if max_rows is not None:
             ds = ds.select(range(min(max_rows, len(ds))))
