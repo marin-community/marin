@@ -62,34 +62,27 @@ def _extract_tpu_chips_per_host_bounds(tpu_env_raw: str) -> str:
 
 
 def _probe_tpu_metadata() -> tuple[str, str, str, str, str]:
-    """Probe TPU metadata from env and GCP metadata service.
+    """Probe TPU metadata from GCP metadata service.
 
     Returns:
         Tuple of (tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds).
     """
-    tpu_name = os.environ.get("TPU_NAME", "")
-    tpu_type = os.environ.get("TPU_TYPE", "")
-    tpu_worker_hostnames = os.environ.get("TPU_WORKER_HOSTNAMES", "")
-    tpu_worker_id = os.environ.get("TPU_WORKER_ID", "")
-    tpu_chips_per_host_bounds = os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS", "")
-
-    if not tpu_type:
-        tpu_type = _get_gcp_metadata("attributes/accelerator-type") or ""
+    tpu_name = ""
+    tpu_worker_hostnames = ""
+    tpu_worker_id = ""
+    tpu_chips_per_host_bounds = ""
+    tpu_type = _get_gcp_metadata("attributes/accelerator-type") or ""
 
     # Only collect TPU-specific metadata once we know this is a TPU VM.
-    has_tpu_signal = bool(tpu_type or tpu_worker_id or tpu_worker_hostnames or tpu_chips_per_host_bounds)
+    has_tpu_signal = bool(tpu_type)
     if has_tpu_signal:
-        if not tpu_name:
-            if instance_name := _get_gcp_metadata("name"):
-                tpu_name = _extract_tpu_name(instance_name)
-        if not tpu_worker_id:
-            tpu_worker_id = _get_gcp_metadata("attributes/agent-worker-number") or ""
-        if not tpu_worker_hostnames:
-            if worker_endpoints := _get_gcp_metadata("attributes/worker-network-endpoints"):
-                tpu_worker_hostnames = _extract_tpu_worker_hostnames(worker_endpoints)
-        if not tpu_chips_per_host_bounds:
-            if tpu_env_raw := _get_gcp_metadata("attributes/tpu-env"):
-                tpu_chips_per_host_bounds = _extract_tpu_chips_per_host_bounds(tpu_env_raw)
+        if instance_name := _get_gcp_metadata("name"):
+            tpu_name = _extract_tpu_name(instance_name)
+        tpu_worker_id = _get_gcp_metadata("attributes/agent-worker-number") or ""
+        if worker_endpoints := _get_gcp_metadata("attributes/worker-network-endpoints"):
+            tpu_worker_hostnames = _extract_tpu_worker_hostnames(worker_endpoints)
+        if tpu_env_raw := _get_gcp_metadata("attributes/tpu-env"):
+            tpu_chips_per_host_bounds = _extract_tpu_chips_per_host_bounds(tpu_env_raw)
 
     return tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds
 

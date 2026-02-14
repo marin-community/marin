@@ -85,8 +85,8 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
     assert metadata.device.tpu.variant == "v5litepod-16"
 
 
-def test_environment_provider_prefers_tpu_env_vars_over_metadata(monkeypatch):
-    """Explicit TPU env vars should override metadata values."""
+def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch):
+    """TPU env vars alone should not trigger TPU detection."""
     monkeypatch.setenv("TPU_NAME", "env-slice")
     monkeypatch.setenv("TPU_TYPE", "v5litepod-16")
     monkeypatch.setenv("TPU_WORKER_HOSTNAMES", "10.1.0.1,10.1.0.2")
@@ -96,7 +96,8 @@ def test_environment_provider_prefers_tpu_env_vars_over_metadata(monkeypatch):
 
     metadata = DefaultEnvironmentProvider().probe()
 
-    assert metadata.tpu_name == "env-slice"
-    assert metadata.tpu_worker_id == "7"
-    assert metadata.tpu_worker_hostnames == "10.1.0.1,10.1.0.2"
-    assert metadata.tpu_chips_per_host_bounds == "1,2,1"
+    assert metadata.tpu_name == ""
+    assert metadata.tpu_worker_id == ""
+    assert metadata.tpu_worker_hostnames == ""
+    assert metadata.tpu_chips_per_host_bounds == ""
+    assert metadata.device.HasField("cpu")
