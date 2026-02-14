@@ -306,6 +306,37 @@ def _get_first_example(dataset, max_retries: int = 3):
     return None
 
 
+def _get_vocab_from_levanter_checkpoint(checkpoint_path):
+    """Probe a Levanter checkpoint to determine vocab size from the embedding array shape."""
+    import tensorstore as ts
+
+    from levanter.checkpoint import discover_latest_checkpoint
+    from levanter.tensorstore_serialization import _create_ocdbt_spec, _list_ocdbt_keys
+
+    ckpt = discover_latest_checkpoint(checkpoint_path)
+    if ckpt is None:
+        return None
+
+    try:
+        keys = asyncio.run(_list_ocdbt_keys(ckpt))
+        # Find the zarr metadata key for the token embedding array
+        embedding_path = None
+        for key in keys:
+            if "token_embeddings" in key and key.endswith("zarr.json"):
+                embedding_path = key.replace("/zarr.json", "")
+                break
+        if embedding_path is None:
+            return None
+
+        # Open the array to read its shape (metadata only, no data loaded)
+        spec = _create_ocdbt_spec(ckpt, embedding_path)
+        store = ts.open(spec, read=True).result()
+        return store.shape[0]  # First dimension is vocab
+    except Exception as e:
+        logger.warning(f"Failed to probe vocab size from Levanter checkpoint: {e}")
+        return None
+
+
 def _determine_vocab_size(config, converter, tokenizer):
     """Determine the vocab size to use for model initialization.
 
@@ -355,6 +386,11 @@ def _determine_vocab_size(config, converter, tokenizer):
         hf_vocab_size = _get_vocab_size_from_hf_config(llm_hf_config)
         if hf_vocab_size is not None and hf_vocab_size > tokenizer_vocab_size:
             return hf_vocab_size, f"LLM checkpoint vocab size {hf_vocab_size} (tokenizer has {tokenizer_vocab_size})"
+
+    elif config.initialize_from_checkpoint_path:
+        ckpt_vocab = _get_vocab_from_levanter_checkpoint(config.initialize_from_checkpoint_path)
+        if ckpt_vocab is not None:
+            return ckpt_vocab, f"Levanter checkpoint vocab size {ckpt_vocab} (tokenizer has {tokenizer_vocab_size})"
 
     return tokenizer_vocab_size, None
 
