@@ -36,7 +36,12 @@ from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
+from marin.utils import (
+    fsspec_exists,
+    fsspec_glob,
+    fsspec_isdir,
+    fsspec_size,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +92,11 @@ class TokenizeConfig(TokenizeConfigBase):
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
+    zephyr_max_parallelism: int = 256
+    """Maximum number of concurrent Zephyr tasks per tokenization step.
+
+    Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -147,6 +157,11 @@ class HfTokenizeConfig(TokenizeConfigBase):
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
+    zephyr_max_parallelism: int = 256
+    """Maximum number of concurrent Zephyr tasks per tokenization step.
+
+    Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True

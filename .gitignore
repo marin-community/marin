@@ -1,6 +1,8 @@
 # redundant, but Ray looks for this otherwise.
 .git
 
+calvin_artifacts/
+
 logs/
 
 # CPU profiles
