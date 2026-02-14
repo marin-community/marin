@@ -46,7 +46,9 @@ from typing import Any
 
 import numpy as np
 from datasets import Dataset, load_dataset
+from huggingface_hub import login
 
+login(token="REDACTED_HF_TOKEN")
 logger = logging.getLogger(__name__)
 
 # Letter labels for multiple choice formatting
