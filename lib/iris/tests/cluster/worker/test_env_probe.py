@@ -65,6 +65,7 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
     monkeypatch.delenv("TPU_CHIPS_PER_HOST_BOUNDS", raising=False)
     monkeypatch.delenv("IRIS_WORKER_ATTRIBUTES", raising=False)
 
+    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
     metadata_values = {
         "name": "test-slice-w-3",
         "attributes/accelerator-type": "v5litepod-16",
@@ -87,6 +88,7 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
 
 def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch):
     """TPU env vars alone should not trigger TPU detection."""
+    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: False)
     monkeypatch.setenv("TPU_NAME", "env-slice")
     monkeypatch.setenv("TPU_TYPE", "v5litepod-16")
     monkeypatch.setenv("TPU_WORKER_HOSTNAMES", "10.1.0.1,10.1.0.2")

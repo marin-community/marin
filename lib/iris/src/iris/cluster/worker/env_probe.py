@@ -10,6 +10,7 @@ import socket
 import subprocess
 import urllib.error
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
@@ -20,6 +21,23 @@ logger = logging.getLogger(__name__)
 
 _GCP_METADATA_ROOT = "http://metadata.google.internal/computeMetadata/v1/instance"
 _GCP_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
+
+
+@lru_cache(maxsize=1)
+def _is_gcp_vm() -> bool:
+    """Return True when running on a GCP VM."""
+    dmi_paths = (
+        "/sys/class/dmi/id/product_name",
+        "/sys/class/dmi/id/sys_vendor",
+    )
+    for path in dmi_paths:
+        try:
+            value = Path(path).read_text().strip().lower()
+        except OSError:
+            continue
+        if "google" in value or "google compute engine" in value:
+            return True
+    return False
 
 
 def _get_gcp_metadata(path: str) -> str | None:
@@ -67,6 +85,9 @@ def _probe_tpu_metadata() -> tuple[str, str, str, str, str]:
     Returns:
         Tuple of (tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds).
     """
+    if not _is_gcp_vm():
+        return "", "", "", "", ""
+
     tpu_name = ""
     tpu_worker_hostnames = ""
     tpu_worker_id = ""
@@ -174,13 +195,14 @@ def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
     falls back to IRIS_WORKER_ATTRIBUTES. Defaults to False for non-GCP
     environments without explicit configuration.
     """
-    try:
-        preemptible = _get_gcp_metadata("scheduling/preemptible")
-        if preemptible is not None:
-            return preemptible.upper() == "TRUE"
-        logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
-    except ValueError:
-        logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
+    if _is_gcp_vm():
+        try:
+            preemptible = _get_gcp_metadata("scheduling/preemptible")
+            if preemptible is not None:
+                return preemptible.upper() == "TRUE"
+            logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
+        except ValueError:
+            logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
 
     return extra_attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY, "false").lower() == "true"
 
