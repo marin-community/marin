@@ -72,6 +72,9 @@ jobs:
           custom_instructions: |
             Always read and follow the guidelines in AGENTS.md before starting work.
 
+            When working on issues, ALWAYS create a new branch for your changes and open a pull request.
+            Use `gh pr create` to create the PR once your changes are ready.
+
             Before submitting any changes or creating PRs, you MUST:
             1. Run `./infra/pre-commit.py --all-files --fix` and ensure all checks pass.
             2. Run `uv run pytest` on any tests relevant to your changes.
