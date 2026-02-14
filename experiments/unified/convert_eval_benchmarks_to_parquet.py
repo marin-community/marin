@@ -105,10 +105,11 @@ def build_eval_messages(
 
 
 def format_mc_options(options: list[str]) -> str:
-    """Format multiple choice options as A. / B. / C. / D. lines."""
+    """Format multiple choice options as A. / B. / C. / D. / ... lines."""
     lines = []
     for i, opt in enumerate(options):
-        lines.append(f"{MC_LETTERS[i]}. {opt}")
+        letter = MC_LETTERS[i] if i < len(MC_LETTERS) else chr(ord("A") + i)
+        lines.append(f"{letter}. {opt}")
     return "\n".join(lines)
 
 
@@ -401,10 +402,17 @@ class MMMUConverter(BenchmarkConverter):
         if not image_bytes_list:
             return None
 
-        # Parse options (JSON-encoded string in lmms-lab/MMMU)
+        # Parse options (may be JSON string, Python literal, or already a list)
         options_raw = item.get("options", "[]")
-        if isinstance(options_raw, str):
-            options = json.loads(options_raw)
+        if isinstance(options_raw, list):
+            options = options_raw
+        elif isinstance(options_raw, str):
+            try:
+                options = json.loads(options_raw)
+            except json.JSONDecodeError:
+                import ast
+
+                options = ast.literal_eval(options_raw)
         else:
             options = list(options_raw)
 
