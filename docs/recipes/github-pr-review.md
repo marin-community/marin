@@ -1,20 +1,36 @@
 # Review Prompt
 
-Review this PR. Be extremely terse. No emoji. No fluff.
+Review this PR for correctness and behavioral regressions.
 
-Format your review as:
-1. A 1-2 line description of what the PR does and whether it fulfills its stated objectives.
-2. Tight bullets (if any) for:
-   - Bugs or correctness issues
-   - Violations of AGENTS.md or coding guidelines
-   - Functionality that diverges from the PR description or linked issue
+Be concise and high-signal. No emoji. No fluff.
 
-If the PR is clean, say so in one line and stop.
+Execution constraints:
+- Use at most 2 analysis passes:
+  1) Diff-first scan for risk areas
+  2) Targeted file checks only where risk is detected
+- Prefer `gh pr diff` first; only open full files when necessary to confirm a concrete issue.
+- If no high-confidence issues are found after these passes, stop.
 
-Do NOT comment on:
-- Formatting, import order, or linting (handled by pre-commit)
-- Style preferences or naming opinions
-- Missing docstrings or comments
-- Generic best-practice advice
+Scope:
+- Only report high-confidence findings that are likely to cause:
+  - Bugs or correctness issues
+  - Violations of AGENTS.md or coding guidelines
+  - Functionality divergence from the PR description or linked issue
+- Ignore formatting, import order, lint/style preferences, naming opinions, missing docstrings/comments, and generic best-practice advice.
 
-Only flag issues you are confident about. If you are unsure, skip it.
+Output contract:
+- Return exactly one final review.
+- Keep total output under 12 lines.
+- Use this format only:
+
+1. `<1-2 lines: what the PR changes and whether it meets objectives>`
+2. Findings:
+- `<issue 1 or "None">`
+- `<issue 2 if needed>`
+- `<issue 3 if needed>`
+
+Rules:
+- Max 3 findings.
+- Each finding must be one line and include file path (and line if known).
+- If clean: write `- None` and stop.
+- Do not include progress narration, process notes, or extra sections.
