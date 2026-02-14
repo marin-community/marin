@@ -780,10 +780,10 @@ def main(config: TrainVLMConfig):
 
         if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
             logger.info(f"Initializing from Levanter checkpoint: {config.initialize_from_checkpoint_path}")
-            state = load_checkpoint(state, config.initialize_from_checkpoint_path)
-            # Reset step to 0 - we're just initializing weights for a new training stage
-            state = dataclasses.replace(state, step=jnp.array(0))
-            logger.info("Loaded Levanter checkpoint and reset step to 0")
+            # Load only model weights (not optimizer state or step) for a clean new training stage
+            model = load_checkpoint(state.model, config.initialize_from_checkpoint_path, subpath="model", allow_partial=True)
+            state = dataclasses.replace(state, model=model)
+            logger.info("Loaded model weights from Levanter checkpoint (optimizer and step kept fresh)")
 
         if int(state.step) == 0:
             if config.initialize_from_hf:
