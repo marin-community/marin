@@ -32,7 +32,7 @@ from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_tpu_topology
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +286,7 @@ def bootstrap_slice_vms(
     results: dict[str, list] = {}
     spawned_threads: list[ManagedThread] = []
 
-    start = time.time()
+    discovery_deadline = Deadline.from_seconds(timeout)
     while True:
         for vm in handle.describe().vms:
             if vm.vm_id not in seen:
@@ -314,15 +314,15 @@ def bootstrap_slice_vms(
 
         if expected is None or len(seen) >= expected:
             break
-        if time.time() - start > timeout:
+        if discovery_deadline.expired():
             raise PlatformError(
                 f"Slice {handle.slice_id}: only {len(seen)}/{expected} VMs " f"appeared after {timeout}s"
             )
         time.sleep(poll_interval)
 
-    join_deadline = time.time() + boot_timeout
+    boot_deadline = Deadline.from_seconds(boot_timeout)
     for t in spawned_threads:
-        remaining = max(0, join_deadline - time.time())
+        remaining = boot_deadline.remaining_seconds()
         t.join(timeout=Duration.from_seconds(remaining))
         if t.is_alive:
             raise PlatformError(

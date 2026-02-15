@@ -81,8 +81,9 @@ than when you started.
 ## Implementation
 
 Once you have researched and prepared your design or planned fix, you may
-proceed to implementation. You will implement your changes in a branch with the
-following format `agent/{YYYYMMDD}-fix-{issue-id}`.
+proceed to implementation. You MUST implement your changes in a branch with the
+following format `agent/{YYYYMMDD}-fix-{issue-id}`. You are allowed to create
+branches on github as well as submit PRs from those branches.
 
 You will implement a test which demonstrates your changed behavior before
 beginning work. Your tests will be minimal and refrain from using mocks.

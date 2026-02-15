@@ -64,16 +64,30 @@ class LocalJobHandle:
 
 
 def _run_callable(entry: CallableEntrypoint) -> None:
-    entry.callable(*entry.args, **entry.kwargs)
+    name = getattr(entry.callable, "__name__", repr(entry.callable))
+    try:
+        entry.callable(*entry.args, **entry.kwargs)
+    except Exception:
+        logger.warning("Callable %r failed", name, exc_info=True)
+        raise
 
 
 def _run_binary(entry: BinaryEntrypoint) -> None:
-    subprocess.run(
-        [entry.command, *entry.args],
-        check=True,
-        capture_output=True,
+    cmd = [entry.command, *entry.args]
+    logger.info("Running binary: %s", " ".join(cmd))
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
     )
+    assert process.stdout is not None
+    for line in process.stdout:
+        logger.info("[%s] %s", entry.command, line.rstrip("\n"))
+    returncode = process.wait()
+    if returncode != 0:
+        logger.warning("Binary %r exited with code %d", entry.command, returncode)
+        raise subprocess.CalledProcessError(returncode, cmd)
 
 
 class LocalClient:
@@ -96,6 +110,13 @@ class LocalClient:
             raise ValueError("JobRequest entrypoint must have either callable_entrypoint or binary_entrypoint")
 
         job_id = f"local-{request.name}-{uuid.uuid4().hex[:8]}"
+
+        def _on_done(fut: Future[None], _job_id: str = job_id) -> None:
+            exc = fut.exception()
+            if exc is not None:
+                logger.warning("Job %s failed: %s", _job_id, exc, exc_info=exc)
+
+        future.add_done_callback(_on_done)
         handle = LocalJobHandle(job_id, future)
         self._jobs.append(handle)
         return handle
@@ -211,12 +232,14 @@ class LocalActorMethod:
         backpressure when many actors make concurrent remote calls.
         """
         future: Future[Any] = Future()
+        method_name = getattr(self._method, "__name__", repr(self._method))
 
         def run():
             try:
                 result = self._method(*args, **kwargs)
                 future.set_result(result)
             except Exception as e:
+                logger.warning("Actor method %r failed: %s", method_name, e, exc_info=True)
                 future.set_exception(e)
 
         thread = threading.Thread(target=run, daemon=True)

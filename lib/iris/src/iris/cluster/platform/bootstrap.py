@@ -4,8 +4,8 @@
 """Bootstrap script generation for worker and controller VMs.
 
 Centralizes all bootstrap script templates and generation logic. Worker
-bootstrap handles TPU metadata discovery, Docker setup, and container
-startup. Controller bootstrap is simpler — Docker setup plus container start.
+bootstrap handles Docker setup and container startup. TPU metadata discovery
+is performed by the worker environment probe at runtime.
 """
 
 from __future__ import annotations
@@ -64,52 +64,6 @@ echo "[iris-init] Starting Iris worker bootstrap"
 
 # Write config file
 {config_setup}
-
-# Fetch TPU metadata from GCE and export as environment variables.
-# GCP TPU VMs expose TPU info via instance metadata, not environment variables.
-echo "[iris-init] Probing TPU metadata..."
-METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
-METADATA_HEADER="Metadata-Flavor: Google"
-
-# Derive TPU slice name from instance name by stripping worker suffix.
-# Handles both -wN (original) and -w-N (GCP multi-host) formats.
-# Example: "iris-v5litepod_16-abc123-w0" -> "iris-v5litepod_16-abc123"
-# Example: "t1v-n-598bede5-w-0" -> "t1v-n-598bede5"
-INSTANCE_NAME=$(curl -sf -H "$METADATA_HEADER" \\
-    "http://metadata.google.internal/computeMetadata/v1/instance/name" 2>/dev/null || echo "")
-if [ -n "$INSTANCE_NAME" ]; then
-    export TPU_NAME=$(echo "$INSTANCE_NAME" | sed 's/-w-*[0-9]*$//')
-fi
-
-# Fetch accelerator-type as TPU_TYPE (e.g., v5litepod-16)
-export TPU_TYPE=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/accelerator-type" 2>/dev/null || echo "")
-
-# Fetch agent-worker-number as TPU_WORKER_ID
-export TPU_WORKER_ID=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/agent-worker-number" 2>/dev/null || echo "")
-
-# Fetch worker hostnames for multi-host slices (JSON array of network endpoints)
-TPU_HOSTNAMES_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/worker-network-endpoints" 2>/dev/null || echo "")
-if [ -n "$TPU_HOSTNAMES_RAW" ]; then
-    # Format is "unknown:unknown:ip1,unknown:unknown:ip2,..." — extract IPs (fields with dots)
-    export TPU_WORKER_HOSTNAMES=$(echo "$TPU_HOSTNAMES_RAW" | \\
-        tr ',' '\\n' | while read -r entry; do echo "$entry" | tr ':' '\\n' | grep '[.]'; done | \\
-        paste -sd ',' - 2>/dev/null || echo "")
-fi
-
-# Fetch chips per host bounds from tpu-env metadata (YAML-like key: value format)
-TPU_ENV_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/tpu-env" 2>/dev/null || echo "")
-if [ -n "$TPU_ENV_RAW" ]; then
-    TOPO_RAW=$(echo "$TPU_ENV_RAW" | grep "^CHIPS_PER_HOST_BOUNDS:" | sed "s/.*: *'\\(.*\\)'/\\1/" | tr -d "'")
-    if [ -n "$TOPO_RAW" ]; then
-        export TPU_CHIPS_PER_HOST_BOUNDS="$TOPO_RAW"
-    fi
-fi
-
-if [ -n "$TPU_NAME" ]; then
-    echo "[iris-init] TPU detected: name=$TPU_NAME type=$TPU_TYPE worker_id=$TPU_WORKER_ID"
-else
-    echo "[iris-init] No TPU metadata found (this may be a non-TPU VM)"
-fi
 
 echo "[iris-init] Phase: prerequisites"
 
@@ -213,10 +167,8 @@ exit 1
 def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str:
     """Generate docker -e flags with proper escaping.
 
-    TPU environment variables (TPU_NAME, TPU_WORKER_ID, etc.) are passed through
-    from the host if they exist. These are set by GCP on TPU VMs and are required
-    for the worker to register with tpu-name and tpu-worker-id attributes needed
-    for coscheduled job scheduling.
+    TPU metadata is probed by the worker process via env_probe.py, so bootstrap
+    only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
     """
     flags = []
     for k, v in config.env_vars.items():
@@ -224,19 +176,6 @@ def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) 
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
         flags.append(f"-e IRIS_VM_ADDRESS={shlex.quote(vm_address)}")
-
-    # Pass through TPU environment variables from host if they exist.
-    # These are fetched from GCE metadata by the bootstrap script preamble.
-    tpu_env_vars = [
-        "TPU_NAME",
-        "TPU_TYPE",
-        "TPU_WORKER_ID",
-        "TPU_WORKER_HOSTNAMES",
-        "TPU_CHIPS_PER_HOST_BOUNDS",
-    ]
-    for var in tpu_env_vars:
-        # Use shell syntax to pass through only if set on host
-        flags.append(f'-e {var}="${{{var}:-}}"')
 
     return " ".join(flags)
 

@@ -25,7 +25,7 @@ from iris.cluster.controller.events import (
     JobSubmittedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import SchedulingContext, TaskScheduleResult
+from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
 DEFAULT_MAX_TOTAL_LINES = 10000
+
+# Maximum bundle size in bytes (25 MB) - matches client-side limit
+MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
 # Log fetching configuration
 LOG_FETCH_MAX_WORKERS = 16  # Max parallel worker connections
@@ -119,8 +122,12 @@ class SchedulerProtocol(Protocol):
         """Send KILL RPCs to workers for tasks that were running."""
         ...
 
-    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
-        """Get the current scheduling status of a task (for dashboard display)."""
+    def create_scheduling_context(self, workers: list) -> SchedulingContext:
+        """Create a scheduling context for the given workers."""
+        ...
+
+    def get_job_scheduling_diagnostics(self, job, context: SchedulingContext) -> str:
+        """Get detailed diagnostics for why a job cannot be scheduled."""
         ...
 
     @property
@@ -198,6 +205,16 @@ class ControllerServiceImpl:
             # Handle bundle_blob: upload to bundle store, then replace blob
             # with the resulting GCS path (preserving all other fields).
             if request.bundle_blob:
+                # Validate bundle size
+                bundle_size = len(request.bundle_blob)
+                if bundle_size > MAX_BUNDLE_SIZE_BYTES:
+                    bundle_size_mb = bundle_size / (1024 * 1024)
+                    max_size_mb = MAX_BUNDLE_SIZE_BYTES / (1024 * 1024)
+                    raise ConnectError(
+                        Code.INVALID_ARGUMENT,
+                        f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
+                    )
+
                 bundle_path = self._bundle_store.write_bundle(job_id.to_wire(), request.bundle_blob)
 
                 new_request = cluster_pb2.Controller.LaunchJobRequest()
@@ -279,6 +296,15 @@ class ControllerServiceImpl:
                 proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
             task_statuses.append(proto_task_status)
 
+        # Get scheduling diagnostics for pending jobs
+        pending_reason = ""
+        if job.state == cluster_pb2.JOB_STATE_PENDING:
+            # Create scheduling context once for all tasks
+            workers = self._state.list_all_workers()
+            sched_context = self._scheduler.create_scheduling_context(workers)
+            # Get job-level diagnostics (expensive but only for detail view)
+            pending_reason = self._scheduler.get_job_scheduling_diagnostics(job, sched_context)
+
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -289,6 +315,7 @@ class ControllerServiceImpl:
             preemption_count=total_preemption_count,
             tasks=task_statuses,
             name=job.request.name if job.request else "",
+            pending_reason=pending_reason,
         )
         if job.request:
             proto_job_status.resources.CopyFrom(job.request.resources)
@@ -554,10 +581,6 @@ class ControllerServiceImpl:
             for job in self._state.list_all_jobs():
                 tasks.extend(self._state.get_job_tasks(job.job_id))
 
-        # Build scheduling context once for all pending-task diagnostics
-        workers = self._state.get_available_workers()
-        sched_context = SchedulingContext.from_workers(workers)
-
         task_statuses = []
         for task in tasks:
             # Look up worker address
@@ -567,13 +590,12 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
-            # Add scheduling diagnostics for pending tasks
+            # Don't add scheduling diagnostics in list view - too expensive
+            # Users should check job detail page for scheduling diagnostics
             pending_reason = ""
             can_be_scheduled = False
             if task.state == cluster_pb2.TASK_STATE_PENDING:
                 can_be_scheduled = task.can_be_scheduled()
-                schedule_status = self._scheduler.task_schedule_status(task, sched_context)
-                pending_reason = schedule_status.failure_reason or ""
 
             # Use attempt timestamps since task-level timestamps are not set
             current_attempt = task.current_attempt
