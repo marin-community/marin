@@ -124,27 +124,18 @@ Common failures:
 
 | Problem | Fix |
 |---|---|
-| "Refactor the module" | Name the specific functions/classes, describe the target structure |
-| "Add error handling" | Which errors, where, what recovery behavior |
-| "Update tests" | Which test file, what scenarios, expected behavior |
-| Spec says 4 files, diff has 12 | Spec missed downstream call-site updates — list them |
+| "Missing test case for Y" | Which test file, what scenarios, expected behavior |
 | Code uses approach X, spec says Y | Either update spec or re-implement |
 
 ## Case Studies
 
 These existing design docs demonstrate the spec format at different scales:
 
-- [`docs/design/rl-unified-interface.md`](../design/rl-unified-interface.md) —
-  Large-scale interface redesign. Defines protocols, dataclasses, and usage
-  examples. Multi-phase implementation plan.
-- [`docs/recipes/design_doc.md`](design_doc.md) — The design doc template
-  itself, with an embedded example (step execution timing).
 - `.agents/projects/grugformer.md` —
   Project-level working agreement defining principles and conventions for an
   ongoing body of work.
 
 ## See Also
 
-- [design_doc.md](design_doc.md) — Template for standalone design documents
 - [github-pr-review.md](github-pr-review.md) — PR review prompt (includes spec validation)
 - `AGENTS.md` — Coding guidelines
