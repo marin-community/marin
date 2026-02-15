@@ -29,7 +29,7 @@ override-dependencies = [
 
 [tool.uv.workspace]
 members = [
-    "harbor",
+    "lib/harbor",
     "lib/iris",
     "lib/fray",
     "lib/haliax",

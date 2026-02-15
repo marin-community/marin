@@ -2956,7 +2956,7 @@ dev = [
 [[package]]
 name = "harbor"
 version = "0.1.42"
-source = { editable = "harbor" }
+source = { editable = "lib/harbor" }
 dependencies = [
     { name = "claude-agent-sdk" },
     { name = "datasets" },
@@ -4977,7 +4977,7 @@ requires-dist = [
     { name = "google-cloud-storage" },
     { name = "google-cloud-storage-transfer" },
     { name = "haliax", editable = "lib/haliax" },
-    { name = "harbor", marker = "extra == 'harbor'", editable = "harbor" },
+    { name = "harbor", marker = "extra == 'harbor'", editable = "lib/harbor" },
     { name = "jax", specifier = "==0.8.0" },
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.8.0" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = "==0.8.0" },
