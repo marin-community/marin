@@ -39,8 +39,9 @@ N = len(df)
 SC_EPOCH_MULT = 13.2289
 NEM_EPOCH_MULT = 0.5
 
-print(f"N={N}, target={TARGET}")
-print(f"y range: [{y.min():.4f}, {y.max():.4f}], median={np.median(y):.4f}")
+if __name__ == "__main__":
+    print(f"N={N}, target={TARGET}")
+    print(f"y range: [{y.min():.4f}, {y.max():.4f}], median={np.median(y):.4f}")
 
 
 # =========================================================================
@@ -966,24 +967,8 @@ MODELS = [
 
 
 # =========================================================================
-# Cross-validation
+# Slice builders (module-level for importability)
 # =========================================================================
-print("\n" + "=" * 80)
-print(f"{'Model':<14} {'R2':>7} {'RMSE':>7} {'Spearman':>9} {'RMSE_bot':>9}")
-print("=" * 80)
-
-cv_results = {}
-for name, fit_fn, X_data, _, _, _ in MODELS:
-    m = cv_metrics(fit_fn, X_data, y)
-    cv_results[name] = m
-    print(f"{name:<14} {m['R2']:>7.4f} {m['RMSE']:>7.4f} {m['Spearman']:>9.4f} {m['RMSE_bot']:>9.4f}")
-
-
-# =========================================================================
-# Fit on full data, extract params, build labels
-# =========================================================================
-print("\n\nFitting all models on full data...")
-
 slice_grid = np.linspace(0.002, 0.998, 300)
 
 
@@ -1001,112 +986,156 @@ def make_slice_wt_epoch(g):
     return np.column_stack([np.zeros(n), g, np.full(n, np.log(EPS)), np.log(SC_EPOCH_MULT * g + EPS)])
 
 
-fitted = []  # (name, pred_fn, params, label_str, slice_preds, color, ls, cv_m)
-
-for name, fit_fn, X_data, label_fn, color, ls in MODELS:
-    pred_fn, params = fit_fn(X_data, y)
-
+def feature_kind(X_data):
+    """Return 'weight', 'wt_epoch', or 'vdom' based on identity with module globals."""
     if X_data is X_weight:
-        Xs = make_slice_weight(slice_grid)
+        return "weight"
     elif X_data is X_wt_epoch:
-        Xs = make_slice_wt_epoch(slice_grid)
+        return "wt_epoch"
+    return "vdom"
+
+
+def make_2d_grid(g0, g1, kind="weight"):
+    """Build a 2D feature matrix for a meshgrid of (p0_sc, p1_sc) values."""
+    p0, p1 = np.meshgrid(g0, g1, indexing="ij")
+    p0f, p1f = p0.ravel(), p1.ravel()
+    if kind == "weight":
+        return np.column_stack([p0f, p1f]), p0, p1
+    elif kind == "wt_epoch":
+        return np.column_stack([
+            p0f, p1f,
+            np.log(SC_EPOCH_MULT * p0f + EPS),
+            np.log(SC_EPOCH_MULT * p1f + EPS),
+        ]), p0, p1
     else:
-        Xs = make_slice_vdom(slice_grid)
-
-    preds_slice = pred_fn(Xs)
-    label = label_fn(params)
-
-    print(f"\n--- {name} ---")
-    print(f"  Params: {params}")
-    print(f"  Label:  {label}")
-
-    best_i = np.argmin(preds_slice)
-    print(f"  Slice optimal: p1_sc={slice_grid[best_i]:.4f}, pred={preds_slice[best_i]:.4f}")
-
-    fitted.append((name, pred_fn, params, label, preds_slice, color, ls, cv_results[name]))
+        return np.column_stack([
+            0.5 * (1 - p0f), 0.5 * p0f,
+            0.5 * (1 - p1f), 0.5 * p1f,
+        ]), p0, p1
 
 
-# =========================================================================
-# Actual data on the slice
-# =========================================================================
-mask = df["phase_0_nemotron_full"].round(4) == 1.0
-df_slice = df[mask].sort_values("phase_1_starcoder")
-x_actual = df_slice["phase_1_starcoder"].values
-y_actual = df_slice[TARGET].values
-actual_best_i = np.argmin(y_actual)
+if __name__ == "__main__":
+    # =====================================================================
+    # Cross-validation
+    # =====================================================================
+    print("\n" + "=" * 80)
+    print(f"{'Model':<14} {'R2':>7} {'RMSE':>7} {'Spearman':>9} {'RMSE_bot':>9}")
+    print("=" * 80)
 
-print(f"\nActual best (slice): p1_sc={x_actual[actual_best_i]:.4f}, bpb={y_actual[actual_best_i]:.4f}")
+    cv_results = {}
+    for name, fit_fn, X_data, _, _, _ in MODELS:
+        m = cv_metrics(fit_fn, X_data, y)
+        cv_results[name] = m
+        print(f"{name:<14} {m['R2']:>7.4f} {m['RMSE']:>7.4f} {m['Spearman']:>9.4f} {m['RMSE_bot']:>9.4f}")
 
+    # =====================================================================
+    # Fit on full data, extract params, build labels
+    # =====================================================================
+    print("\n\nFitting all models on full data...")
 
-# =========================================================================
-# Plot
-# =========================================================================
-fig, axes = plt.subplots(1, 3, figsize=(36, 9))
+    fitted = []  # (name, pred_fn, params, label_str, slice_preds, color, ls, cv_m)
 
-XLABEL = r"$p$ = StarCoder fraction in the Second Phase"
-YLABEL = r"eval/paloma/dolma\_100\_programing\_languages/bpb"
-NOTATION_LINE = (
-    r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{sc\_epochs}_1)$,"
-    r"\; (w{-}e) = weight{-}epoch features"
-)
-TOP_MODELS = {"LogQuad(w{-}e)", "Translog", "BayesLogQuad(w{-}e)", "ElasticLogQuad(w{-}e)", "Quadratic(w{-}e)"}
+    for name, fit_fn, X_data, label_fn, color, ls in MODELS:
+        pred_fn, params = fit_fn(X_data, y)
 
-for panel, (ax, xlim, ylim, title) in enumerate(
-    zip(
-        axes,
-        [(0, 1), (0.1, 0.55), (0.1, 0.55)],
-        [(0.85, 1.75), (0.88, 0.97), (0.88, 0.97)],
-        ["Full range", "Zoomed: all models", "Zoomed: top 5"],
-    )
-):
-    ax.scatter(x_actual, y_actual, s=50, c="black", zorder=10, label="Actual data")
-
-    for name, _, params, label, preds_s, color, ls, cv_m in fitted:
-        if panel == 2 and name not in TOP_MODELS:
-            continue
-        if panel == 0:
-            lbl = name
-        elif panel == 2:
-            lbl = rf"{name}: {label}"
+        if X_data is X_weight:
+            Xs = make_slice_weight(slice_grid)
+        elif X_data is X_wt_epoch:
+            Xs = make_slice_wt_epoch(slice_grid)
         else:
-            lbl = label
-        ax.plot(slice_grid, preds_s, label=lbl, linewidth=2.0, color=color, linestyle=ls)
+            Xs = make_slice_vdom(slice_grid)
 
-    ax.set_xlabel(XLABEL, fontsize=14)
-    ax.set_ylabel(YLABEL, fontsize=14)
-    ax.set_title(rf"Slice: 100\% Nemotron in the First Phase --- {title}", fontsize=15)
-    ax.set_xlim(xlim)
-    ax.set_ylim(ylim)
-    ax.tick_params(labelsize=12)
+        preds_slice = pred_fn(Xs)
+        label = label_fn(params)
 
-    secax = ax.secondary_xaxis("top", functions=(lambda w: w * SC_EPOCH_MULT, lambda e: e / SC_EPOCH_MULT))
-    secax.set_xlabel(r"StarCoder epochs in the Second Phase", fontsize=12)
-    secax.tick_params(labelsize=10)
+        print(f"\n--- {name} ---")
+        print(f"  Params: {params}")
+        print(f"  Label:  {label}")
 
-    if panel == 0:
-        ax.legend(fontsize=9, loc="upper right", ncol=2)
-    elif panel == 2:
-        ax.plot([], [], " ", label=NOTATION_LINE)
-        ax.legend(fontsize=11, loc="upper left", framealpha=0.95)
+        best_i = np.argmin(preds_slice)
+        print(f"  Slice optimal: p1_sc={slice_grid[best_i]:.4f}, pred={preds_slice[best_i]:.4f}")
 
-fig.tight_layout()
-out_path = script_dir / "debug_epoch_features_v3.png"
-fig.savefig(out_path, dpi=300, bbox_inches="tight")
-print(f"\nSaved {out_path}")
+        fitted.append((name, pred_fn, params, label, preds_slice, color, ls, cv_results[name]))
 
+    # =====================================================================
+    # Actual data on the slice
+    # =====================================================================
+    mask = df["phase_0_nemotron_full"].round(4) == 1.0
+    df_slice = df[mask].sort_values("phase_1_starcoder")
+    x_actual = df_slice["phase_1_starcoder"].values
+    y_actual = df_slice[TARGET].values
+    actual_best_i = np.argmin(y_actual)
 
-# =========================================================================
-# Summary
-# =========================================================================
-print("\n" + "=" * 80)
-print("SUMMARY -- Ranked by RMSE_bot")
-print("=" * 80)
-print(f"{'Model':<14} {'RMSE_bot':>9} {'Spearman':>9} {'R2':>7}  {'Slice opt':>10} {'Pred':>7}")
-print("-" * 65)
-for name, _, params, label, preds_s, _, _, cv_m in sorted(fitted, key=lambda x: x[7]["RMSE_bot"]):
-    best_i = np.argmin(preds_s)
-    print(
-        f"{name:<14} {cv_m['RMSE_bot']:>9.4f} {cv_m['Spearman']:>9.4f} {cv_m['R2']:>7.4f}  "
-        f"p1={slice_grid[best_i]:>6.4f} {preds_s[best_i]:>7.4f}"
+    print(f"\nActual best (slice): p1_sc={x_actual[actual_best_i]:.4f}, bpb={y_actual[actual_best_i]:.4f}")
+
+    # =====================================================================
+    # Plot
+    # =====================================================================
+    fig, axes = plt.subplots(1, 3, figsize=(36, 9))
+
+    XLABEL = r"$p$ = StarCoder fraction in the Second Phase"
+    YLABEL = r"eval/paloma/dolma\_100\_programing\_languages/bpb"
+    NOTATION_LINE = (
+        r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{sc\_epochs}_1)$,"
+        r"\; (w{-}e) = weight{-}epoch features"
     )
-print(f"{'Actual':14s} {'':>9} {'':>9} {'':>7}  p1={x_actual[actual_best_i]:>6.4f} {y_actual[actual_best_i]:>7.4f}")
+    TOP_MODELS = {"LogQuad(w{-}e)", "Translog", "BayesLogQuad(w{-}e)", "ElasticLogQuad(w{-}e)", "Quadratic(w{-}e)"}
+
+    for panel, (ax, xlim, ylim, title) in enumerate(
+        zip(
+            axes,
+            [(0, 1), (0.1, 0.55), (0.1, 0.55)],
+            [(0.85, 1.75), (0.88, 0.97), (0.88, 0.97)],
+            ["Full range", "Zoomed: all models", "Zoomed: top 5"],
+        )
+    ):
+        ax.scatter(x_actual, y_actual, s=50, c="black", zorder=10, label="Actual data")
+
+        for name, _, params, label, preds_s, color, ls, cv_m in fitted:
+            if panel == 2 and name not in TOP_MODELS:
+                continue
+            if panel == 0:
+                lbl = name
+            elif panel == 2:
+                lbl = rf"{name}: {label}"
+            else:
+                lbl = label
+            ax.plot(slice_grid, preds_s, label=lbl, linewidth=2.0, color=color, linestyle=ls)
+
+        ax.set_xlabel(XLABEL, fontsize=14)
+        ax.set_ylabel(YLABEL, fontsize=14)
+        ax.set_title(rf"Slice: 100\% Nemotron in the First Phase --- {title}", fontsize=15)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.tick_params(labelsize=12)
+
+        secax = ax.secondary_xaxis("top", functions=(lambda w: w * SC_EPOCH_MULT, lambda e: e / SC_EPOCH_MULT))
+        secax.set_xlabel(r"StarCoder epochs in the Second Phase", fontsize=12)
+        secax.tick_params(labelsize=10)
+
+        if panel == 0:
+            ax.legend(fontsize=9, loc="upper right", ncol=2)
+        elif panel == 2:
+            ax.plot([], [], " ", label=NOTATION_LINE)
+            ax.legend(fontsize=11, loc="upper left", framealpha=0.95)
+
+    fig.tight_layout()
+    out_path = script_dir / "debug_epoch_features_v3.png"
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    print(f"\nSaved {out_path}")
+
+    # =====================================================================
+    # Summary
+    # =====================================================================
+    print("\n" + "=" * 80)
+    print("SUMMARY -- Ranked by RMSE_bot")
+    print("=" * 80)
+    print(f"{'Model':<14} {'RMSE_bot':>9} {'Spearman':>9} {'R2':>7}  {'Slice opt':>10} {'Pred':>7}")
+    print("-" * 65)
+    for name, _, params, label, preds_s, _, _, cv_m in sorted(fitted, key=lambda x: x[7]["RMSE_bot"]):
+        best_i = np.argmin(preds_s)
+        print(
+            f"{name:<14} {cv_m['RMSE_bot']:>9.4f} {cv_m['Spearman']:>9.4f} {cv_m['R2']:>7.4f}  "
+            f"p1={slice_grid[best_i]:>6.4f} {preds_s[best_i]:>7.4f}"
+        )
+    print(f"{'Actual':14s} {'':>9} {'':>9} {'':>7}  p1={x_actual[actual_best_i]:>6.4f} {y_actual[actual_best_i]:>7.4f}")
