@@ -52,6 +52,9 @@ class ModelConfig:
     Whether or not this model was trained with a Chat Template in the tokenizer
     """
 
+    base_eval_run_name: str | None = None
+    """Custom base name for wandb runs."""
+
 
 class Evaluator(ABC):
     def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):

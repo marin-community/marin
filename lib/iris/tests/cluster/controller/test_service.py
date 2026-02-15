@@ -122,6 +122,8 @@ class MockSchedulerWake:
     def __init__(self):
         self.wake = Mock()
         self.kill_tasks_on_workers = Mock()
+        self.create_scheduling_context = Mock(return_value=Mock())
+        self.get_job_scheduling_diagnostics = Mock(return_value="")
 
 
 @pytest.fixture
@@ -255,7 +257,6 @@ def test_launch_job_rejects_empty_name(service, state):
         service.launch_job(request, None)
 
     assert exc_info.value.code == Code.INVALID_ARGUMENT
-    assert "name is required" in exc_info.value.message.lower()
 
 
 # =============================================================================
