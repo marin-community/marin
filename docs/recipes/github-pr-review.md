@@ -4,12 +4,16 @@ Review this PR for correctness and behavioral regressions.
 
 Be concise and high-signal. No emoji. No fluff.
 
-Execution constraints:
-- Use at most 2 analysis passes:
-  1) Diff-first scan for risk areas
-  2) Targeted file checks only where risk is detected
-- Prefer a PR diff tool first (for example, `gh pr diff` when available); only open full files when necessary to confirm a concrete issue.
-- If no high-confidence issues are found after these passes, stop.
+Format your review as:
+1. A 1-2 line description of what the PR does and whether it fulfills its stated objectives.
+2. **Specification check** (if a specification exists as a PR comment, linked design doc, or `.agents/projects/` file):
+   - The implementation should follow the described approach. Flag significant deviations.
+   - Described test scenarios should exist and test what they claim.
+   - If no specification exists and the PR exceeds ~500 lines of code changes, note that a specification is expected (see `docs/recipes/agent-coding.md`).
+3. Tight bullets (if any) for:
+   - Bugs or correctness issues
+   - Violations of AGENTS.md or coding guidelines
+   - Functionality that diverges from the PR description or linked issue
 
 Scope:
 - Only report high-confidence findings that are likely to cause:
@@ -22,16 +26,4 @@ Scope:
 Output contract:
 - Return exactly one final review.
 - Keep output compact and high-signal.
-- Use this format only:
-
-1. `<1-2 lines: what the PR changes and whether it meets objectives>`
-2. Findings:
-- `<issue 1 or "None">`
-- `<issue 2 if needed>`
-- `<issue 3 if needed>`
-
-Rules:
-- Max 3 findings.
-- Each finding must be one line and include file path (and line if known).
-- If clean: write `- None` and stop.
 - Do not include progress narration, process notes, or extra sections.
