@@ -1,25 +1,11 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pandas", "numpy", "scipy", "scikit-learn", "matplotlib"]
 # ///
-"""v3: Parametric models only, with explicit functional forms in legends.
+"""v3: Parametric models only, with explicit functional forms in legends (LaTeX).
 
 Based on v2 and literature_scaling_laws.py findings.
 All models return fitted parameters; legends show the explicit
@@ -39,7 +25,9 @@ from sklearn.model_selection import KFold
 sys.stdout.reconfigure(line_buffering=True)
 warnings.filterwarnings("ignore")
 
-plt.rcParams["text.usetex"] = False
+plt.rcParams["text.usetex"] = True
+plt.rcParams["text.latex.preamble"] = r"\usepackage{opensans}\renewcommand{\familydefault}{\sfdefault}"
+plt.rcParams["font.family"] = "sans-serif"
 script_dir = Path(__file__).parent
 df = pd.read_csv(script_dir / "two_phase_starcoder.csv")
 df = df[df["status"] == "completed"].copy()
@@ -113,18 +101,14 @@ def _softplus(x):
 
 
 def fit_linear(X, y):
-    """y = c₀ + c₁·x₀ + c₂·x₁
-    Features: [p0_sc, p1_sc].  Params: [c₀, c₁, c₂]
-    """
+    """y = c0 + c1*x0 + c2*x1.  Features: [p0_sc, p1_sc]."""
     X_aug = np.column_stack([np.ones(len(X)), X])
     coef, _, _, _ = np.linalg.lstsq(X_aug, y, rcond=None)
     return lambda Xn: np.column_stack([np.ones(len(Xn)), Xn]) @ coef, coef
 
 
 def fit_quadratic(X, y):
-    """y = c₀ + c₁x₀ + c₂x₁ + c₃x₀² + c₄x₁² + c₅x₀x₁
-    Features: [p0_sc, p1_sc].  Params: [c₀..c₅]
-    """
+    """y = c0 + c1*x0 + c2*x1 + c3*x0^2 + c4*x1^2 + c5*x0*x1.  Features: [p0_sc, p1_sc]."""
 
     def _build(X):
         x0, x1 = X[:, 0], X[:, 1]
@@ -135,9 +119,7 @@ def fit_quadratic(X, y):
 
 
 def fit_quadratic_4d(X, y):
-    """y = c₀ + Σcᵢxᵢ + Σcᵢᵢxᵢ² + Σcᵢⱼxᵢxⱼ
-    Features: [p0_sc, p1_sc, log_sc_ep0, log_sc_ep1].  15 params.
-    """
+    """Full quadratic on [p0_sc, p1_sc, log_sc_ep0, log_sc_ep1].  15 params."""
 
     def _build(X):
         n = len(X)
@@ -156,11 +138,18 @@ def fit_quadratic_4d(X, y):
     return lambda Xn: _build(Xn) @ coef, coef
 
 
-def fit_powerlaw(X, y, n_restarts=50, seed=42):
-    """y = Σᵢ softplus(αᵢ + βᵢ@x)^(−γᵢ) + c
-    Features: [p0_sc, p1_sc].  2 terms.
-    Params: [α₀, β₀₀, β₀₁, γ₀, α₁, β₁₀, β₁₁, γ₁, c]
+def fit_loglinear(X, y):
+    """log(y) = c0 + c1*x0 + ... + cn*xn  =>  y = exp(linear).
+    Features: whatever is passed.  Params: [c0, c1, ..., cn].
     """
+    log_y = np.log(y)
+    X_aug = np.column_stack([np.ones(len(X)), X])
+    coef, _, _, _ = np.linalg.lstsq(X_aug, log_y, rcond=None)
+    return lambda Xn: np.exp(np.column_stack([np.ones(len(Xn)), Xn]) @ coef), coef
+
+
+def fit_powerlaw(X, y, n_restarts=50, seed=42):
+    """y = sum_i softplus(a_i + b_i @ x)^(-g_i) + c.  Features: [p0_sc, p1_sc], 2 terms."""
     rng = np.random.default_rng(seed)
     nf, nt = X.shape[1], 2
 
@@ -195,10 +184,7 @@ def fit_powerlaw(X, y, n_restarts=50, seed=42):
 
 
 def fit_dml_m1(X, y, n_restarts=40, seed=42):
-    """DML M1 (Sum-Exp): y = c + Σⱼ kⱼ·exp(tⱼ·rⱼ)
-    Features: [r_n0, r_s0, r_n1, r_s1] (virtual domain proportions).
-    Params: [c, k₀, t₀, k₁, t₁, k₂, t₂, k₃, t₃]
-    """
+    """DML M1 (Sum-Exp): y = c + sum_j k_j * exp(t_j * r_j).  Features: vdom."""
     rng = np.random.default_rng(seed)
     nf = X.shape[1]
 
@@ -227,10 +213,7 @@ def fit_dml_m1(X, y, n_restarts=40, seed=42):
 
 
 def fit_slodm(X, y, n_restarts=40, seed=42):
-    """SLODM: y = E + 1/Σ(Cⱼ·rⱼ^γⱼ)
-    Features: [r_n0, r_s0, r_n1, r_s1].
-    Params: [E, logC₀, logγ₀, ..., logC₃, logγ₃]  (C=exp(logC), γ=exp(logγ))
-    """
+    """SLODM: y = E + 1/sum(C_j * r_j^g_j).  Features: vdom."""
     rng = np.random.default_rng(seed)
     nf = X.shape[1]
 
@@ -261,10 +244,7 @@ def fit_slodm(X, y, n_restarts=40, seed=42):
 
 
 def fit_bimix(X, y, n_restarts=40, seed=42):
-    """BiMix: y = Σⱼ Aⱼ/(rⱼ+ε)^αⱼ + C
-    Features: [r_n0, r_s0, r_n1, r_s1].
-    Params: [C, logA₀, logα₀, ..., logA₃, logα₃]  (A=exp(logA), α=exp(logα))
-    """
+    """BiMix: y = sum_j A_j/(r_j+eps)^a_j + C.  Features: vdom."""
     rng = np.random.default_rng(seed)
     nf = X.shape[1]
     EPS_B = 1e-3
@@ -296,104 +276,106 @@ def fit_bimix(X, y, n_restarts=40, seed=42):
 
 
 # =========================================================================
-# Slice label constructors — show functional form on p0_sc=0 slice
+# Slice label constructors — LaTeX functional forms on p0_sc=0 slice
 # =========================================================================
-def _s(v):
-    """Format a number: short representation."""
+# Notation: p = p1_starcoder, L = ln(starcoder_epochs_phase1)
+# On this slice: p0_sc=0 => phase_0 = 100% nemotron
+
+
+def _f(v, fmt=".3f"):
+    """Format a number for LaTeX."""
     if abs(v) < 0.001:
         return f"{v:.1e}"
-    return f"{v:.4f}"
+    return f"{v:{fmt}}"
 
 
 def label_linear(params):
-    # params = [c0, c1, c2]
-    # On slice: y = c0 + c2*p1
-    c0, c1, c2 = params
-    return f"Linear: y = {_s(c0)} + {_s(c2)}·p₁"
+    c0, _, c2 = params
+    return rf"$y = {_f(c0)} {c2:+.3f}\,p$"
 
 
 def label_quadratic(params):
-    # params = [c0, c1, c2, c3, c4, c5]
-    # On slice: y = c0 + c2*p1 + c4*p1^2
     c0, _, c2, _, c4, _ = params
-    return f"Quad: y = {_s(c0)} {c2:+.4f}·p₁ {c4:+.4f}·p₁²"
+    return rf"$y = {_f(c0)} {c2:+.3f}\,p {c4:+.3f}\,p^2$"
 
 
 def label_quadratic_4d(params):
-    # 15 params: [c0, c1..c4, c11..c44, c12,c13,c14,c23,c24,c34]
-    # Features: [p0_sc, p1_sc, log_sc_ep0, log_sc_ep1]
-    # On slice p0_sc=0: p0_sc=0, log_sc_ep0=log(EPS)≈-18.4
-    # x0=0, x1=p1, x2=log(eps), x3=log(SC_EPOCH_MULT*p1+eps)
-    # Simplify: terms with x0 vanish. x2=const → absorbed into intercept.
+    # 15 params for full quadratic on [p0, p1, log_ep0, log_ep1]
+    # On slice p0=0, log_ep0=log(EPS)=const: absorb into effective coefficients
     c = params
-    log_eps = np.log(EPS)
-    # const = c0 + c3*log_eps + c7*log_eps^2 + cross terms with x2
-    const = c[0] + c[3] * log_eps + c[7] * log_eps**2
-    # p1 terms: c2 + c13_cross*log_eps (c13 is at index 11: pairs (0,1)=9, (0,2)=10, (0,3)=11, (1,2)=12)
-    b_p1 = c[2] + c[12] * log_eps  # c2*p1 + c_12_cross*p1*log_eps
-    # p1^2 term
-    b_p1sq = c[6]
-    # log_sc_ep1 terms: c4 + c_23_cross*log_eps (pair (2,3) = index 14)
-    b_lep1 = c[4] + c[14] * log_eps
-    # log_sc_ep1^2
-    b_lep1sq = c[8]
-    # p1*log_sc_ep1 cross: pair (1,3) = index 13
-    b_cross = c[13]
+    le = np.log(EPS)
+    const = c[0] + c[3] * le + c[7] * le**2
+    b_p = c[2] + c[12] * le
+    b_pp = c[6]
+    b_L = c[4] + c[14] * le
+    b_LL = c[8]
+    b_pL = c[13]
     return (
-        f"Q4D: {_s(const)} {b_p1:+.3f}p1 {b_p1sq:+.3f}p1^2"
-        f" {b_lep1:+.3f}L1 {b_lep1sq:+.3f}L1^2 {b_cross:+.3f}p1*L1"
-        f"  [L1=log(sc_ep1)]"
+        rf"$y = {_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2"
+        rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.2f}\,pL$"
     )
 
 
+def label_loglinear(params):
+    # params = [c0, c1, c2, c3, c4] for [1, p0, p1, log_ep0, log_ep1]
+    # On slice p0=0: log(y) = (c0 + c3*log_eps) + c2*p + c4*L
+    c = params
+    le = np.log(EPS)
+    const = c[0] + c[3] * le
+    return rf"$y = \exp({_f(const)} {c[2]:+.3f}\,p {c[4]:+.3f}\,L)$"
+
+
 def label_powerlaw(params):
-    # params = [α0, β00, β01, γ0, α1, β10, β11, γ1, c]
-    # On slice (p0=0): y = sp(α0+β01·p1)^(-γ0) + sp(α1+β11·p1)^(-γ1) + c
     a0, _, b01, g0 = params[0], params[1], params[2], params[3]
     a1, _, b11, g1 = params[4], params[5], params[6], params[7]
     c = params[8]
-    return f"PL: sp({_s(a0)}{b01:+.2f}·p₁)^(−{g0:.2f}) + sp({_s(a1)}{b11:+.2f}·p₁)^(−{g1:.2f}) + {_s(c)}"
+    return (
+        rf"$\mathrm{{SoftPlus}}({_f(a0)}{b01:+.1f}\,p)^{{-{g0:.2f}}}"
+        rf" + \mathrm{{SoftPlus}}({_f(a1)}{b11:+.1f}\,p)^{{-{g1:.2f}}}"
+        rf" + {_f(c)}$"
+    )
 
 
 def label_dml_m1(params):
-    # params = [c, k0, t0, k1, t1, k2, t2, k3, t3]
-    # Features: [r_n0, r_s0, r_n1, r_s1]
-    # On slice (p0=0): r_n0=0.5, r_s0=0, r_n1=(1-p1)/2, r_s1=p1/2
-    # y = [c + k0*e^(t0*0.5) + k1*e^0] + k2*e^(t2*(1-p1)/2) + k3*e^(t3*p1/2)
     c = params[0]
     k0, t0 = params[1], params[2]
     k1, t1 = params[3], params[4]
     k2, t2 = params[5], params[6]
     k3, t3 = params[7], params[8]
     const = c + k0 * np.exp(np.clip(t0 * 0.5, -20, 20)) + k1
-    return f"M1: {_s(const)} {k2:+.4f}·e^({t2:.1f}·(1−p₁)/2) {k3:+.4f}·e^({t3:.1f}·p₁/2)"
+    return (
+        rf"${_f(const)} {k2:+.3f}\,e^{{{t2:.1f}(1-p)/2}}"
+        rf" {k3:+.3f}\,e^{{{t3:.1f}\,p/2}}$"
+    )
 
 
 def label_slodm(params):
-    # params = [E, lC0, lg0, lC1, lg1, lC2, lg2, lC3, lg3]
-    # On slice: r_n0=0.5, r_s0=0, r_n1=(1-p1)/2, r_s1=p1/2
-    # r_s0=0 → C1*0^g1 ≈ 0, so that term drops
     E = params[0]
     C0, g0 = np.exp(params[1]), np.exp(params[2])
     C2, g2 = np.exp(params[5]), np.exp(params[6])
     C3, g3 = np.exp(params[7]), np.exp(params[8])
-    c0_val = C0 * 0.5**g0  # constant from r_n0=0.5
-    return f"SLODM: {_s(E)} + 1/({_s(c0_val)} + {_s(C2)}·((1−p₁)/2)^{g2:.2f} + {_s(C3)}·(p₁/2)^{g3:.2f})"
+    c0_val = C0 * 0.5**g0
+    return (
+        rf"${_f(E)} + \frac{{1}}{{{_f(c0_val)}"
+        rf" + {_f(C2)}\!\left(\frac{{1-p}}{{2}}\right)^{{{g2:.2f}}}"
+        rf" + {_f(C3)}\!\left(\frac{{p}}{{2}}\right)^{{{g3:.2f}}}}}$"
+    )
 
 
 def label_bimix(params):
-    # params = [C, lA0, la0, lA1, la1, lA2, la2, lA3, la3]
-    # On slice: r_n0=0.5, r_s0=0, r_n1=(1-p1)/2, r_s1=p1/2
     C = params[0]
     A0, a0 = np.exp(params[1]), np.exp(params[2])
     A1, a1 = np.exp(params[3]), np.exp(params[4])
     A2, a2 = np.exp(params[5]), np.exp(params[6])
     A3, a3 = np.exp(params[7]), np.exp(params[8])
-    # r_s0=0 → A1/(0+eps)^a1 is a large constant
     c_n0 = A0 / (0.5 + 1e-3) ** a0
     c_s0 = A1 / (0 + 1e-3) ** a1
     const = C + c_n0 + c_s0
-    return f"BiMix: {_s(const)} + {_s(A2)}/((1−p₁)/2+ε)^{a2:.2f} + {_s(A3)}/(p₁/2+ε)^{a3:.2f}"
+    return (
+        rf"${_f(const)}"
+        rf" + \frac{{{_f(A2)}}}{{((1\!-\!p)/2+\varepsilon)^{{{a2:.2f}}}}}"
+        rf" + \frac{{{_f(A3)}}}{{(p/2+\varepsilon)^{{{a3:.2f}}}}}$"
+    )
 
 
 # =========================================================================
@@ -404,8 +386,9 @@ MODELS = [
     ("Linear", fit_linear, X_weight, label_linear, "tab:blue", "--"),
     ("Quadratic", fit_quadratic, X_weight, label_quadratic, "tab:cyan", "--"),
     ("Quad(mix)", fit_quadratic_4d, X_mixed_both, label_quadratic_4d, "tab:orange", "--"),
+    ("LogLin(mix)", fit_loglinear, X_mixed_both, label_loglinear, "tab:brown", "-"),
     ("PowerLaw", fit_powerlaw, X_weight, label_powerlaw, "black", "-"),
-    ("DML_M1", fit_dml_m1, X_vdom, label_dml_m1, "tab:green", "-"),
+    ("DML M1", fit_dml_m1, X_vdom, label_dml_m1, "tab:green", "-"),
     ("SLODM", fit_slodm, X_vdom, label_slodm, "tab:red", "-"),
     ("BiMix", fit_bimix, X_vdom, label_bimix, "tab:purple", "-"),
 ]
@@ -415,7 +398,7 @@ MODELS = [
 # Cross-validation
 # =========================================================================
 print("\n" + "=" * 80)
-print(f"{'Model':<14} {'R²':>7} {'RMSE':>7} {'Spearman':>9} {'RMSE_bot':>9}")
+print(f"{'Model':<14} {'R2':>7} {'RMSE':>7} {'Spearman':>9} {'RMSE_bot':>9}")
 print("=" * 80)
 
 cv_results = {}
@@ -433,7 +416,6 @@ print("\n\nFitting all models on full data...")
 slice_grid = np.linspace(0.002, 0.998, 300)
 
 
-# Slice features for each feature type
 def make_slice_weight(g):
     return np.column_stack([np.zeros(len(g)), g])
 
@@ -453,7 +435,6 @@ fitted = []  # (name, pred_fn, params, label_str, slice_preds, color, ls, cv_m)
 for name, fit_fn, X_data, label_fn, color, ls in MODELS:
     pred_fn, params = fit_fn(X_data, y)
 
-    # Construct slice features
     if X_data is X_weight:
         Xs = make_slice_weight(slice_grid)
     elif X_data is X_mixed_both:
@@ -489,7 +470,11 @@ print(f"\nActual best (slice): p1_sc={x_actual[actual_best_i]:.4f}, bpb={y_actua
 # =========================================================================
 # Plot
 # =========================================================================
-fig, axes = plt.subplots(1, 2, figsize=(20, 7))
+fig, axes = plt.subplots(1, 2, figsize=(24, 9))
+
+XLABEL = r"$p$ = StarCoder fraction in the Second Phase"
+YLABEL = r"eval/paloma/dolma\_100\_programing\_languages/bpb"
+NOTATION_LINE = r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{starcoder\_epochs}_1)$"
 
 for panel, (ax, xlim, ylim, title) in enumerate(
     zip(
@@ -499,29 +484,32 @@ for panel, (ax, xlim, ylim, title) in enumerate(
         ["Full range", "Zoomed: minimum region"],
     )
 ):
-    ax.scatter(x_actual, y_actual, s=40, c="black", zorder=10, label="Actual data")
+    ax.scatter(x_actual, y_actual, s=50, c="black", zorder=10, label="Actual data")
 
     for name, _, params, label, preds_s, color, ls, cv_m in fitted:
         if panel == 0:
             lbl = name
         else:
-            lbl = f"{label}\n  RMSE_bot={cv_m['RMSE_bot']:.4f}"
-        ax.plot(slice_grid, preds_s, label=lbl, linewidth=1.8, color=color, linestyle=ls)
+            lbl = label
+        ax.plot(slice_grid, preds_s, label=lbl, linewidth=2.0, color=color, linestyle=ls)
 
-    ax.set_xlabel("phase_1_starcoder", fontsize=11)
-    ax.set_ylabel("dolma_100_programing_languages/bpb", fontsize=11)
-    ax.set_title(f"Slice: phase_0 = 100% nemotron — {title}", fontsize=12)
+    ax.set_xlabel(XLABEL, fontsize=14)
+    ax.set_ylabel(YLABEL, fontsize=14)
+    ax.set_title(rf"Slice: 100\% Nemotron in the First Phase --- {title}", fontsize=15)
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
+    ax.tick_params(labelsize=12)
 
     if panel == 0:
-        ax.legend(fontsize=8, loc="upper right")
+        ax.legend(fontsize=11, loc="upper right")
     else:
-        ax.legend(fontsize=6.5, loc="upper left", framealpha=0.9)
+        # Add notation as a phantom last entry in the legend
+        ax.plot([], [], " ", label=NOTATION_LINE)
+        ax.legend(fontsize=9, loc="upper left", framealpha=0.95)
 
 fig.tight_layout()
 out_path = script_dir / "debug_epoch_features_v3.png"
-fig.savefig(out_path, dpi=150)
+fig.savefig(out_path, dpi=300, bbox_inches="tight")
 print(f"\nSaved {out_path}")
 
 
@@ -529,9 +517,9 @@ print(f"\nSaved {out_path}")
 # Summary
 # =========================================================================
 print("\n" + "=" * 80)
-print("SUMMARY — Ranked by RMSE_bot")
+print("SUMMARY -- Ranked by RMSE_bot")
 print("=" * 80)
-print(f"{'Model':<14} {'RMSE_bot':>9} {'Spearman':>9} {'R²':>7}  {'Slice opt':>10} {'Pred':>7}")
+print(f"{'Model':<14} {'RMSE_bot':>9} {'Spearman':>9} {'R2':>7}  {'Slice opt':>10} {'Pred':>7}")
 print("-" * 65)
 for name, _, params, label, preds_s, _, _, cv_m in sorted(fitted, key=lambda x: x[7]["RMSE_bot"]):
     best_i = np.argmin(preds_s)
