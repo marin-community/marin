@@ -376,11 +376,12 @@ def run_training(
         step = experiment.create_training_step(config, name_prefix=NAME)
         training_steps.append(step)
 
-    # Create analysis step
+    # Analysis step depends on all training steps so it waits for them to finish
     analysis_step = create_analysis_step(
         weight_configs_step=weight_configs_step,
         name_prefix=NAME,
         metrics=ANALYSIS_METRICS,
+        depends_on=training_steps,
     )
 
     logger.info(f"Created {len(training_steps)} training steps for v5")

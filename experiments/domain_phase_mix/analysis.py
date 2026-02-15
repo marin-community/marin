@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -80,6 +81,10 @@ class CollectResultsConfig:
     wandb_project: str = "marin"
     wandb_tags: tuple[str, ...] = ()  # Tags to filter runs
     metrics: tuple[str, ...] = tuple(DEFAULT_METRICS)  # Metrics to collect
+    # Extra blocking dependencies (e.g. training steps that must finish before analysis).
+    # The executor discovers InputName objects here and creates blocking dependencies.
+    # Not used by collect_results itself.
+    depends_on: tuple[InputName, ...] = ()
 
 
 def collect_results(config: CollectResultsConfig):
@@ -405,6 +410,7 @@ def create_analysis_step(
     wandb_entity: str = "marin-community",
     wandb_project: str = "marin",
     metrics: list[str] | None = None,
+    depends_on: Sequence[ExecutorStep] | None = None,
 ) -> ExecutorStep:
     """Create an analysis ExecutorStep.
 
@@ -414,10 +420,14 @@ def create_analysis_step(
         wandb_entity: W&B entity name.
         wandb_project: W&B project name.
         metrics: Metrics to collect (defaults to DEFAULT_METRICS).
+        depends_on: Additional steps that must complete before analysis runs
+            (e.g. training steps). Without this, analysis runs as soon as
+            weight configs are saved.
 
     Returns:
         ExecutorStep that collects results and writes CSV.
     """
+    dep_input_names = tuple(output_path_of(step) for step in depends_on) if depends_on else ()
     return ExecutorStep(
         name=f"{name_prefix}/analysis",
         description="Collect W&B results and generate analysis CSV",
@@ -429,5 +439,6 @@ def create_analysis_step(
             wandb_project=wandb_project,
             wandb_tags=(name_prefix,),
             metrics=tuple(metrics or DEFAULT_METRICS),
+            depends_on=dep_input_names,
         ),
     )

@@ -434,6 +434,7 @@ def main(
         weight_configs_step=weight_configs_step,
         name_prefix=name_prefix,
         metrics=ANALYSIS_METRICS,
+        depends_on=list(training_steps),
     )
 
     if analyze:

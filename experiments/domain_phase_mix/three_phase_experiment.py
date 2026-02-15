@@ -268,6 +268,7 @@ def main(
     analysis_step = create_analysis_step(
         weight_configs_step=weight_configs_step,
         name_prefix=name_prefix,
+        depends_on=list(training_steps),
     )
 
     if analyze:
