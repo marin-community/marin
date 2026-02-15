@@ -198,6 +198,7 @@ train_config = SimpleVlmTrainConfig(
 
     # Checkpointing
     steps_per_export=1000,
+    steps_per_hf_export=-1, 
     steps_per_eval=500,
 
     # Load complete VLM weights from GCS HF checkpoint (vision encoder + projector + LLM)
