@@ -1,3 +1,0 @@
-[submodule "harbor"]
-	path = lib/harbor
-	url = https://github.com/laude-institute/harbor.git

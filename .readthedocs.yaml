@@ -5,7 +5,6 @@ build:
   tools:
     python: "3.11"
   commands:
-    - git submodule update --init
     - pip install uv
     - uv sync --group docs --package marin
     - uv run --frozen mkdocs build --strict --site-dir $READTHEDOCS_OUTPUT/html
