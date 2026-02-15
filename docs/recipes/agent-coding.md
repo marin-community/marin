@@ -28,22 +28,21 @@ engineer reading it would produce substantially the same set of changes.
 **Required elements:**
 
 1. **Problem** — What is broken or missing. Reference files and line numbers.
-2. **Approach** — The concrete plan. Which files change, what gets added/removed,
+2. **Approach** — The concrete plan. Which modules change, what gets added/removed,
    key data structures or interfaces introduced.
-3. **Files touched** — Explicit list of files created, modified, or deleted.
-   Every file in the diff must be inferable from this list.
-4. **Key code** — Short snippets (10-30 lines) for non-obvious logic: new
+3. **Key code** — Short snippets (10-30 lines) for non-obvious logic: new
    protocols, algorithms, data schemas. Not boilerplate.
-5. **Tests** — What is tested and how. Name the test files and describe the
-   scenarios.
+4. **Tests** — What is tested and how. Name the test files and describe the
+   scenarios. Tests must be extensive and cover the changed code in sufficient detail as to
+   provide confidence that the changes are correct. Tests should be behavioral and end-to-end.
+   Tests should _not_ validate facially correct behavior or duplicate existing functionality.
+   Don't test that a type is a type, a constant is a value, or that 1 + 1 = 2.
 
 **Optional elements:**
 
 - Non-goals — Scope boundaries.
 - Future work — What is deliberately deferred.
 - Alternatives considered — Why this approach over others.
-
-**Target length:** 100-300 lines. Shorter is better if it's unambiguous.
 
 Follow the format in [design_doc.md](design_doc.md) for longer specifications
 that live as standalone documents.
@@ -99,19 +98,12 @@ Human reviewers focus on the **specification**, not the diff:
 3. **Is the scope right?** Too much? Too little? Unintended side effects?
 4. **Are the files listed complete?** Any surprising additions or omissions?
 
-If the spec is approved, implementation review is lighter — verify the code
-matches the spec and flag only correctness issues.
-
-If the spec is wrong, reject early. Don't line-by-line review code that
-implements the wrong thing.
-
 ### Agent review: specification compliance
 
 Automated/agent review validates that the implementation matches the
 specification:
 
-1. **File coverage** — Every file in the diff should be traceable to the spec's
-   "Files touched" list. Flag unexpected files.
+1. **Coverage** — Every change in the diff should be traceable to the spec. Flag where the spec is ambiguous. Is this the only reasonable output from the spec?
 2. **Approach fidelity** — The implementation should follow the described
    approach. Flag significant deviations (different data structures, different
    control flow, missing components).
