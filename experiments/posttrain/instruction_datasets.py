@@ -416,7 +416,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     ),
     "teetone/qwen3_4b_openthoughts4_math30K_instill_n4_valredundancy3_round1": InstructionDatasetConfig(
         hf_dataset_id="teetone/qwen3_4b_openthoughts4_math30K_instill_n4_valredundancy3_round1",
-        revision="3d3d256",
+        revision="7daf226",
         adapter=multi_turn_adapter(),
         metadata_columns=[],
         name="teetone/qwen3_4b_openthoughts4_math30K_instill_n4_valredundancy3_round1",
