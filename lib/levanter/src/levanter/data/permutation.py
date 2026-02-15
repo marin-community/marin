@@ -19,7 +19,6 @@ class PermutationDataset(AsyncDataset[T_co]):
     # TODO: add epoch reshuffling
 
     def __init__(self, dataset: AsyncDataset[T_co], key: PRNGKeyArray, perm_type: PermType = "feistel"):
-        super().__init__()
         self.dataset = dataset
         self.key = key
         self._permutation: Optional[Permutation] = None
@@ -28,18 +27,8 @@ class PermutationDataset(AsyncDataset[T_co]):
     async def async_len(self) -> int:
         return await self.dataset.async_len()
 
-    async def final_length_is_known(self) -> bool:
-        return await self.dataset.final_length_is_known()
-
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
-
-    async def current_len(self) -> Optional[int]:
-        if await self.final_length_is_known():
-            return await self.async_len()
-        # In general, we can't know the current length until we know the entire length
-        return None
-        # return await self.dataset.current_len()
 
     async def getitem_async(self, index: int) -> T_co:
         permutation = await self._get_permutation()
@@ -55,9 +44,6 @@ class PermutationDataset(AsyncDataset[T_co]):
         if self._permutation is None:
             self._permutation = Permutation.make(self._perm_type, await self.async_len(), self.key)
         return self._permutation
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        return await self.async_len()
 
 
 class EraShufflingDataset(AsyncDataset[T_co]):
@@ -83,7 +69,6 @@ class EraShufflingDataset(AsyncDataset[T_co]):
     def __init__(
         self, dataset: AsyncDataset[T_co], era_length: int, *, key: jax.random.PRNGKey, perm_type: PermType = "feistel"
     ):
-        super().__init__()
         self.dataset = dataset
         self.era_length = era_length
 
@@ -100,9 +85,17 @@ class EraShufflingDataset(AsyncDataset[T_co]):
         @alru_cache(maxsize=4)  # we're mostly going to be going sequentially
         async def gen_era_permutation(era: int) -> Permutation:
             # TODO: support epochs
-            # edge case: final era may be shorter than era_length
-            current_len = await self.dataset.wait_until_len_at_least((era + 1) * self.era_length)
-            era_length_val = min(self.era_length, current_len - era * self.era_length)
+            if self.dataset.is_finite():
+                # edge case: final era may be shorter than era_length
+                dataset_len = await self.dataset.async_len()
+                remaining = dataset_len - era * self.era_length
+                if remaining <= 0:
+                    raise IndexError(
+                        f"Era {era} is out of bounds for dataset length {dataset_len} with era length {self.era_length}"
+                    )
+                era_length_val = min(self.era_length, remaining)
+            else:
+                era_length_val = self.era_length
 
             mix_key = jax.random.fold_in(key, era)
             return Permutation.make(self._perm_type, era_length_val, mix_key)
@@ -121,25 +114,8 @@ class EraShufflingDataset(AsyncDataset[T_co]):
     async def async_len(self) -> int:
         return await self.dataset.async_len()
 
-    async def final_length_is_known(self) -> bool:
-        return await self.dataset.final_length_is_known()
-
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
-
-    async def current_len(self) -> Optional[int]:
-        # nb this is the no-wait length, which means we might be a bit behind the length of the inner dataset
-        inner_current_len = await self.dataset.current_len()
-        if inner_current_len is None:
-            return None
-
-        # if we have the final length, and it's the inner_current_len, then we can return the final length
-        if await self.final_length_is_known() and inner_current_len == await self.async_len():
-            return inner_current_len
-
-        # otherwise, we need to wait for the era to fill
-        era = inner_current_len // self.era_length
-        return era * self.era_length
 
     async def getitem_async(self, index: int) -> T_co:
         return await self.dataset.getitem_async(await self._get_index(index))
@@ -152,8 +128,3 @@ class EraShufflingDataset(AsyncDataset[T_co]):
 
     def __str__(self):
         return f"EraShufflingDataset({str(self.dataset)})"
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        # wait until we hit the next era
-        next_era_end = (length // self.era_length + 1) * self.era_length
-        return await self.dataset.wait_until_len_at_least(next_era_end)

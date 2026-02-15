@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Subprocess-based container runtime for local execution.
 
@@ -43,9 +32,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.runtime.env import build_device_env_vars
+from iris.cluster.runtime.profile import (
+    build_memray_attach_cmd,
+    build_memray_transform_cmd,
+    build_pyspy_cmd,
+    resolve_cpu_spec,
+    resolve_memory_spec,
+)
 from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
+from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -120,9 +118,10 @@ class ProcessContainer:
     def start(self):
         """Start container as subprocess and begin streaming logs."""
         self._running = True
-        cmd = self._build_command()
+        cmd = list(self.command)
         if cmd and cmd[0] in {"python", "python3"}:
-            # Ensure we use the current interpreter even when PATH lacks "python".
+            # For Entrypoint.from_command("python", ...) — rewrite to the
+            # current interpreter since "python" may not be on PATH.
             cmd = [sys.executable, *cmd[1:]]
 
         try:
@@ -168,9 +167,6 @@ class ProcessContainer:
             self._exit_code = 1
             self._running = False
             logger.exception("Failed to start container")
-
-    def _build_command(self) -> list[str]:
-        return self.command
 
     def _stream_logs(self, stop_event: threading.Event):
         """Stream stdout/stderr from subprocess to log buffer.
@@ -264,6 +260,35 @@ class ProcessContainer:
             self._exit_code = 137  # 128 + SIGKILL
 
 
+def _cpu_profile_stub(cpu_format: int) -> bytes:
+    """Return a minimal stub CPU profile for when py-spy is unavailable."""
+    if cpu_format == cluster_pb2.CpuProfile.FLAMEGRAPH:
+        return (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="50">'
+            b'<text x="10" y="30" font-size="14">py-spy unavailable in local mode</text></svg>'
+        )
+    elif cpu_format == cluster_pb2.CpuProfile.SPEEDSCOPE:
+        return (
+            b'{"version":"0.1.0","$schema":"https://www.speedscope.app/file-format-schema.json",'
+            b'"profiles":[],"shared":{"frames":[]}}'
+        )
+    else:  # RAW
+        return b"py-spy unavailable in local mode\n"
+
+
+def _memory_profile_stub(memory_format: int) -> bytes:
+    """Return a minimal stub memory profile for when memray is unavailable."""
+    if memory_format == cluster_pb2.MemoryProfile.FLAMEGRAPH:
+        return (
+            b"<!DOCTYPE html><html><head><title>Memory Profile</title></head><body>"
+            b"<p>memray unavailable in local mode</p></body></html>"
+        )
+    elif memory_format == cluster_pb2.MemoryProfile.TABLE:
+        return b"memray unavailable in local mode\n"
+    else:  # STATS
+        return b'{"error": "memray unavailable in local mode"}'
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -299,10 +324,14 @@ class ProcessContainerHandle:
 
         # Remap container paths to host paths in env vars
         mount_map = {container_path: host_path for host_path, container_path, _ in config.mounts}
-        env = dict(config.env)
+        env = {**build_device_env_vars(config), **dict(config.env)}
         for key, value in env.items():
             if value in mount_map:
                 env[key] = mount_map[value]
+
+        # In local mode, resolve IRIS_PYTHON to the current interpreter so that
+        # bash -c "exec $IRIS_PYTHON ..." works even when "python" isn't on PATH.
+        env["IRIS_PYTHON"] = sys.executable
 
         # Extract the command from the RuntimeEntrypoint proto
         cmd = list(config.entrypoint.run_command.argv)
@@ -362,6 +391,88 @@ class ProcessContainerHandle:
     def stats(self) -> ContainerStats:
         """Get resource usage statistics."""
         return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
+
+    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+        """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""
+
+        if not self._container or not self._container._process:
+            raise RuntimeError("Cannot profile: no running process")
+
+        # Dispatch to CPU or memory profiling
+        if profile_type.HasField("cpu"):
+            return self._profile_cpu(duration_seconds, profile_type.cpu)
+        elif profile_type.HasField("memory"):
+            return self._profile_memory(duration_seconds, profile_type.memory)
+        else:
+            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+
+    def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
+        """Profile CPU using py-spy, with fallback stub."""
+        pid = self._container._process.pid
+        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=str(pid))
+
+        output_path = None
+        try:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
+                output_path = f.name
+
+            cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
+            if result.returncode == 0:
+                return Path(output_path).read_bytes()
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
+            logger.warning("py-spy profiling failed for PID %s; falling back to stub", pid, exc_info=True)
+        finally:
+            if output_path is not None:
+                Path(output_path).unlink(missing_ok=True)
+
+        return _cpu_profile_stub(cpu_config.format)
+
+    def _profile_memory(self, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
+        """Profile memory using memray, with fallback stub."""
+        pid = self._container._process.pid
+        spec = resolve_memory_spec(memory_config, duration_seconds, pid=str(pid))
+
+        trace_path = None
+        output_path = None
+        try:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+                trace_path = f.name
+
+            attach_cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path)
+            result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
+            if result.returncode != 0:
+                raise RuntimeError(f"memray attach failed: {result.stderr}")
+
+            if spec.output_is_file:
+                with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
+                    output_path = f.name
+
+            transform_cmd = build_memray_transform_cmd(
+                spec, memray_bin="memray", trace_path=trace_path, output_path=output_path or ""
+            )
+            result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
+
+            if spec.output_is_file:
+                return Path(output_path).read_bytes()
+            else:
+                return result.stdout.encode("utf-8")
+
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError, RuntimeError):
+            logger.warning("memray profiling failed for PID %s; falling back to stub", pid, exc_info=True)
+        finally:
+            if trace_path is not None:
+                Path(trace_path).unlink(missing_ok=True)
+            if output_path is not None:
+                Path(output_path).unlink(missing_ok=True)
+
+        return _memory_profile_stub(memory_config.format)
 
     def cleanup(self) -> None:
         """Kill the subprocess and clean up resources."""

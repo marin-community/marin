@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 The `Executor` framework provides a way to specify a DAG of `ExecutorStep`s that
@@ -109,7 +98,6 @@ from urllib.parse import urlparse
 import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-
 from fray.v2 import client as fray_client
 from fray.v2.client import JobHandle, JobStatus
 from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
@@ -198,9 +186,9 @@ class StepRunner:
             if self._job is None:
                 raise RuntimeError("StepRunner.wait called before launch")
             result = self._job.wait(raise_on_failure=False)
-            if result == JobStatus.FAILED:
+            if result != JobStatus.SUCCEEDED:
                 self._status_file.write_status(STATUS_FAILED)
-                raise RuntimeError(f"Job {self.job_id} failed")
+                raise RuntimeError(f"Job {self.job_id} finished with status {result}")
             self._status_file.write_status(STATUS_SUCCESS)
         except Exception:
             if self._status_file.status != STATUS_FAILED:
@@ -847,7 +835,7 @@ class Executor:
         logger.info("  output_path = %s", output_path)
         logger.info("  config = %s", json.dumps(config_version, cls=CustomJsonEncoder))
         for i, dep in enumerate(self.dependencies[step]):
-            logger.info("  %s = %s", dependency_index_str(i), self.output_paths[dep])
+            logger.debug("  %s = %s", dependency_index_str(i), self.output_paths[dep])
 
         if dry_run:
             action, reason = self._plan_dry_run(step, force_run_failed=force_run_failed)

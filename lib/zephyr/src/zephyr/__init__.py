@@ -1,23 +1,12 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Zephyr: Lightweight dataset library for distributed data processing."""
 
 import logging
 
 from zephyr.dataset import Dataset
-from zephyr.execution import DiskChunk, ZephyrContext, shard_ctx
+from zephyr.execution import DiskChunk, WorkerContext, ZephyrContext, zephyr_worker_ctx
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import ExecutionHint, compute_plan
 from zephyr.readers import InputFileSpec, load_file, load_jsonl, load_parquet, load_vortex, load_zip_members
@@ -31,6 +20,7 @@ __all__ = [
     "ExecutionHint",
     "Expr",
     "InputFileSpec",
+    "WorkerContext",
     "ZephyrContext",
     "atomic_rename",
     "col",
@@ -41,9 +31,9 @@ __all__ = [
     "load_parquet",
     "load_vortex",
     "load_zip_members",
-    "shard_ctx",
     "write_jsonl_file",
     "write_levanter_cache",
     "write_parquet_file",
     "write_vortex_file",
+    "zephyr_worker_ctx",
 ]

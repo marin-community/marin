@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Pytest fixtures for zephyr tests."""
 
@@ -47,17 +36,13 @@ IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "demo.
 @pytest.fixture(scope="session")
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
-    from iris.cluster.vm.cluster_manager import ClusterManager
-    from iris.cluster.vm.config import load_config, make_local_config
+    from iris.cluster.manager import connect_cluster
+    from iris.cluster.config import load_config, make_local_config
 
-    try:
-        config = load_config(IRIS_CONFIG)
-        config = make_local_config(config)
-        manager = ClusterManager(config)
-        with manager.connect() as url:
-            yield url
-    except Exception as e:
-        pytest.skip(f"Failed to start local Iris cluster: {e}")
+    config = load_config(IRIS_CONFIG)
+    config = make_local_config(config)
+    with connect_cluster(config) as url:
+        yield url
 
 
 @pytest.fixture(scope="session")
