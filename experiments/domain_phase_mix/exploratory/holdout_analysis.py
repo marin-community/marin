@@ -25,6 +25,7 @@ Usage:
   uv run holdout_analysis.py --plots-only      # skip bootstrap, just regenerate plots
 """
 
+import os
 import pickle
 import sys
 import time
@@ -61,7 +62,8 @@ from debug_epoch_features_v3 import (  # noqa: E402
 sys.stdout.reconfigure(line_buffering=True)
 
 script_dir = Path(__file__).parent
-OUT_DIR = script_dir / "holdout_plots"
+_out_name = os.environ.get("HOLDOUT_OUT_DIR", "holdout_plots")
+OUT_DIR = script_dir / _out_name
 OUT_DIR.mkdir(exist_ok=True)
 CACHE_FILE = OUT_DIR / "bootstrap_cache.pkl"
 
@@ -99,9 +101,12 @@ def clean_name(name: str) -> str:
 # =========================================================================
 # Configuration
 # =========================================================================
-TRAIN_SIZES = [12, 18, 24, 30, 36, 42, 48, 54]
+N = len(y)
+# Generate train sizes: 8 evenly spaced values from ~10% to ~87% of N
+_lo, _hi = max(12, N // 10), int(N * 0.87)
+TRAIN_SIZES = sorted(set(int(round(v)) for v in np.linspace(_lo, _hi, 8)))
 B = 200  # bootstrap iterations per training size
-REFERENCE_N = 48  # training size for Table 1 and Figure 3
+REFERENCE_N = TRAIN_SIZES[-1]  # use largest train size for Table 1 and Figure 3
 N_JOBS = -1  # use all cores (M3 Max)
 SEED_BASE = 42
 HEATMAP_RES = 80  # grid resolution for 2D heatmaps
@@ -226,7 +231,8 @@ def _run_one_iter(n_train, seed, model_specs, all_p0, all_p1, all_y, delta, sg, 
     p0_train, p1_train = all_p0[train_idx], all_p1[train_idx]
     p0_test, p1_test = all_p0[test_idx], all_p1[test_idx]
 
-    fail = {"test_huber": np.nan, "test_rmse": np.nan, "train_rmse": np.nan,
+    fail = {"test_huber": np.nan, "test_rmse": np.nan,
+            "train_huber": np.nan, "train_rmse": np.nan,
             "opt_p1": np.nan, "success": False}
 
     results = {}
@@ -257,6 +263,7 @@ def _run_one_iter(n_train, seed, model_specs, all_p0, all_p1, all_y, delta, sg, 
             results[name] = {
                 "test_huber": huber_loss(y_test, test_pred, delta),
                 "test_rmse": float(np.sqrt(np.mean((y_test - test_pred) ** 2))),
+                "train_huber": huber_loss(y_train, train_pred, delta),
                 "train_rmse": float(np.sqrt(np.mean((y_train - train_pred) ** 2))),
                 "opt_p1": opt_p1,
                 "success": True,
@@ -315,6 +322,7 @@ if needed_names and not plots_only:
             new_model_results[name][n_train] = {
                 "test_huber": np.array([r[name]["test_huber"] for r in iter_results]),
                 "test_rmse": np.array([r[name]["test_rmse"] for r in iter_results]),
+                "train_huber": np.array([r[name]["train_huber"] for r in iter_results]),
                 "train_rmse": np.array([r[name]["train_rmse"] for r in iter_results]),
                 "opt_p1": np.array([r[name]["opt_p1"] for r in iter_results]),
                 "success": np.array([r[name]["success"] for r in iter_results]),
@@ -354,63 +362,86 @@ for n_train in TRAIN_SIZES:
 
 
 # =========================================================================
-# Table 1: Models ranked at n_train=REFERENCE_N
+# Compute rankings for both metrics
 # =========================================================================
-print(f"\n{'=' * 100}")
-print(f"TABLE 1: Models ranked by held-out Huber loss (n_train={REFERENCE_N})")
-print(f"{'=' * 100}")
-header = (
-    f"{'Model':<22} {'Huber(test)':>14} {'RMSE(test)':>12} {'RMSE(train)':>12}"
-    f" {'Overfit':>8} {'Opt p1':>14} {'Conv%':>6}"
-)
-print(header)
-print("-" * 100)
-
 ref = all_results[REFERENCE_N]
-rankings = []
-for name in model_names:
-    d = ref[name]
-    mask = d["success"]
-    if mask.sum() == 0:
-        rankings.append((name, np.inf, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-        continue
-    h_vals = d["test_huber"][mask]
-    t_rmse = d["test_rmse"][mask]
-    tr_rmse = d["train_rmse"][mask]
-    opt_vals = d["opt_p1"][mask]
-    rankings.append((
-        name,
-        float(np.mean(h_vals)), float(np.std(h_vals)),
-        float(np.mean(t_rmse)),
-        float(np.mean(tr_rmse)),
-        float(np.mean(t_rmse)) / max(float(np.mean(tr_rmse)), 1e-12),
-        float(np.mean(opt_vals)), float(np.std(opt_vals)),
-        float(mask.mean()) * 100,
-    ))
 
-rankings.sort(key=lambda x: x[1])
+METRICS = {
+    "huber": {"test_key": "test_huber", "train_key": "train_huber",
+              "label": f"Huber ($\\delta$={HUBER_DELTA:.4f})", "short": "Huber"},
+    "rmse": {"test_key": "test_rmse", "train_key": "train_rmse",
+             "label": "RMSE", "short": "RMSE"},
+}
 
-for name, h_mean, h_std, rmse_test, rmse_train, overfit, opt_mean, opt_std, conv in rankings:
-    cn = clean_name(name)
-    print(
-        f"{cn:<22} {h_mean:>7.5f}+-{h_std:<5.5f} {rmse_test:>10.5f}"
-        f" {rmse_train:>12.5f} {overfit:>8.2f}x"
-        f" {opt_mean:>6.3f}+-{opt_std:<5.3f} {conv:>5.0f}%"
+
+def _compute_rankings(metric_key):
+    """Compute model rankings sorted by median test metric at REFERENCE_N.
+
+    Uses median (not mean) for ranking so the sort order matches the
+    median values displayed in the learning-curve plots.
+    """
+    rows = []
+    for name in model_names:
+        d = ref[name]
+        mask = d["success"]
+        if mask.sum() == 0:
+            rows.append((name, np.inf, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            continue
+        test_vals = d[metric_key][mask]
+        train_key = metric_key.replace("test_", "train_")
+        train_vals = d[train_key][mask]
+        opt_vals = d["opt_p1"][mask]
+        median_test = float(np.median(test_vals))
+        rows.append((
+            name,
+            median_test, float(np.std(test_vals)),
+            float(np.median(test_vals)),
+            float(np.median(train_vals)),
+            median_test / max(float(np.median(train_vals)), 1e-12),
+            float(np.mean(opt_vals)), float(np.std(opt_vals)),
+            float(mask.mean()) * 100,
+        ))
+    rows.sort(key=lambda x: x[1])
+    return rows
+
+
+rankings_huber = _compute_rankings("test_huber")
+rankings_rmse = _compute_rankings("test_rmse")
+
+# Print tables for both metrics
+for metric_name, rankings in [("Huber", rankings_huber), ("RMSE", rankings_rmse)]:
+    print(f"\n{'=' * 100}")
+    print(f"Models ranked by held-out {metric_name} (n_train={REFERENCE_N})")
+    print(f"{'=' * 100}")
+    header = (
+        f"{'Model':<22} {metric_name + '(test)':>14} {metric_name + '(train)':>14}"
+        f" {'Overfit':>8} {'Opt p1':>14} {'Conv%':>6}"
     )
+    print(header)
+    print("-" * 100)
+    for name, m_mean, m_std, _, m_train, overfit, opt_mean, opt_std, conv in rankings:
+        cn = clean_name(name)
+        print(
+            f"{cn:<22} {m_mean:>7.5f}+-{m_std:<5.5f} {m_train:>12.5f}"
+            f" {overfit:>8.2f}x {opt_mean:>6.3f}+-{opt_std:<5.3f} {conv:>5.0f}%"
+        )
 
-top_models = [r[0] for r in rankings[:min(5, len(rankings))]]
-print(f"\nTop models by held-out Huber: {[clean_name(n) for n in top_models]}")
+top_models_huber = [r[0] for r in rankings_huber[:5]]
+top_models_rmse = [r[0] for r in rankings_rmse[:5]]
+print(f"\nTop 5 by Huber: {[clean_name(n) for n in top_models_huber]}")
+print(f"Top 5 by RMSE:  {[clean_name(n) for n in top_models_rmse]}")
 
 
 # =========================================================================
-# Helper: extract learning curve stats for one model
+# Helpers for dual-metric plotting
 # =========================================================================
-def _learning_curve_stats(name):
+def _learning_curve_stats(name, metric_key="test_huber"):
+    """Extract median + IQR learning curve for a given test metric."""
     medians, q25, q75 = [], [], []
     for n_train in TRAIN_SIZES:
         d = all_results[n_train][name]
         mask = d["success"]
-        vals = d["test_huber"][mask]
+        vals = d[metric_key][mask]
         vals = vals[np.isfinite(vals)]
         if len(vals) == 0:
             medians.append(np.nan)
@@ -423,165 +454,221 @@ def _learning_curve_stats(name):
     return medians, q25, q75
 
 
-# =========================================================================
-# Figure 1: Learning curves overview (all + top 5)
-# =========================================================================
-print("\nGenerating Figure 1: Learning curves (overview)...")
+def _plot_fig1(metric_id, rankings, top_models, suffix):
+    """Figure 1: Learning curves overview (all + top 5)."""
+    mi = METRICS[metric_id]
+    test_key, label = mi["test_key"], mi["label"]
 
-n_panels = 2 if len(model_names) > 5 else 1
-fig1, axes1 = plt.subplots(1, n_panels, figsize=(7 * n_panels, 5))
-if n_panels == 1:
-    axes1 = [axes1]
+    n_panels = 2 if len(model_names) > 5 else 1
+    fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 5))
+    if n_panels == 1:
+        axes = [axes]
 
-panel_configs = []
-if n_panels == 2:
-    panel_configs.append((0, model_names, False, f"All {len(model_names)} models"))
-    panel_configs.append((1, top_models, True, f"Top {min(5, len(model_names))}"))
-else:
-    panel_configs.append((0, model_names, True, "All models"))
+    panels = []
+    if n_panels == 2:
+        panels.append((0, model_names, False, f"All {len(model_names)} models"))
+        panels.append((1, top_models, True, f"Top {min(5, len(model_names))}"))
+    else:
+        panels.append((0, model_names, True, "All models"))
 
-for ax_idx, subset, show_ci, title in panel_configs:
-    ax = axes1[ax_idx]
-    for name in subset:
-        medians, q25, q75 = _learning_curve_stats(name)
-        color = model_colors[name]
-        lw = 2.5 if show_ci else 1.2
-        ax.plot(TRAIN_SIZES, medians, "o-", color=color, lw=lw, ms=4,
-                label=clean_name(name))
-        if show_ci:
-            ax.fill_between(TRAIN_SIZES, q25, q75, color=color, alpha=0.15)
+    for ax_idx, subset, show_ci, title in panels:
+        ax = axes[ax_idx]
+        for name in subset:
+            medians, q25, q75 = _learning_curve_stats(name, test_key)
+            color = model_colors[name]
+            lw = 2.5 if show_ci else 1.2
+            ax.plot(TRAIN_SIZES, medians, "o-", color=color, lw=lw, ms=4,
+                    label=clean_name(name))
+            if show_ci:
+                ax.fill_between(TRAIN_SIZES, q25, q75, color=color, alpha=0.15)
+        ax.set_xlabel("$n_{\\mathrm{train}}$")
+        if ax_idx == 0:
+            ax.set_ylabel(f"Held-out {label}, median")
+        ax.set_title(title)
+        ax.legend(framealpha=0.9, loc="upper right")
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-    ax.set_xlabel("$n_{\\mathrm{train}}$")
-    if ax_idx == 0:
-        ax.set_ylabel(f"Held-out Huber loss, median ($\\delta$={HUBER_DELTA:.4f})")
-    ax.set_title(title)
-    ax.legend(framealpha=0.9, loc="upper right")
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-
-fig1.suptitle("Learning Curves: Held-out Huber Loss vs Training Set Size", fontsize=13, y=1.02)
-fig1.tight_layout()
-out1 = OUT_DIR / "fig1_learning_curves.png"
-fig1.savefig(out1)
-plt.close(fig1)
-print(f"  Saved {out1}")
+    fig.suptitle(f"Learning Curves: Held-out {label} vs Training Set Size", fontsize=13, y=1.02)
+    fig.tight_layout()
+    out = OUT_DIR / f"fig1_learning_curves_{suffix}.png"
+    fig.savefig(out)
+    plt.close(fig)
+    print(f"  Saved {out}")
 
 
-# =========================================================================
-# Figure 1b: Learning curves per-model (small multiples)
-# =========================================================================
-print("Generating Figure 1b: Learning curves (per-model)...")
+def _adaptive_ylim(y_maxes, factor=1.5):
+    """Compute a shared y-limit that works for the majority of subplots.
 
-n_all = len(model_names)
-ncols1b = min(5, n_all)
-nrows1b = (n_all + ncols1b - 1) // ncols1b
+    Models whose max y exceeds `factor` * (75th percentile of all maxes) are
+    treated as outliers and get their own y-scale.  Returns (shared_ylim,
+    outlier_set) where outlier_set contains indices of outlier subplots.
+    """
+    arr = np.array(y_maxes)
+    q75 = float(np.percentile(arr, 75))
+    threshold = factor * q75
+    outliers = set(int(i) for i, v in enumerate(arr) if v > threshold)
+    shared_ylim = float(np.max(arr[arr <= threshold])) if np.any(arr <= threshold) else float(np.max(arr))
+    # Add 5% padding
+    shared_ylim *= 1.05
+    return shared_ylim, outliers
 
-fig1b, axes1b = plt.subplots(nrows1b, ncols1b, figsize=(3.5 * ncols1b, 3.2 * nrows1b),
+
+def _plot_fig1b(metric_id, rankings, suffix):
+    """Figure 1b: Learning curves per-model (small multiples)."""
+    mi = METRICS[metric_id]
+    test_key, short = mi["test_key"], mi["short"]
+
+    n_all = len(model_names)
+    ncols = min(5, n_all)
+    nrows = (n_all + ncols - 1) // ncols
+    ranked_names = [r[0] for r in rankings]
+
+    # Pre-compute stats and y-ranges per model
+    stats_per_model = []
+    y_maxes = []
+    for name in ranked_names:
+        medians, q25, q75 = _learning_curve_stats(name, test_key)
+        stats_per_model.append((medians, q25, q75))
+        finite_q75 = [v for v in q75 if np.isfinite(v)]
+        y_maxes.append(max(finite_q75) if finite_q75 else 0.0)
+
+    shared_ylim, outlier_idxs = _adaptive_ylim(y_maxes)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.2 * nrows),
                               squeeze=False, sharex=True)
+    for idx, name in enumerate(ranked_names):
+        r, c = divmod(idx, ncols)
+        ax = axes[r][c]
+        medians, q25, q75 = stats_per_model[idx]
+        color = model_colors.get(name, "gray")
+        ax.plot(TRAIN_SIZES, medians, "o-", color=color, lw=2, ms=4)
+        ax.fill_between(TRAIN_SIZES, q25, q75, color=color, alpha=0.2)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        if idx in outlier_idxs:
+            ax.set_title(clean_name(name) + r"  $\ast$ diff. scale", fontsize=9,
+                         color="firebrick")
+            for spine in ax.spines.values():
+                spine.set_edgecolor("firebrick")
+                spine.set_linewidth(1.5)
+        else:
+            ax.set_ylim(0, shared_ylim)
+            ax.set_title(clean_name(name), fontsize=10)
+        if c == 0:
+            ax.set_ylabel(f"{short} (median)")
+        if r == nrows - 1:
+            ax.set_xlabel("$n_{\\mathrm{train}}$")
 
-# Sort models by ranking order for consistent layout
-ranked_names = [r[0] for r in rankings]
+    for idx in range(n_all, nrows * ncols):
+        r, c = divmod(idx, ncols)
+        axes[r][c].set_visible(False)
 
-for idx, name in enumerate(ranked_names):
-    row, col = divmod(idx, ncols1b)
-    ax = axes1b[row][col]
+    fig.suptitle(f"Learning Curves per Model — {short} (median + IQR)", fontsize=13, y=1.02)
+    fig.tight_layout()
+    out = OUT_DIR / f"fig1b_learning_curves_detail_{suffix}.png"
+    fig.savefig(out)
+    plt.close(fig)
+    print(f"  Saved {out}")
 
-    medians, q25, q75 = _learning_curve_stats(name)
-    color = model_colors.get(name, "gray")
 
-    ax.plot(TRAIN_SIZES, medians, "o-", color=color, lw=2, ms=4)
-    ax.fill_between(TRAIN_SIZES, q25, q75, color=color, alpha=0.2)
+def _plot_fig2(metric_id, rankings, suffix):
+    """Figure 2: Overfitting gap (small multiples), train vs test."""
+    mi = METRICS[metric_id]
+    test_key, train_key, short = mi["test_key"], mi["train_key"], mi["short"]
 
-    ax.set_title(clean_name(name), fontsize=10)
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    if col == 0:
-        ax.set_ylabel("Huber (median)")
-    if row == nrows1b - 1:
-        ax.set_xlabel("$n_{\\mathrm{train}}$")
+    n_show = len(rankings)
+    show_models = [r[0] for r in rankings]
+    ncols = min(5, n_show)
+    nrows = (n_show + ncols - 1) // ncols
 
-for idx in range(n_all, nrows1b * ncols1b):
-    row, col = divmod(idx, ncols1b)
-    axes1b[row][col].set_visible(False)
+    # Pre-compute stats and y-ranges per model
+    all_stats = []
+    y_maxes = []
+    for name in show_models:
+        train_meds, test_meds = [], []
+        train_q25, train_q75, test_q25, test_q75 = [], [], [], []
+        for n_train in TRAIN_SIZES:
+            d = all_results[n_train][name]
+            mask = d["success"]
+            tr = d[train_key][mask]
+            te = d[test_key][mask]
+            tr, te = tr[np.isfinite(tr)], te[np.isfinite(te)]
+            train_meds.append(float(np.median(tr)) if len(tr) else np.nan)
+            test_meds.append(float(np.median(te)) if len(te) else np.nan)
+            train_q25.append(float(np.percentile(tr, 25)) if len(tr) else np.nan)
+            train_q75.append(float(np.percentile(tr, 75)) if len(tr) else np.nan)
+            test_q25.append(float(np.percentile(te, 25)) if len(te) else np.nan)
+            test_q75.append(float(np.percentile(te, 75)) if len(te) else np.nan)
+        all_stats.append((train_meds, test_meds, train_q25, train_q75, test_q25, test_q75))
+        all_q75 = [v for v in train_q75 + test_q75 if np.isfinite(v)]
+        y_maxes.append(max(all_q75) if all_q75 else 0.0)
 
-fig1b.suptitle("Learning Curves per Model (median + IQR)", fontsize=13, y=1.02)
-fig1b.tight_layout()
-out1b = OUT_DIR / "fig1b_learning_curves_detail.png"
-fig1b.savefig(out1b)
-plt.close(fig1b)
-print(f"  Saved {out1b}")
+    shared_ylim, outlier_idxs = _adaptive_ylim(y_maxes)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.5 * nrows),
+                              squeeze=False, sharex=True)
+    for idx, name in enumerate(show_models):
+        r, c = divmod(idx, ncols)
+        ax = axes[r][c]
+        train_meds, test_meds, train_q25, train_q75, test_q25, test_q75 = all_stats[idx]
+
+        ax.plot(TRAIN_SIZES, train_meds, "s--", color="royalblue", lw=1.5, ms=3,
+                label="Train" if idx == 0 else None)
+        ax.fill_between(TRAIN_SIZES, train_q25, train_q75, color="royalblue", alpha=0.12)
+        ax.plot(TRAIN_SIZES, test_meds, "o-", color="crimson", lw=1.5, ms=3,
+                label="Test" if idx == 0 else None)
+        ax.fill_between(TRAIN_SIZES, test_q25, test_q75, color="crimson", alpha=0.12)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        if idx in outlier_idxs:
+            ax.set_title(clean_name(name) + r"  $\ast$ diff. scale", fontsize=9,
+                         color="firebrick")
+            for spine in ax.spines.values():
+                spine.set_edgecolor("firebrick")
+                spine.set_linewidth(1.5)
+        else:
+            ax.set_ylim(0, shared_ylim)
+            ax.set_title(clean_name(name), fontsize=10)
+        if c == 0:
+            ax.set_ylabel(f"{short} (median)")
+        if r == nrows - 1:
+            ax.set_xlabel("$n_{\\mathrm{train}}$")
+
+    for idx in range(n_show, nrows * ncols):
+        r, c = divmod(idx, ncols)
+        axes[r][c].set_visible(False)
+
+    _leg = [
+        Line2D([], [], color="royalblue", ls="--", marker="s", ms=4, lw=1.5, label="Train"),
+        Line2D([], [], color="crimson", ls="-", marker="o", ms=4, lw=1.5, label="Test"),
+    ]
+    fig.legend(handles=_leg, loc="upper right", framealpha=0.9, fontsize=10)
+    fig.suptitle(f"Overfitting Gap: Train vs Test {short}", fontsize=13, y=1.02)
+    fig.tight_layout()
+    out = OUT_DIR / f"fig2_overfitting_gap_{suffix}.png"
+    fig.savefig(out)
+    plt.close(fig)
+    print(f"  Saved {out}")
 
 
 # =========================================================================
-# Figure 2: Overfitting gap (small multiples)
+# Generate figures 1, 1b, 2 for both Huber and RMSE
 # =========================================================================
-print("Generating Figure 2: Overfitting gap...")
-
-n_show = len(rankings)
-show_models = [r[0] for r in rankings[:n_show]]
-ncols2 = min(5, n_show)
-nrows2 = (n_show + ncols2 - 1) // ncols2
-
-fig2, axes2 = plt.subplots(nrows2, ncols2, figsize=(3.5 * ncols2, 3.5 * nrows2),
-                            squeeze=False, sharex=True)
-
-for idx, name in enumerate(show_models):
-    row, col = divmod(idx, ncols2)
-    ax = axes2[row][col]
-
-    train_meds, test_meds = [], []
-    train_q25, train_q75, test_q25, test_q75 = [], [], [], []
-    for n_train in TRAIN_SIZES:
-        d = all_results[n_train][name]
-        mask = d["success"]
-        tr = d["train_rmse"][mask]
-        te = d["test_rmse"][mask]
-        tr, te = tr[np.isfinite(tr)], te[np.isfinite(te)]
-        train_meds.append(float(np.median(tr)) if len(tr) else np.nan)
-        test_meds.append(float(np.median(te)) if len(te) else np.nan)
-        train_q25.append(float(np.percentile(tr, 25)) if len(tr) else np.nan)
-        train_q75.append(float(np.percentile(tr, 75)) if len(tr) else np.nan)
-        test_q25.append(float(np.percentile(te, 25)) if len(te) else np.nan)
-        test_q75.append(float(np.percentile(te, 75)) if len(te) else np.nan)
-
-    ax.plot(TRAIN_SIZES, train_meds, "s--", color="royalblue", lw=1.5, ms=3,
-            label="Train" if idx == 0 else None)
-    ax.fill_between(TRAIN_SIZES, train_q25, train_q75, color="royalblue", alpha=0.12)
-    ax.plot(TRAIN_SIZES, test_meds, "o-", color="crimson", lw=1.5, ms=3,
-            label="Test" if idx == 0 else None)
-    ax.fill_between(TRAIN_SIZES, test_q25, test_q75, color="crimson", alpha=0.12)
-
-    ax.set_title(clean_name(name), fontsize=10)
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    if col == 0:
-        ax.set_ylabel("RMSE (median)")
-    if row == nrows2 - 1:
-        ax.set_xlabel("$n_{\\mathrm{train}}$")
-
-for idx in range(n_show, nrows2 * ncols2):
-    row, col = divmod(idx, ncols2)
-    axes2[row][col].set_visible(False)
-
-_leg_handles = [
-    Line2D([], [], color="royalblue", ls="--", marker="s", ms=4, lw=1.5, label="Train"),
-    Line2D([], [], color="crimson", ls="-", marker="o", ms=4, lw=1.5, label="Test"),
-]
-fig2.legend(handles=_leg_handles, loc="upper right", framealpha=0.9, fontsize=10)
-fig2.suptitle("Overfitting Gap: Train (dashed) vs Test (solid) RMSE", fontsize=13, y=1.02)
-fig2.tight_layout()
-out2 = OUT_DIR / "fig2_overfitting_gap.png"
-fig2.savefig(out2)
-plt.close(fig2)
-print(f"  Saved {out2}")
+for metric_id, rnk, top in [("huber", rankings_huber, top_models_huber),
+                              ("rmse", rankings_rmse, top_models_rmse)]:
+    short = METRICS[metric_id]["short"]
+    print(f"\nGenerating figures ({short})...")
+    _plot_fig1(metric_id, rnk, top, metric_id)
+    _plot_fig1b(metric_id, rnk, metric_id)
+    _plot_fig2(metric_id, rnk, metric_id)
 
 
 # =========================================================================
 # Figure 3: Stability of predicted optimum + BPB sanity check
+# (uses Huber ranking for ordering)
 # =========================================================================
-print("Generating Figure 3: Stability of predicted optimum...")
+print("\nGenerating Figure 3: Stability of predicted optimum...")
 
 ref_data = all_results[REFERENCE_N]
-
-# Sort models by ranking order (increasing held-out loss)
-ranked_names = [r[0] for r in rankings]
+ranked_names = [r[0] for r in rankings_huber]
 
 opt_data = []
 for name in ranked_names:
@@ -595,7 +682,6 @@ observed_best_idx = int(np.argmin(y))
 observed_best_p1 = float(p1_sc[observed_best_idx])
 observed_best_bpb = float(np.min(y))
 
-# Compute predicted BPB at each model's median predicted optimum (full-data fit)
 predicted_bpb_at_opt = {}
 for name, fit_fn, X_data, *_rest in RUN_MODELS:
     kind = FEATURE_KINDS[name]
@@ -607,7 +693,6 @@ for name, fit_fn, X_data, *_rest in RUN_MODELS:
         pred_fn, _ = fit_fn(X_data, y)
         Xs = _make_slice_for_kind(kind, sg)
         slice_pred = pred_fn(Xs)
-        # Interpolate BPB at median_p1
         predicted_bpb_at_opt[name] = float(np.interp(median_p1, sg, slice_pred))
     except Exception:
         predicted_bpb_at_opt[name] = np.nan
@@ -622,7 +707,6 @@ bp_labels = [clean_name(n) for n, _, _ in opt_data]
 bp_colors = [model_colors.get(n, "gray") for n, _, _ in opt_data]
 x_pos = np.arange(1, len(opt_data) + 1)
 
-# Panel A: Box plots of predicted p1
 bplot = ax3a.boxplot(bp_data, labels=bp_labels, patch_artist=True, widths=0.6,
                      medianprops=dict(color="black", lw=1.5),
                      flierprops=dict(marker="o", ms=3, alpha=0.5))
@@ -636,7 +720,6 @@ ax3a.set_ylabel("Predicted optimal $p_1^{\\mathrm{sc}}$")
 ax3a.set_title(f"Stability of Predicted Optimum ($n_{{\\mathrm{{train}}}}$={REFERENCE_N}, B={B})")
 ax3a.legend(loc="upper left", framealpha=0.9)
 
-# Panel B: Predicted BPB at median predicted optimum (sanity check)
 bpb_vals = [predicted_bpb_at_opt.get(n, np.nan) for n, _, _ in opt_data]
 bar_colors = ["#2ca02c" if b <= observed_best_bpb else "#d62728"
               for b in bpb_vals]
@@ -649,14 +732,12 @@ ax3b.set_title("Sanity Check: predicted BPB at median optimum (green $=$ improve
 ax3b.legend(loc="upper right", framealpha=0.9, fontsize=8)
 ax3b.set_xlim(0.3, len(opt_data) + 0.7)
 
-# Zoom y-axis to show the differences clearly
 finite_bpbs = [b for b in bpb_vals if np.isfinite(b)]
 if finite_bpbs:
     ylo = min(min(finite_bpbs), observed_best_bpb) - 0.005
     yhi = max(max(finite_bpbs), observed_best_bpb) + 0.005
     ax3b.set_ylim(ylo, yhi)
 
-# Annotate each bar with the BPB value
 for i, bpb in enumerate(bpb_vals):
     if np.isfinite(bpb):
         ax3b.text(x_pos[i], bpb + 0.0005, f"{bpb:.4f}", ha="center", va="bottom",
@@ -673,14 +754,14 @@ print(f"  Saved {out3}")
 
 # =========================================================================
 # Figure 4: 2D heatmaps of predicted BPB with isoloss contours
+# (uses Huber ranking for ordering)
 # =========================================================================
 print("Generating Figure 4: 2D heatmaps...")
 
 g = np.linspace(0.005, 0.995, HEATMAP_RES)
 
-# Sort models by ranking order (increasing held-out loss)
 ranked_model_info = []
-rank_order = {r[0]: i for i, r in enumerate(rankings)}
+rank_order = {r[0]: i for i, r in enumerate(rankings_huber)}
 for name, fit_fn, X_data, label_fn, color, ls in RUN_MODELS:
     ranked_model_info.append((rank_order.get(name, 999), name, fit_fn, X_data))
 ranked_model_info.sort()
@@ -689,12 +770,12 @@ n_models = len(ranked_model_info)
 ncols4 = min(4, n_models)
 nrows4 = (n_models + ncols4 - 1) // ncols4
 
-cell_size = 4.2
+cell_size = 4.0
 fig4, axes4 = plt.subplots(
     nrows4, ncols4,
-    figsize=(cell_size * ncols4 + 1.8, cell_size * nrows4 + 1.0),
+    figsize=(cell_size * ncols4 + 1.8, cell_size * nrows4),
     squeeze=False,
-    gridspec_kw={"hspace": 0.35, "wspace": 0.3},
+    constrained_layout=True,
 )
 
 vmin_global = float(np.min(y)) - 0.05
@@ -707,24 +788,19 @@ for mi, (_, name, fit_fn, X_data) in enumerate(ranked_model_info):
     ax = axes4[row][col]
     kind = FEATURE_KINDS[name]
 
-    opt_p0, opt_p1_val, opt_bpb = np.nan, np.nan, np.nan
-
     try:
         pred_fn, _ = fit_fn(X_data, y)
         X_grid, P0, P1 = make_2d_grid(g, g, kind=kind)
         Z = pred_fn(X_grid).reshape(P0.shape)
         Z_clipped = np.clip(Z, vmin_global, vmax_global + 0.5)
 
-        # Filled contour
         ax.contourf(P0, P1, Z_clipped, levels=n_contour_levels,
                      cmap="RdYlGn_r", vmin=vmin_global, vmax=vmax_global,
                      extend="both")
-        # Isoloss contour lines with labels
         cs = ax.contour(P0, P1, Z_clipped, levels=n_contour_levels,
                         colors="black", linewidths=0.4, alpha=0.6)
         ax.clabel(cs, inline=True, fontsize=6, fmt="%.2f")
 
-        # Predicted optimum
         opt_idx = int(np.argmin(Z))
         opt_p0 = float(P0.ravel()[opt_idx])
         opt_p1_val = float(P1.ravel()[opt_idx])
@@ -732,7 +808,6 @@ for mi, (_, name, fit_fn, X_data) in enumerate(ranked_model_info):
         ax.plot(opt_p0, opt_p1_val, marker="*", ms=14, color="gold",
                 markeredgecolor="black", markeredgewidth=1.2, zorder=6)
 
-        # Label the optimum with mixture values and predicted BPB
         ax.annotate(
             f"({opt_p0:.2f}, {opt_p1_val:.2f})\nBPB={opt_bpb:.3f}",
             xy=(opt_p0, opt_p1_val),
@@ -747,7 +822,6 @@ for mi, (_, name, fit_fn, X_data) in enumerate(ranked_model_info):
         ax.text(0.5, 0.5, f"Fit failed:\n{e}", ha="center", va="center",
                 transform=ax.transAxes, fontsize=8, color="red")
 
-    # Training runs overlay: conspicuous bordered circles
     last_scatter = ax.scatter(p0_sc, p1_sc, c=y, cmap="RdYlGn_r",
                               vmin=vmin_global, vmax=vmax_global,
                               s=40, edgecolors="white", linewidths=1.2, zorder=5)
@@ -761,12 +835,10 @@ for mi, (_, name, fit_fn, X_data) in enumerate(ranked_model_info):
     if col == 0:
         ax.set_ylabel("Phase 1 StarCoder weight")
 
-# Hide unused subplots
 for idx in range(n_models, nrows4 * ncols4):
     row, col = divmod(idx, ncols4)
     axes4[row][col].set_visible(False)
 
-# Shared colorbar placed on the right, outside the subplots
 if last_scatter is not None:
     fig4.colorbar(last_scatter, ax=axes4.ravel().tolist(), label="BPB",
                   shrink=0.7, pad=0.03, aspect=30)

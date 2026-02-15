@@ -12,6 +12,7 @@ All models return fitted parameters; legends show the explicit
 functional form on the p0_sc=0 slice with actual numeric values.
 """
 
+import os
 import sys
 import warnings
 import numpy as np
@@ -29,7 +30,8 @@ plt.rcParams["text.usetex"] = True
 plt.rcParams["text.latex.preamble"] = r"\usepackage{opensans}\renewcommand{\familydefault}{\sfdefault}"
 plt.rcParams["font.family"] = "sans-serif"
 script_dir = Path(__file__).parent
-df = pd.read_csv(script_dir / "two_phase_starcoder.csv")
+_csv_name = os.environ.get("DATA_CSV", "two_phase_starcoder.csv")
+df = pd.read_csv(script_dir / _csv_name)
 df = df[df["status"] == "completed"].copy()
 
 TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
