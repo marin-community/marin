@@ -80,6 +80,7 @@ mixture_sft_config = SimpleSFTConfig(
     beta1=0.9,
     beta2=0.999,
     pad_tokenizer_to_match_model=True,
+    steps_per_hf_export=100,
 )
 
 mixture_config = lm_mixture_data_config(
