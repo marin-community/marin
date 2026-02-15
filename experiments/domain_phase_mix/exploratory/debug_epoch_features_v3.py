@@ -62,7 +62,8 @@ X_vdom = np.column_stack(
 EPS = 1e-8
 sc_ep0 = df["phase_0_starcoder_epochs"].values
 sc_ep1 = df["phase_1_starcoder_epochs"].values
-X_mixed_both = np.column_stack([p0_sc, p1_sc, np.log(sc_ep0 + EPS), np.log(sc_ep1 + EPS)])
+# Weight-epoch features: proportions + log-epoch counts
+X_wt_epoch = np.column_stack([p0_sc, p1_sc, np.log(sc_ep0 + EPS), np.log(sc_ep1 + EPS)])
 
 
 # =========================================================================
@@ -275,6 +276,439 @@ def fit_bimix(X, y, n_restarts=40, seed=42):
     return lambda Xn: model(Xn, best_p), best_p
 
 
+def fit_cobb_douglas(X, y, n_restarts=40, seed=42):
+    """Cobb-Douglas: L = C - A * prod(r_j^alpha_j).  Features: vdom."""
+    rng = np.random.default_rng(seed)
+    nf = X.shape[1]
+
+    def model(X, p):
+        C, log_A = p[0], p[1]
+        alphas = np.abs(p[2 : 2 + nf]) + 1e-6
+        log_prod = np.sum(alphas * np.log(np.maximum(X, 1e-10)), axis=1)
+        return C - np.exp(log_A + log_prod)
+
+    def loss(p):
+        return float(np.sum((model(X, p) - y) ** 2))
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = [y.max() + rng.normal(0, 0.1), rng.normal(-1, 1)]
+        p0.extend(rng.uniform(0.1, 2.0, nf))
+        try:
+            res = minimize(loss, np.array(p0), method="L-BFGS-B", options={"maxiter": 1000, "ftol": 1e-10})
+            if res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+    return lambda Xn: model(Xn, best_p), best_p
+
+
+def fit_translog(X, y, **_kwargs):
+    """Translog: L = exp(a0 + sum a_j*ln(r_j) + 0.5*sum b_jk*ln(r_j)*ln(r_k)).  Features: vdom."""
+    log_X = np.log(np.maximum(X, 1e-10))
+    log_y = np.log(y)
+    n, nf = X.shape
+    parts = [np.ones((n, 1))]
+    for j in range(nf):
+        parts.append(log_X[:, j : j + 1])
+    for j in range(nf):
+        parts.append(log_X[:, j : j + 1] ** 2)
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((log_X[:, j] * log_X[:, k]).reshape(-1, 1))
+    Z = np.hstack(parts)
+    coef, _, _, _ = np.linalg.lstsq(Z, log_y, rcond=None)
+
+    def pred(Xn):
+        log_Xn = np.log(np.maximum(Xn, 1e-10))
+        nn = len(Xn)
+        ps = [np.ones((nn, 1))]
+        for j in range(nf):
+            ps.append(log_Xn[:, j : j + 1])
+        for j in range(nf):
+            ps.append(log_Xn[:, j : j + 1] ** 2)
+        for j in range(nf):
+            for k in range(j + 1, nf):
+                ps.append((log_Xn[:, j] * log_Xn[:, k]).reshape(-1, 1))
+        return np.exp(np.hstack(ps) @ coef)
+
+    return pred, coef
+
+
+def fit_stone_geary(X, y, n_restarts=40, seed=42):
+    """Stone-Geary: L = C - A * prod((r_j - gamma_j)^beta_j).  Features: vdom."""
+    rng = np.random.default_rng(seed)
+    nf = X.shape[1]
+
+    def model(X, p):
+        C, log_A = p[0], p[1]
+        gammas = np.clip(p[2 : 2 + nf], 0, 0.2)
+        betas = np.abs(p[2 + nf : 2 + 2 * nf]) + 1e-6
+        shifted = np.maximum(X - gammas, 1e-10)
+        log_prod = np.sum(betas * np.log(shifted), axis=1)
+        return C - np.exp(log_A + log_prod)
+
+    def loss(p):
+        return float(np.sum((model(X, p) - y) ** 2))
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = [y.max() + rng.normal(0, 0.1), rng.normal(-1, 1)]
+        p0.extend(rng.uniform(0, 0.05, nf))
+        p0.extend(rng.uniform(0.1, 2.0, nf))
+        bnd = [(None, None), (None, None)]
+        bnd += [(0, 0.2)] * nf
+        bnd += [(1e-4, None)] * nf
+        try:
+            res = minimize(loss, np.array(p0), method="L-BFGS-B", bounds=bnd, options={"maxiter": 1000, "ftol": 1e-10})
+            if res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+    return lambda Xn: model(Xn, best_p), best_p
+
+
+def fit_logquad_mix(X, y, **_kwargs):
+    """LogQuad(w{-}e): y = exp(quadratic in [p0, p1, log_ep0, log_ep1]).  Features: wt_epoch."""
+    log_y = np.log(y)
+    n, nf = X.shape
+    parts = [np.ones((n, 1))]
+    for j in range(nf):
+        parts.append(X[:, j : j + 1])
+    for j in range(nf):
+        parts.append(X[:, j : j + 1] ** 2)
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((X[:, j] * X[:, k]).reshape(-1, 1))
+    Z = np.hstack(parts)
+    coef, _, _, _ = np.linalg.lstsq(Z, log_y, rcond=None)
+
+    def pred(Xn):
+        nn = len(Xn)
+        ps = [np.ones((nn, 1))]
+        for j in range(nf):
+            ps.append(Xn[:, j : j + 1])
+        for j in range(nf):
+            ps.append(Xn[:, j : j + 1] ** 2)
+        for j in range(nf):
+            for k in range(j + 1, nf):
+                ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
+        return np.exp(np.hstack(ps) @ coef)
+
+    return pred, coef
+
+
+def fit_ridge_translog(X, y, **_kwargs):
+    """Ridge Translog: y = exp(quadratic in log(vdom)), L2-regularized.  Features: vdom."""
+    from sklearn.linear_model import RidgeCV
+
+    log_X = np.log(np.maximum(X, 1e-10))
+    log_y = np.log(y)
+    n, nf = X.shape
+    parts = [np.ones((n, 1))]
+    for j in range(nf):
+        parts.append(log_X[:, j : j + 1])
+    for j in range(nf):
+        parts.append(log_X[:, j : j + 1] ** 2)
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((log_X[:, j] * log_X[:, k]).reshape(-1, 1))
+    Z = np.hstack(parts)
+    # Standardize columns (except intercept) so Ridge penalizes fairly
+    mu = Z.mean(axis=0)
+    sigma = Z.std(axis=0)
+    sigma[0] = 1.0  # don't scale intercept column
+    mu[0] = 0.0
+    Z_std = (Z - mu) / sigma
+    ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=False)
+    ridge.fit(Z_std, log_y)
+    # Convert back to original scale: coef_orig = coef_std / sigma
+    coef_std = ridge.coef_
+    coef = coef_std / sigma
+    intercept_adj = -np.sum(coef_std * mu / sigma)
+    coef[0] += intercept_adj
+
+    def pred(Xn):
+        log_Xn = np.log(np.maximum(Xn, 1e-10))
+        nn = len(Xn)
+        ps = [np.ones((nn, 1))]
+        for j in range(nf):
+            ps.append(log_Xn[:, j : j + 1])
+        for j in range(nf):
+            ps.append(log_Xn[:, j : j + 1] ** 2)
+        for j in range(nf):
+            for k in range(j + 1, nf):
+                ps.append((log_Xn[:, j] * log_Xn[:, k]).reshape(-1, 1))
+        return np.exp(np.hstack(ps) @ coef)
+
+    return pred, coef
+
+
+def fit_scheffe_log(X, y, **_kwargs):
+    """Scheffé+log: y = sum b_j r_j + sum b_jk r_j r_k + sum g_j r_j ln(r_j).  Features: vdom."""
+    n, nf = X.shape
+    safe_X = np.maximum(X, 1e-10)
+    parts = []
+    for j in range(nf):
+        parts.append(X[:, j : j + 1])
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((X[:, j] * X[:, k]).reshape(-1, 1))
+    for j in range(nf):
+        parts.append((safe_X[:, j] * np.log(safe_X[:, j])).reshape(-1, 1))
+    Z = np.hstack(parts)
+    coef, _, _, _ = np.linalg.lstsq(Z, y, rcond=None)
+
+    def pred(Xn):
+        safe_Xn = np.maximum(Xn, 1e-10)
+        nn = len(Xn)
+        ps = []
+        for j in range(nf):
+            ps.append(Xn[:, j : j + 1])
+        for j in range(nf):
+            for k in range(j + 1, nf):
+                ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
+        for j in range(nf):
+            ps.append((safe_Xn[:, j] * np.log(safe_Xn[:, j])).reshape(-1, 1))
+        return np.hstack(ps) @ coef
+
+    return pred, coef
+
+
+def _ilr_transform(X):
+    """ILR transform for d=4 compositional data (sequential binary partition)."""
+    r = np.maximum(X, 1e-10)
+    z1 = np.sqrt(3.0 / 4) * np.log(r[:, 0] / (r[:, 1] * r[:, 2] * r[:, 3]) ** (1.0 / 3))
+    z2 = np.sqrt(2.0 / 3) * np.log(r[:, 1] / (r[:, 2] * r[:, 3]) ** 0.5)
+    z3 = np.sqrt(1.0 / 2) * np.log(r[:, 2] / r[:, 3])
+    return np.column_stack([z1, z2, z3])
+
+
+def fit_ilr_quad(X, y, **_kwargs):
+    """ILR Quadratic: y = quadratic in ILR(vdom) coordinates.  Features: vdom."""
+    Z_ilr = _ilr_transform(X)
+    n, nf = Z_ilr.shape
+    parts = [np.ones((n, 1))]
+    for j in range(nf):
+        parts.append(Z_ilr[:, j : j + 1])
+    for j in range(nf):
+        parts.append(Z_ilr[:, j : j + 1] ** 2)
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((Z_ilr[:, j] * Z_ilr[:, k]).reshape(-1, 1))
+    D = np.hstack(parts)
+    coef, _, _, _ = np.linalg.lstsq(D, y, rcond=None)
+
+    def pred(Xn):
+        Z_new = _ilr_transform(Xn)
+        nn = len(Z_new)
+        ps = [np.ones((nn, 1))]
+        for j in range(nf):
+            ps.append(Z_new[:, j : j + 1])
+        for j in range(nf):
+            ps.append(Z_new[:, j : j + 1] ** 2)
+        for j in range(nf):
+            for k in range(j + 1, nf):
+                ps.append((Z_new[:, j] * Z_new[:, k]).reshape(-1, 1))
+        return np.hstack(ps) @ coef
+
+    return pred, coef
+
+
+def fit_ces(X, y, n_restarts=40, seed=42):
+    """CES: L = C - A * (sum a_j * r_j^rho)^(1/rho).  Features: vdom."""
+    rng = np.random.default_rng(seed)
+    nf = X.shape[1]
+
+    def model(X, p):
+        C, log_A, rho = p[0], p[1], np.clip(p[2], -10, 0.99)
+        log_a = p[3 : 3 + nf]
+        a = np.exp(log_a)
+        a = a / a.sum()
+        inner = np.sum(a * np.power(np.maximum(X, 1e-10), rho), axis=1)
+        return C - np.exp(log_A) * np.power(np.maximum(inner, 1e-10), 1.0 / rho)
+
+    def loss(p):
+        return float(np.sum((model(X, p) - y) ** 2))
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = [y.max() + rng.normal(0, 0.1), rng.normal(-1, 1), rng.uniform(-5, 0.5)]
+        p0.extend(rng.normal(0, 0.5, nf))
+        try:
+            res = minimize(loss, np.array(p0), method="L-BFGS-B", options={"maxiter": 1000, "ftol": 1e-10})
+            if res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+    return lambda Xn: model(Xn, best_p), best_p
+
+
+def fit_elastic_logquad(X, y, **_kwargs):
+    """ElasticLogQuad: y = exp(quadratic in mixed_both), Elastic Net.  Features: wt_epoch."""
+    from sklearn.linear_model import ElasticNetCV
+
+    log_y = np.log(y)
+    n, nf = X.shape
+    parts = [np.ones((n, 1))]
+    for j in range(nf):
+        parts.append(X[:, j : j + 1])
+    for j in range(nf):
+        parts.append(X[:, j : j + 1] ** 2)
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((X[:, j] * X[:, k]).reshape(-1, 1))
+    Z = np.hstack(parts)
+
+    mu = Z.mean(axis=0)
+    sigma = Z.std(axis=0)
+    mu[0], sigma[0] = 0.0, 1.0
+    sigma[sigma < 1e-12] = 1.0
+    Z_std = (Z - mu) / sigma
+
+    enet = ElasticNetCV(
+        l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9, 0.95],
+        alphas=np.logspace(-5, 1, 50),
+        cv=5,
+        fit_intercept=False,
+        max_iter=10000,
+    )
+    enet.fit(Z_std, log_y)
+
+    coef = enet.coef_ / sigma
+    coef[0] -= np.sum(enet.coef_ * mu / sigma)
+
+    def pred(Xn):
+        nn = len(Xn)
+        nf2 = Xn.shape[1]
+        ps = [np.ones((nn, 1))]
+        for j in range(nf2):
+            ps.append(Xn[:, j : j + 1])
+        for j in range(nf2):
+            ps.append(Xn[:, j : j + 1] ** 2)
+        for j in range(nf2):
+            for k in range(j + 1, nf2):
+                ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
+        return np.exp(np.hstack(ps) @ coef)
+
+    return pred, coef
+
+
+def fit_logquad_weight(X, y, **_kwargs):
+    """LogQuad(weight): y = exp(quadratic in [p0_sc, p1_sc]).  Features: weight."""
+    log_y = np.log(y)
+    n, nf = X.shape
+    parts = [np.ones((n, 1))]
+    for j in range(nf):
+        parts.append(X[:, j : j + 1])
+    for j in range(nf):
+        parts.append(X[:, j : j + 1] ** 2)
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((X[:, j] * X[:, k]).reshape(-1, 1))
+    Z = np.hstack(parts)
+    coef, _, _, _ = np.linalg.lstsq(Z, log_y, rcond=None)
+
+    def pred(Xn):
+        nn = len(Xn)
+        nf2 = Xn.shape[1]
+        ps = [np.ones((nn, 1))]
+        for j in range(nf2):
+            ps.append(Xn[:, j : j + 1])
+        for j in range(nf2):
+            ps.append(Xn[:, j : j + 1] ** 2)
+        for j in range(nf2):
+            for k in range(j + 1, nf2):
+                ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
+        return np.exp(np.hstack(ps) @ coef)
+
+    return pred, coef
+
+
+def fit_bayes_logquad(X, y, **_kwargs):
+    """BayesLogQuad: y = exp(quadratic in mixed_both), Bayesian Ridge.  Features: wt_epoch."""
+    from sklearn.linear_model import BayesianRidge
+
+    log_y = np.log(y)
+    n, nf = X.shape
+    parts = [np.ones((n, 1))]
+    for j in range(nf):
+        parts.append(X[:, j : j + 1])
+    for j in range(nf):
+        parts.append(X[:, j : j + 1] ** 2)
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((X[:, j] * X[:, k]).reshape(-1, 1))
+    Z = np.hstack(parts)
+
+    mu = Z.mean(axis=0)
+    sigma = Z.std(axis=0)
+    mu[0], sigma[0] = 0.0, 1.0
+    sigma[sigma < 1e-12] = 1.0
+    Z_std = (Z - mu) / sigma
+
+    br = BayesianRidge(max_iter=1000, tol=1e-8, fit_intercept=False, compute_score=True)
+    br.fit(Z_std, log_y)
+
+    coef = br.coef_ / sigma
+    coef[0] -= np.sum(br.coef_ * mu / sigma)
+
+    def pred(Xn):
+        nn = len(Xn)
+        nf2 = Xn.shape[1]
+        ps = [np.ones((nn, 1))]
+        for j in range(nf2):
+            ps.append(Xn[:, j : j + 1])
+        for j in range(nf2):
+            ps.append(Xn[:, j : j + 1] ** 2)
+        for j in range(nf2):
+            for k in range(j + 1, nf2):
+                ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
+        return np.exp(np.hstack(ps) @ coef)
+
+    return pred, coef
+
+
+def fit_huber_logquad(X, y, **_kwargs):
+    """HuberLogQuad: y = exp(quadratic in mixed_both), Huber robust loss.  Features: wt_epoch."""
+    from sklearn.linear_model import HuberRegressor
+
+    log_y = np.log(y)
+    n, nf = X.shape
+    parts = [np.ones((n, 1))]
+    for j in range(nf):
+        parts.append(X[:, j : j + 1])
+    for j in range(nf):
+        parts.append(X[:, j : j + 1] ** 2)
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((X[:, j] * X[:, k]).reshape(-1, 1))
+    Z = np.hstack(parts)
+
+    log_y_median = np.median(log_y)
+    mad = np.median(np.abs(log_y - log_y_median))
+    eps_huber = max(1.35, 1.35 * mad / 0.6745)
+
+    huber = HuberRegressor(epsilon=eps_huber, max_iter=1000, fit_intercept=False, alpha=0.0)
+    huber.fit(Z, log_y)
+    coef = huber.coef_
+
+    def pred(Xn):
+        nn = len(Xn)
+        nf2 = Xn.shape[1]
+        ps = [np.ones((nn, 1))]
+        for j in range(nf2):
+            ps.append(Xn[:, j : j + 1])
+        for j in range(nf2):
+            ps.append(Xn[:, j : j + 1] ** 2)
+        for j in range(nf2):
+            for k in range(j + 1, nf2):
+                ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
+        return np.exp(np.hstack(ps) @ coef)
+
+    return pred, coef
+
+
 # =========================================================================
 # Slice label constructors — LaTeX functional forms on p0_sc=0 slice
 # =========================================================================
@@ -378,6 +812,131 @@ def label_bimix(params):
     )
 
 
+def label_cobb_douglas(params):
+    C, log_A = params[0], params[1]
+    alphas = np.abs(params[2:6]) + 1e-6
+    return (
+        rf"${_f(C)} - e^{{{_f(log_A)}}}"
+        rf"\prod r_j^{{\alpha_j}}$"
+        rf" \ $\alpha=[{alphas[0]:.2f},{alphas[1]:.2f},{alphas[2]:.2f},{alphas[3]:.2f}]$"
+    )
+
+
+def label_translog(params):
+    # params = [a0, a1..a4, a1^2..a4^2, cross terms] = 15 coefficients
+    # On slice: r_nem0=0.5, r_sc0≈0, r_nem1=(1-p)/2, r_sc1=p/2
+    # Show general form
+    c = params
+    return rf"$\exp({_f(c[0])} + \sum a_j \ln r_j + \sum b_{{jk}} \ln r_j \ln r_k)$"
+
+
+def label_stone_geary(params):
+    C, log_A = params[0], params[1]
+    gammas = np.clip(params[2:6], 0, 0.2)
+    betas = np.abs(params[6:10]) + 1e-6
+    return (
+        rf"${_f(C)} - e^{{{_f(log_A)}}}"
+        rf"\prod (r_j - \gamma_j)^{{\beta_j}}$"
+        rf" \ $\gamma=[{gammas[0]:.3f},{gammas[1]:.3f},{gammas[2]:.3f},{gammas[3]:.3f}]$"
+    )
+
+
+def label_ces(params):
+    C, log_A, rho = params[0], params[1], np.clip(params[2], -10, 0.99)
+    log_a = params[3:7]
+    a = np.exp(log_a)
+    a = a / a.sum()
+    return (
+        rf"${_f(C)} - {_f(np.exp(log_A))}"
+        rf"(\sum a_j r_j^{{{rho:.2f}}})^{{{1/rho:.2f}}}$"
+        rf" \ $a=[{a[0]:.2f},{a[1]:.2f},{a[2]:.2f},{a[3]:.2f}]$"
+    )
+
+
+def label_logquad_mix(params):
+    # Same structure as label_quadratic_4d but wrapped in exp()
+    c = params
+    le = np.log(EPS)
+    const = c[0] + c[3] * le + c[7] * le**2
+    b_p = c[2] + c[12] * le
+    b_pp = c[6]
+    b_L = c[4] + c[14] * le
+    b_LL = c[8]
+    b_pL = c[13]
+    return (
+        rf"$\exp({_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2"
+        rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.2f}\,pL)$"
+    )
+
+
+def label_ridge_translog(params):
+    c = params
+    return rf"$\exp({_f(c[0])} + \sum a_j \ln r_j + \sum b_{{jk}} \ln r_j \ln r_k)$ [Ridge]"
+
+
+def label_scheffe_log(params):
+    # params: [b1..b4, b12..b34, g1..g4] = 14 coefficients
+    # On slice: r_nem0=0.5, r_sc0≈0, r_nem1=(1-p)/2, r_sc1=p/2
+    return rf"$\sum \beta_j r_j + \sum \beta_{{jk}} r_j r_k + \sum \gamma_j r_j \ln r_j$"
+
+
+def label_ilr_quad(params):
+    c = params
+    return rf"${_f(c[0])} + \mathrm{{quad}}(\mathrm{{ILR}}(\mathbf{{r}}))$"
+
+
+def label_elastic_logquad(params):
+    c = params
+    le = np.log(EPS)
+    const = c[0] + c[3] * le + c[7] * le**2
+    b_p = c[2] + c[12] * le
+    b_pp = c[6]
+    b_L = c[4] + c[14] * le
+    b_LL = c[8]
+    b_pL = c[13]
+    return (
+        rf"$\exp({_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2"
+        rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.02f}\,pL)$ [EN]"
+    )
+
+
+def label_logquad_weight(params):
+    # 6 params: [1, p0, p1, p0², p1², p0*p1]
+    # On slice p0=0: log(y) = c[0] + c[2]*p + c[4]*p²
+    c = params
+    return rf"$\exp({_f(c[0])} {c[2]:+.3f}\,p {c[4]:+.3f}\,p^2)$"
+
+
+def label_bayes_logquad(params):
+    c = params
+    le = np.log(EPS)
+    const = c[0] + c[3] * le + c[7] * le**2
+    b_p = c[2] + c[12] * le
+    b_pp = c[6]
+    b_L = c[4] + c[14] * le
+    b_LL = c[8]
+    b_pL = c[13]
+    return (
+        rf"$\exp({_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2"
+        rf" {b_L:+.2f}\,L {b_LL:+.003f}\,L^2 {b_pL:+.02f}\,pL)$ [Bayes]"
+    )
+
+
+def label_huber_logquad(params):
+    c = params
+    le = np.log(EPS)
+    const = c[0] + c[3] * le + c[7] * le**2
+    b_p = c[2] + c[12] * le
+    b_pp = c[6]
+    b_L = c[4] + c[14] * le
+    b_LL = c[8]
+    b_pL = c[13]
+    return (
+        rf"$\exp({_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2"
+        rf" {b_L:+.2f}\,L {b_LL:+.003f}\,L^2 {b_pL:+.02f}\,pL)$ [Huber]"
+    )
+
+
 # =========================================================================
 # Define all models to test
 # =========================================================================
@@ -385,12 +944,24 @@ def label_bimix(params):
 MODELS = [
     ("Linear", fit_linear, X_weight, label_linear, "tab:blue", "--"),
     ("Quadratic", fit_quadratic, X_weight, label_quadratic, "tab:cyan", "--"),
-    ("Quad(mix)", fit_quadratic_4d, X_mixed_both, label_quadratic_4d, "tab:orange", "--"),
-    ("LogLin(mix)", fit_loglinear, X_mixed_both, label_loglinear, "tab:brown", "-"),
+    ("Quadratic(w{-}e)", fit_quadratic_4d, X_wt_epoch, label_quadratic_4d, "tab:orange", "--"),
+    ("LogLinear(w{-}e)", fit_loglinear, X_wt_epoch, label_loglinear, "tab:brown", "-"),
     ("PowerLaw", fit_powerlaw, X_weight, label_powerlaw, "black", "-"),
     ("DML M1", fit_dml_m1, X_vdom, label_dml_m1, "tab:green", "-"),
     ("SLODM", fit_slodm, X_vdom, label_slodm, "tab:red", "-"),
     ("BiMix", fit_bimix, X_vdom, label_bimix, "tab:purple", "-"),
+    ("Cobb-Douglas", fit_cobb_douglas, X_vdom, label_cobb_douglas, "tab:olive", "-"),
+    ("CES", fit_ces, X_vdom, label_ces, "darkgoldenrod", "-"),
+    ("Translog", fit_translog, X_vdom, label_translog, "teal", "--"),
+    ("Stone-Geary", fit_stone_geary, X_vdom, label_stone_geary, "deeppink", "-"),
+    ("LogQuad(w{-}e)", fit_logquad_mix, X_wt_epoch, label_logquad_mix, "navy", "--"),
+    ("RidgeTranslog", fit_ridge_translog, X_vdom, label_ridge_translog, "darkviolet", "--"),
+    (r"Scheff\'e+log", fit_scheffe_log, X_vdom, label_scheffe_log, "sienna", "-"),
+    ("ILR Quad", fit_ilr_quad, X_vdom, label_ilr_quad, "darkseagreen", "-"),
+    ("ElasticLogQuad(w{-}e)", fit_elastic_logquad, X_wt_epoch, label_elastic_logquad, "crimson", "-."),
+    ("LogQuad(weight)", fit_logquad_weight, X_weight, label_logquad_weight, "gray", ":"),
+    ("BayesLogQuad(w{-}e)", fit_bayes_logquad, X_wt_epoch, label_bayes_logquad, "mediumblue", "-."),
+    ("HuberLogQuad(w{-}e)", fit_huber_logquad, X_wt_epoch, label_huber_logquad, "darkorange", ":"),
 ]
 
 
@@ -425,7 +996,7 @@ def make_slice_vdom(g):
     return np.column_stack([np.full(n, 0.5), np.zeros(n), 0.5 * (1 - g), 0.5 * g])
 
 
-def make_slice_mixed_both(g):
+def make_slice_wt_epoch(g):
     n = len(g)
     return np.column_stack([np.zeros(n), g, np.full(n, np.log(EPS)), np.log(SC_EPOCH_MULT * g + EPS)])
 
@@ -437,8 +1008,8 @@ for name, fit_fn, X_data, label_fn, color, ls in MODELS:
 
     if X_data is X_weight:
         Xs = make_slice_weight(slice_grid)
-    elif X_data is X_mixed_both:
-        Xs = make_slice_mixed_both(slice_grid)
+    elif X_data is X_wt_epoch:
+        Xs = make_slice_wt_epoch(slice_grid)
     else:
         Xs = make_slice_vdom(slice_grid)
 
@@ -470,25 +1041,33 @@ print(f"\nActual best (slice): p1_sc={x_actual[actual_best_i]:.4f}, bpb={y_actua
 # =========================================================================
 # Plot
 # =========================================================================
-fig, axes = plt.subplots(1, 2, figsize=(24, 9))
+fig, axes = plt.subplots(1, 3, figsize=(36, 9))
 
 XLABEL = r"$p$ = StarCoder fraction in the Second Phase"
 YLABEL = r"eval/paloma/dolma\_100\_programing\_languages/bpb"
-NOTATION_LINE = r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{starcoder\_epochs}_1)$"
+NOTATION_LINE = (
+    r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{sc\_epochs}_1)$,"
+    r"\; (w{-}e) = weight{-}epoch features"
+)
+TOP_MODELS = {"LogQuad(w{-}e)", "Translog", "BayesLogQuad(w{-}e)", "ElasticLogQuad(w{-}e)", "Quadratic(w{-}e)"}
 
 for panel, (ax, xlim, ylim, title) in enumerate(
     zip(
         axes,
-        [(0, 1), (0.1, 0.55)],
-        [(0.85, 1.75), (0.88, 0.97)],
-        ["Full range", "Zoomed: minimum region"],
+        [(0, 1), (0.1, 0.55), (0.1, 0.55)],
+        [(0.85, 1.75), (0.88, 0.97), (0.88, 0.97)],
+        ["Full range", "Zoomed: all models", "Zoomed: top 5"],
     )
 ):
     ax.scatter(x_actual, y_actual, s=50, c="black", zorder=10, label="Actual data")
 
     for name, _, params, label, preds_s, color, ls, cv_m in fitted:
+        if panel == 2 and name not in TOP_MODELS:
+            continue
         if panel == 0:
             lbl = name
+        elif panel == 2:
+            lbl = rf"{name}: {label}"
         else:
             lbl = label
         ax.plot(slice_grid, preds_s, label=lbl, linewidth=2.0, color=color, linestyle=ls)
@@ -500,12 +1079,15 @@ for panel, (ax, xlim, ylim, title) in enumerate(
     ax.set_ylim(ylim)
     ax.tick_params(labelsize=12)
 
+    secax = ax.secondary_xaxis("top", functions=(lambda w: w * SC_EPOCH_MULT, lambda e: e / SC_EPOCH_MULT))
+    secax.set_xlabel(r"StarCoder epochs in the Second Phase", fontsize=12)
+    secax.tick_params(labelsize=10)
+
     if panel == 0:
-        ax.legend(fontsize=11, loc="upper right")
-    else:
-        # Add notation as a phantom last entry in the legend
+        ax.legend(fontsize=9, loc="upper right", ncol=2)
+    elif panel == 2:
         ax.plot([], [], " ", label=NOTATION_LINE)
-        ax.legend(fontsize=9, loc="upper left", framealpha=0.95)
+        ax.legend(fontsize=11, loc="upper left", framealpha=0.95)
 
 fig.tight_layout()
 out_path = script_dir / "debug_epoch_features_v3.png"
