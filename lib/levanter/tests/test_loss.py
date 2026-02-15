@@ -5,8 +5,10 @@
 import math
 
 import equinox
+import jax
 import jax.numpy as jnp
 import jax.random
+import numpy as np
 import pytest
 
 import haliax as hax
@@ -14,7 +16,7 @@ from haliax import NamedArray
 
 # Import the functions from your module
 # Replace 'your_module' with the actual module name where your functions are defined
-from levanter.models.loss import _blockwise_cross_entropy_loss, cross_entropy_loss_and_log_normalizers
+from levanter.models.loss import cross_entropy_loss_and_log_normalizers, fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.jax_utils import key_iterator
 
 
@@ -22,6 +24,17 @@ Batch = hax.Axis("batch", size=2)
 Seq = hax.Axis("seq", size=3)
 Embed = hax.Axis("embed", size=8)
 Vocab = hax.Axis("vocab", size=16)
+
+
+@pytest.fixture(autouse=True)
+def _mesh_context():
+    devices = jax.devices()
+    if not devices:
+        raise RuntimeError("No JAX devices available")
+    mesh_devices = np.array(devices).reshape((len(devices),))
+    mesh = jax.sharding.Mesh(mesh_devices, axis_names=("data",))
+    with hax.partitioning.set_mesh(mesh):
+        yield
 
 
 @pytest.fixture
@@ -53,13 +66,27 @@ def test_basic_equivalence(test_data):
     # Compute full loss
     logits_full = hax.dot(pred_embeddings, pred_lm_head, axis="embed")
     target_y_full = hax.nn.one_hot(true_ids, Vocab, dtype=pred_embeddings.dtype)
-    loss_full, norm_full = cross_entropy_loss_and_log_normalizers(logits_full, Vocab, target_y_full)
+    loss_full, logz_full = cross_entropy_loss_and_log_normalizers(logits_full, Vocab, target_y_full)
 
-    loss_block, norm_this = _blockwise_cross_entropy_loss(
-        (pred_embeddings, pred_lm_head),
+    loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
         Contract=Embed,
         Label=Vocab,
-        labels_y=true_ids,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.0,
+        block_size=8,
+        dtype=pred_embeddings.dtype,
+    )
+    loss_block_penalty = fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
+        Contract=Embed,
+        Label=Vocab,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.25,
         block_size=8,
         dtype=pred_embeddings.dtype,
     )
@@ -68,6 +95,9 @@ def test_basic_equivalence(test_data):
     assert hax.all(
         hax.isclose(loss_full, loss_block, atol=1e-3, rtol=1e-3)
     ), "Block-wise loss does not match full loss."
+    assert hax.all(
+        hax.isclose(loss_full + 0.25 * (logz_full**2), loss_block_penalty, atol=1e-3, rtol=1e-3)
+    ), "Logsumexp penalty does not match full loss."
 
 
 def test_single_block(test_data):
@@ -77,23 +107,23 @@ def test_single_block(test_data):
     pred_embeddings, pred_lm_head, true_ids = test_data
 
     # Compute full loss
-    loss_full, sumexp_full = _compute_full(Vocab, pred_embeddings, pred_lm_head, true_ids)
+    loss_full, _logz_full = _compute_full(Vocab, pred_embeddings, pred_lm_head, true_ids)
 
     # Compute block-wise loss with block_size=4 (vocab_size=4)
     with jax.disable_jit():
-        loss_block, sumexp_block = _blockwise_cross_entropy_loss(
-            (pred_embeddings, pred_lm_head),
+        loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
+            pred_embeddings,
+            pred_lm_head,
             Contract=Embed,
             Label=Vocab,
-            labels_y=true_ids,
+            target_y=true_ids,
+            reduction=None,
+            logsumexp_weight=0.0,
             block_size=Vocab.size,
             dtype=pred_embeddings.dtype,
         )
 
     # Assert that the losses are close
-    assert hax.all(
-        hax.isclose(sumexp_full, sumexp_block, atol=1e-3, rtol=1e-3)
-    ), "Single block-wise sumexp does not match full sumexp."
     assert hax.all(
         hax.isclose(loss_full, loss_block, atol=1e-3, rtol=1e-3)
     ), "Single block-wise loss does not match full loss."
@@ -113,22 +143,22 @@ def test_multiple_blocks(test_data):
     pred_embeddings, pred_lm_head, true_ids = test_data
 
     # Compute full loss
-    loss_full, logz_full = _compute_full(Vocab, pred_embeddings, pred_lm_head, true_ids)
+    loss_full, _logz_full = _compute_full(Vocab, pred_embeddings, pred_lm_head, true_ids)
 
     # Compute block-wise loss with block_size=1 (vocab_size=4)
-    loss_block, logz_block = _blockwise_cross_entropy_loss(
-        (pred_embeddings, pred_lm_head),
+    loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
         Contract=Embed,
         Label=Vocab,
-        labels_y=true_ids,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.0,
         block_size=1,
         dtype=pred_embeddings.dtype,
     )
 
     # Assert that the losses are close
-    assert hax.all(
-        hax.isclose(logz_full, logz_block, atol=1e-3, rtol=1e-3)
-    ), "Multiple block-wise logz does not match full logz."
     assert hax.all(
         hax.isclose(loss_full, loss_block, atol=1e-3, rtol=1e-3)
     ), "Multiple block-wise loss does not match full loss."
@@ -141,17 +171,20 @@ def test_block_size_not_dividing_vocab(test_data):
     block_size = 3  # vocab_size=4
 
     # should be fine now
-    loss_block, logz_block = _blockwise_cross_entropy_loss(
-        (pred_embeddings, pred_lm_head),
+    loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
         Contract=Embed,
         Label=Vocab,
-        labels_y=true_ids,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.0,
         block_size=block_size,
         dtype=pred_embeddings.dtype,
     )
 
     # Compute full loss
-    loss_full, logz_full = cross_entropy_loss_and_log_normalizers(
+    loss_full, _logz_full = cross_entropy_loss_and_log_normalizers(
         pred_y=hax.dot(pred_embeddings, pred_lm_head, axis="embed"),
         Label=Vocab,
         target_y=hax.nn.one_hot(true_ids, Vocab, dtype=pred_embeddings.dtype),
@@ -161,9 +194,6 @@ def test_block_size_not_dividing_vocab(test_data):
     assert hax.all(
         hax.isclose(loss_full, loss_block, atol=1e-3, rtol=1e-3)
     ), "Block-wise loss does not match full loss."
-    assert hax.all(
-        hax.isclose(logz_full, logz_block, atol=1e-3, rtol=1e-3)
-    ), "Block-wise logz does not match full logz."
 
 
 def test_vocab_size_less_than_block_size(test_data):
@@ -176,17 +206,20 @@ def test_vocab_size_less_than_block_size(test_data):
     block_size = 5  # vocab_size=4
 
     # should be fine now
-    loss_block, logz_block = _blockwise_cross_entropy_loss(
-        (pred_embeddings, pred_lm_head),
+    loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
         Contract=Embed,
         Label=Vocab,
-        labels_y=true_ids,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.0,
         block_size=block_size,
         dtype=pred_embeddings.dtype,
     )
 
     # Compute full loss
-    loss_full, logz_full = cross_entropy_loss_and_log_normalizers(
+    loss_full, _logz_full = cross_entropy_loss_and_log_normalizers(
         pred_y=hax.dot(pred_embeddings, pred_lm_head, axis="embed"),
         Label=Vocab,
         target_y=hax.nn.one_hot(true_ids, Vocab, dtype=pred_embeddings.dtype),
@@ -194,7 +227,6 @@ def test_vocab_size_less_than_block_size(test_data):
 
     # Assert that the losses are close
     assert hax.all(hax.isclose(loss_full, loss_block, atol=1e-3, rtol=1e-3)), "loss does not match full loss."
-    assert hax.all(hax.isclose(logz_full, logz_block, atol=1e-3, rtol=1e-3)), "logz does not match full logz."
 
 
 def test_large_vocab():
@@ -220,18 +252,21 @@ def test_large_vocab():
     )
 
     # Compute full loss
-    loss_full, logz_full = cross_entropy_loss_and_log_normalizers(
+    loss_full, _logz_full = cross_entropy_loss_and_log_normalizers(
         pred_y=hax.dot(pred_embeddings, pred_lm_head, axis="embed"),
         Label=Vocab,
         target_y=hax.nn.one_hot(true_ids, Vocab, dtype=pred_embeddings.dtype),
     )
 
     # Compute block-wise loss with block_size=3 (vocab_size=12 is divisible by 3)
-    loss_block, logz_block = _blockwise_cross_entropy_loss(
-        (pred_embeddings, pred_lm_head),
+    loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
         Contract=Embed,
         Label=Vocab,
-        labels_y=true_ids,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.0,
         block_size=3,
         dtype=pred_embeddings.dtype,
     )
@@ -240,9 +275,6 @@ def test_large_vocab():
     assert hax.all(
         hax.isclose(loss_full, loss_block, atol=1e-3, rtol=1e-3)
     ), "Large vocab block-wise loss does not match full loss."
-    assert hax.all(
-        hax.isclose(logz_full, logz_block, atol=1e-3, rtol=1e-3)
-    ), "Large vocab block-wise logz does not match full logz."
 
 
 @pytest.mark.parametrize("block_size", [1, 2, 3, 4, 5])
@@ -255,16 +287,19 @@ def test_gradient_block_cross_entropy(block_size, test_data):
     # Compute block-wise loss
     def custom_fn(pred):
         pred_embeddings, pred_lm_head = pred
-        a, b = _blockwise_cross_entropy_loss(
-            (pred_embeddings, pred_lm_head),
+        loss = fused_cross_entropy_loss_and_logsumexp_penalty(
+            pred_embeddings,
+            pred_lm_head,
             Contract=Embed,
             Label=Vocab,
-            labels_y=true_ids,
+            target_y=true_ids,
+            reduction=None,
+            logsumexp_weight=0.5,
             block_size=block_size,
             dtype=pred_embeddings.dtype,
         )
 
-        return (a.mean() + b.mean()).scalar()
+        return loss.mean().scalar()
 
     (
         g_embed,
@@ -280,7 +315,7 @@ def test_gradient_block_cross_entropy(block_size, test_data):
         logits = hax.dot(pred_embeddings, pred_lm_head, axis="embed")
         target_y = hax.nn.one_hot(true_ids, Vocab, dtype=pred_embeddings.dtype)
         loss, logz = cross_entropy_loss_and_log_normalizers(logits, Vocab, target_y)
-        return (loss.mean() + logz.mean()).scalar()
+        return (loss + 0.5 * (logz**2)).mean().scalar()
 
     g_embed_direct, g_head_direct = equinox.filter_grad(direct_fn)((pred_embeddings, pred_lm_head))
 
@@ -299,16 +334,19 @@ def test_grad_loss_without_logz(test_data):
     # Compute block-wise loss
     def custom_fn(pred):
         pred_embeddings, pred_lm_head = pred
-        a, b = _blockwise_cross_entropy_loss(
-            (pred_embeddings, pred_lm_head),
+        loss = fused_cross_entropy_loss_and_logsumexp_penalty(
+            pred_embeddings,
+            pred_lm_head,
             Contract=Embed,
             Label=Vocab,
-            labels_y=true_ids,
+            target_y=true_ids,
+            reduction=None,
+            logsumexp_weight=0.0,
             block_size=2,
             dtype=pred_embeddings.dtype,
         )
 
-        return a.mean().scalar()
+        return loss.mean().scalar()
 
     (
         g_embed,

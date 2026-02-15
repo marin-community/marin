@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Script to run an evaluator on a model checkpoint.
@@ -27,8 +16,13 @@ import time
 
 import draccus
 
+from fray.cluster import ResourceConfig, TpuConfig, get_tpu_topology
+from fray.v1.cluster import ResourceConfig as V1ResourceConfig
+from fray.v1.cluster import TpuConfig as V1TpuConfig
+
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
 from marin.evaluation.evaluators.harbor_evaluator import HarborEvaluator
 from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
@@ -41,6 +35,7 @@ logger = logging.getLogger(__name__)
 EVALUATORS = {
     "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
     "levanter_lm_evaluation_harness": LevanterLmEvalEvaluator,
+    "evalchemy": EvalchemyEvaluator,
     "debug": SimpleEvaluator,
     "harbor": HarborEvaluator,
 }
@@ -52,6 +47,34 @@ def get_evaluator(config: EvaluationConfig) -> Evaluator:
     return EVALUATORS[config.evaluator]()
 
 
+def _to_v1_resource_config(config: ResourceConfig) -> V1ResourceConfig:
+    """Convert a v2 ResourceConfig to v1 for the evaluation subsystem.
+
+    The key difference is `replicas`: v2 means total VMs (slice_count * vm_count),
+    v1 means slice_count. For TPU configs we divide back out; for non-TPU configs
+    the value passes through unchanged.
+    """
+    replicas = config.replicas
+    device = config.device
+    if isinstance(device, TpuConfig):
+        try:
+            topo = get_tpu_topology(device.variant)
+            replicas = max(1, config.replicas // topo.vm_count)
+        except ValueError:
+            pass
+        device = V1TpuConfig(variant=device.variant, topology=device.topology)
+
+    return V1ResourceConfig(
+        cpu=config.cpu,
+        ram=config.ram,
+        disk=config.disk,
+        device=device,
+        replicas=replicas,
+        preemptible=config.preemptible,
+        regions=config.regions,
+    )
+
+
 def evaluate(config: EvaluationConfig) -> None:
     logger.info(f"Running evals with args: {config}")
     evaluator: Evaluator = get_evaluator(config)
@@ -61,12 +84,14 @@ def evaluate(config: EvaluationConfig) -> None:
 
     start_time: float = time.time()
     if config.launch_with_ray:
+        v1_resources = _to_v1_resource_config(config.resource_config)
         evaluator.launch_evaluate_with_ray(
             model,
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
-            resource_config=config.resource_config,
+            resource_config=v1_resources,
+            wandb_tags=config.wandb_tags,
         )
     else:
         evaluator.evaluate(
@@ -74,6 +99,7 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
+            wandb_tags=config.wandb_tags,
         )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
@@ -138,6 +164,7 @@ def _impute_model_config(config):
         engine_kwargs=engine_kwargs,
         generation_params=generation_params,
         apply_chat_template=config.apply_chat_template,
+        base_eval_run_name=config.base_eval_run_name,
     )
 
 

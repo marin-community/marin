@@ -1,20 +1,7 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tokenization and mixture configs for the Common Pile v0.1 dataset."""
-
-from levanter.data.dataset import PermType
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
@@ -511,25 +498,23 @@ def common_pile_tokenized(*, tokenizer: str = llama3_tokenizer) -> dict[str, Tok
     return tokenized
 
 
-def comma_main_mixture(*, tokenizer: str = llama3_tokenizer, permutation_type: PermType = "feistel"):
+def comma_main_mixture(*, tokenizer: str = llama3_tokenizer):
     """LmMixtureDatasetConfig for the main training stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
     components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
     return lm_mixture_data_config(
         components=components,
         weights=COMMA_MAIN_MIXTURE_WEIGHTS,
-        permutation_type=permutation_type,
     )
 
 
-def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer, permutation_type="feistel"):
+def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer):
     """LmMixtureDatasetConfig for the cooldown stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
     components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
     return lm_mixture_data_config(
         components=components,
         weights=COMMA_COOLDOWN_MIXTURE_WEIGHTS,
-        permutation_type=permutation_type,
     )
 
 

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
@@ -18,7 +7,7 @@ import logging
 import threading
 from collections import defaultdict
 from collections.abc import Sequence
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, as_completed
 from dataclasses import dataclass, field
 from time import sleep
 from typing import Protocol
@@ -26,41 +15,37 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.events import (
-    TaskAssignedEvent,
-    TaskStateChangedEvent,
-    WorkerHeartbeatEvent,
-    WorkerHeartbeatFailedEvent,
+from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
+from iris.cluster.controller.scheduler import (
+    Scheduler,
+    SchedulingContext,
 )
-from iris.cluster.controller.scheduler import Scheduler, SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
+    HEARTBEAT_FAILURE_THRESHOLD,
+    ControllerJob,
     ControllerState,
     ControllerTask,
     ControllerWorker,
+    HeartbeatSnapshot,
+)
+from iris.cluster.types import (
+    PREEMPTIBLE_ATTRIBUTE_KEY,
+    JobName,
+    VmWorkerStatus,
+    VmWorkerStatusMap,
     get_device_type_enum,
     get_device_variant,
 )
-from iris.cluster.types import JobId, TaskId, WorkerId, VmWorkerStatus, VmWorkerStatusMap, PREEMPTIBLE_ATTRIBUTE_KEY
-from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
+from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import ExponentialBackoff, now_ms
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class WorkerDispatch:
-    """Transient per-worker dispatch state owned by the controller scheduling loop.
-
-    Separate from ControllerWorker (state.py) which holds durable worker metadata.
-    """
-
-    dispatch_outbox: list[cluster_pb2.Worker.RunTaskRequest] = field(default_factory=list)
-    kill_outbox: list[str] = field(default_factory=list)
 
 
 def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
@@ -77,68 +62,57 @@ def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint
 
 
 def compute_demand_entries(state: ControllerState) -> list:
-    """Compute demand entries from controller state.
-
-    Groups pending tasks by device type and variant, returning DemandEntry objects.
-    CPU-only tasks get DeviceType.CPU with variant=None.
-
-    For coscheduled jobs, all tasks in the job share a single slice, so we count
-    the job once (not each task). For non-coscheduled jobs, each task counts as
-    one slice of demand.
-
-    Args:
-        state: Controller state with pending tasks.
-
-    Returns:
-        List of DemandEntry objects with device_type, device_variant, and count.
-    """
-    from iris.cluster.vm.autoscaler import DemandEntry
+    """Compute demand entries from controller state."""
+    from iris.cluster.controller.autoscaler import DemandEntry
     from iris.cluster.types import DeviceType
 
-    @dataclass
-    class DemandAccumulator:
-        count: int = 0
-        total_cpu: int = 0
-        total_memory_bytes: int = 0
+    demand_entries: list[DemandEntry] = []
 
-    demand_by_device: dict[tuple[DeviceType, str | None, bool | None], DemandAccumulator] = {}
-    coscheduled_jobs_counted: set[str] = set()
-
+    tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
     for task in state.peek_pending_tasks():
-        job = state.get_job(task.job_id)
+        if not task.can_be_scheduled():
+            continue
+        tasks_by_job[task.job_id].append(task)
+
+    for job_id, tasks in tasks_by_job.items():
+        job = state.get_job(job_id)
         if not job:
             continue
-
-        # For coscheduled jobs, only count once per job (all tasks share one slice)
-        if job.is_coscheduled:
-            if job.job_id in coscheduled_jobs_counted:
-                continue
-            coscheduled_jobs_counted.add(job.job_id)
+        if job.is_finished():
+            continue
 
         device = job.request.resources.device
         device_type = get_device_type_enum(device)
         device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
         preemptible_pref = _extract_preemptible_preference(job.request.constraints)
 
-        key = (device_type, device_variant, preemptible_pref)
-        if key not in demand_by_device:
-            demand_by_device[key] = DemandAccumulator()
-        acc = demand_by_device[key]
-        acc.count += 1
-        acc.total_cpu += job.request.resources.cpu
-        acc.total_memory_bytes += job.request.resources.memory_bytes
+        if job.is_coscheduled:
+            task_ids = [t.task_id.to_wire() for t in tasks]
+            entry = DemandEntry(
+                task_ids=task_ids,
+                coschedule_group_id=job.job_id.to_wire(),
+                device_type=device_type,
+                device_variant=device_variant,
+                constraints=list(job.request.constraints),
+                resources=job.request.resources,
+                preemptible=preemptible_pref,
+            )
+            demand_entries.append(entry)
+            continue
 
-    return [
-        DemandEntry(
-            device_type=dt,
-            device_variant=variant,
-            count=acc.count,
-            total_cpu=acc.total_cpu,
-            total_memory_bytes=acc.total_memory_bytes,
-            preemptible=preemptible,
-        )
-        for (dt, variant, preemptible), acc in demand_by_device.items()
-    ]
+        for task in tasks:
+            entry = DemandEntry(
+                task_ids=[task.task_id.to_wire()],
+                coschedule_group_id=None,
+                device_type=device_type,
+                device_variant=device_variant,
+                constraints=list(job.request.constraints),
+                resources=job.request.resources,
+                preemptible=preemptible_pref,
+            )
+            demand_entries.append(entry)
+
+    return demand_entries
 
 
 class WorkerClient(Protocol):
@@ -208,14 +182,20 @@ class ControllerConfig:
     Uses fsspec for storage, so supports both GCS and local filesystems. For distributed deployments,
     use a GCS path so workers can download bundles."""
 
-    scheduler_interval_seconds: float = 0.5
-    """How often to run the scheduling loop (in seconds)."""
+    scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
+    """How often to run the scheduling loop."""
 
-    worker_timeout_seconds: float = 60.0
+    heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
+    """How often to send heartbeats to workers."""
+
+    worker_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
     """How long without worker heartbeats before declaring a worker unavailable."""
 
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
+
+    heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
+    """Consecutive heartbeat failures before marking worker as dead."""
 
     autoscaler_enabled: bool = False
     worker_access_address: str = ""
@@ -224,14 +204,13 @@ class ControllerConfig:
 class Controller:
     """Unified controller managing all components and lifecycle.
 
-    Runs two background loops:
-    - Scheduling loop: finds task assignments, checks worker timeouts, runs autoscaler
+    Runs three background loops:
+    - Scheduling loop: finds task assignments, checks worker timeouts
     - Heartbeat loop: sends heartbeat RPCs to workers, delivering buffered dispatches/kills
+    - Autoscaler loop: evaluates scaling decisions, manages slice lifecycle
 
-    Separating these ensures slow heartbeat RPCs don't block scheduling and vice versa.
-
-    When an autoscaler is provided, manages it in a background thread that
-    provisions/terminates VM slices based on demand.
+    Each loop runs on its own thread so blocking operations in one don't
+    stall the others.
 
     Example:
         ```python
@@ -260,6 +239,7 @@ class Controller:
         config: ControllerConfig,
         worker_stub_factory: WorkerStubFactory,
         autoscaler: "Autoscaler | None" = None,
+        threads: ThreadContainer | None = None,
     ):
         if not config.bundle_prefix:
             raise ValueError(
@@ -270,7 +250,7 @@ class Controller:
         self._config = config
         self._stub_factory = worker_stub_factory
 
-        self._state = ControllerState()
+        self._state = ControllerState(heartbeat_failure_threshold=config.heartbeat_failure_threshold)
         self._scheduler = Scheduler(self._state)
         self._service = ControllerServiceImpl(
             self._state,
@@ -285,28 +265,26 @@ class Controller:
         )
 
         # Background loop state
-        self._stop = False
+        self._threads = threads if threads is not None else get_thread_container()
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
-        self._scheduling_loop_thread: threading.Thread | None = None
-        self._heartbeat_loop_thread: threading.Thread | None = None
-        self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
+        self._scheduling_thread: ManagedThread | None = None
+        self._heartbeat_thread: ManagedThread | None = None
+        self._autoscaler_thread: ManagedThread | None = None
 
-        # Per-worker dispatch state (outboxes). Protected by _dispatch_lock since
-        # the scheduling thread writes and the heartbeat thread reads+drains.
-        self._dispatch: dict[WorkerId, WorkerDispatch] = {}
-        self._dispatch_lock = threading.Lock()
-
-        # Thread pool for parallel heartbeat dispatch
-        self._dispatch_executor = ThreadPoolExecutor(
+        # Thread pool for parallel heartbeat dispatch, owned by the ThreadContainer
+        # so it is shut down automatically during stop().
+        self._dispatch_executor = self._threads.spawn_executor(
             max_workers=config.max_dispatch_parallelism,
-            thread_name_prefix="dispatch",
+            prefix="dispatch",
         )
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
-        self._last_autoscaler_run: float = 0.0
+        self._autoscaler_limiter: RateLimiter | None = (
+            RateLimiter(autoscaler.evaluation_interval.to_seconds()) if autoscaler else None
+        )
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -320,90 +298,86 @@ class Controller:
 
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
-        self._stop = False
+        self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
+        self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
 
-        # Start main controller loop
-        self._scheduling_loop_thread = threading.Thread(
-            target=self._run_scheduling_loop,
-            daemon=True,
+        # Create and start uvicorn server via spawn_server, which bridges the
+        # ManagedThread stop_event to server.should_exit automatically.
+        server_config = uvicorn.Config(
+            self._dashboard._app,
+            host=self._config.host,
+            port=self._config.port,
+            log_level="error",
         )
-        self._scheduling_loop_thread.start()
+        self._server = uvicorn.Server(server_config)
+        self._threads.spawn_server(self._server, name="controller-server")
 
-        # Start heartbeat loop (separate from scheduling so slow RPCs don't block scheduling)
-        self._heartbeat_loop_thread = threading.Thread(
-            target=self._run_heartbeat_loop,
-            daemon=True,
-        )
-        self._heartbeat_loop_thread.start()
-
-        # Start dashboard server in background thread
-        self._server_thread = threading.Thread(
-            target=self._run_server,
-            daemon=True,
-        )
-        self._server_thread.start()
-
-        # Log autoscaler configuration if provided (runs from scheduling loop, not separate thread)
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
+            self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server is not None and self._server.started,
-            timeout=5.0,
+            timeout=Duration.from_seconds(5.0),
         )
 
     def stop(self) -> None:
         """Stop all background components gracefully.
 
-        Waits for all threads to complete naturally. If shutdown hangs,
-        test framework timeout will kill the process.
+        Shutdown ordering:
+        1. Stop scheduling/heartbeat/autoscaler loops so no new work is triggered.
+        2. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
+        3. Stop remaining threads (server) and executors.
         """
-        self._stop = True
         self._wake_event.set()
         self._heartbeat_event.set()
+        join_timeout = Duration.from_seconds(5.0)
+        if self._scheduling_thread:
+            self._scheduling_thread.stop()
+            self._scheduling_thread.join(timeout=join_timeout)
+        if self._heartbeat_thread:
+            self._heartbeat_thread.stop()
+            self._heartbeat_thread.join(timeout=join_timeout)
+        if self._autoscaler_thread:
+            self._autoscaler_thread.stop()
+            self._autoscaler_thread.join(timeout=join_timeout)
 
-        # Wait for threads to exit - no timeout, let pytest-timeout handle hangs
-        if self._scheduling_loop_thread:
-            self._scheduling_loop_thread.join()
-        if self._heartbeat_loop_thread:
-            self._heartbeat_loop_thread.join()
-
-        # Stop uvicorn server
-        if self._server:
-            self._server.should_exit = True
-        if self._server_thread:
-            self._server_thread.join()
-
-        # Shutdown dispatch executor - wait for in-flight requests to complete
-        # Don't cancel futures to avoid httpx logging to closed stdout/stderr
-        self._dispatch_executor.shutdown(wait=True, cancel_futures=False)
-
-        # Shutdown autoscaler
         if self._autoscaler:
             self._autoscaler.shutdown()
 
-    def _run_scheduling_loop(self) -> None:
-        """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
-        while not self._stop:
-            self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
+        self._threads.stop()
+
+    def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
+        """Scheduling loop: task assignment and worker timeout checks only."""
+        while not stop_event.is_set():
+            self._wake_event.wait(timeout=self._config.scheduler_interval.to_seconds())
             self._wake_event.clear()
 
-            if self._stop:
+            if stop_event.is_set():
                 break
 
             self._run_scheduling()
             self._check_worker_timeouts()
 
-            if self._autoscaler:
+    def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
+        """Autoscaler loop: runs on its own thread so blocking cloud API calls
+        don't stall scheduling or heartbeats."""
+        while not stop_event.is_set():
+            stop_event.wait(timeout=self._config.autoscaler_interval.to_seconds())
+            if stop_event.is_set():
+                break
+            try:
                 self._run_autoscaler_once()
+            except Exception:
+                logger.exception("Autoscaler loop iteration failed")
 
-    def _run_heartbeat_loop(self) -> None:
+    def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
-        while not self._stop:
-            self._heartbeat_event.wait(timeout=self._config.scheduler_interval_seconds)
+        while not stop_event.is_set():
+            self._heartbeat_event.wait(timeout=self._config.heartbeat_interval.to_seconds())
             self._heartbeat_event.clear()
-            if self._stop:
+            if stop_event.is_set():
                 break
             self._heartbeat_all_workers()
 
@@ -438,11 +412,11 @@ class Controller:
     ) -> None:
         """Commit resources and buffer task assignments for heartbeat delivery.
 
-        Groups assignments by job and buffers RunTaskRequest protos into per-worker outboxes.
-        Resource commitment happens via TaskAssignedEvent.
+        Groups assignments by job, commits resources via TaskAssignedEvent, and
+        buffers RunTaskRequest protos via state.buffer_dispatch().
         """
         # Group assignments by job for coscheduled handling
-        by_job: dict[JobId, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
+        by_job: dict[JobName, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
         for task, worker in assignments:
             by_job[task.job_id].append((task, worker))
 
@@ -452,32 +426,31 @@ class Controller:
                 continue
 
             for task, worker in job_assignments:
-                # Commit resources and buffer dispatch atomically under _dispatch_lock.
-                # This prevents the heartbeat thread from seeing the task in
-                # worker.running_tasks (via TaskAssignedEvent) before the
-                # RunTaskRequest is in the outbox.
-                with self._dispatch_lock:
-                    self._state.handle_event(
-                        TaskAssignedEvent(
-                            task_id=task.task_id,
-                            worker_id=worker.worker_id,
-                        )
+                # Commit resources via event
+                self._state.handle_event(
+                    TaskAssignedEvent(
+                        task_id=task.task_id,
+                        worker_id=worker.worker_id,
                     )
-                    request = cluster_pb2.Worker.RunTaskRequest(
-                        job_id=str(task.job_id),
-                        task_id=str(task.task_id),
-                        task_index=task.task_index,
-                        num_tasks=len(self._state.get_job_tasks(task.job_id)),
-                        entrypoint=job.request.entrypoint,
-                        environment=job.request.environment,
-                        bundle_gcs_path=job.request.bundle_gcs_path,
-                        resources=job.request.resources,
-                        ports=list(job.request.ports),
-                        attempt_id=task.current_attempt_id,
-                        timeout_seconds=job.request.timeout_seconds,
-                    )
-                    wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-                    wd.dispatch_outbox.append(request)
+                )
+
+                # Build the run request
+                request = cluster_pb2.Worker.RunTaskRequest(
+                    task_id=task.task_id.to_wire(),
+                    num_tasks=len(self._state.get_job_tasks(task.job_id)),
+                    entrypoint=job.request.entrypoint,
+                    environment=job.request.environment,
+                    bundle_gcs_path=job.request.bundle_gcs_path,
+                    resources=job.request.resources,
+                    ports=list(job.request.ports),
+                    attempt_id=task.current_attempt_id,
+                )
+                # Copy timeout if set (check milliseconds field > 0)
+                if job.request.timeout.milliseconds > 0:
+                    request.timeout.CopyFrom(job.request.timeout)
+
+                # Buffer dispatch (state handles the lock)
+                self._state.buffer_dispatch(worker.worker_id, request)
 
             # Wake heartbeat thread to deliver buffered dispatches immediately
             if job_assignments:
@@ -486,27 +459,31 @@ class Controller:
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
         job = self._state.get_job(task.job_id)
-        timeout_seconds = job.request.scheduling_timeout_seconds if job else 0
-        logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout_seconds}s), marking as UNSCHEDULABLE")
+        if job and job.request.HasField("scheduling_timeout"):
+            timeout = Duration.from_proto(job.request.scheduling_timeout)
+        else:
+            timeout = None
+        logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
         txn = self._state.handle_event(
             TaskStateChangedEvent(
                 task_id=task.task_id,
                 new_state=cluster_pb2.TASK_STATE_UNSCHEDULABLE,
                 attempt_id=task.current_attempt_id,
-                error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
+                error=f"Scheduling timeout exceeded ({timeout})",
             )
         )
         if txn.tasks_to_kill:
             self.kill_tasks_on_workers(txn.tasks_to_kill)
 
-    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
-        """Get the current scheduling status of a task (for dashboard display).
+    def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext:
+        """Create a scheduling context for the given workers."""
+        return self._scheduler.create_scheduling_context(workers)
 
-        Delegates to the internal scheduler.
-        """
-        return self._scheduler.task_schedule_status(task, context)
+    def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str:
+        """Get detailed diagnostics for why a job cannot be scheduled."""
+        return self._scheduler.get_job_scheduling_diagnostics(job, context)
 
-    def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
+    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
         """Buffer kill requests for delivery via next heartbeat.
 
         Called after state has marked tasks as killed. For each task that had
@@ -521,10 +498,8 @@ class Controller:
             worker = self._state.get_worker(task.worker_id)
             if not worker:
                 continue
-            with self._dispatch_lock:
-                wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-                wd.kill_outbox.append(str(task_id))
-                any_buffered = True
+            self._state.buffer_kill(worker.worker_id, task_id.to_wire())
+            any_buffered = True
 
         # Wake heartbeat thread to deliver buffered kills immediately
         if any_buffered:
@@ -533,186 +508,114 @@ class Controller:
     def _heartbeat_all_workers(self) -> None:
         """Send heartbeats to all registered workers.
 
-        Uses a lock-copy-unlock-send-lock-apply pattern: snapshots dispatch outboxes
-        under lock, sends RPCs without holding the lock, then re-locks to apply results.
+        Uses state-owned transitions: begin_heartbeat() atomically snapshots worker
+        state and drains dispatch buffers, then RPCs proceed without locks, and
+        complete_heartbeat()/fail_heartbeat() apply results.
         """
-        # Phase 1: snapshot worker list (no lock), then drain outboxes (under lock)
-        all_workers = self._state.get_available_workers()
-        with self._dispatch_lock:
-            worker_dispatches: dict[WorkerId, tuple[ControllerWorker, list, list]] = {}
-            for w in all_workers:
-                wd = self._dispatch.pop(w.worker_id, WorkerDispatch())
-                worker_dispatches[w.worker_id] = (w, wd.dispatch_outbox, wd.kill_outbox)
+        # Phase 1: create snapshots for all healthy workers
+        snapshots: list[HeartbeatSnapshot] = []
+        for w in self._state.get_available_workers():
+            snapshot = self._state.begin_heartbeat(w.worker_id)
+            if snapshot:
+                snapshots.append(snapshot)
 
-        # Phase 2: send RPCs (no lock held)
-        futures = {}
-        for _worker_id, (worker, tasks_to_run, tasks_to_kill) in worker_dispatches.items():
-            future = self._dispatch_executor.submit(self._heartbeat_worker, worker, tasks_to_run, tasks_to_kill)
-            futures[future] = (worker, tasks_to_run, tasks_to_kill)
+        # Phase 2: send RPCs in parallel (no lock held)
+        futures: dict[Future, HeartbeatSnapshot] = {}
+        for snapshot in snapshots:
+            future = self._dispatch_executor.submit(self._do_heartbeat_rpc, snapshot)
+            futures[future] = snapshot
 
-        # Phase 3: process results, requeue failures
+        # Phase 3: process results via state transitions
         try:
             for future in as_completed(futures, timeout=10):
-                worker, tasks_to_run, tasks_to_kill = futures.pop(future)
-                self._handle_heartbeat_future(future, worker, tasks_to_run, tasks_to_kill)
+                snapshot = futures.pop(future)
+                try:
+                    response = future.result()
+                    self._state.complete_heartbeat(snapshot, response)
+                except Exception as e:
+                    logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
+                    self._state.fail_heartbeat(snapshot, str(e))
         except TimeoutError:
             # Process any futures that completed before timeout
-            for future, (worker, tasks_to_run, tasks_to_kill) in futures.items():
+            for future, snapshot in futures.items():
                 if future.done():
-                    self._handle_heartbeat_future(future, worker, tasks_to_run, tasks_to_kill)
+                    try:
+                        response = future.result()
+                        self._state.complete_heartbeat(snapshot, response)
+                    except Exception as e:
+                        logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
+                        self._state.fail_heartbeat(snapshot, str(e))
                 else:
-                    logger.warning(f"Heartbeat timed out for {worker.worker_id}")
-                    self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+                    logger.warning(f"Heartbeat timed out for {snapshot.worker_id}")
+                    self._state.fail_heartbeat(snapshot, "Heartbeat timed out")
                     future.cancel()
 
-    def _handle_heartbeat_future(
+    def _do_heartbeat_rpc(
         self,
-        future: Future,
-        worker: ControllerWorker,
-        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
-        tasks_to_kill: list[str],
-    ) -> None:
-        """Process a completed heartbeat future.
-
-        Args:
-            future: Completed future from heartbeat RPC
-            worker: The worker that was heartbeated
-            tasks_to_run: Tasks that were sent to the worker
-            tasks_to_kill: Task IDs that were sent for killing
-        """
-        try:
-            response = future.result()
-            self._process_heartbeat_response(worker, response)
-        except Exception as e:
-            logger.warning(f"Heartbeat error for {worker.worker_id}: {e}")
-            self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
-
-    def _heartbeat_worker(
-        self,
-        worker: ControllerWorker,
-        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
-        tasks_to_kill: list[str],
+        snapshot: HeartbeatSnapshot,
     ) -> cluster_pb2.HeartbeatResponse:
-        """Send a heartbeat to a single worker.
-
-        Args:
-            worker: The worker to heartbeat
-            tasks_to_run: Tasks to start on this worker
-            tasks_to_kill: Task IDs to kill on this worker
-
-        Returns:
-            HeartbeatResponse on success
+        """Send a heartbeat RPC to a single worker.
 
         Raises:
-            Exception on RPC failure (caught and handled by _handle_heartbeat_future)
+            Exception on RPC failure (handled by caller via state.fail_heartbeat)
         """
         if rule := chaos("controller.heartbeat"):
             sleep(rule.delay_seconds)
             raise Exception("chaos: heartbeat unavailable")
-        stub = self._stub_factory.get_stub(worker.address)
-        expected_tasks = [
-            cluster_pb2.Controller.RunningTaskEntry(
-                task_id=str(tid),
-                attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
+        stub = self._stub_factory.get_stub(snapshot.worker_address)
+
+        # Build expected_tasks list using the pre-snapshotted running_tasks.
+        # Chaos injection point for race condition testing.
+        expected_tasks = []
+        for tid in snapshot.running_tasks:
+            if rule := chaos("controller.heartbeat.iteration"):
+                sleep(rule.delay_seconds)
+            expected_tasks.append(
+                cluster_pb2.Controller.RunningTaskEntry(
+                    task_id=tid.to_wire(),
+                    attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
+                )
             )
-            for tid in worker.running_tasks
-        ]
         request = cluster_pb2.HeartbeatRequest(
-            tasks_to_run=tasks_to_run,
-            tasks_to_kill=tasks_to_kill,
+            tasks_to_run=snapshot.tasks_to_run,
+            tasks_to_kill=snapshot.tasks_to_kill,
             expected_tasks=expected_tasks,
         )
         return stub.heartbeat(request)
 
-    def _process_heartbeat_response(
-        self,
-        worker: ControllerWorker,
-        response: cluster_pb2.HeartbeatResponse,
-    ) -> None:
-        """Process a successful heartbeat response.
-
-        Updates heartbeat timestamp and processes completed tasks. Reconciliation
-        of running vs expected tasks is handled worker-side using expected_tasks.
-        """
-        self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp_ms=now_ms()))
-
-        for entry in response.completed_tasks:
-            task_id = TaskId(entry.task_id)
-            task = self._state.get_task(task_id)
-            if task and not task.is_finished():
-                self._state.handle_event(
-                    TaskStateChangedEvent(
-                        task_id=task_id,
-                        new_state=entry.state,
-                        error=entry.error or None,
-                        exit_code=entry.exit_code,
-                        attempt_id=entry.attempt_id,
-                    )
-                )
-
-    def _requeue_and_fail(
-        self,
-        worker: ControllerWorker,
-        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
-        tasks_to_kill: list[str],
-    ) -> None:
-        """Re-queue outbox entries and record a heartbeat failure for a worker."""
-        with self._dispatch_lock:
-            wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-            if tasks_to_run:
-                wd.dispatch_outbox.extend(tasks_to_run)
-            if tasks_to_kill:
-                wd.kill_outbox.extend(tasks_to_kill)
-        self._handle_heartbeat_failure(worker)
-
-    def _handle_heartbeat_failure(self, worker: ControllerWorker) -> None:
-        """Handle a failed heartbeat RPC via the state layer."""
-        self._state.handle_event(
-            WorkerHeartbeatFailedEvent(
-                worker_id=worker.worker_id,
-                error=f"Heartbeat failed for worker {worker.worker_id}",
-            )
-        )
-
     def _check_worker_timeouts(self) -> None:
-        """Check for worker timeouts and send kill RPCs for affected tasks."""
-        timeout_ms = int(self._config.worker_timeout_seconds * 1000)
-
-        # State computes failed workers and marks them atomically under lock
-        tasks_to_kill = self._state.check_worker_timeouts(timeout_ms)
+        """Check for worker timeouts, send kill RPCs, and notify autoscaler."""
+        result = self._state.check_worker_timeouts(self._config.worker_timeout)
 
         # Send kill RPCs outside lock
-        if tasks_to_kill:
-            self.kill_tasks_on_workers(tasks_to_kill)
+        if result.tasks_to_kill:
+            self.kill_tasks_on_workers(result.tasks_to_kill)
+
+        # Notify autoscaler so it can terminate the containing slice
+        if self._autoscaler and result.failed_vm_addresses:
+            for vm_address in result.failed_vm_addresses:
+                self._autoscaler.notify_worker_failed(vm_address)
 
     def _run_autoscaler_once(self) -> None:
-        """Run one autoscaler evaluation cycle.
+        """Run one autoscaler cycle: refresh (I/O) then update (CPU).
 
-        Called from the scheduling loop every cycle. Computes demand from pending
-        tasks and worker idle state, then runs the autoscaler.
-
-        Rate-limits evaluations based on the autoscaler's configured evaluation_interval_seconds.
+        Called from the autoscaler loop thread.
         """
-        if not self._autoscaler:
+        if not self._autoscaler or not self._autoscaler_limiter:
+            return
+        if not self._autoscaler_limiter.should_run():
             return
 
-        from time import monotonic
-
-        now = monotonic()
-        interval = self._autoscaler.evaluation_interval_seconds
-        if interval > 0 and now - self._last_autoscaler_run < interval:
-            return
-        self._last_autoscaler_run = now
-
-        demand_entries = compute_demand_entries(self._state)
         vm_status_map = self._build_vm_status_map()
-        self._autoscaler.run_once(demand_entries, vm_status_map=vm_status_map)
+        self._autoscaler.refresh(vm_status_map)
+        demand_entries = compute_demand_entries(self._state)
+        self._autoscaler.update(demand_entries)
 
     def _build_vm_status_map(self) -> VmWorkerStatusMap:
         """Build a map of VM address to worker status for autoscaler.
 
         The autoscaler needs to look up worker status by VM address (not worker_id)
-        because ManagedVm only knows the VM's IP address, not the worker's self-assigned ID.
+        because VmHandle only exposes the VM's IP address, not the worker's self-assigned ID.
         Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
         """
         result: VmWorkerStatusMap = {}
@@ -726,22 +629,10 @@ class Controller:
 
             result[vm_addr] = VmWorkerStatus(
                 vm_address=vm_addr,
-                running_task_ids=frozenset(str(tid) for tid in worker.running_tasks),
+                # Snapshot the set to prevent concurrent modification errors
+                running_task_ids=frozenset(tid.to_wire() for tid in list(worker.running_tasks)),
             )
         return result
-
-    def _run_server(self) -> None:
-        try:
-            config = uvicorn.Config(
-                self._dashboard._app,
-                host=self._config.host,
-                port=self._config.port,
-                log_level="error",
-            )
-            self._server = uvicorn.Server(config)
-            self._server.run()
-        except Exception as e:
-            logger.exception("Controller server error: %s", e)
 
     def launch_job(
         self,

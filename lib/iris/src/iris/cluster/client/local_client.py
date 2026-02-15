@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Local cluster client using real Controller/Worker with in-process execution.
 
@@ -19,49 +8,53 @@ instead of Docker containers, ensuring local execution follows the same code pat
 as production cluster execution.
 """
 
-import time
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.types import Entrypoint
-from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.config import make_local_config
+from iris.cluster.controller.local import LocalController
+from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Duration, ExponentialBackoff
 
 
 def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for local execution.
 
-    Sets up controller_vm.local, bundle_prefix, scale groups with local provider,
-    and fast autoscaler evaluation for tests.
+    Creates a minimal base config and transforms it via make_local_config()
+    to ensure local defaults (fast autoscaler timings, etc.) are applied
+    consistently from config.py.
     """
-    config = config_pb2.IrisClusterConfig()
+    # Build minimal base config
+    base_config = config_pb2.IrisClusterConfig()
 
-    # Configure local controller
-    config.controller_vm.local.port = 0  # auto-assign
-    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
-
-    # Configure scale group with local provider
+    # Configure scale group (will be transformed to VM_TYPE_LOCAL_VM by make_local_config)
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
         min_slices=1,
         max_slices=max_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        num_vms=1,
+        resources=config_pb2.ScaleGroupResources(
+            cpu=8,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=50 * 1024**3,
+            gpu_count=0,
+            tpu_count=0,
+        ),
     )
-    sg.provider.local.SetInParent()
-    config.scale_groups["local-cpu"].CopyFrom(sg)
+    base_config.scale_groups["local-cpu"].CopyFrom(sg)
 
-    # Fast autoscaler evaluation for tests
-    config.autoscaler.evaluation_interval_seconds = 0.5
-
-    return config
+    # Transform to local config - applies local platform, controller, and fast autoscaler timings
+    return make_local_config(base_config)
 
 
 class LocalClusterClient:
-    """Local cluster client using real Controller/Worker with in-process execution.
+    """Local cluster client using real Controller/Worker with subprocess-based task execution.
 
-    Provides the same execution path as production clusters while running
-    entirely in-process without Docker or network dependencies.
+    Provides the same execution path as production clusters. Workers run in-process,
+    but tasks execute in subprocesses (not Docker containers) for isolation.
 
     Use the create() classmethod to instantiate:
         client = LocalClusterClient.create()
@@ -69,8 +62,8 @@ class LocalClusterClient:
         client.shutdown()
     """
 
-    def __init__(self, manager: ClusterManager, remote_client: RemoteClusterClient):
-        self._manager = manager
+    def __init__(self, controller: LocalController, remote_client: RemoteClusterClient):
+        self._controller = controller
         self._remote_client = remote_client
 
     @classmethod
@@ -84,11 +77,11 @@ class LocalClusterClient:
             A fully initialized LocalClusterClient ready for use
         """
         config = _make_local_cluster_config(max_workers)
-        manager = ClusterManager(config)
-        address = manager.start()
+        controller = LocalController(config)
+        address = controller.start()
         cls._wait_for_worker_registration(address)
         remote_client = RemoteClusterClient(controller_address=address, timeout_ms=30000)
-        return cls(manager, remote_client)
+        return cls(controller, remote_client)
 
     @staticmethod
     def _wait_for_worker_registration(controller_address: str, timeout: float = 10.0) -> None:
@@ -97,35 +90,34 @@ class LocalClusterClient:
             timeout_ms=30000,
         )
         try:
-            start = time.monotonic()
-            while time.monotonic() - start < timeout:
-                response = temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
-                if response.workers:
-                    return
-                time.sleep(0.1)
-            raise TimeoutError("Worker failed to register with controller")
+            ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+                lambda: bool(temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers),
+                timeout=Duration.from_seconds(timeout),
+                error_message="Worker failed to register with controller",
+            )
         finally:
             temp_client.close()
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
         self._remote_client.shutdown()
-        self._manager.stop()
+        self._controller.stop()
 
     def submit_job(
         self,
-        job_id: str,
+        job_id: JobName,
         entrypoint: Entrypoint,
         resources: cluster_pb2.ResourceSpecProto,
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
-        scheduling_timeout_seconds: int = 0,
+        scheduling_timeout: Duration | None = None,
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
-        timeout_seconds: int = 0,
+        timeout: Duration | None = None,
+        fail_if_exists: bool = False,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -133,34 +125,35 @@ class LocalClusterClient:
             resources=resources,
             environment=environment,
             ports=ports,
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
+            scheduling_timeout=scheduling_timeout,
             constraints=constraints,
             coscheduling=coscheduling,
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
-            timeout_seconds=timeout_seconds,
+            timeout=timeout,
+            fail_if_exists=fail_if_exists,
         )
 
-    def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
+    def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         return self._remote_client.get_job_status(job_id)
 
     def wait_for_job(
         self,
-        job_id: str,
+        job_id: JobName,
         timeout: float = 300.0,
         poll_interval: float = 2.0,
     ) -> cluster_pb2.JobStatus:
         return self._remote_client.wait_for_job(job_id, timeout=timeout, poll_interval=poll_interval)
 
-    def terminate_job(self, job_id: str) -> None:
+    def terminate_job(self, job_id: JobName) -> None:
         self._remote_client.terminate_job(job_id)
 
     def register_endpoint(
         self,
         name: str,
         address: str,
-        job_id: str,
+        job_id: JobName,
         metadata: dict[str, str] | None = None,
     ) -> str:
         return self._remote_client.register_endpoint(name=name, address=address, job_id=job_id, metadata=metadata)
@@ -174,16 +167,30 @@ class LocalClusterClient:
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         return self._remote_client.list_jobs()
 
-    def get_task_status(self, job_id: str, task_index: int) -> cluster_pb2.TaskStatus:
-        return self._remote_client.get_task_status(job_id, task_index)
+    def get_task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
+        return self._remote_client.get_task_status(task_name)
 
-    def list_tasks(self, job_id: str) -> list[cluster_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
         return self._remote_client.list_tasks(job_id)
 
     def fetch_task_logs(
         self,
-        task_id: str,
-        start_ms: int = 0,
-        max_lines: int = 0,
-    ) -> list[cluster_pb2.Worker.LogEntry]:
-        return self._remote_client.fetch_task_logs(task_id, start_ms, max_lines)
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        return self._remote_client.fetch_task_logs(
+            target,
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_total_lines,
+            regex=regex,
+            attempt_id=attempt_id,
+        )
+
+    def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
+        return self._remote_client.get_autoscaler_status()

@@ -31,6 +31,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
     - We will likely add `"replica"` and `"replica_dcn"` for partial fsdp and multislice.
 - **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (ejkernel blocksparse today) as long as the surface stays simple and the fallback reference path remains.
 - **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types. By using `set_mesh` with `AxisType.Explicit` we'll always know every Array's sharding. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`. Prefer the former.
+- **Fresh arrays with the right sharding.** If you need a new array (e.g., `zeros`, `full`, etc.) that inherits a specific sharding, use `full_like` on any traced expression of an existing sharded array (e.g. `jnp.full_like(x.sum(-1), init)`). Tracing/DCE means the extra op doesn’t execute, but the sharding annotation is preserved.
 
 ### Code Organization Principles
 

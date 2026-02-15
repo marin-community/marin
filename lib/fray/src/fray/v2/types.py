@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Type definitions for fray v2.
 
@@ -289,7 +278,8 @@ class TpuConfig:
     topology: str | None = None
 
     def chip_count(self) -> int:
-        return get_tpu_topology(self.variant).chip_count
+        """Return the number of chips per VM for this TPU type."""
+        return get_tpu_topology(self.variant).chips_per_vm
 
     def vm_count(self) -> int:
         return get_tpu_topology(self.variant).vm_count
@@ -318,18 +308,24 @@ class ResourceConfig:
     JobRequest.replicas takes precedence. This field exists here so that
     convenience builders like `with_tpu(..., slice_count=4)` can carry the
     replica count alongside the resource spec.
+
+    `max_concurrency` controls how many method calls can run in parallel on
+    the actor (Ray's max_concurrency). Use >1 for actors that need to handle
+    concurrent calls, e.g. coordinators that block while workers call back.
     """
 
     cpu: int = 1
-    ram: str = "128m"
-    disk: str = "1g"
+    ram: str = "1g"
+    disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
     regions: Sequence[str] | None = None
     replicas: int = 1
+    max_concurrency: int = 1
 
     def chip_count(self) -> int:
-        return self.device.chip_count()
+        """Total accelerator chips across all replicas."""
+        return self.device.chip_count() * self.replicas
 
     def device_flops(self, dtype: str = "bf16") -> float:
         return self.device.device_flops(dtype)
@@ -342,7 +338,13 @@ class ResourceConfig:
     @staticmethod
     def with_tpu(tpu_type: str, *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
         device = TpuConfig(variant=tpu_type)
-        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
+        topo = get_tpu_topology(tpu_type)
+        replicas = slice_count * topo.vm_count
+        kwargs = dict(kwargs)
+        kwargs.setdefault("cpu", 32)
+        kwargs.setdefault("ram", "128g")
+        kwargs.setdefault("disk", "50g")
+        return ResourceConfig(device=device, replicas=replicas, **kwargs)
 
     @staticmethod
     def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs: Any) -> ResourceConfig:
