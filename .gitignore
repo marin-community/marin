@@ -223,3 +223,6 @@ gha-creds-*.json
 *.jsonl
 **/*.jsonl
 scr/*
+
+# Generated restart scripts
+run_sft.sh
