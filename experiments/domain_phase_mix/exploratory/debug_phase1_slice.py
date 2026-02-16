@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 script_dir = Path(__file__).parent
-df = pd.read_csv(script_dir / "two_phase_starcoder.csv")
+df = pd.read_csv(script_dir / "two_phase_starcoder_combined.csv")
 df = df[df["status"] == "completed"]
 
 # Filter to rows where phase_0 is 100% nemotron (phase_0_starcoder ~ 0)

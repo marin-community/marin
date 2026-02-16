@@ -136,9 +136,10 @@ BOOTSTRAP_CONFIG = {
 }
 
 # =========================================================================
-# CLI: model selection + --plots-only flag
+# CLI: model selection + --plots-only / --quick flags
 # =========================================================================
 plots_only = "--plots-only" in sys.argv
+quick_mode = "--quick" in sys.argv
 cli_filters = [a for a in sys.argv[1:] if not a.startswith("--")]
 
 if cli_filters:
@@ -292,7 +293,7 @@ else:
     needed_names = list(model_names)
 
 # Run bootstrap only for uncached models
-if needed_names and not plots_only:
+if needed_names and not plots_only and not quick_mode:
     needed_specs = [(n, fn, FEATURE_KINDS[n]) for n, fn, *_ in RUN_MODELS if n in needed_names]
 
     print(f"Running bootstrap: {len(TRAIN_SIZES)} sizes x {B} iters x {len(needed_specs)} models")
@@ -340,6 +341,9 @@ if needed_names and not plots_only:
     _save_cache(BOOTSTRAP_CONFIG, cached_models)
     print(f"Cache saved ({len(cached_models)} models total)")
 
+elif quick_mode:
+    print("\n--- Quick mode: skipping bootstrap, will use CV metrics for ranking ---")
+
 elif plots_only and not config_matches:
     print("ERROR: --plots-only but no valid cache exists. Run without --plots-only first.")
     sys.exit(1)
@@ -349,22 +353,17 @@ elif needed_names and plots_only:
     print(f"Warning: --plots-only but {len(missing)} models are not cached: {missing}")
     print("  These models will be skipped in plots.")
     model_names = [n for n in model_names if n not in needed_names]
-    RUN_MODELS = [(n, f, x, l, c, s) for n, f, x, l, c, s in RUN_MODELS if n not in needed_names]
-    model_specs = [(n, f, FEATURE_KINDS[n]) for n, f, *_ in RUN_MODELS]
+    RUN_MODELS = [m for m in RUN_MODELS if m.name not in needed_names]
+    model_specs = [(m.name, m.fit_fn, m.feature_kind) for m in RUN_MODELS]
 
-# Build all_results[n_train][model_name] from cache for plotting
-all_results = {}
-for n_train in TRAIN_SIZES:
-    size_results = {}
-    for name in model_names:
-        size_results[name] = cached_models[name][n_train]
-    all_results[n_train] = size_results
-
-
-# =========================================================================
-# Compute rankings for both metrics
-# =========================================================================
-ref = all_results[REFERENCE_N]
+if not quick_mode:
+    # Build all_results[n_train][model_name] from cache for plotting
+    all_results = {}
+    for n_train in TRAIN_SIZES:
+        size_results = {}
+        for name in model_names:
+            size_results[name] = cached_models[name][n_train]
+        all_results[n_train] = size_results
 
 METRICS = {
     "huber": {
@@ -376,67 +375,71 @@ METRICS = {
     "rmse": {"test_key": "test_rmse", "train_key": "train_rmse", "label": "RMSE", "short": "RMSE"},
 }
 
+if not quick_mode:
+    # =====================================================================
+    # Compute rankings for both metrics (requires bootstrap data)
+    # =====================================================================
+    ref = all_results[REFERENCE_N]
 
-def _compute_rankings(metric_key):
-    """Compute model rankings sorted by median test metric at REFERENCE_N.
+    def _compute_rankings(metric_key):
+        """Compute model rankings sorted by median test metric at REFERENCE_N.
 
-    Uses median (not mean) for ranking so the sort order matches the
-    median values displayed in the learning-curve plots.
-    """
-    rows = []
-    for name in model_names:
-        d = ref[name]
-        mask = d["success"]
-        if mask.sum() == 0:
-            rows.append((name, np.inf, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-            continue
-        test_vals = d[metric_key][mask]
-        train_key = metric_key.replace("test_", "train_")
-        train_vals = d[train_key][mask]
-        opt_vals = d["opt_p1"][mask]
-        median_test = float(np.median(test_vals))
-        rows.append(
-            (
-                name,
-                median_test,
-                float(np.std(test_vals)),
-                float(np.median(test_vals)),
-                float(np.median(train_vals)),
-                median_test / max(float(np.median(train_vals)), 1e-12),
-                float(np.mean(opt_vals)),
-                float(np.std(opt_vals)),
-                float(mask.mean()) * 100,
+        Uses median (not mean) for ranking so the sort order matches the
+        median values displayed in the learning-curve plots.
+        """
+        rows = []
+        for name in model_names:
+            d = ref[name]
+            mask = d["success"]
+            if mask.sum() == 0:
+                rows.append((name, np.inf, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                continue
+            test_vals = d[metric_key][mask]
+            train_key = metric_key.replace("test_", "train_")
+            train_vals = d[train_key][mask]
+            opt_vals = d["opt_p1"][mask]
+            median_test = float(np.median(test_vals))
+            rows.append(
+                (
+                    name,
+                    median_test,
+                    float(np.std(test_vals)),
+                    float(np.median(test_vals)),
+                    float(np.median(train_vals)),
+                    median_test / max(float(np.median(train_vals)), 1e-12),
+                    float(np.mean(opt_vals)),
+                    float(np.std(opt_vals)),
+                    float(mask.mean()) * 100,
+                )
             )
+        rows.sort(key=lambda x: x[1])
+        return rows
+
+    rankings_huber = _compute_rankings("test_huber")
+    rankings_rmse = _compute_rankings("test_rmse")
+
+    # Print tables for both metrics
+    for metric_name, rankings in [("Huber", rankings_huber), ("RMSE", rankings_rmse)]:
+        print(f"\n{'=' * 100}")
+        print(f"Models ranked by held-out {metric_name} (n_train={REFERENCE_N})")
+        print(f"{'=' * 100}")
+        header = (
+            f"{'Model':<22} {metric_name + '(test)':>14} {metric_name + '(train)':>14}"
+            f" {'Overfit':>8} {'Opt p1':>14} {'Conv%':>6}"
         )
-    rows.sort(key=lambda x: x[1])
-    return rows
+        print(header)
+        print("-" * 100)
+        for name, m_mean, m_std, _, m_train, overfit, opt_mean, opt_std, conv in rankings:
+            cn = clean_name(name)
+            print(
+                f"{cn:<22} {m_mean:>7.5f}+-{m_std:<5.5f} {m_train:>12.5f}"
+                f" {overfit:>8.2f}x {opt_mean:>6.3f}+-{opt_std:<5.3f} {conv:>5.0f}%"
+            )
 
-
-rankings_huber = _compute_rankings("test_huber")
-rankings_rmse = _compute_rankings("test_rmse")
-
-# Print tables for both metrics
-for metric_name, rankings in [("Huber", rankings_huber), ("RMSE", rankings_rmse)]:
-    print(f"\n{'=' * 100}")
-    print(f"Models ranked by held-out {metric_name} (n_train={REFERENCE_N})")
-    print(f"{'=' * 100}")
-    header = (
-        f"{'Model':<22} {metric_name + '(test)':>14} {metric_name + '(train)':>14}"
-        f" {'Overfit':>8} {'Opt p1':>14} {'Conv%':>6}"
-    )
-    print(header)
-    print("-" * 100)
-    for name, m_mean, m_std, _, m_train, overfit, opt_mean, opt_std, conv in rankings:
-        cn = clean_name(name)
-        print(
-            f"{cn:<22} {m_mean:>7.5f}+-{m_std:<5.5f} {m_train:>12.5f}"
-            f" {overfit:>8.2f}x {opt_mean:>6.3f}+-{opt_std:<5.3f} {conv:>5.0f}%"
-        )
-
-top_models_huber = [r[0] for r in rankings_huber[:5]]
-top_models_rmse = [r[0] for r in rankings_rmse[:5]]
-print(f"\nTop 5 by Huber: {[clean_name(n) for n in top_models_huber]}")
-print(f"Top 5 by RMSE:  {[clean_name(n) for n in top_models_rmse]}")
+    top_models_huber = [r[0] for r in rankings_huber[:5]]
+    top_models_rmse = [r[0] for r in rankings_rmse[:5]]
+    print(f"\nTop 5 by Huber: {[clean_name(n) for n in top_models_huber]}")
+    print(f"Top 5 by RMSE:  {[clean_name(n) for n in top_models_rmse]}")
 
 
 # =========================================================================
@@ -649,112 +652,151 @@ def _plot_fig2(metric_id, rankings, suffix):
     print(f"  Saved {out}")
 
 
-# =========================================================================
-# Generate figures 1, 1b, 2 for both Huber and RMSE
-# =========================================================================
-for metric_id, rnk, top in [("huber", rankings_huber, top_models_huber), ("rmse", rankings_rmse, top_models_rmse)]:
-    short = METRICS[metric_id]["short"]
-    print(f"\nGenerating figures ({short})...")
-    _plot_fig1(metric_id, rnk, top, metric_id)
-    _plot_fig1b(metric_id, rnk, metric_id)
-    _plot_fig2(metric_id, rnk, metric_id)
+if not quick_mode:
+    # =====================================================================
+    # Generate figures 1, 1b, 2 for both Huber and RMSE
+    # =====================================================================
+    for metric_id, rnk, top in [
+        ("huber", rankings_huber, top_models_huber),
+        ("rmse", rankings_rmse, top_models_rmse),
+    ]:
+        short = METRICS[metric_id]["short"]
+        print(f"\nGenerating figures ({short})...")
+        _plot_fig1(metric_id, rnk, top, metric_id)
+        _plot_fig1b(metric_id, rnk, metric_id)
+        _plot_fig2(metric_id, rnk, metric_id)
+
+
+if not quick_mode:
+    # =====================================================================
+    # Figure 3: Stability of predicted optimum + BPB sanity check
+    # (uses Huber ranking for ordering)
+    # =====================================================================
+    print("\nGenerating Figure 3: Stability of predicted optimum...")
+
+    ref_data = all_results[REFERENCE_N]
+    ranked_names = [r[0] for r in rankings_huber]
+
+    opt_data = []
+    for name in ranked_names:
+        d = ref_data[name]
+        mask = d["success"]
+        vals = d["opt_p1"][mask]
+        vals = vals[np.isfinite(vals)]
+        opt_data.append((name, vals, float(np.median(vals)) if len(vals) else np.nan))
+
+    observed_best_idx = int(np.argmin(y))
+    observed_best_p1 = float(p1_sc[observed_best_idx])
+    observed_best_bpb = float(np.min(y))
+
+    predicted_bpb_at_opt = {}
+    for m in RUN_MODELS:
+        median_p1 = next(med for n, _, med in opt_data if n == m.name)
+        if not np.isfinite(median_p1):
+            predicted_bpb_at_opt[m.name] = np.nan
+            continue
+        try:
+            X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+            pred_fn, _ = m.fit_fn(X_full, y)
+            Xs = make_slice_for_kind(m.feature_kind, sg)
+            slice_pred = pred_fn(Xs)
+            predicted_bpb_at_opt[m.name] = float(np.interp(median_p1, sg, slice_pred))
+        except Exception:
+            predicted_bpb_at_opt[m.name] = np.nan
+
+    fig_width = max(8, 1.3 * len(opt_data))
+    fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(fig_width, 8), gridspec_kw={"height_ratios": [3, 2]}, sharex=True)
+
+    bp_data = [vals for _, vals, _ in opt_data]
+    bp_labels = [clean_name(n) for n, _, _ in opt_data]
+    bp_colors = [model_colors.get(n, "gray") for n, _, _ in opt_data]
+    x_pos = np.arange(1, len(opt_data) + 1)
+
+    bplot = ax3a.boxplot(
+        bp_data,
+        labels=bp_labels,
+        patch_artist=True,
+        widths=0.6,
+        medianprops=dict(color="black", lw=1.5),
+        flierprops=dict(marker="o", ms=3, alpha=0.5),
+    )
+    for patch, color in zip(bplot["boxes"], bp_colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.4)
+
+    ax3a.axhline(
+        observed_best_p1, color="red", ls="--", lw=2, zorder=0, label=f"Observed best $p_1$={observed_best_p1:.3f}"
+    )
+    ax3a.set_ylabel("Predicted optimal $p_1^{\\mathrm{sc}}$")
+    ax3a.set_title(f"Stability of Predicted Optimum ($n_{{\\mathrm{{train}}}}$={REFERENCE_N}, B={B})")
+    ax3a.legend(loc="upper left", framealpha=0.9)
+
+    bpb_vals = [predicted_bpb_at_opt.get(n, np.nan) for n, _, _ in opt_data]
+    bar_colors = ["#2ca02c" if b <= observed_best_bpb else "#d62728" for b in bpb_vals]
+
+    ax3b.bar(x_pos, bpb_vals, color=bar_colors, alpha=0.7, edgecolor="black", linewidth=0.5)
+    ax3b.axhline(
+        observed_best_bpb, color="red", ls="--", lw=2, zorder=0, label=f"Observed best BPB={observed_best_bpb:.4f}"
+    )
+    ax3b.set_ylabel("Predicted BPB at median $p_1^*$")
+    ax3b.set_title("Sanity Check: predicted BPB at median optimum (green $=$ improves on observed)")
+    ax3b.legend(loc="upper right", framealpha=0.9, fontsize=8)
+    ax3b.set_xlim(0.3, len(opt_data) + 0.7)
+
+    finite_bpbs = [b for b in bpb_vals if np.isfinite(b)]
+    if finite_bpbs:
+        ylo = min(min(finite_bpbs), observed_best_bpb) - 0.005
+        yhi = max(max(finite_bpbs), observed_best_bpb) + 0.005
+        ax3b.set_ylim(ylo, yhi)
+
+    for i, bpb in enumerate(bpb_vals):
+        if np.isfinite(bpb):
+            ax3b.text(x_pos[i], bpb + 0.0005, f"{bpb:.4f}", ha="center", va="bottom", fontsize=7)
+
+    plt.setp(ax3b.get_xticklabels(), rotation=30, ha="right")
+
+    fig3.tight_layout()
+    out3 = OUT_DIR / "fig3_stability.png"
+    fig3.savefig(out3)
+    plt.close(fig3)
+    print(f"  Saved {out3}")
 
 
 # =========================================================================
-# Figure 3: Stability of predicted optimum + BPB sanity check
-# (uses Huber ranking for ordering)
+# Cross-validation metrics table (runs in both quick and full mode)
 # =========================================================================
-print("\nGenerating Figure 3: Stability of predicted optimum...")
+print("\n" + "=" * 90)
+print("Cross-Validation Metrics (5-fold CV on full data)")
+print("=" * 90)
+print(f"{'Model':<25} {'R2':>7} {'RMSE':>7} {'Spearman':>9} {'RMSE_bot':>9}")
+print("-" * 90)
 
-ref_data = all_results[REFERENCE_N]
-ranked_names = [r[0] for r in rankings_huber]
-
-opt_data = []
-for name in ranked_names:
-    d = ref_data[name]
-    mask = d["success"]
-    vals = d["opt_p1"][mask]
-    vals = vals[np.isfinite(vals)]
-    opt_data.append((name, vals, float(np.median(vals)) if len(vals) else np.nan))
-
-observed_best_idx = int(np.argmin(y))
-observed_best_p1 = float(p1_sc[observed_best_idx])
-observed_best_bpb = float(np.min(y))
-
-predicted_bpb_at_opt = {}
+cv_results_dict = {}
 for m in RUN_MODELS:
-    median_p1 = next(med for n, _, med in opt_data if n == m.name)
-    if not np.isfinite(median_p1):
-        predicted_bpb_at_opt[m.name] = np.nan
-        continue
-    try:
-        X_full = build_features(m.feature_kind, p0_sc, p1_sc)
-        pred_fn, _ = m.fit_fn(X_full, y)
-        Xs = make_slice_for_kind(m.feature_kind, sg)
-        slice_pred = pred_fn(Xs)
-        predicted_bpb_at_opt[m.name] = float(np.interp(median_p1, sg, slice_pred))
-    except Exception:
-        predicted_bpb_at_opt[m.name] = np.nan
+    X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+    cv_res = cv_metrics(m.fit_fn, X_full, y, n_folds=5, seed=42)
+    cv_results_dict[m.name] = cv_res
+    print(
+        f"{clean_name(m.name):<25} {cv_res['R2']:>7.4f} {cv_res['RMSE']:>7.4f} "
+        f"{cv_res['Spearman']:>9.4f} {cv_res['RMSE_bot']:>9.4f}"
+    )
 
-fig_width = max(8, 1.3 * len(opt_data))
-fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(fig_width, 8), gridspec_kw={"height_ratios": [3, 2]}, sharex=True)
+print("=" * 90)
 
-bp_data = [vals for _, vals, _ in opt_data]
-bp_labels = [clean_name(n) for n, _, _ in opt_data]
-bp_colors = [model_colors.get(n, "gray") for n, _, _ in opt_data]
-x_pos = np.arange(1, len(opt_data) + 1)
-
-bplot = ax3a.boxplot(
-    bp_data,
-    labels=bp_labels,
-    patch_artist=True,
-    widths=0.6,
-    medianprops=dict(color="black", lw=1.5),
-    flierprops=dict(marker="o", ms=3, alpha=0.5),
-)
-for patch, color in zip(bplot["boxes"], bp_colors):
-    patch.set_facecolor(color)
-    patch.set_alpha(0.4)
-
-ax3a.axhline(observed_best_p1, color="red", ls="--", lw=2, zorder=0, label=f"Observed best $p_1$={observed_best_p1:.3f}")
-ax3a.set_ylabel("Predicted optimal $p_1^{\\mathrm{sc}}$")
-ax3a.set_title(f"Stability of Predicted Optimum ($n_{{\\mathrm{{train}}}}$={REFERENCE_N}, B={B})")
-ax3a.legend(loc="upper left", framealpha=0.9)
-
-bpb_vals = [predicted_bpb_at_opt.get(n, np.nan) for n, _, _ in opt_data]
-bar_colors = ["#2ca02c" if b <= observed_best_bpb else "#d62728" for b in bpb_vals]
-
-ax3b.bar(x_pos, bpb_vals, color=bar_colors, alpha=0.7, edgecolor="black", linewidth=0.5)
-ax3b.axhline(observed_best_bpb, color="red", ls="--", lw=2, zorder=0, label=f"Observed best BPB={observed_best_bpb:.4f}")
-ax3b.set_ylabel("Predicted BPB at median $p_1^*$")
-ax3b.set_title("Sanity Check: predicted BPB at median optimum (green $=$ improves on observed)")
-ax3b.legend(loc="upper right", framealpha=0.9, fontsize=8)
-ax3b.set_xlim(0.3, len(opt_data) + 0.7)
-
-finite_bpbs = [b for b in bpb_vals if np.isfinite(b)]
-if finite_bpbs:
-    ylo = min(min(finite_bpbs), observed_best_bpb) - 0.005
-    yhi = max(max(finite_bpbs), observed_best_bpb) + 0.005
-    ax3b.set_ylim(ylo, yhi)
-
-for i, bpb in enumerate(bpb_vals):
-    if np.isfinite(bpb):
-        ax3b.text(x_pos[i], bpb + 0.0005, f"{bpb:.4f}", ha="center", va="bottom", fontsize=7)
-
-plt.setp(ax3b.get_xticklabels(), rotation=30, ha="right")
-
-fig3.tight_layout()
-out3 = OUT_DIR / "fig3_stability.png"
-fig3.savefig(out3)
-plt.close(fig3)
-print(f"  Saved {out3}")
+# In quick mode, derive rankings from CV metrics (for fig 4 ordering and fig 5 top models)
+if quick_mode:
+    _cv_ranked = sorted(cv_results_dict.items(), key=lambda x: -x[1]["R2"])
+    rankings_huber = [
+        (name, cv["RMSE"], 0.0, cv["RMSE"], cv["RMSE"], 1.0, 0.0, 0.0, 100.0) for name, cv in _cv_ranked
+    ]
+    top_models_huber = [name for name, _ in _cv_ranked[:5]]
+    print(f"\nTop 5 by CV R²: {[clean_name(n) for n in top_models_huber]}")
 
 
 # =========================================================================
 # Figure 4: 2D heatmaps of predicted BPB with isoloss contours
-# (uses Huber ranking for ordering)
 # =========================================================================
-print("Generating Figure 4: 2D heatmaps...")
+print("\nGenerating Figure 4: 2D heatmaps...")
 
 g = np.linspace(0.005, 0.995, HEATMAP_RES)
 
@@ -868,28 +910,6 @@ out4 = OUT_DIR / "fig4_heatmaps.png"
 fig4.savefig(out4)
 plt.close(fig4)
 print(f"  Saved {out4}")
-
-
-# =========================================================================
-# Cross-validation metrics table
-# =========================================================================
-print("\n" + "=" * 90)
-print("Cross-Validation Metrics (5-fold CV on full data)")
-print("=" * 90)
-print(f"{'Model':<25} {'R2':>7} {'RMSE':>7} {'Spearman':>9} {'RMSE_bot':>9}")
-print("-" * 90)
-
-cv_results_dict = {}
-for m in RUN_MODELS:
-    X_full = build_features(m.feature_kind, p0_sc, p1_sc)
-    cv_res = cv_metrics(m.fit_fn, X_full, y, n_folds=5, seed=42)
-    cv_results_dict[m.name] = cv_res
-    print(
-        f"{clean_name(m.name):<25} {cv_res['R2']:>7.4f} {cv_res['RMSE']:>7.4f} "
-        f"{cv_res['Spearman']:>9.4f} {cv_res['RMSE_bot']:>9.4f}"
-    )
-
-print("=" * 90)
 
 
 # =========================================================================

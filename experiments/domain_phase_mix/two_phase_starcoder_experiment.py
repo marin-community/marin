@@ -172,6 +172,12 @@ BASELINES: list[tuple[list[float], list[float]]] = [
     ([0.9347, 0.0653], [0.6536, 0.3464]),
     # Power Law optimized
     ([1, 0], [0.814, 0.186]),
+    # cover more of the U shape slice
+    ([1, 0], [0.975, 0.025]),
+    ([1, 0], [0.95, 0.05]),
+    ([1, 0], [0.9, 0.1]),
+    ([1, 0], [0.875, 0.125]),
+    ([1, 0], [0.85, 0.15]),
 ]
 
 # UniMax baseline (Chung et al., 2023): uniform budget with epoch cap N=1
