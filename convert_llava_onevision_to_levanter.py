@@ -762,6 +762,38 @@ def validate_sample(item: Dict, idx: int) -> bool:
     return False
 
 
+def validate_image_token_count(converted: Dict[str, Any]) -> bool:
+    """Check that image token count in messages matches actual images count.
+
+    Returns True if valid, False if mismatched (should be filtered out).
+    """
+    messages = converted.get("messages", [])
+    images = converted.get("images", [])
+
+    # Count {"type": "image"} dicts and "<image>" text placeholders in messages
+    image_token_count = 0
+    for msg in messages:
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "image":
+                        image_token_count += 1
+                    elif item.get("type") == "text":
+                        image_token_count += item.get("text", "").count("<image>")
+        elif isinstance(content, str):
+            image_token_count += content.count("<image>")
+
+    num_images = len(images) if isinstance(images, (list, tuple)) else (1 if images else 0)
+
+    # Valid cases: both zero, or counts match
+    if image_token_count == 0 and num_images == 0:
+        return True
+    if image_token_count == num_images:
+        return True
+    return False
+
+
 def convert_to_levanter(item: Dict[str, Any], include_source: bool = True) -> Dict[str, Any]:
     """
     Convert a single item from various formats to Levanter format.
@@ -1679,6 +1711,10 @@ def process_dataset_download_first(
 
                                     try:
                                         converted = convert_to_levanter(item)
+                                        if not validate_image_token_count(converted):
+                                            print(f"WARNING: Skipping item {item_id} due to image token/count mismatch "
+                                                  f"(source={source})", file=sys.stderr)
+                                            continue
                                         shard_results[shard_offset].append(converted)
                                         rows_processed += 1
                                     except Exception as e:
@@ -2197,6 +2233,11 @@ def process_dataset(
 
                 # Convert to Levanter format
                 converted = convert_to_levanter(item)
+                if not validate_image_token_count(converted):
+                    print(f"WARNING: Skipping item {item_id} due to image token/count mismatch "
+                          f"(source={source})", file=sys.stderr)
+                    skipped_count += 1
+                    continue
                 buffer.append((item_id, converted))
                 new_processed_ids.add(item_id)
                 total_processed += 1
