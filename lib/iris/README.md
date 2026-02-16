@@ -219,6 +219,17 @@ controller:
 
 The controller will **fail at startup** if `bundle_prefix` is not configured.
 
+### Multi-Region Bundle Storage
+
+**Design Decision:** Bundles are stored in a single centralized GCS bucket and fetched by workers in all regions as needed, rather than implementing regional caching or replication.
+
+**Rationale:**
+- Bundles are small (~4MB each)
+- Cross-region transfer costs are negligible at expected scale:
+  - 10,000 tasks/day × 4MB = 40GB/day ≈ $4/day in cross-region transfer fees
+- The complexity of regional bundle caching is not justified by these costs
+- Centralized storage simplifies operations and reduces infrastructure complexity
+
 ## CLI Reference
 
 **Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml cluster start` or `iris --config cluster.yaml job run ...`).
