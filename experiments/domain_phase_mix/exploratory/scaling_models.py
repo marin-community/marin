@@ -36,6 +36,17 @@ NEM_EPOCH_MULT = 0.5  # Nemotron epochs per weight fraction
 FeatureKind = Literal["weight", "vdom", "wt_epoch"]
 
 
+def _epochs_from_weights(X):
+    """Convert weight features [p0_sc, p1_sc] to (e_sc0, e_sc1, e_nem0, e_nem1)."""
+    p0, p1 = X[:, 0], X[:, 1]
+    return (
+        SC_EPOCH_MULT * p0,
+        SC_EPOCH_MULT * p1,
+        NEM_EPOCH_MULT * (1.0 - p0),
+        NEM_EPOCH_MULT * (1.0 - p1),
+    )
+
+
 # =========================================================================
 # ModelSpec dataclass
 # =========================================================================
@@ -760,6 +771,119 @@ def fit_huber_logquad(X, y, **_kwargs):
 
 
 # =========================================================================
+# SOE (Satiety + Overfit + Epoch) model family
+# =========================================================================
+
+
+def _build_soe_base(X):
+    """Design matrix for SOE-Base: satiety + overfit in epoch space (8 cols)."""
+    e0, e1, n0, n1 = _epochs_from_weights(X)
+    s0, s1 = np.log1p(e0), np.log1p(e1)
+    t0, t1 = np.log1p(n0), np.log1p(n1)
+    return np.column_stack([
+        np.ones(len(X)),
+        s0, s1,          # satiety (code)
+        t0, t1,          # satiety (nemotron)
+        e0**2, e1**2,    # convex overfit
+        e0 * e1,         # cross-phase reuse
+    ])
+
+
+def fit_soe_base(X, y):
+    """SOE-Base: satiety log(1+e) + overfit e² in epoch space.  8 params, OLS."""
+    Phi = _build_soe_base(X)
+    coef, _, _, _ = np.linalg.lstsq(Phi, y, rcond=None)
+    return lambda Xn: _build_soe_base(Xn) @ coef, coef
+
+
+def _build_soe_plus(X):
+    """Design matrix for SOE-Plus: satiety + overfit + within-phase coupling (12 cols)."""
+    e0, e1, n0, n1 = _epochs_from_weights(X)
+    s0, s1 = np.log1p(e0), np.log1p(e1)
+    t0, t1 = np.log1p(n0), np.log1p(n1)
+    return np.column_stack([
+        np.ones(len(X)),
+        s0, s1,              # satiety (code)
+        t0, t1,              # satiety (nemotron)
+        e0, e1,              # linear code epochs
+        e0**2, e1**2,        # convex overfit
+        e0 * e1,             # cross-phase reuse
+        s0 * t0, s1 * t1,   # within-phase regularization
+    ])
+
+
+def fit_soe_plus(X, y):
+    """SOE-Plus: satiety + overfit + within-phase coupling.  12 params, OLS."""
+    Phi = _build_soe_plus(X)
+    coef, _, _, _ = np.linalg.lstsq(Phi, y, rcond=None)
+    return lambda Xn: _build_soe_plus(Xn) @ coef, coef
+
+
+def _build_soe_curric(X):
+    """Design matrix for SOE-Curric: satiety + overfit + curriculum (18 cols)."""
+    e0, e1, n0, n1 = _epochs_from_weights(X)
+    s0, s1 = np.log1p(e0), np.log1p(e1)
+    t0, t1 = np.log1p(n0), np.log1p(n1)
+    return np.column_stack([
+        np.ones(len(X)),
+        # satiety (both domains)
+        s0, s1, t0, t1,
+        # code linear + convex overfit
+        e0, e1, e0**2, e1**2,
+        # curriculum / interaction structure
+        e0 * e1,         # repeated code across phases
+        s0 * e0, s1 * e1,  # within-phase diminishing returns
+        s0 * e1, s1 * e0,  # cross-phase carryover
+        s0 * s1,         # cross-phase code persistence
+        t0 * t1,         # cross-phase nemotron persistence
+        s0 * t0, s1 * t1,  # within-phase regularization
+    ])
+
+
+def fit_soe_curric(X, y):
+    """SOE-Curric: satiety + overfit + curriculum interactions.  18 params, OLS."""
+    Phi = _build_soe_curric(X)
+    coef, _, _, _ = np.linalg.lstsq(Phi, y, rcond=None)
+    return lambda Xn: _build_soe_curric(Xn) @ coef, coef
+
+
+def _build_threshold_design(X, tau):
+    """Design matrix for threshold overfit model (12 cols) given threshold tau."""
+    e0, e1, n0, n1 = _epochs_from_weights(X)
+    s0, s1 = np.log1p(e0), np.log1p(e1)
+    t0, t1 = np.log1p(n0), np.log1p(n1)
+    h0 = np.maximum(0.0, e0 - tau)
+    h1 = np.maximum(0.0, e1 - tau)
+    return np.column_stack([
+        np.ones(len(X)),
+        s0, s1, t0, t1,       # satiety
+        e0, e1,                # linear code epochs
+        h0, h1,                # hinge
+        h0**2, h1**2,          # squared hinge (convex penalty)
+        e0 * e1,               # cross-phase reuse
+    ])
+
+
+def fit_threshold_overfit(X, y):
+    """Threshold Overfit: satiety + hinge penalty at learned epoch threshold.  13 params."""
+    tau_grid = np.linspace(1.0, 13.2, 80)
+    best_tau, best_beta, best_sse = 0.0, None, float("inf")
+    for tau in tau_grid:
+        Phi = _build_threshold_design(X, tau)
+        beta, _, _, _ = np.linalg.lstsq(Phi, y, rcond=None)
+        sse = float(np.sum((Phi @ beta - y) ** 2))
+        if sse < best_sse:
+            best_sse, best_tau, best_beta = sse, float(tau), beta
+
+    params = np.concatenate([[best_tau], best_beta])
+
+    def pred(Xn):
+        return _build_threshold_design(Xn, best_tau) @ best_beta
+
+    return pred, params
+
+
+# =========================================================================
 # Slice label constructors — LaTeX functional forms on p0_sc=0 slice
 # =========================================================================
 # Notation: p = p1_starcoder, L = ln(starcoder_epochs_phase1)
@@ -977,6 +1101,86 @@ def label_huber_logquad(params):
     )
 
 
+def label_soe_base(params):
+    # 8 params: [intercept, s0, s1, t0, t1, e0², e1², e0*e1]
+    # On p0=0 slice: s0=0, e0=0 → β1, β5, β7 terms vanish
+    # t0=log(1+NEM_EPOCH_MULT)=log(1.5) constant → absorbed
+    c = params
+    const = c[0] + c[3] * np.log(1.5)  # β0 + β3·ln(1.5)
+    b_s = c[2]    # satiety code: log(1+εp)
+    b_t = c[4]    # satiety nem: log(1+½(1-p))
+    b_e2 = c[6]   # overfit: (εp)²
+    return (
+        rf"${_f(const)} {b_s:+.3f}\,\ln(1+\varepsilon p)"
+        rf" {b_t:+.3f}\,\ln(1+\frac{1}{2}(1-p))"
+        rf" {b_e2:+.4f}\,(\varepsilon p)^2$"
+    )
+
+
+def label_soe_plus(params):
+    # 12 params: [intercept, s0, s1, t0, t1, e0, e1, e0², e1², e0*e1, s0*t0, s1*t1]
+    # On p0=0: s0=0, e0=0 → β1, β5, β7, β9, β10 terms vanish
+    # t0=log(1.5) absorbed
+    c = params
+    const = c[0] + c[3] * np.log(1.5)  # β0 + t0 coeff * ln(1.5)
+    b_s = c[2]    # s1: log(1+εp)
+    b_t = c[4]    # t1: log(1+½(1-p))
+    b_e = c[6]    # e1: εp
+    b_e2 = c[8]   # e1²: (εp)²
+    b_st = c[11]  # s1*t1
+    return (
+        rf"${_f(const)} {b_s:+.3f}\,s {b_t:+.3f}\,t"
+        rf" {b_e:+.3f}\,e {b_e2:+.4f}\,e^2"
+        rf" {b_st:+.3f}\,st$"
+        rf" \ $s\!=\!\ln(1\!+\!\varepsilon p),\, t\!=\!\ln(1\!+\!\frac{1}{2}(1\!-\!p))$"
+    )
+
+
+def label_soe_curric(params):
+    # 18 params — column order matches _build_soe_curric:
+    #  [0] intercept  [1] s0  [2] s1  [3] t0  [4] t1
+    #  [5] e0  [6] e1  [7] e0²  [8] e1²
+    #  [9] e0*e1  [10] s0*e0  [11] s1*e1
+    #  [12] s0*e1  [13] s1*e0  [14] s0*s1
+    #  [15] t0*t1  [16] s0*t0  [17] s1*t1
+    # On p0=0: s0=0, e0=0 → most cross terms vanish
+    # t0=log(1.5) absorbed
+    c = params
+    ln15 = np.log(1.5)
+    const = c[0] + c[3] * ln15                # β0 + t0 coeff * ln(1.5)
+    b_s = c[2]                                  # s1
+    b_t = c[4] + c[15] * ln15                  # t1 + t0*t1 coeff * ln(1.5)
+    b_e = c[6]                                  # e1
+    b_e2 = c[8]                                 # e1²
+    b_se = c[11]                                # s1*e1
+    b_st = c[17]                                # s1*t1
+    return (
+        rf"${_f(const)} {b_s:+.2f}\,s {b_t:+.2f}\,t"
+        rf" {b_e:+.3f}\,e {b_e2:+.4f}\,e^2"
+        rf" {b_se:+.3f}\,se {b_st:+.2f}\,st$"
+        rf" \ $s\!=\!\ln(1\!+\!\varepsilon p),\, t\!=\!\ln(1\!+\!\frac{1}{2}(1\!-\!p))$"
+    )
+
+
+def label_threshold_overfit(params):
+    # params[0] = tau, params[1:] = 12 OLS coefficients
+    # Column order: [intercept, s0, s1, t0, t1, e0, e1, h0, h1, h0², h1², e0*e1]
+    # On p0=0: s0=0, e0=0, h0=0 → many terms vanish
+    tau = params[0]
+    c = params[1:]
+    const = c[0] + c[3] * np.log(1.5)  # intercept + t0*ln(1.5)
+    b_s = c[2]   # s1: log(1+εp)
+    b_t = c[4]   # t1: log(1+½(1-p))
+    b_e = c[6]   # e1: εp
+    b_h2 = c[10]  # h1²: [εp-τ]₊²
+    return (
+        rf"${_f(const)} {b_s:+.3f}\,\ln(1+\varepsilon p)"
+        rf" {b_t:+.3f}\,\ln(1+\frac{1}{2}(1-p))"
+        rf" {b_e:+.3f}\,\varepsilon p"
+        rf" {b_h2:+.4f}\,[\varepsilon p - {tau:.1f}]_+^2$"
+    )
+
+
 # =========================================================================
 # Model registry
 # =========================================================================
@@ -1001,6 +1205,11 @@ MODELS: list[ModelSpec] = [
     ModelSpec("LogQuad(weight)", fit_logquad_weight, "weight", label_logquad_weight, "gray", ":"),
     ModelSpec("BayesLogQuad(w{-}e)", fit_bayes_logquad, "wt_epoch", label_bayes_logquad, "mediumblue", "-."),
     ModelSpec("HuberLogQuad(w{-}e)", fit_huber_logquad, "wt_epoch", label_huber_logquad, "darkorange", ":"),
+    # SOE (Satiety + Overfit + Epoch) family
+    ModelSpec("SOE-Base", fit_soe_base, "weight", label_soe_base, "forestgreen", "-"),
+    ModelSpec("SOE-Plus", fit_soe_plus, "weight", label_soe_plus, "dodgerblue", "-"),
+    ModelSpec("SOE-Curric", fit_soe_curric, "weight", label_soe_curric, "orangered", "-"),
+    ModelSpec("Threshold Overfit", fit_threshold_overfit, "weight", label_threshold_overfit, "seagreen", "-."),
 ]
 
 

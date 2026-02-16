@@ -186,6 +186,45 @@ _unimax_domain_sizes = [NEMOTRON_FULL_DOMAIN.total_weight, STARCODER_DOMAIN.tota
 _unimax_weights = compute_unimax_weights(_unimax_domain_sizes, _unimax_phase_budget, max_epochs=1.0)
 BASELINES.append((_unimax_weights, _unimax_weights))
 
+# ---- Predicted optima from 24 scaling models (116-pt combined dataset) ----
+# Each entry is the argmin of the model's predicted BPB on an 80x80 grid.
+# Near-identical predictions (L1 < 0.02) are deduplicated into one run.
+# Appended after UniMax to preserve existing run_id assignments (90000-90015).
+BASELINES.extend([
+    # Linear: predicted BPB=0.758
+    ([0.9950, 0.0050], [0.9950, 0.0050]),
+    # Quadratic, LogQuad(weight): predicted BPB=0.892
+    ([0.9950, 0.0050], [0.6191, 0.3809]),
+    # Quadratic(w-e): predicted BPB=0.903
+    ([0.4185, 0.5815], [0.8697, 0.1303]),
+    # LogLinear(w-e), BiMix: predicted BPB=0.760
+    ([0.9950, 0.0050], [0.9699, 0.0301]),
+    # PowerLaw, LogQuad(w-e), ILR Quad, BayesLogQuad(w-e): predicted BPB=0.897
+    ([0.9950, 0.0050], [0.7694, 0.2306]),
+    # DML M1, Translog, RidgeTranslog, ElasticLogQuad(w-e): predicted BPB=0.841
+    ([0.9950, 0.0050], [0.8196, 0.1804]),
+    # SLODM: predicted BPB=0.853
+    ([0.9825, 0.0175], [0.8446, 0.1554]),
+    # Cobb-Douglas: predicted BPB=0.835
+    ([0.9950, 0.0050], [0.9449, 0.0551]),
+    # CES: predicted BPB=0.880
+    ([0.9198, 0.0802], [0.7318, 0.2682]),
+    # Stone-Geary: predicted BPB=0.847
+    ([0.9950, 0.0050], [0.8947, 0.1053]),
+    # Scheffe+log: predicted BPB=0.883
+    ([0.7820, 0.2180], [0.7569, 0.2431]),
+    # HuberLogQuad(w-e): predicted BPB=0.878
+    ([0.8822, 0.1178], [0.7820, 0.2180]),
+    # SOE-Base: predicted BPB=0.881
+    ([0.7569, 0.2431], [0.7318, 0.2682]),
+    # SOE-Plus: predicted BPB=0.893
+    ([0.6566, 0.3434], [0.8321, 0.1679]),
+    # SOE-Curric: predicted BPB=0.890
+    ([0.7318, 0.2682], [0.8822, 0.1178]),
+    # Threshold Overfit: predicted BPB=0.880
+    ([0.8572, 0.1428], [0.7318, 0.2682]),
+])
+
 
 # ============================================================================
 # EXPERIMENT DEFINITION

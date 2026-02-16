@@ -294,7 +294,7 @@ else:
 
 # Run bootstrap only for uncached models
 if needed_names and not plots_only and not quick_mode:
-    needed_specs = [(n, fn, FEATURE_KINDS[n]) for n, fn, *_ in RUN_MODELS if n in needed_names]
+    needed_specs = [(m.name, m.fit_fn, m.feature_kind) for m in RUN_MODELS if m.name in needed_names]
 
     print(f"Running bootstrap: {len(TRAIN_SIZES)} sizes x {B} iters x {len(needed_specs)} models")
     t0 = time.time()
