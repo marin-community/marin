@@ -149,17 +149,12 @@ class LocalController:
             threads=autoscaler_threads,
         )
 
-        worker_timeout = (
-            Duration.from_proto(self._config.controller.worker_timeout)
-            if self._config.controller.worker_timeout.milliseconds > 0
-            else Duration.from_seconds(60.0)
-        )
         self._controller = _InnerController(
             config=_InnerControllerConfig(
                 host="127.0.0.1",
                 port=port,
                 bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
-                worker_timeout=worker_timeout,
+                heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
             ),
             worker_stub_factory=RpcWorkerStubFactory(),

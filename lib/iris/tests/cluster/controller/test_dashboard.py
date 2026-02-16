@@ -92,6 +92,7 @@ def service(state, scheduler):
     controller_mock.create_scheduling_context = scheduler.create_scheduling_context
     controller_mock.get_job_scheduling_diagnostics = scheduler.get_job_scheduling_diagnostics
     controller_mock.autoscaler = None  # No autoscaler by default
+    controller_mock.stub_factory = Mock()
     return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
@@ -109,6 +110,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler):
     controller_mock.create_scheduling_context = scheduler.create_scheduling_context
     controller_mock.get_job_scheduling_diagnostics = scheduler.get_job_scheduling_diagnostics
     controller_mock.autoscaler = mock_autoscaler  # Enable autoscaler
+    controller_mock.stub_factory = Mock()
     return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
