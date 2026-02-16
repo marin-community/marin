@@ -1,17 +1,23 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration test expressed using StepSpec and StepRunner directly.
+"""Self-contained integration test using a traced Deferred DAG with its own minimal runner.
 
-This is equivalent to integration_test.py but avoids the executor "magic".
+Builds a DAG of Deferred nodes, topologically sorts them, and executes each
+node sequentially with a ContextVar-based StepContext.
 """
 
+import hashlib
+import json
 import logging
 import os
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from functools import cached_property
 from typing import Any, Generic, TypeVar
-from uuid import uuid4
 
 import click
 from fray.v1.cluster import create_cluster, set_current_cluster
@@ -21,7 +27,6 @@ from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
 from marin.execution.step_model import StepSpec
-from marin.execution.step_runner import StepRunner
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate_fn
 from marin.processing.classification.dataset_utils import DatasetConfig
 from marin.processing.classification.deduplication.dedup_commons import DedupMetadata, DedupMode, deduplicate_fn
@@ -38,42 +43,222 @@ T = TypeVar("T")
 
 
 class Deferred(Generic[T]):
-    def __init__(self, fn: Callable[[], T] | None = None, id: str | None  = None, value: Any = None):
+    def __init__(
+        self,
+        fn: Callable[..., T] | None = None,
+        id: str | None = None,  # noqa: A002
+        value: Any = None,
+        args: tuple = (),
+        kwargs: dict | None = None,
+        name: str | None = None,
+    ):
         self.fn = fn
-        # TODO(make a separate type, for handling value = None)
         self.value = value
-        self.id: str = id or uuid4()
+        self.args = args
+        self.kwargs = kwargs or {}
+        self.name = name or (fn.__name__.lstrip("_") if fn else "value")
+        self.id: str = id or self._make_id()
+
+    def _make_id(self) -> str:
+        """Deterministic ID from name + value + dep IDs."""
+        content: dict[str, Any] = {"name": self.name}
+        if self.value is not None:
+            content["value"] = repr(self.value)
+        dep_ids = []
+        for arg in self.args:
+            _collect_ids(arg, dep_ids)
+        for v in self.kwargs.values():
+            _collect_ids(v, dep_ids)
+        content["deps"] = sorted(dep_ids)
+        return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:12]
 
     @staticmethod
-    def from_value(v: Any):
-      return Deferred(value=v)
+    def from_value(v: Any) -> "Deferred":
+        return Deferred(value=v)
+
+    @property
+    def deps(self) -> "list[Deferred]":
+        """Extract all Deferred dependencies from args and kwargs."""
+        found: list[Deferred] = []
+        for arg in self.args:
+            _collect_deferred(arg, found)
+        for v in self.kwargs.values():
+            _collect_deferred(v, found)
+        return found
+
+    @cached_property
+    def output_path(self) -> str:
+        """Deterministic path: hash over name + sorted dep output paths + value."""
+        content: dict[str, Any] = {"name": self.name}
+        if self.value is not None:
+            content["value"] = repr(self.value)
+        content["deps"] = sorted(d.output_path for d in self.deps)
+        hash_id = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:8]
+        prefix = os.environ.get("MARIN_PREFIX", "/tmp/marin")
+        return f"{prefix}/{self.name}_{hash_id}"
 
 
+def _collect_deferred(obj: Any, out: list["Deferred"]):
+    """Recursively collect Deferred instances from nested args (handles dicts)."""
+    if isinstance(obj, Deferred):
+        out.append(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _collect_deferred(v, out)
 
+
+def _collect_ids(obj: Any, out: list[str]):
+    """Recursively collect Deferred IDs from nested args (handles dicts)."""
+    if isinstance(obj, Deferred):
+        out.append(obj.id)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _collect_ids(v, out)
+
+
+# ---------------------------------------------------------------------------
+# StepContext — ContextVar-based, fully self-contained
+# ---------------------------------------------------------------------------
+
+_current_step_context: ContextVar["StepContext | None"] = ContextVar("step_context", default=None)
+
+
+@dataclass
 class StepContext:
-    """Implicit context for a currently running step."""
+    _output_path: str
+    dep_id_to_path: dict[str, str]
 
-    def deps(self) -> dict[str, Artifact]: ...
-
-    def output_path(self) -> str: ...
+    def output_path(self) -> str:
+        return self._output_path
 
     @classmethod
     def current(cls) -> "StepContext":
-      return DeferredStepContext()
+        ctx = _current_step_context.get()
+        if ctx is None:
+            raise RuntimeError("No active StepContext")
+        return ctx
 
-    def resolve_id(self, dep_id: str) -> Any:
-      return Artifact.load(self.deps()[dep_id])
-
-    def resolve(self, dep: Deferred[T]) -> T:
-      """Typed dependency resolution"""
-      return self.resolve_id(dep.id)
+    def resolve(self, dep: "Deferred[T]") -> Any:
+        """Load the artifact at the dependency's output path."""
+        path = self.dep_id_to_path[dep.id]
+        return Artifact.load(path)
 
 
-# make a decoractor for traced functions
+@contextmanager
+def active_step_context(ctx: StepContext):
+    token = _current_step_context.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _current_step_context.reset(token)
+
+
+# ---------------------------------------------------------------------------
+# @deferred decorator
+# ---------------------------------------------------------------------------
+
+
 def deferred(fn: Callable):
-  def wrapper(*args, **kwargs):
-    return Deferred(fn=fn, args=args, kwargs=kwargs)
-  return wrapper
+    def wrapper(*args, **kwargs):
+        return Deferred(fn=fn, args=args, kwargs=kwargs)
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Deferred -> StepSpec conversion
+# ---------------------------------------------------------------------------
+
+
+def deferred_to_steps(root: Deferred) -> list[StepSpec]:
+    """Trace the Deferred DAG into a topologically-sorted list of StepSpecs.
+
+    DFS post-order gives leaves first so each dep's output_path is known
+    when we build the StepSpec for its dependents. Each StepSpec.fn closes
+    over the original Deferred, setting up a StepContext before invoking it.
+    """
+    all_nodes: dict[str, Deferred] = {}
+    pending: list[Deferred] = [root]
+    while pending:
+        curr = pending.pop()
+        if curr.id in all_nodes:
+            continue
+        all_nodes[curr.id] = curr
+        pending.extend(curr.deps)
+
+    topo_order: list[str] = []
+    visited: set[str] = set()
+
+    def dfs(node_id: str):
+        if node_id in visited:
+            return
+        visited.add(node_id)
+        for dep in all_nodes[node_id].deps:
+            dfs(dep.id)
+        topo_order.append(node_id)
+
+    dfs(root.id)
+
+    deferred_id_to_output_path: dict[str, str] = {}
+    steps: list[StepSpec] = []
+    for deferred_id in topo_order:
+        d = all_nodes[deferred_id]
+        dep_output_paths = [deferred_id_to_output_path[dep.id] for dep in d.deps]
+
+        step_fn = _make_step_fn(d) if d.fn is not None else _make_value_fn(d)
+
+        spec = StepSpec(
+            name=d.name,
+            deps=dep_output_paths,
+            fn=step_fn,
+        )
+        deferred_id_to_output_path[d.id] = spec.output_path
+        steps.append(spec)
+
+    return steps
+
+
+def _make_step_fn(d: Deferred) -> Callable[[str], Any]:
+    """Build a StepSpec.fn that sets up StepContext and invokes the Deferred."""
+
+    def step_fn(output_path: str) -> Any:
+        dep_map = {dep.id: dep.output_path for dep in d.deps}
+        ctx = StepContext(_output_path=output_path, dep_id_to_path=dep_map)
+        with active_step_context(ctx):
+            return d.fn(*d.args, **d.kwargs)
+
+    return step_fn
+
+
+def _make_value_fn(d: Deferred) -> Callable[[str], Any]:
+    """Build a StepSpec.fn for a constant-value Deferred."""
+
+    def value_fn(output_path: str) -> Any:
+        return d.value
+
+    return value_fn
+
+
+# ---------------------------------------------------------------------------
+# Minimal sequential runner (replaces StepRunner)
+# ---------------------------------------------------------------------------
+
+
+def run_steps(steps: list[StepSpec], *, dry_run: bool = False):
+    """Execute a list of StepSpecs sequentially, saving results as Artifacts."""
+    for step in steps:
+        if dry_run:
+            logger.info(f"[DRY RUN] Would run {step.name} -> {step.output_path}")
+            continue
+
+        result = step.fn(step.output_path)
+        if result is not None:
+            Artifact.save(result, step.output_path)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline steps
+# ---------------------------------------------------------------------------
 
 
 @deferred
@@ -85,6 +270,7 @@ def _html_to_md(input_path: Deferred[str]) -> Deferred[str]:
         extract_method="resiliparse",
         config=ResiliparseConfig(),
     )
+
 
 @deferred
 def _train_quality(inputs: dict[str, Deferred[str]]):
@@ -99,6 +285,7 @@ def _train_quality(inputs: dict[str, Deferred[str]]):
         fasttext_args=fasttext_args,
     )
 
+
 @deferred
 def _dedup_exact(input_path: Deferred[str]):
     ctx = StepContext.current()
@@ -110,6 +297,7 @@ def _dedup_exact(input_path: Deferred[str]):
         ray_num_cpus=1,
     )
 
+
 @deferred
 def _dedup_fuzzy(input_path: Deferred[str]):
     ctx = StepContext.current()
@@ -120,6 +308,7 @@ def _dedup_fuzzy(input_path: Deferred[str]):
         ray_memory=1 * 1024**3,  # 1GB
         ray_num_cpus=1,
     )
+
 
 @deferred
 def _consolidate(inputs: dict[str, Deferred[str]]):
@@ -141,6 +330,7 @@ def _consolidate(inputs: dict[str, Deferred[str]]):
         ],
     )
 
+
 @deferred
 def _tokenize(inputs: dict[str, Deferred[str]]):
     ctx = StepContext.current()
@@ -152,6 +342,7 @@ def _tokenize(inputs: dict[str, Deferred[str]]):
         zephyr_num_cpus=1,
         zephyr_memory=1 * 1024**2,  # 1MB
     )
+
 
 @deferred
 def _train_lm(inputs: dict[str, Deferred[str]]):
@@ -176,52 +367,26 @@ def _train_lm(inputs: dict[str, Deferred[str]]):
                 max_seq_len=64,
                 hidden_dim=32,
             ),
-            trainer=TrainerConfig(
-                train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
-            ),
+            trainer=TrainerConfig(train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
         ),
     )
+
 
 def create_steps(*, prefix: str, synth_data: str) -> Deferred[str]:
     # ############################################################
     # Transform HTML to text
 
-    hq_step = _html_to_md(
-      input_path=Deferred.from_value(os.path.join(synth_data, "pos"))
-    )
+    hq_step = _html_to_md(input_path=Deferred.from_value(os.path.join(synth_data, "pos")))
 
-    lq_step = _html_to_md(
-        input_path=Deferred.from_value(os.path.join(synth_data, "neg"))
-    )
+    lq_step = _html_to_md(input_path=Deferred.from_value(os.path.join(synth_data, "neg")))
 
-    quality = _train_quality({"hq": hq_step, "lq": lq_step})
+    _quality = _train_quality({"hq": hq_step, "lq": lq_step})
     dedup_exact_step = _dedup_exact(hq_step)
     dedup_fuzzy_step = _dedup_fuzzy(hq_step)
     consolidate_step = _consolidate({"hq": hq_step, "dedup_exact": dedup_exact_step, "dedup_fuzzy": dedup_fuzzy_step})
     tokenize_step = _tokenize({"consolidate": consolidate_step})
     train_step = _train_lm({"tokenize": tokenize_step})
     return train_step
-
-
-def deferred_to_steps(root: Deferred) -> list[StepSpec]:
-    """Trace out deferred execution into a list of explicit steps."""
-    # StepSpec(name="", output_path_prefix="", deps=[], hash_attrs={}, override_output_path={}, fn=Callable())
-    pending = [root]
-    steps = dict[str, StepSpec]
-    while pending:
-        curr = pending.pop(0)
-        if curr.id in steps:
-            continue
-        steps[curr.id] = StepSpec(
-            name=curr.name,
-            deps=[d.id for d in curr.deps],
-            hash_attrs=curr.hash_attrs,
-            override_output_path=curr.override_output_path,
-            fn=curr.fn,
-        )
-        pending.extend(curr.deps)
-    return list(steps.values())
-
 
 
 @click.command()
@@ -251,10 +416,9 @@ def main(prefix: str | None, dry_run: bool):
             os.system(f"rm -rf {experiment_prefix}")
 
         os.environ["MARIN_PREFIX"] = experiment_prefix
-        deferred = create_steps(prefix=experiment_prefix, synth_data=synth_data)
-        steps = deferred_to_steps(deferred)
-
-        StepRunner().run(steps, dry_run=dry_run)
+        root = create_steps(prefix=experiment_prefix, synth_data=synth_data)
+        steps = deferred_to_steps(root)
+        run_steps(steps, dry_run=dry_run)
 
         logger.info(f"Execution completed successfully. All outputs are in {experiment_prefix}")
     except Exception as e:
