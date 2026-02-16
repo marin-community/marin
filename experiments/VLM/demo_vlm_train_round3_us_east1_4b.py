@@ -70,7 +70,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
 PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
-GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
+GRADIENT_ACCUMULATION_STEPS = 2  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
 # ============================================================================
@@ -203,7 +203,7 @@ train_config = SimpleVlmTrainConfig(
 
     # Load complete VLM weights from GCS HF checkpoint (vision encoder + projector + LLM)
     # This checkpoint contains trained weights from stage 1
-    initialize_from_checkpoint_path="gs://marin-us-east1/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-6-9fe39f/checkpoints",
+    initialize_from_checkpoint_path="gs://marin-us-east1/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-6-9fe39f/checkpoints/step-39000/step-39000",
     # vision_checkpoint and llm_checkpoint not needed when using vlm_checkpoint
 
     # New training stage - data starts from beginning
