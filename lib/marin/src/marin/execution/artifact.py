@@ -4,7 +4,7 @@
 import json
 from typing import TypeVar, overload, Any
 from dataclasses import dataclass, is_dataclass
-from marin.execution.step_model import StepMeta, StepSpec
+from marin.execution.step_model import StepSpec
 
 import fsspec
 from pydantic import BaseModel
@@ -17,17 +17,17 @@ class Artifact:
 
     @overload
     @classmethod
-    def load(cls, base_path: str | StepSpec | StepMeta, artifact_type: type[T]) -> T: ...
+    def load(cls, base_path: str | StepSpec, artifact_type: type[T]) -> T: ...
 
     @overload
     @classmethod
-    def load(cls, base_path: str | StepSpec | StepMeta) -> dict[str, Any]: ...
+    def load(cls, base_path: str | StepSpec) -> dict[str, Any]: ...
 
     @classmethod
-    def load(cls, base_path: str | StepSpec | StepMeta, artifact_type: type[T] | None = None) -> T | dict[str, Any]:
+    def load(cls, base_path: str | StepSpec, artifact_type: type[T] | None = None) -> T | dict[str, Any]:
         """Loads an Artifact instance from the specified output base path"""
 
-        if isinstance(base_path, (StepSpec, StepMeta)):
+        if isinstance(base_path, StepSpec):
             base_path = base_path.output_path
 
         with fsspec.open(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:

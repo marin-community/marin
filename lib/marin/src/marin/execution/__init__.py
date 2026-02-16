@@ -18,7 +18,7 @@ from .executor import (
     unwrap_versioned_value,
     versioned,
 )
-from .step_model import StepSpec, StepMeta
+from .step_model import StepSpec
 from .step_runner import StepRunner, resolve_executor_step
 from .executor_step_status import (
     STATUS_DEP_FAILED,
