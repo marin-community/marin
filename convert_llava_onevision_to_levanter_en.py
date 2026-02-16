@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Convert LLaVA-OneVision-1.5-Mid-Training-85M dataset to Levanter image conversation format.
+Convert LLaVA-OneVision-1.5-Mid-Training-85M dataset (EN-only) to Levanter image conversation format.
+
+Only includes English (EN) parquet files, excluding all CN/Language-CN data.
 
 Uses streaming to avoid large local storage, with TWO-LAYER shuffling for cross-subset mixing:
 1. HF built-in shuffle: Shuffles shard (parquet file) order AND maintains a streaming buffer
@@ -1480,6 +1482,12 @@ def process_dataset_download_first(
         print(f"Listing parquet files from {len(repo_ids)} repo(s)...")
         files_with_sizes = list_dataset_parquet_files_with_sizes(repo_ids)
 
+        # EN-only filter: only keep parquet files under /EN/ directories
+        total_before = len(files_with_sizes)
+        files_with_sizes = [(r, f, s) for r, f, s in files_with_sizes if '/EN/' in f]
+        total_after = len(files_with_sizes)
+        print(f"EN-only filter: {total_before} -> {total_after} files ({total_before - total_after} non-EN files excluded)")
+
         # LAYER 1: File-level shuffle
         print(f"Shuffling {len(files_with_sizes)} files (seed={seed})...")
         random.shuffle(files_with_sizes)
@@ -2099,12 +2107,20 @@ def process_dataset(
         enable_progress_bar()
         print("HF verbose logging enabled - you'll see download progress from HF library")
 
-    # Load datasets in streaming mode from all repos
-    print(f"Loading datasets from {len(repo_ids)} repo(s) in streaming mode...")
+    # Load datasets in streaming mode from all repos (EN-only)
+    print(f"Loading datasets from {len(repo_ids)} repo(s) in streaming mode (EN-only)...")
     datasets_list = []
     for repo_id in repo_ids:
-        print(f"  Loading {repo_id}...")
-        ds = load_dataset(repo_id, streaming=True, split="train")
+        print(f"  Loading {repo_id} (EN-only)...")
+        # Get EN-only parquet file list
+        from huggingface_hub import HfApi
+        api = HfApi()
+        en_files = []
+        for item in api.list_repo_tree(repo_id, repo_type="dataset", recursive=True):
+            if item.path.endswith('.parquet') and '/EN/' in item.path:
+                en_files.append(item.path)
+        print(f"  Found {len(en_files)} EN-only parquet files from {repo_id}")
+        ds = load_dataset(repo_id, data_files=en_files, streaming=True, split="train")
         datasets_list.append(ds)
 
     # Interleave datasets if multiple repos
