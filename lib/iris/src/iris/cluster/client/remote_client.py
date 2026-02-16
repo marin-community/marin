@@ -3,13 +3,23 @@
 
 """RPC-based cluster client implementation."""
 
+import logging
 import time
+from typing import TypeVar
+from collections.abc import Callable
+
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class RemoteClusterClient:
@@ -41,6 +51,101 @@ class RemoteClusterClient:
             address=controller_address,
             timeout_ms=timeout_ms,
         )
+
+    def _is_retryable_error(self, exc: Exception) -> bool:
+        """Check if an error should trigger retry.
+
+        Retries on:
+        - ConnectError with Code.UNAVAILABLE (controller temporarily down)
+        - ConnectError with Code.INTERNAL (network errors bubble up as INTERNAL)
+
+        Does not retry on:
+        - Application errors (NOT_FOUND, INVALID_ARGUMENT, ALREADY_EXISTS, etc.)
+        - These indicate issues with the request itself, not transient failures
+        """
+        if isinstance(exc, ConnectError):
+            return exc.code in (Code.UNAVAILABLE, Code.INTERNAL)
+        return False
+
+    def _call_with_retry(
+        self,
+        operation: str,
+        call_fn: Callable[[], T],
+        *,
+        max_attempts: int = 5,
+        initial_backoff: float = 0.1,
+        max_backoff: float = 5.0,
+        backoff_factor: float = 2.0,
+    ) -> T:
+        """Execute an RPC call with exponential backoff retry.
+
+        Args:
+            operation: Description of the operation for logging
+            call_fn: Callable that performs the RPC
+            max_attempts: Maximum number of attempts (default: 5)
+            initial_backoff: Initial retry delay in seconds (default: 0.1)
+            max_backoff: Maximum delay between retries (default: 5.0)
+            backoff_factor: Exponential backoff multiplier (default: 2.0)
+
+        Returns:
+            Result from call_fn
+
+        Raises:
+            Exception from call_fn if all retries exhausted or error is not retryable
+        """
+        backoff = ExponentialBackoff(
+            initial=initial_backoff,
+            maximum=max_backoff,
+            factor=backoff_factor,
+        )
+        last_exception = None
+
+        for attempt in range(max_attempts):
+            try:
+                return call_fn()
+            except Exception as e:
+                last_exception = e
+                if not self._is_retryable_error(e):
+                    # Non-retryable error, fail immediately
+                    raise
+
+                if attempt + 1 >= max_attempts:
+                    # Final attempt failed, raise
+                    logger.warning(
+                        "Operation %s failed after %d attempts: %s",
+                        operation,
+                        max_attempts,
+                        e,
+                    )
+                    raise
+
+                # Log and retry
+                delay = backoff.next_interval()
+                if attempt == 0:
+                    # First retry: log at INFO to make it visible
+                    logger.info(
+                        "Operation %s failed (attempt %d/%d), retrying in %.2fs: %s",
+                        operation,
+                        attempt + 1,
+                        max_attempts,
+                        delay,
+                        e,
+                    )
+                else:
+                    # Subsequent retries: log at DEBUG to reduce noise
+                    logger.debug(
+                        "Operation %s failed (attempt %d/%d), retrying in %.2fs: %s",
+                        operation,
+                        attempt + 1,
+                        max_attempts,
+                        delay,
+                        e,
+                    )
+                time.sleep(delay)
+
+        # Should not reach here due to raise in loop, but satisfy type checker
+        assert last_exception is not None
+        raise last_exception
 
     def submit_job(
         self,
@@ -106,9 +211,12 @@ class RemoteClusterClient:
         self._client.launch_job(request)
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
-        response = self._client.get_job_status(request)
-        return response.job
+        def _call():
+            request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
+            response = self._client.get_job_status(request)
+            return response.job
+
+        return self._call_with_retry(f"get_job_status({job_id})", _call)
 
     def wait_for_job(
         self,
@@ -182,9 +290,12 @@ class RemoteClusterClient:
         return list(response.endpoints)
 
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
-        request = cluster_pb2.Controller.ListJobsRequest()
-        response = self._client.list_jobs(request)
-        return list(response.jobs)
+        def _call():
+            request = cluster_pb2.Controller.ListJobsRequest()
+            response = self._client.list_jobs(request)
+            return list(response.jobs)
+
+        return self._call_with_retry("list_jobs", _call)
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
@@ -200,9 +311,13 @@ class RemoteClusterClient:
             TaskStatus proto for the requested task
         """
         task_name.require_task()
-        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
-        response = self._client.get_task_status(request)
-        return response.task
+
+        def _call():
+            request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
+            response = self._client.get_task_status(request)
+            return response.task
+
+        return self._call_with_retry(f"get_task_status({task_name})", _call)
 
     def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
         """List all tasks for a job.
@@ -213,9 +328,13 @@ class RemoteClusterClient:
         Returns:
             List of TaskStatus protos, one per task in the job
         """
-        request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
-        response = self._client.list_tasks(request)
-        return list(response.tasks)
+
+        def _call():
+            request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
+            response = self._client.list_tasks(request)
+            return list(response.tasks)
+
+        return self._call_with_retry(f"list_tasks({job_id})", _call)
 
     def fetch_task_logs(
         self,
@@ -237,15 +356,19 @@ class RemoteClusterClient:
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
         """
-        request = cluster_pb2.Controller.GetTaskLogsRequest(
-            id=target.to_wire(),
-            include_children=include_children,
-            since_ms=since_ms,
-            max_total_lines=max_total_lines,
-            regex=regex or "",
-            attempt_id=attempt_id,
-        )
-        return self._client.get_task_logs(request)
+
+        def _call():
+            request = cluster_pb2.Controller.GetTaskLogsRequest(
+                id=target.to_wire(),
+                include_children=include_children,
+                since_ms=since_ms,
+                max_total_lines=max_total_lines,
+                regex=regex or "",
+                attempt_id=attempt_id,
+            )
+            return self._client.get_task_logs(request)
+
+        return self._call_with_retry(f"fetch_task_logs({target})", _call)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.
