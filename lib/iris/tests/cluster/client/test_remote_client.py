@@ -30,9 +30,7 @@ def test_get_job_status_retries_on_unavailable(mock_client):
 
     # Mock: fail twice with UNAVAILABLE, then succeed
     mock_response = MagicMock()
-    mock_response.job = cluster_pb2.JobStatus(
-        job_id=job_id.to_wire(), state=cluster_pb2.JOB_STATE_RUNNING
-    )
+    mock_response.job = cluster_pb2.JobStatus(job_id=job_id.to_wire(), state=cluster_pb2.JOB_STATE_RUNNING)
 
     call_count = 0
 
@@ -62,9 +60,7 @@ def test_get_job_status_retries_on_internal_error(mock_client):
 
     # Mock: fail once with INTERNAL, then succeed
     mock_response = MagicMock()
-    mock_response.job = cluster_pb2.JobStatus(
-        job_id=job_id.to_wire(), state=cluster_pb2.JOB_STATE_SUCCEEDED
-    )
+    mock_response.job = cluster_pb2.JobStatus(job_id=job_id.to_wire(), state=cluster_pb2.JOB_STATE_SUCCEEDED)
 
     call_count = 0
 
@@ -87,9 +83,7 @@ def test_get_job_status_fails_after_max_retries(mock_client):
     job_id = JobName.root("test-job")
 
     # Mock: always fail with UNAVAILABLE
-    mock_client._client.get_job_status.side_effect = ConnectError(
-        Code.UNAVAILABLE, "Controller down"
-    )
+    mock_client._client.get_job_status.side_effect = ConnectError(Code.UNAVAILABLE, "Controller down")
 
     # Should raise after max_attempts (default 5)
     with pytest.raises(ConnectError) as exc_info:
@@ -104,9 +98,7 @@ def test_get_job_status_no_retry_on_not_found(mock_client):
     job_id = JobName.root("test-job")
 
     # Mock: return NOT_FOUND (not retryable)
-    mock_client._client.get_job_status.side_effect = ConnectError(
-        Code.NOT_FOUND, "Job not found"
-    )
+    mock_client._client.get_job_status.side_effect = ConnectError(Code.NOT_FOUND, "Job not found")
 
     # Should fail immediately without retry
     with pytest.raises(ConnectError) as exc_info:
