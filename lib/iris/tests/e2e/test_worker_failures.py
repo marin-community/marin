@@ -45,7 +45,7 @@ def test_worker_sequential_jobs(cluster):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 def test_all_workers_fail(cluster):
     """All workers' registration fails permanently. With scheduling timeout,
     job transitions to FAILED/UNSCHEDULABLE when no workers register.
@@ -72,13 +72,9 @@ def test_task_fails_once_then_succeeds(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-# ---------------------------------------------------------------------------
-# Dashboard assertions (require Playwright via the `page` fixture)
-# ---------------------------------------------------------------------------
-
-
 def test_worker_health_in_dashboard(cluster, page, screenshot):
     """Workers tab shows at least one healthy worker."""
+    cluster.wait_for_workers(1)
     dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
     dashboard_click(page, 'button.tab-btn:has-text("Workers")')
