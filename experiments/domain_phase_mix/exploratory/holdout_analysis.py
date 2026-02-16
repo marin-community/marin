@@ -44,18 +44,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 warnings.filterwarnings("ignore")
 
 from scaling_models import (  # noqa: E402
-    EPS,
     MODELS,
-    ModelSpec,
     SC_EPOCH_MULT,
     build_features,
     cv_metrics,
     fit_linear,
     make_2d_grid,
     make_slice_for_kind,
-    make_slice_vdom,
-    make_slice_weight,
-    make_slice_wt_epoch,
 )
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -90,27 +85,26 @@ CACHE_FILE = OUT_DIR / "bootstrap_cache.pkl"
 # -------------------------------------------------------------------------
 # Matplotlib style
 # -------------------------------------------------------------------------
-mpl.rcParams.update({
-    "text.usetex": True,
-    "text.latex.preamble": (
-        r"\usepackage{opensans}\renewcommand{\familydefault}{\sfdefault}"
-        r"\usepackage{amssymb}"
-    ),
-    "font.family": "sans-serif",
-    "font.size": 11,
-    "axes.titlesize": 12,
-    "axes.labelsize": 11,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
-    "legend.fontsize": 9,
-    "figure.dpi": 150,
-    "savefig.dpi": 200,
-    "savefig.bbox": "tight",
-    "axes.grid": True,
-    "grid.alpha": 0.3,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-})
+mpl.rcParams.update(
+    {
+        "text.usetex": True,
+        "text.latex.preamble": r"\usepackage{opensans}\renewcommand{\familydefault}{\sfdefault}" r"\usepackage{amssymb}",
+        "font.family": "sans-serif",
+        "font.size": 11,
+        "axes.titlesize": 12,
+        "axes.labelsize": 11,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "legend.fontsize": 9,
+        "figure.dpi": 150,
+        "savefig.dpi": 200,
+        "savefig.bbox": "tight",
+        "axes.grid": True,
+        "grid.alpha": 0.3,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+    }
+)
 
 
 def clean_name(name: str) -> str:
@@ -224,9 +218,14 @@ def _run_one_iter(n_train, seed, model_specs, all_p0, all_p1, all_y, delta, sg, 
     p0_train, p1_train = all_p0[train_idx], all_p1[train_idx]
     p0_test, p1_test = all_p0[test_idx], all_p1[test_idx]
 
-    fail = {"test_huber": np.nan, "test_rmse": np.nan,
-            "train_huber": np.nan, "train_rmse": np.nan,
-            "opt_p1": np.nan, "success": False}
+    fail = {
+        "test_huber": np.nan,
+        "test_rmse": np.nan,
+        "train_huber": np.nan,
+        "train_rmse": np.nan,
+        "opt_p1": np.nan,
+        "success": False,
+    }
 
     results = {}
     for name, fit_fn, kind in model_specs:
@@ -239,9 +238,11 @@ def _run_one_iter(n_train, seed, model_specs, all_p0, all_p1, all_y, delta, sg, 
             train_pred = pred_fn(X_train)
 
             # Sanity check: reject divergent predictions (exp overflow, etc.)
-            if (np.any(np.abs(test_pred) > max_pred)
-                    or np.any(np.isnan(test_pred))
-                    or np.any(np.abs(train_pred) > max_pred)):
+            if (
+                np.any(np.abs(test_pred) > max_pred)
+                or np.any(np.isnan(test_pred))
+                or np.any(np.abs(train_pred) > max_pred)
+            ):
                 results[name] = fail
                 continue
 
@@ -292,8 +293,7 @@ else:
 
 # Run bootstrap only for uncached models
 if needed_names and not plots_only:
-    needed_specs = [(n, fn, FEATURE_KINDS[n])
-                    for n, fn, *_ in RUN_MODELS if n in needed_names]
+    needed_specs = [(n, fn, FEATURE_KINDS[n]) for n, fn, *_ in RUN_MODELS if n in needed_names]
 
     print(f"Running bootstrap: {len(TRAIN_SIZES)} sizes x {B} iters x {len(needed_specs)} models")
     t0 = time.time()
@@ -306,7 +306,15 @@ if needed_names and not plots_only:
 
         iter_results = Parallel(n_jobs=N_JOBS, backend="loky")(
             delayed(_run_one_iter)(
-                n_train, seed, needed_specs, p0_sc, p1_sc, y, HUBER_DELTA, sg, MAX_PRED,
+                n_train,
+                seed,
+                needed_specs,
+                p0_sc,
+                p1_sc,
+                y,
+                HUBER_DELTA,
+                sg,
+                MAX_PRED,
             )
             for seed in seeds
         )
@@ -341,8 +349,7 @@ elif needed_names and plots_only:
     print(f"Warning: --plots-only but {len(missing)} models are not cached: {missing}")
     print("  These models will be skipped in plots.")
     model_names = [n for n in model_names if n not in needed_names]
-    RUN_MODELS = [(n, f, x, l, c, s)
-                  for n, f, x, l, c, s in RUN_MODELS if n not in needed_names]
+    RUN_MODELS = [(n, f, x, l, c, s) for n, f, x, l, c, s in RUN_MODELS if n not in needed_names]
     model_specs = [(n, f, FEATURE_KINDS[n]) for n, f, *_ in RUN_MODELS]
 
 # Build all_results[n_train][model_name] from cache for plotting
@@ -360,10 +367,13 @@ for n_train in TRAIN_SIZES:
 ref = all_results[REFERENCE_N]
 
 METRICS = {
-    "huber": {"test_key": "test_huber", "train_key": "train_huber",
-              "label": f"Huber ($\\delta$={HUBER_DELTA:.4f})", "short": "Huber"},
-    "rmse": {"test_key": "test_rmse", "train_key": "train_rmse",
-             "label": "RMSE", "short": "RMSE"},
+    "huber": {
+        "test_key": "test_huber",
+        "train_key": "train_huber",
+        "label": f"Huber ($\\delta$={HUBER_DELTA:.4f})",
+        "short": "Huber",
+    },
+    "rmse": {"test_key": "test_rmse", "train_key": "train_rmse", "label": "RMSE", "short": "RMSE"},
 }
 
 
@@ -385,15 +395,19 @@ def _compute_rankings(metric_key):
         train_vals = d[train_key][mask]
         opt_vals = d["opt_p1"][mask]
         median_test = float(np.median(test_vals))
-        rows.append((
-            name,
-            median_test, float(np.std(test_vals)),
-            float(np.median(test_vals)),
-            float(np.median(train_vals)),
-            median_test / max(float(np.median(train_vals)), 1e-12),
-            float(np.mean(opt_vals)), float(np.std(opt_vals)),
-            float(mask.mean()) * 100,
-        ))
+        rows.append(
+            (
+                name,
+                median_test,
+                float(np.std(test_vals)),
+                float(np.median(test_vals)),
+                float(np.median(train_vals)),
+                median_test / max(float(np.median(train_vals)), 1e-12),
+                float(np.mean(opt_vals)),
+                float(np.std(opt_vals)),
+                float(mask.mean()) * 100,
+            )
+        )
     rows.sort(key=lambda x: x[1])
     return rows
 
@@ -470,8 +484,7 @@ def _plot_fig1(metric_id, rankings, top_models, suffix):
             medians, q25, q75 = _learning_curve_stats(name, test_key)
             color = model_colors[name]
             lw = 2.5 if show_ci else 1.2
-            ax.plot(TRAIN_SIZES, medians, "o-", color=color, lw=lw, ms=4,
-                    label=clean_name(name))
+            ax.plot(TRAIN_SIZES, medians, "o-", color=color, lw=lw, ms=4, label=clean_name(name))
             if show_ci:
                 ax.fill_between(TRAIN_SIZES, q25, q75, color=color, alpha=0.15)
         ax.set_xlabel("$n_{\\mathrm{train}}$")
@@ -527,8 +540,7 @@ def _plot_fig1b(metric_id, rankings, suffix):
 
     shared_ylim, outlier_idxs = _adaptive_ylim(y_maxes)
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.2 * nrows),
-                              squeeze=False, sharex=True)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.2 * nrows), squeeze=False, sharex=True)
     for idx, name in enumerate(ranked_names):
         r, c = divmod(idx, ncols)
         ax = axes[r][c]
@@ -538,8 +550,7 @@ def _plot_fig1b(metric_id, rankings, suffix):
         ax.fill_between(TRAIN_SIZES, q25, q75, color=color, alpha=0.2)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         if idx in outlier_idxs:
-            ax.set_title(clean_name(name) + r"  $\ast$ diff. scale", fontsize=9,
-                         color="firebrick")
+            ax.set_title(clean_name(name) + r"  $\ast$ diff. scale", fontsize=9, color="firebrick")
             for spine in ax.spines.values():
                 spine.set_edgecolor("firebrick")
                 spine.set_linewidth(1.5)
@@ -597,23 +608,19 @@ def _plot_fig2(metric_id, rankings, suffix):
 
     shared_ylim, outlier_idxs = _adaptive_ylim(y_maxes)
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.5 * nrows),
-                              squeeze=False, sharex=True)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.5 * nrows), squeeze=False, sharex=True)
     for idx, name in enumerate(show_models):
         r, c = divmod(idx, ncols)
         ax = axes[r][c]
         train_meds, test_meds, train_q25, train_q75, test_q25, test_q75 = all_stats[idx]
 
-        ax.plot(TRAIN_SIZES, train_meds, "s--", color="royalblue", lw=1.5, ms=3,
-                label="Train" if idx == 0 else None)
+        ax.plot(TRAIN_SIZES, train_meds, "s--", color="royalblue", lw=1.5, ms=3, label="Train" if idx == 0 else None)
         ax.fill_between(TRAIN_SIZES, train_q25, train_q75, color="royalblue", alpha=0.12)
-        ax.plot(TRAIN_SIZES, test_meds, "o-", color="crimson", lw=1.5, ms=3,
-                label="Test" if idx == 0 else None)
+        ax.plot(TRAIN_SIZES, test_meds, "o-", color="crimson", lw=1.5, ms=3, label="Test" if idx == 0 else None)
         ax.fill_between(TRAIN_SIZES, test_q25, test_q75, color="crimson", alpha=0.12)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         if idx in outlier_idxs:
-            ax.set_title(clean_name(name) + r"  $\ast$ diff. scale", fontsize=9,
-                         color="firebrick")
+            ax.set_title(clean_name(name) + r"  $\ast$ diff. scale", fontsize=9, color="firebrick")
             for spine in ax.spines.values():
                 spine.set_edgecolor("firebrick")
                 spine.set_linewidth(1.5)
@@ -645,8 +652,7 @@ def _plot_fig2(metric_id, rankings, suffix):
 # =========================================================================
 # Generate figures 1, 1b, 2 for both Huber and RMSE
 # =========================================================================
-for metric_id, rnk, top in [("huber", rankings_huber, top_models_huber),
-                              ("rmse", rankings_rmse, top_models_rmse)]:
+for metric_id, rnk, top in [("huber", rankings_huber, top_models_huber), ("rmse", rankings_rmse, top_models_rmse)]:
     short = METRICS[metric_id]["short"]
     print(f"\nGenerating figures ({short})...")
     _plot_fig1(metric_id, rnk, top, metric_id)
@@ -691,35 +697,35 @@ for m in RUN_MODELS:
         predicted_bpb_at_opt[m.name] = np.nan
 
 fig_width = max(8, 1.3 * len(opt_data))
-fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(fig_width, 8),
-                                   gridspec_kw={"height_ratios": [3, 2]},
-                                   sharex=True)
+fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(fig_width, 8), gridspec_kw={"height_ratios": [3, 2]}, sharex=True)
 
 bp_data = [vals for _, vals, _ in opt_data]
 bp_labels = [clean_name(n) for n, _, _ in opt_data]
 bp_colors = [model_colors.get(n, "gray") for n, _, _ in opt_data]
 x_pos = np.arange(1, len(opt_data) + 1)
 
-bplot = ax3a.boxplot(bp_data, labels=bp_labels, patch_artist=True, widths=0.6,
-                     medianprops=dict(color="black", lw=1.5),
-                     flierprops=dict(marker="o", ms=3, alpha=0.5))
+bplot = ax3a.boxplot(
+    bp_data,
+    labels=bp_labels,
+    patch_artist=True,
+    widths=0.6,
+    medianprops=dict(color="black", lw=1.5),
+    flierprops=dict(marker="o", ms=3, alpha=0.5),
+)
 for patch, color in zip(bplot["boxes"], bp_colors):
     patch.set_facecolor(color)
     patch.set_alpha(0.4)
 
-ax3a.axhline(observed_best_p1, color="red", ls="--", lw=2, zorder=0,
-             label=f"Observed best $p_1$={observed_best_p1:.3f}")
+ax3a.axhline(observed_best_p1, color="red", ls="--", lw=2, zorder=0, label=f"Observed best $p_1$={observed_best_p1:.3f}")
 ax3a.set_ylabel("Predicted optimal $p_1^{\\mathrm{sc}}$")
 ax3a.set_title(f"Stability of Predicted Optimum ($n_{{\\mathrm{{train}}}}$={REFERENCE_N}, B={B})")
 ax3a.legend(loc="upper left", framealpha=0.9)
 
 bpb_vals = [predicted_bpb_at_opt.get(n, np.nan) for n, _, _ in opt_data]
-bar_colors = ["#2ca02c" if b <= observed_best_bpb else "#d62728"
-              for b in bpb_vals]
+bar_colors = ["#2ca02c" if b <= observed_best_bpb else "#d62728" for b in bpb_vals]
 
 ax3b.bar(x_pos, bpb_vals, color=bar_colors, alpha=0.7, edgecolor="black", linewidth=0.5)
-ax3b.axhline(observed_best_bpb, color="red", ls="--", lw=2, zorder=0,
-             label=f"Observed best BPB={observed_best_bpb:.4f}")
+ax3b.axhline(observed_best_bpb, color="red", ls="--", lw=2, zorder=0, label=f"Observed best BPB={observed_best_bpb:.4f}")
 ax3b.set_ylabel("Predicted BPB at median $p_1^*$")
 ax3b.set_title("Sanity Check: predicted BPB at median optimum (green $=$ improves on observed)")
 ax3b.legend(loc="upper right", framealpha=0.9, fontsize=8)
@@ -733,8 +739,7 @@ if finite_bpbs:
 
 for i, bpb in enumerate(bpb_vals):
     if np.isfinite(bpb):
-        ax3b.text(x_pos[i], bpb + 0.0005, f"{bpb:.4f}", ha="center", va="bottom",
-                  fontsize=7)
+        ax3b.text(x_pos[i], bpb + 0.0005, f"{bpb:.4f}", ha="center", va="bottom", fontsize=7)
 
 plt.setp(ax3b.get_xticklabels(), rotation=30, ha="right")
 
@@ -765,7 +770,8 @@ nrows4 = (n_models + ncols4 - 1) // ncols4
 
 cell_size = 4.0
 fig4, axes4 = plt.subplots(
-    nrows4, ncols4,
+    nrows4,
+    ncols4,
     figsize=(cell_size * ncols4 + 1.8, cell_size * nrows4),
     squeeze=False,
     constrained_layout=True,
@@ -787,38 +793,56 @@ for mi, (_, m) in enumerate(ranked_model_info):
         Z = pred_fn(X_grid).reshape(P0.shape)
         Z_clipped = np.clip(Z, vmin_global, vmax_global + 0.5)
 
-        ax.contourf(P0, P1, Z_clipped, levels=n_contour_levels,
-                     cmap="RdYlGn_r", vmin=vmin_global, vmax=vmax_global,
-                     extend="both")
-        cs = ax.contour(P0, P1, Z_clipped, levels=n_contour_levels,
-                        colors="black", linewidths=0.4, alpha=0.6)
+        ax.contourf(
+            P0,
+            P1,
+            Z_clipped,
+            levels=n_contour_levels,
+            cmap="RdYlGn_r",
+            vmin=vmin_global,
+            vmax=vmax_global,
+            extend="both",
+        )
+        cs = ax.contour(P0, P1, Z_clipped, levels=n_contour_levels, colors="black", linewidths=0.4, alpha=0.6)
         ax.clabel(cs, inline=True, fontsize=6, fmt="%.2f")
 
         opt_idx = int(np.argmin(Z))
         opt_p0 = float(P0.ravel()[opt_idx])
         opt_p1_val = float(P1.ravel()[opt_idx])
         opt_bpb = float(Z.ravel()[opt_idx])
-        ax.plot(opt_p0, opt_p1_val, marker="*", ms=14, color="gold",
-                markeredgecolor="black", markeredgewidth=1.2, zorder=6)
+        ax.plot(
+            opt_p0, opt_p1_val, marker="*", ms=14, color="gold", markeredgecolor="black", markeredgewidth=1.2, zorder=6
+        )
 
         ax.annotate(
             f"({opt_p0:.2f}, {opt_p1_val:.2f})\nBPB={opt_bpb:.3f}",
             xy=(opt_p0, opt_p1_val),
-            xytext=(0.97, 0.03), textcoords="axes fraction",
-            fontsize=7, ha="right", va="bottom",
+            xytext=(0.97, 0.03),
+            textcoords="axes fraction",
+            fontsize=7,
+            ha="right",
+            va="bottom",
             bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.85),
             arrowprops=dict(arrowstyle="->", color="gray", lw=0.8),
             zorder=7,
         )
 
     except Exception as e:
-        ax.text(0.5, 0.5, f"Fit failed:\n{e}", ha="center", va="center",
-                transform=ax.transAxes, fontsize=8, color="red")
+        ax.text(0.5, 0.5, f"Fit failed:\n{e}", ha="center", va="center", transform=ax.transAxes, fontsize=8, color="red")
 
-    last_scatter = ax.scatter(p0_sc, p1_sc, c=y, cmap="RdYlGn_r",
-                              vmin=vmin_global, vmax=vmax_global,
-                              s=40, marker="o", edgecolors="black",
-                              linewidths=1., zorder=5)
+    last_scatter = ax.scatter(
+        p0_sc,
+        p1_sc,
+        c=y,
+        cmap="RdYlGn_r",
+        vmin=vmin_global,
+        vmax=vmax_global,
+        s=40,
+        marker="o",
+        edgecolors="black",
+        linewidths=1.0,
+        zorder=5,
+    )
 
     ax.set_title(clean_name(m.name), fontsize=10)
     ax.set_aspect("equal")
@@ -834,8 +858,7 @@ for idx in range(n_models, nrows4 * ncols4):
     axes4[row][col].set_visible(False)
 
 if last_scatter is not None:
-    fig4.colorbar(last_scatter, ax=axes4.ravel().tolist(), label="BPB",
-                  shrink=0.7, pad=0.03, aspect=30)
+    fig4.colorbar(last_scatter, ax=axes4.ravel().tolist(), label="BPB", shrink=0.7, pad=0.03, aspect=30)
 
 fig4.suptitle(
     "Predicted BPB over Weight Space (full-data fit, $\\bigstar$ = predicted optimum)",
@@ -861,8 +884,10 @@ for m in RUN_MODELS:
     X_full = build_features(m.feature_kind, p0_sc, p1_sc)
     cv_res = cv_metrics(m.fit_fn, X_full, y, n_folds=5, seed=42)
     cv_results_dict[m.name] = cv_res
-    print(f"{clean_name(m.name):<25} {cv_res['R2']:>7.4f} {cv_res['RMSE']:>7.4f} "
-          f"{cv_res['Spearman']:>9.4f} {cv_res['RMSE_bot']:>9.4f}")
+    print(
+        f"{clean_name(m.name):<25} {cv_res['R2']:>7.4f} {cv_res['RMSE']:>7.4f} "
+        f"{cv_res['Spearman']:>9.4f} {cv_res['RMSE_bot']:>9.4f}"
+    )
 
 print("=" * 90)
 
@@ -899,8 +924,7 @@ fig5, axes5 = plt.subplots(1, 3, figsize=(36, 9))
 XLABEL = r"$p$ = StarCoder fraction in Phase 1"
 YLABEL = r"BPB (eval/paloma/dolma\_100\_programing\_languages)"
 NOTATION_LINE = (
-    r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{sc\_epochs}_1)$,"
-    r"\; (w{-}e) = weight{-}epoch features"
+    r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{sc\_epochs}_1)$," r"\; (w{-}e) = weight{-}epoch features"
 )
 TOP_MODELS_FIG5 = set(top_models_huber)
 
@@ -933,10 +957,7 @@ for panel, (ax, xlim, ylim, title) in enumerate(
     ax.tick_params(labelsize=12)
 
     # Secondary x-axis showing epoch scale
-    secax = ax.secondary_xaxis("top", functions=(
-        lambda w: w * SC_EPOCH_MULT,
-        lambda e: e / SC_EPOCH_MULT
-    ))
+    secax = ax.secondary_xaxis("top", functions=(lambda w: w * SC_EPOCH_MULT, lambda e: e / SC_EPOCH_MULT))
     secax.set_xlabel(r"StarCoder epochs in Phase 1", fontsize=12)
     secax.tick_params(labelsize=10)
 

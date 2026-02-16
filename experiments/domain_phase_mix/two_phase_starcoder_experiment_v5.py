@@ -106,8 +106,7 @@ def load_existing_configs() -> list[WeightConfig]:
 
     if not matches:
         raise FileNotFoundError(
-            f"No weight_configs found at {prefix}/{V4_WEIGHT_CONFIGS_PATTERN}. "
-            "Run the v4 training swarm first."
+            f"No weight_configs found at {prefix}/{V4_WEIGHT_CONFIGS_PATTERN}. " "Run the v4 training swarm first."
         )
 
     if len(matches) > 1:
@@ -185,10 +184,7 @@ def sample_new_configs(
             f"Try reducing --min-dist (currently {min_config_distance})."
         )
 
-    logger.info(
-        f"Sampled {n_new} new configs in {attempts} attempts "
-        f"(rejection rate: {1 - n_new / attempts:.1%})"
-    )
+    logger.info(f"Sampled {n_new} new configs in {attempts} attempts " f"(rejection rate: {1 - n_new / attempts:.1%})")
     return new_configs
 
 
@@ -262,7 +258,7 @@ def dry_run(
     print(f"Total:                    {len(all_existing) + len(new_configs)}")
     print(f"Min config distance:      {min_config_distance}")
     print(f"Seed:                     {seed}")
-    print(f"\nNearest-neighbor distances (new configs):")
+    print("\nNearest-neighbor distances (new configs):")
     print(f"  min:  {min(nn_dists_new):.4f}")
     print(f"  mean: {np.mean(nn_dists_new):.4f}")
     print(f"  max:  {max(nn_dists_new):.4f}")
@@ -271,19 +267,40 @@ def dry_run(
     # Plot
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.scatter(
-        existing_props[:, 0], existing_props[:, 1],
-        c="royalblue", marker="o", s=40, alpha=0.7, edgecolors="k", linewidths=0.5,
-        label=f"Existing v4 random (n={len(existing)})", zorder=3,
+        existing_props[:, 0],
+        existing_props[:, 1],
+        c="royalblue",
+        marker="o",
+        s=40,
+        alpha=0.7,
+        edgecolors="k",
+        linewidths=0.5,
+        label=f"Existing v4 random (n={len(existing)})",
+        zorder=3,
     )
     ax.scatter(
-        baseline_props[:, 0], baseline_props[:, 1],
-        c="seagreen", marker="D", s=60, alpha=0.9, edgecolors="k", linewidths=0.5,
-        label=f"Existing v4 baselines (n={len(baselines)})", zorder=4,
+        baseline_props[:, 0],
+        baseline_props[:, 1],
+        c="seagreen",
+        marker="D",
+        s=60,
+        alpha=0.9,
+        edgecolors="k",
+        linewidths=0.5,
+        label=f"Existing v4 baselines (n={len(baselines)})",
+        zorder=4,
     )
     ax.scatter(
-        new_props[:, 0], new_props[:, 1],
-        c="darkorange", marker="o", s=40, alpha=0.7, edgecolors="k", linewidths=0.5,
-        label=f"New v5 (n={len(new_configs)})", zorder=3,
+        new_props[:, 0],
+        new_props[:, 1],
+        c="darkorange",
+        marker="o",
+        s=40,
+        alpha=0.7,
+        edgecolors="k",
+        linewidths=0.5,
+        label=f"New v5 (n={len(new_configs)})",
+        zorder=3,
     )
     ax.set_xlabel("$p_0$ (StarCoder fraction, phase 0)", fontsize=12)
     ax.set_ylabel("$p_1$ (StarCoder fraction, phase 1)", fontsize=12)
@@ -298,9 +315,7 @@ def dry_run(
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
-    out_path = os.path.join(
-        os.path.dirname(__file__), "exploratory", "v5_sampling_preview.png"
-    )
+    out_path = os.path.join(os.path.dirname(__file__), "exploratory", "v5_sampling_preview.png")
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved scatter plot to {out_path}")
@@ -414,10 +429,7 @@ def run_analysis():
     matches = fs.glob(f"{base}/{pattern}")
 
     if not matches:
-        raise FileNotFoundError(
-            f"No v5 weight_configs found at {prefix}/{pattern}. "
-            "Run the training first."
-        )
+        raise FileNotFoundError(f"No v5 weight_configs found at {prefix}/{pattern}. " "Run the training first.")
 
     path = f"{fs.protocol}://{matches[0]}" if isinstance(fs.protocol, str) else f"{fs.protocol[0]}://{matches[0]}"
     logger.info(f"Loading v5 weight configs from {path}")
@@ -452,27 +464,33 @@ def run_analysis():
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(
-        description="50 additional training runs for two-phase StarCoder experiment."
-    )
+    parser = argparse.ArgumentParser(description="50 additional training runs for two-phase StarCoder experiment.")
     parser.add_argument(
-        "--n-runs", type=int, default=50,
+        "--n-runs",
+        type=int,
+        default=50,
         help="Number of new training runs (default: 50).",
     )
     parser.add_argument(
-        "--seed", type=int, default=100,
+        "--seed",
+        type=int,
+        default=100,
         help="Random seed for weight sampling (default: 100, distinct from v4's 42).",
     )
     parser.add_argument(
-        "--min-dist", type=float, default=0.05,
+        "--min-dist",
+        type=float,
+        default=0.05,
         help="Minimum config distance for rejection sampling (default: 0.05).",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Sample configs and visualize without creating training steps.",
     )
     parser.add_argument(
-        "--analyze", action="store_true",
+        "--analyze",
+        action="store_true",
         help="Run analysis only (collect results from W&B and export CSV).",
     )
     return parser.parse_known_args()

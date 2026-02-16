@@ -81,21 +81,25 @@ def build_features(kind: FeatureKind, p0_sc: np.ndarray, p1_sc: np.ndarray) -> n
         return np.column_stack([p0_sc, p1_sc])
     elif kind == "vdom":
         # Virtual domain: volume fractions (each phase contributes 0.5 total)
-        return np.column_stack([
-            0.5 * (1 - p0_sc),  # Nemotron phase 0
-            0.5 * p0_sc,  # StarCoder phase 0
-            0.5 * (1 - p1_sc),  # Nemotron phase 1
-            0.5 * p1_sc,  # StarCoder phase 1
-        ])
+        return np.column_stack(
+            [
+                0.5 * (1 - p0_sc),  # Nemotron phase 0
+                0.5 * p0_sc,  # StarCoder phase 0
+                0.5 * (1 - p1_sc),  # Nemotron phase 1
+                0.5 * p1_sc,  # StarCoder phase 1
+            ]
+        )
     elif kind == "wt_epoch":
         # Weight-epoch features: proportions + log-transformed epoch counts
         # Epochs scale linearly with weight: epoch_j = SC_EPOCH_MULT * p_j
-        return np.column_stack([
-            p0_sc,
-            p1_sc,
-            np.log(SC_EPOCH_MULT * p0_sc + EPS),
-            np.log(SC_EPOCH_MULT * p1_sc + EPS),
-        ])
+        return np.column_stack(
+            [
+                p0_sc,
+                p1_sc,
+                np.log(SC_EPOCH_MULT * p0_sc + EPS),
+                np.log(SC_EPOCH_MULT * p1_sc + EPS),
+            ]
+        )
     else:
         raise ValueError(f"Unknown feature kind: {kind}")
 
@@ -790,10 +794,7 @@ def label_quadratic_4d(params):
     b_L = c[4] + c[14] * le
     b_LL = c[8]
     b_pL = c[13]
-    return (
-        rf"$y = {_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2"
-        rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.2f}\,pL$"
-    )
+    return rf"$y = {_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2" rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.2f}\,pL$"
 
 
 def label_loglinear(params):
@@ -823,10 +824,7 @@ def label_dml_m1(params):
     k2, t2 = params[5], params[6]
     k3, t3 = params[7], params[8]
     const = c + k0 * np.exp(np.clip(t0 * 0.5, -20, 20)) + k1
-    return (
-        rf"${_f(const)} {k2:+.3f}\,e^{{{t2:.1f}(1-p)/2}}"
-        rf" {k3:+.3f}\,e^{{{t3:.1f}\,p/2}}$"
-    )
+    return rf"${_f(const)} {k2:+.3f}\,e^{{{t2:.1f}(1-p)/2}}" rf" {k3:+.3f}\,e^{{{t3:.1f}\,p/2}}$"
 
 
 def label_slodm(params):
@@ -909,10 +907,7 @@ def label_logquad_mix(params):
     b_L = c[4] + c[14] * le
     b_LL = c[8]
     b_pL = c[13]
-    return (
-        rf"$\exp({_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2"
-        rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.2f}\,pL)$"
-    )
+    return rf"$\exp({_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2" rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.2f}\,pL)$"
 
 
 def label_ridge_translog(params):
@@ -923,7 +918,7 @@ def label_ridge_translog(params):
 def label_scheffe_log(params):
     # params: [b1..b4, b12..b34, g1..g4] = 14 coefficients
     # On slice: r_nem0=0.5, r_sc0≈0, r_nem1=(1-p)/2, r_sc1=p/2
-    return rf"$\sum \beta_j r_j + \sum \beta_{{jk}} r_j r_k + \sum \gamma_j r_j \ln r_j$"
+    return r"$\sum \beta_j r_j + \sum \beta_{jk} r_j r_k + \sum \gamma_j r_j \ln r_j$"
 
 
 def label_ilr_quad(params):
@@ -941,8 +936,7 @@ def label_elastic_logquad(params):
     b_LL = c[8]
     b_pL = c[13]
     return (
-        rf"$\exp({_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2"
-        rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.02f}\,pL)$ [EN]"
+        rf"$\exp({_f(const)} {b_p:+.2f}\,p {b_pp:+.2f}\,p^2" rf" {b_L:+.2f}\,L {b_LL:+.3f}\,L^2 {b_pL:+.02f}\,pL)$ [EN]"
     )
 
 
@@ -1059,13 +1053,28 @@ def make_2d_grid(g0: np.ndarray, g1: np.ndarray, kind: FeatureKind = "weight"):
     if kind == "weight":
         return np.column_stack([p0f, p1f]), p0, p1
     elif kind == "wt_epoch":
-        return np.column_stack([
-            p0f, p1f,
-            np.log(SC_EPOCH_MULT * p0f + EPS),
-            np.log(SC_EPOCH_MULT * p1f + EPS),
-        ]), p0, p1
+        return (
+            np.column_stack(
+                [
+                    p0f,
+                    p1f,
+                    np.log(SC_EPOCH_MULT * p0f + EPS),
+                    np.log(SC_EPOCH_MULT * p1f + EPS),
+                ]
+            ),
+            p0,
+            p1,
+        )
     else:  # vdom
-        return np.column_stack([
-            0.5 * (1 - p0f), 0.5 * p0f,
-            0.5 * (1 - p1f), 0.5 * p1f,
-        ]), p0, p1
+        return (
+            np.column_stack(
+                [
+                    0.5 * (1 - p0f),
+                    0.5 * p0f,
+                    0.5 * (1 - p1f),
+                    0.5 * p1f,
+                ]
+            ),
+            p0,
+            p1,
+        )
