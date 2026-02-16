@@ -9,9 +9,8 @@ from dataclasses import dataclass
 
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import ExecutorStep
-from marin.execution.step_model import StepSpec, StepMeta
+from marin.execution.step_model import StepSpec
 from marin.execution.step_runner import StepRunner, resolve_executor_step
-from marin.execution.step import Step, resolve_deferred
 
 # ---------------------------------------------------------------------------
 # Artifact types
@@ -152,7 +151,7 @@ def test_resolve_executor_step_binds_config():
     resolved = resolve_executor_step(step, config={"url": "http://example.com"}, output_path="/out/download-abc123")
 
     assert resolved.output_path == "/out/download-abc123"
-    assert resolved.meta.deps == []
+    assert resolved.deps == []
 
     # Call the resolved fn — it should invoke my_fn with the config
     resolved.fn("/tmp/foobar")
@@ -164,8 +163,9 @@ def test_runner_saves_artifact_automatically(tmp_path):
     out = tmp_path.as_posix()
 
     step = StepSpec(
+        name="test_save",
+        override_output_path=out,
         fn=lambda output_path: PathMetadata(path=output_path),
-        meta=StepMeta(name="test_save", override_output_path=out),
     )
 
     runner = StepRunner()
@@ -183,7 +183,7 @@ def test_resolve_executor_step_preserves_deps():
         output_path="/out/train-abc123",
         deps=["/out/download-abc123", "/out/tokenize-def456"],
     )
-    assert resolved.meta.deps == ["/out/download-abc123", "/out/tokenize-def456"]
+    assert resolved.deps == ["/out/download-abc123", "/out/tokenize-def456"]
 
 
 # ---------------------------------------------------------------------------
@@ -203,30 +203,32 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
 
     source_url = "http://data.example.com/raw.tar"
     download_step = StepSpec(
+        name="download",
+        output_path_prefix=tmp_path_posix,
+        hash_attrs={"source_url": source_url},
         fn=lambda output_path: download_raw_data(output_path, source_url),
-        meta=StepMeta(name="download", output_path_prefix=tmp_path_posix, hash_attrs={"source_url": source_url}),
     )
 
     # Artifact.load must be deferred to execution time (upstream hasn't run yet)
     tokenizer = "word"
     tokenize_step = StepSpec(
+        name="tokenize",
+        output_path_prefix=tmp_path_posix,
+        hash_attrs={"tokenizer": tokenizer},
+        deps=[download_step.output_path],
         fn=lambda output_path: tokenize_data(
             output_path,
             Artifact.load(download_step.output_path, PathMetadata),
             tokenizer,
         ),
-        meta=StepMeta(
-            name="tokenize",
-            output_path_prefix=tmp_path_posix,
-            hash_attrs={"tokenizer": tokenizer},
-            deps=[download_step.output_path],
-        ),
     )
     train_step = StepSpec(
+        name="train",
+        output_path_prefix=tmp_path_posix,
+        deps=[tokenize_step.output_path],
         fn=lambda output_path: train_on_tokenized_data(
             output_path, Artifact.load(tokenize_step.output_path, TokenizeMetadata)
         ),
-        meta=StepMeta(name="train", output_path_prefix=tmp_path_posix, deps=[tokenize_step.output_path]),
     )
     return [download_step, tokenize_step, train_step]
 
@@ -306,82 +308,3 @@ def test_runner_max_concurrent(tmp_path: Path):
 
     train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
-
-
-# ---------------------------------------------------------------------------
-# resolve_deferred tests
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_deferred_simple(tmp_path: Path):
-    """resolve_deferred should flatten a StepCallDeferred tree into StepSpecs."""
-    download = Step(download_raw_data).defer(tmp_path.as_posix(), "http://example.com")
-    steps = resolve_deferred(download, prefix=tmp_path.as_posix())
-
-    assert len(steps) == 1
-    assert steps[0].meta.deps == []
-    assert "download_raw_data" in steps[0].output_path
-
-
-def test_resolve_deferred_chain(tmp_path: Path):
-    """Chained deferred steps should produce correct dependency order."""
-    download = Step(download_raw_data).defer(tmp_path.as_posix(), "http://example.com")
-    tokenized = Step(tokenize_data).defer(tmp_path.as_posix(), download, "word")
-
-    steps = resolve_deferred(tokenized, prefix=tmp_path.as_posix())
-
-    assert len(steps) == 2
-    # First step is download (no deps), second is tokenize (depends on download)
-    assert steps[0].meta.deps == []
-    assert steps[1].meta.deps == [steps[0].output_path]
-
-
-def test_resolve_deferred_runs_pipeline(tmp_path: Path):
-    """resolve_deferred + StepRunner should execute a full pipeline."""
-    download = Step(download_raw_data).defer(tmp_path / "dl_data", "http://example.com")
-    tokenized = Step(tokenize_data).defer(tmp_path / "tok_data", download, "word")
-    trained = Step(train_on_tokenized_data).defer(tmp_path / "tr_data", tokenized)
-
-    steps = resolve_deferred(trained, prefix=tmp_path.as_posix())
-    assert len(steps) == 3
-
-    runner = StepRunner()
-    runner.run(steps)
-
-    # The train step should have produced a TrainArtifact
-    train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
-    assert train_artifact.tokens_seen > 0
-    assert os.path.exists(train_artifact.checkpoint_path)
-
-
-def test_resolve_deferred_diamond_dag(tmp_path: Path):
-    """A shared dependency should appear only once in the resolved list."""
-    prefix = tmp_path.as_posix()
-
-    download = Step(download_raw_data).defer(os.path.join(prefix, "dl_data"), "http://example.com")
-    tok_a = Step(tokenize_data).defer(os.path.join(prefix, "tok_a"), download, "word")
-    tok_b = Step(tokenize_data).defer(os.path.join(prefix, "tok_b"), download, "char")
-
-    steps = resolve_deferred(tok_a, tok_b, prefix=prefix)
-
-    # download appears once, then the two tokenize steps
-    assert len(steps) == 3
-    assert steps[0].meta.deps == []
-    assert steps[1].meta.deps == [steps[0].output_path]
-    assert steps[2].meta.deps == [steps[0].output_path]
-
-
-def test_resolve_deferred_stable_hash(tmp_path: Path):
-    """Same deferred tree should produce the same output paths."""
-    prefix = tmp_path.as_posix()
-
-    steps1 = resolve_deferred(
-        Step(download_raw_data).defer(prefix, "http://example.com"),
-        prefix=prefix,
-    )
-    steps2 = resolve_deferred(
-        Step(download_raw_data).defer(prefix, "http://example.com"),
-        prefix=prefix,
-    )
-
-    assert steps1[0].output_path == steps2[0].output_path

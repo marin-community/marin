@@ -6,12 +6,11 @@
 This is equivalent to integration_test.py but avoids the executor "magic".
 """
 
-import dataclasses
 import logging
 import os
 import sys
 
-import draccus
+import click
 from fray.v1.cluster import create_cluster, set_current_cluster
 from fray.v2 import ResourceConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -20,7 +19,7 @@ from levanter.trainer import TrainerConfig
 
 
 from marin.execution.artifact import Artifact
-from marin.execution.step_model import StepSpec, StepMeta
+from marin.execution.step_model import StepSpec
 from marin.execution.step_runner import StepRunner
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate_fn
 from marin.processing.classification.dataset_utils import DatasetConfig
@@ -32,7 +31,6 @@ from marin.schemas.web.convert import ResiliparseConfig
 from marin.transform.simple_html_to_md.process import html_to_md
 from marin.training.training import run_levanter_train_lm_fn
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -41,30 +39,24 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
     # Transform HTML to text
 
     hq_step = StepSpec(
+        name="hq_html_to_md",
+        hash_attrs={"input_path": os.path.join(synth_data, "pos"), "extract_method": "resiliparse"},
         fn=lambda output_path: html_to_md(
             input_path=os.path.join(synth_data, "pos"),
             output_path=output_path,
             extract_method="resiliparse",
             config=ResiliparseConfig(),
         ),
-        meta=StepMeta(
-            name="hq_html_to_md",
-            output_path_prefix=prefix,
-            hash_attrs={"input_path": os.path.join(synth_data, "pos"), "extract_method": "resiliparse"},
-        ),
     )
 
     lq_step = StepSpec(
+        name="lq_html_to_md",
+        hash_attrs={"input_path": os.path.join(synth_data, "neg"), "extract_method": "resiliparse"},
         fn=lambda output_path: html_to_md(
             input_path=os.path.join(synth_data, "neg"),
             output_path=output_path,
             extract_method="resiliparse",
             config=ResiliparseConfig(),
-        ),
-        meta=StepMeta(
-            name="lq_html_to_md",
-            output_path_prefix=prefix,
-            hash_attrs={"input_path": os.path.join(synth_data, "neg"), "extract_method": "resiliparse"},
         ),
     )
 
@@ -74,6 +66,9 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
     fasttext_args = {"lr": 0.001, "minCount": 1, "epoch": 25, "wordNgrams": 2, "dim": 50, "thread": 1}
 
     train_quality_step = StepSpec(
+        name="train_quality",
+        hash_attrs={"fasttext_args": fasttext_args},
+        deps=[hq_step, lq_step],
         fn=lambda output_path: train(
             datasets=[
                 DatasetConfig(input_doc_path=hq_step.output_path, label="hq", sampling_rate=1.0),
@@ -82,18 +77,15 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
             output_path=output_path,
             fasttext_args=fasttext_args,
         ),
-        meta=StepMeta(
-            name="train_quality",
-            output_path_prefix=prefix,
-            hash_attrs={"fasttext_args": fasttext_args},
-            deps=[hq_step, lq_step],
-        ),
     )
 
     # ############################################################
     # Deduplicate
 
     dedup_exact_step = StepSpec(
+        name="dedup_exact_paragraph",
+        hash_attrs={"mode": DedupMode.EXACT_PARAGRAPH},
+        deps=[hq_step],
         fn=lambda output_path: deduplicate_fn(
             input_paths=hq_step.output_path,
             output_path=output_path,
@@ -101,15 +93,12 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
             ray_memory=1 * 1024**3,  # 1GB
             ray_num_cpus=1,
         ),
-        meta=StepMeta(
-            name="dedup_exact_paragraph",
-            output_path_prefix=prefix,
-            hash_attrs={"mode": DedupMode.EXACT_PARAGRAPH},
-            deps=[hq_step],
-        ),
     )
 
     dedup_fuzzy_step = StepSpec(
+        name="dedup_fuzzy_document",
+        hash_attrs={"mode": DedupMode.FUZZY_DOCUMENT},
+        deps=[hq_step],
         fn=lambda output_path: deduplicate_fn(
             input_paths=hq_step.output_path,
             output_path=output_path,
@@ -117,18 +106,14 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
             ray_memory=1 * 1024**3,  # 1GB
             ray_num_cpus=1,
         ),
-        meta=StepMeta(
-            name="dedup_fuzzy_document",
-            output_path_prefix=prefix,
-            hash_attrs={"mode": DedupMode.FUZZY_DOCUMENT},
-            deps=[hq_step],
-        ),
     )
 
     # ############################################################
     # Consolidate
 
     consolidate_step = StepSpec(
+        name="consolidate",
+        deps=[hq_step, dedup_exact_step, dedup_fuzzy_step],
         fn=lambda output_path: consolidate_fn(
             input_path=hq_step.output_path,
             output_path=output_path,
@@ -145,17 +130,15 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
                 ),
             ],
         ),
-        meta=StepMeta(
-            name="consolidate",
-            output_path_prefix=prefix,
-            deps=[hq_step, dedup_exact_step, dedup_fuzzy_step],
-        ),
     )
 
     # ############################################################
     # Tokenize
 
     tokenize_step = StepSpec(
+        name="tokenize",
+        hash_attrs={"tokenizer": "gpt2"},
+        deps=[consolidate_step],
         fn=lambda output_path: tokenize_fn(
             train_paths=[consolidate_step.output_path],
             validation_paths=[],
@@ -163,12 +146,6 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
             tokenizer="gpt2",
             zephyr_num_cpus=1,
             zephyr_memory=1 * 1024**2,  # 1MB
-        ),
-        meta=StepMeta(
-            name="tokenize",
-            output_path_prefix=prefix,
-            hash_attrs={"tokenizer": "gpt2"},
-            deps=[consolidate_step],
         ),
     )
 
@@ -184,6 +161,8 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
     pod_config = ResourceConfig.with_cpu()
 
     train_step = StepSpec(
+        name="train",
+        deps=[tokenize_step],
         fn=lambda output_path: run_levanter_train_lm_fn(
             output_path=output_path,
             resources=pod_config,
@@ -202,13 +181,6 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
                 ),
             ),
         ),
-        meta=StepMeta(
-            name="train",
-            output_path_prefix=prefix,
-            deps=[
-                tokenize_step,
-            ],
-        ),
     )
 
     return [
@@ -223,16 +195,12 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
     ]
 
 
-@dataclasses.dataclass(frozen=True)
-class NoMagicConfig:
-    prefix: str | None = None
-    dry_run: bool = False
-
-
-@draccus.wrap()
-def main(config: NoMagicConfig):
+@click.command()
+@click.option("--prefix", default=None, help="Output path prefix")
+@click.option("--dry-run", is_flag=True, default=False, help="Dry run mode")
+def main(prefix: str | None, dry_run: bool):
     try:
-        bucket_prefix = config.prefix or "/tmp"
+        bucket_prefix = prefix or "/tmp"
 
         if "uv run" in " ".join(sys.argv):
             raise RuntimeError("integration_nomagic_test.py must not be launched via `uv run`. Please run it directly.")
@@ -253,9 +221,10 @@ def main(config: NoMagicConfig):
         if os.path.exists(experiment_prefix):
             os.system(f"rm -rf {experiment_prefix}")
 
+        os.environ["MARIN_PREFIX"] = experiment_prefix
         steps = create_steps(prefix=experiment_prefix, synth_data=synth_data)
 
-        StepRunner().run(steps, dry_run=config.dry_run)
+        StepRunner().run(steps, dry_run=dry_run)
 
         logger.info(f"Execution completed successfully. All outputs are in {experiment_prefix}")
     except Exception as e:
@@ -264,4 +233,5 @@ def main(config: NoMagicConfig):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     main()

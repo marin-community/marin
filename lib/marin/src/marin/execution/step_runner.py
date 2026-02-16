@@ -33,7 +33,7 @@ from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
-from marin.execution.step_model import StepSpec, StepMeta
+from marin.execution.step_model import StepSpec
 from marin.utilities.time_logger import log_time
 
 if TYPE_CHECKING:
@@ -211,13 +211,10 @@ def resolve_executor_step(
         return captured_fn(captured_config)
 
     return StepSpec(
+        name=step.name,
+        deps=deps or [],
+        override_output_path=output_path,
         fn=resolved_fn,
-        meta=StepMeta(
-            name=step.name,
-            output_path_prefix=None,
-            deps=deps or [],
-            override_output_path=output_path,
-        ),
         resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
         env_vars=step.env_vars or {},
         pip_dependency_groups=step.pip_dependency_groups or [],
@@ -293,11 +290,11 @@ class StepRunner:
             i = 0
             while i < len(waiting):
                 step = waiting[i]
-                path = step.meta.output_path
-                if any(d in failed for d in step.meta.deps):
+                path = step.output_path
+                if any(d in failed for d in step.deps):
                     waiting.pop(i)
                     failed.add(path)
-                elif all(d in completed for d in step.meta.deps):
+                elif all(d in completed for d in step.deps):
                     if max_concurrent is not None and len(running) >= max_concurrent:
                         i += 1
                         continue
@@ -307,7 +304,7 @@ class StepRunner:
                     i += 1
 
         def _do_launch(step: StepSpec) -> None:
-            path = step.meta.output_path
+            path = step.output_path
             runner = self._launch_step(step, force_run_failed=force_run_failed, dry_run=dry_run)
             if runner is not None:
                 running[path] = runner
@@ -315,7 +312,7 @@ class StepRunner:
                 completed.add(path)
 
         for step in steps:
-            path_to_name[step.meta.output_path] = step.meta.name_with_hash
+            path_to_name[step.output_path] = step.name_with_hash
 
             # Block until there's capacity before consuming more from the iterator
             while max_concurrent is not None and len(running) >= max_concurrent:
@@ -325,10 +322,10 @@ class StepRunner:
             _harvest()
             _flush_waiting()
 
-            path = step.meta.output_path
-            if any(d in failed for d in step.meta.deps):
+            path = step.output_path
+            if any(d in failed for d in step.deps):
                 failed.add(path)
-            elif all(d in completed for d in step.meta.deps):
+            elif all(d in completed for d in step.deps):
                 _do_launch(step)
             else:
                 waiting.append(step)
@@ -341,8 +338,8 @@ class StepRunner:
                 if not running and waiting:
                     missing = []
                     for s in waiting:
-                        unmet = [_display_name(d) for d in s.meta.deps if d not in completed and d not in failed]
-                        missing.append(f"  {s.meta.name_with_hash}: needs {unmet}")
+                        unmet = [_display_name(d) for d in s.deps if d not in completed and d not in failed]
+                        missing.append(f"  {s.name_with_hash}: needs {unmet}")
                     raise RuntimeError(
                         f"Iterable exhausted with {len(waiting)} step(s) with unsatisfied dependencies:\n"
                         + "\n".join(missing)
@@ -356,9 +353,9 @@ class StepRunner:
 
     def _launch_step(self, step: StepSpec, *, force_run_failed: bool, dry_run: bool) -> StepJobRunner | None:
         """Launch a single step as a fray job. Returns None if skipped."""
-        output_path = step.meta.output_path
-        step_name_with_hash = step.meta.name_with_hash
-        logger.info(f"Step = {step_name_with_hash}\tParams = {step.meta.hash_attrs}\tOutput_path = {output_path}")
+        output_path = step.output_path
+        step_name_with_hash = step.name_with_hash
+        logger.info(f"Step = {step_name_with_hash}\tParams = {step.hash_attrs}\tOutput_path = {output_path}")
 
         if dry_run:
             status = StatusFile(output_path, worker_id="dry-run").status
@@ -372,13 +369,14 @@ class StepRunner:
         if not should_run(status_file, step_name_with_hash, force_run_failed):
             return None
 
+        if step.fn is None:
+            raise ValueError(f"Step {step_name_with_hash} has no callable fn")
         step_fn = step.fn
-        step_meta = step.meta
 
         def materialize_fn_output_fn():
             from marin.execution.artifact import Artifact
 
-            logger.debug(f"Executing step fn for: {step_meta}")
+            logger.debug(f"Executing step fn for: {step_name_with_hash}")
             with log_time(f"Step {step_name_with_hash} execution"):
                 result = step_fn(output_path)
 
