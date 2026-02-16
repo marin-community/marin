@@ -1,0 +1,9 @@
+Write a short haiku about entire.io
+
+---
+
+Great, now save this haiku into entire_haiku.txt
+
+---
+
+Commit and push

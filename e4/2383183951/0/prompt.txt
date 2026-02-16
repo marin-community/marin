@@ -1,0 +1,359 @@
+Prepare a PR titled "Support Harbor evaluator for agentic eval". Don't upload the newly added experiment files like  
+  experiments/exp_harbor_aime_sanity_check.py and experiments/exp2602_harbor_ot_tb_dev.py. Just link to them in the PR description, similar to how Moojin's SFT  
+  PR does it (https://github.com/marin-community/marin/pull/2689#issue-3908847764). Don't submit the PR yet. Before you submit, list the files created/changed   
+  and walk me through the key changes.
+
+---
+
+Got it, can we move the harbor submodule into lib/ and update pyproject.toml etc if needed, like how the dupekit dependency works.
+
+---
+
+Ok, now show me the list of files changed/created again
+
+---
+
+which changes are not strictly related to harbor?
+
+---
+
+Got it. Can you run a quick sanity check after this update to make sure harbor eval still works as expected? Test command reference https://github.com/marin-community/marin/issues/2536#issuecomment-3838665091, use a small subset of HARBOR_MAX_INSTANCES=10 to speed things up. You may need to clear the results dir on GCS corresponding to this run first.
+
+---
+
+Merge latest upstream main into this branch, resolve any conflict
+
+---
+
+Quickly run the test again to verify that things are still working
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Skip this check for now. Instead, Check to see if us-central1 has upgraded python from 3.11 to 3.12. If so, we can happily use the official harbor main branch instead of a custom fork downgrading it to match us-central1's 3.11 python.
+
+---
+
+Ok, then just fix the CI failures: 
+docs/readthedocs.org:marin — Read the Docs build failed!
+Fray - Tests / cpu-test (3.12) (pull_request)
+Fray - Tests / cpu-test (3.12) (pull_request)Failing after 7s
+Fray - Tests / tpu-test (pull_request)
+Fray - Tests / tpu-test (pull_request)Failing after 9s
+Haliax - Tests / cpu-test (3.11, 0.8.0) (pull_request)
+Haliax - Tests / cpu-test (3.11, 0.8.0) (pull_request)Failing after 6s
+Marin - Build documentation / build-docs (pull_request)
+Marin - Build documentation / build-docs (pull_request)Failing after 8s
+Marin - Integration Test / itest (3.12) (pull_request)
+Marin - Integration Test / itest (3.12) (pull_request)Failing after 8s
+Marin - Lint and Format Check / lint-and-format (pull_request)
+Marin - Lint and Format Check / lint-and-format (pull_request)Failing after 28s
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial Request**: User asked to prepare a PR titled "Support Harbor evaluator for agentic eval" without uploading experiment files, linking to them instead (like Moojin's SFT PR #2689). Don't submit yet, list files and walk through key changes.
+
+2. **I investigated**: Read all the key files, checked the diff against main, identified Harbor-specific commits and files. Presented a summary of files and key changes.
+
+3. **User asked to move harbor submodule**: "Got it, can we move the harbor submodule into lib/ and update pyproject.toml etc if needed, like how the dupekit dependency works."
+
+4. **I moved the submodule**: Used `git mv harbor lib/harbor`, updated `.gitmodules`, `pyproject.toml` (workspace member `"harbor"` → `"lib/harbor"`), and `lib/fray/src/fray/cluster/ray/deps.py` (`"harbor/src"` → `"lib/harbor/src"`). Had to deal with unstaged `.gitmodules` changes first. Also had to run `uv lock --refresh-package harbor` to update the lock file.
+
+5. **User asked for updated file list**: I showed the updated list of files changed/created.
+
+6. **User asked which changes are not strictly Harbor-related**: I identified: vllm_server.py TPU detection improvements, evaluator.py retry params, fray deps.py adding `lib/iris/src`, and `datasets<4.0.0` pin.
+
+7. **User asked to run sanity check**: Referenced test command from GitHub issue comment. I cleared GCS results, committed the submodule move, pushed, submitted Ray job with HARBOR_MAX_INSTANCES=10. Job succeeded with accuracy 0.60 (6/10).
+
+8. **User asked to commit and submit PR**: I verified no uncommitted changes, created PR #2808 with detailed description.
+
+9. **User asked to merge latest upstream main**: I fetched and merged origin/main. Had 3 conflicts:
+   - `experiments/evals/evals.py`: Both `evaluate_harbor()` and `evaluate_evalchemy()` needed
+   - `lib/marin/src/marin/evaluation/run.py`: Both Harbor and Evalchemy imports needed
+   - `uv.lock`: Needed regeneration
+   
+   Additional issues during merge:
+   - `pytest-asyncio` version conflict: harbor dev group needs `>=1.2.0`, bespokelabs-curator needs `<0.25.0`. Fixed by moving harbor from workspace member to path dependency (like dupekit).
+   - `ResourceConfig` import mismatch: base class moved to `fray.v1.cluster`, harbor_evaluator still imported from `fray.cluster`. Fixed import.
+   - License header: old long-form header needed to be replaced with new SPDX format.
+   - All pre-commit checks passed after fixes. Pushed.
+
+10. **User asked to run test again**: I submitted another job with HARBOR_MAX_INSTANCES=5. User interrupted the wait.
+
+11. **User asked to check Python version on us-central1**: I checked via job logs - **CPython 3.11.11**. Still on 3.11, so the custom harbor fork is still needed.
+
+12. **User asked to fix CI failures**: All 6 failing CI checks had the same root cause: `lib/harbor` submodule not checked out in CI (no `submodules: true` in checkout steps). Also experiment files had old-style license headers.
+
+13. **I started fixing**: Added `submodules: true` to checkout steps in all failing workflows and additional workflows that could be affected. Fixed license headers on experiment files. Was in the middle of checking the levanter-tests.yaml tpu-test checkout step when the summary was requested.
+
+Key files modified for CI fix:
+- `.github/workflows/fray-unit-tests.yaml` (2 checkout steps)
+- `.github/workflows/haliax-run_tests.yaml`
+- `.github/workflows/marin-docs.yaml`
+- `.github/workflows/marin-itest.yaml`
+- `.github/workflows/marin-lint-and-format.yaml`
+- `.github/workflows/marin-unit-tests.yaml`
+- `.github/workflows/iris-unit-tests.yaml`
+- `.github/workflows/zephyr-unit-tests.yaml`
+- `.github/workflows/dupekit-unit-tests.yaml`
+- `.github/workflows/levanter-tests.yaml` (4 of 5 checkout steps done via replace_all, 1 remaining)
+- `experiments/exp_harbor_aime_sanity_check.py` (license header)
+- `experiments/exp2602_harbor_ot_tb_dev.py` (license header)
+
+The levanter-tests.yaml tpu-test checkout (line 160-162) still needs `submodules: true` added. I was reading it when the summary was requested.
+
+Summary:
+1. Primary Request and Intent:
+   - Prepare a PR titled "Support Harbor evaluator for agentic eval" on branch `kevin/harbor` targeting `main` in `marin-community/marin`
+   - Exclude experiment files (`experiments/exp_harbor_aime_sanity_check.py` and `experiments/exp2602_harbor_ot_tb_dev.py`) from the PR but link to them in the description (like Moojin's SFT PR #2689)
+   - Move the `harbor` submodule from `harbor/` to `lib/harbor/` to match the project convention (like dupekit)
+   - Run a sanity check to verify harbor eval works after the move (HARBOR_MAX_INSTANCES=10, verified accuracy 0.60)
+   - Merge latest upstream main into the branch and resolve conflicts
+   - Check Python version on us-central1 cluster (result: CPython 3.11.11, still needs custom fork)
+   - Fix all CI failures on PR #2808
+
+2. Key Technical Concepts:
+   - **Harbor framework**: Agentic evaluation framework supporting 45+ benchmarks (AIME, Terminal-Bench, SWE-bench, etc.)
+   - **HarborEvaluator**: New evaluator class extending `Evaluator` base class, supports API models and self-hosted models via vLLM
+   - **Pre-emption resilience**: Deterministic job names, stable `/tmp` work dirs, incremental GCS uploads per trial, Harbor-native resume
+   - **fray v1/v2 split**: The codebase underwent a fray library split; `ResourceConfig` moved from `fray.cluster` to `fray.v1.cluster` for the evaluator subsystem
+   - **Git submodules in CI**: `actions/checkout` requires `submodules: true` to check out submodules
+   - **uv workspace vs path dependency**: Workspace members have their dev dependency groups resolved; path dependencies (like dupekit) don't, avoiding transitive conflicts
+   - **pytest-asyncio conflict**: Harbor dev group needs `>=1.2.0`, bespokelabs-curator (from evalchemy) needs `<0.25.0` — resolved by making harbor a path dep instead of workspace member
+   - **License header format**: Changed from long-form Apache 2.0 to short SPDX format (`# Copyright 2025 The Marin Authors\n# SPDX-License-Identifier: Apache-2.0`)
+
+3. Files and Code Sections:
+
+   - **`lib/marin/src/marin/evaluation/evaluators/harbor_evaluator.py`** (core deliverable, ~730 lines)
+     - New `HarborEvaluator` class with `evaluate()` and `launch_evaluate_with_ray()` methods
+     - Two modes: API models (`model.path=None`) and self-hosted via `VllmEnvironment`
+     - Pre-emption resilience via `_generate_stable_job_name()`, `_restore_trials_from_gcs()`, `_create_trial_upload_hook()`
+     - Updated import after merge: `from fray.v1.cluster import ResourceConfig`
+     - Updated license header to SPDX format
+
+   - **`experiments/evals/evals.py`** (added `evaluate_harbor()` function, lines 374-463)
+     - Creates `ExecutorStep` with Harbor config packed into `engine_kwargs`
+     - After merge: also contains `evaluate_evalchemy()` and related functions from main
+     - `resources=ResourceConfig.with_cpu() if model_path else resource_config` for CPU/TPU split
+
+   - **`lib/marin/src/marin/evaluation/run.py`**
+     - Registers `"harbor": HarborEvaluator` in `EVALUATORS` dict
+     - After merge: imports both `HarborEvaluator` and `EvalchemyEvaluator`
+     - Supports `model_path=None` for API-only models
+     - New `_to_v1_resource_config()` function from upstream for v2→v1 ResourceConfig conversion
+
+   - **`lib/marin/src/marin/evaluation/evaluators/evaluator.py`**
+     - Added `max_retries_failure` and `max_retries_preemption` parameters to `launch_evaluate_with_ray()`
+
+   - **`lib/marin/src/marin/inference/vllm_server.py`**
+     - Enhanced `_detect_tpu_environment()`: was just `TPU_NAME` check, now checks `/dev/accel*`, multiple TPU env vars, and Ray's `TPUAcceleratorManager`
+     - `_vllm_jax_env()` now passes through `VLLM_ALLOW_LONG_MAX_MODEL_LEN`, `VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION`, `VLLM_TPU_SKIP_PRECOMPILE`
+
+   - **`pyproject.toml`** (root workspace)
+     - Harbor moved from workspace member to path dependency: `harbor = { path = "lib/harbor", editable = true }`
+     - Comment: "dupekit and harbor are optional dependencies. Declaring them as path dependencies (not workspace members) avoids pulling their dev dependency groups into workspace resolution."
+     - Added `"datasets>=3.1.0,<4.0.0"` to override-dependencies
+
+   - **`lib/marin/pyproject.toml`**
+     - Added `harbor = ["harbor>=0.1.42"]` optional dependency group
+     - Pinned `datasets<4.0.0`
+
+   - **`.gitmodules`**
+     - `[submodule "harbor"]` with `path = lib/harbor` and `url = https://github.com/laude-institute/harbor.git`
+
+   - **`lib/fray/src/fray/cluster/ray/deps.py`**
+     - Added `"lib/harbor/src"` and `"lib/iris/src"` to `build_python_path()` PYTHONPATH list
+
+   - **`docs/harbor-integration.md`** (268 lines) - Integration documentation
+
+   - **CI workflow files modified** (adding `submodules: true` to checkout steps):
+     - `.github/workflows/fray-unit-tests.yaml` (2 checkout steps)
+     - `.github/workflows/haliax-run_tests.yaml`
+     - `.github/workflows/marin-docs.yaml`
+     - `.github/workflows/marin-itest.yaml`
+     - `.github/workflows/marin-lint-and-format.yaml`
+     - `.github/workflows/marin-unit-tests.yaml`
+     - `.github/workflows/iris-unit-tests.yaml`
+     - `.github/workflows/zephyr-unit-tests.yaml`
+     - `.github/workflows/dupekit-unit-tests.yaml`
+     - `.github/workflows/levanter-tests.yaml` (4 of 5 checkout steps done)
+
+   - **Experiment files** (license headers fixed, excluded from PR):
+     - `experiments/exp_harbor_aime_sanity_check.py`
+     - `experiments/exp2602_harbor_ot_tb_dev.py`
+
+4. Errors and fixes:
+   - **Unstaged .gitmodules blocking `git mv`**: `.gitmodules` had an unrelated OpenThoughts-Agent submodule entry. Fixed with `git checkout -- .gitmodules` before the move.
+   - **`uv lock` failing after submodule move**: Lock file still referenced `editable = "harbor"`. Fixed with `uv lock --refresh-package harbor`.
+   - **Pre-commit license header failure**: After merge, harbor_evaluator.py had duplicate headers (new SPDX + old long-form). Removed the old long-form header.
+   - **Pyrefly type error**: `HarborEvaluator.launch_evaluate_with_ray` override had wrong `ResourceConfig` type after fray v1/v2 split. Fixed by changing import from `fray.cluster` to `fray.v1.cluster`.
+   - **pytest-asyncio version conflict during `uv lock`**: Harbor dev group needs `>=1.2.0`, bespokelabs-curator needs `<0.25.0`. Fixed by moving harbor from workspace member to path dependency (like dupekit), which excludes dev dependency groups from resolution.
+   - **CI failures (all 6+)**: `lib/harbor` submodule not checked out — `uv` can't find `pyproject.toml`. Fix: add `submodules: true` to all workflow checkout steps.
+   - **Experiment files missing new license headers**: Old Apache 2.0 long-form → new SPDX short form.
+
+5. Problem Solving:
+   - PR #2808 created at https://github.com/marin-community/marin/pull/2808
+   - Sanity check passed: accuracy 0.60 (6/10) on AIME subset, consistent with 0.58 baseline
+   - Merge with main completed, all conflicts resolved, pre-commit checks pass locally
+   - Python version on us-central1: 3.11.11, confirming need for custom harbor fork
+   - CI fix in progress: workflow files being updated with `submodules: true`
+
+6. All user messages:
+   - "Prepare a PR titled 'Support Harbor evaluator for agentic eval'. Don't upload the newly added experiment files... Just link to them in the PR description, similar to how Moojin's SFT PR does it... Don't submit the PR yet. Before you submit, list the files created/changed and walk me through the key changes."
+   - "Got it, can we move the harbor submodule into lib/ and update pyproject.toml etc if needed, like how the dupekit dependency works."
+   - "Ok, now show me the list of files changed/created again"
+   - "which changes are not strictly related to harbor?"
+   - "Can you run a quick sanity check after this update to make sure harbor eval still works as expected? Test command reference https://github.com/marin-community/marin/issues/2536#issuecomment-3838665091, use a small subset of HARBOR_MAX_INSTANCES=10 to speed things up. You may need to clear the results dir on GCS corresponding to this run first."
+   - "Once the job finishes and the results are verified to be around 0.58 (can be lower or higher by 0.20 let's say due to only sampling a subset), commit any change and submit this PR" (sent while waiting for job)
+   - "Merge latest upstream main into this branch, resolve any conflict"
+   - "Quickly run the test again to verify that things are still working"
+   - "Skip this check for now. Instead, Check to see if us-central1 has upgraded python from 3.11 to 3.12. If so, we can happily use the official harbor main branch instead of a custom fork downgrading it to match us-central1's 3.11 python."
+   - "Ok, then just fix the CI failures: docs/readthedocs.org:marin — Read the Docs build failed! Fray - Tests / cpu-test (3.12)... Haliax - Tests / cpu-test (3.11, 0.8.0)... Marin - Build documentation / build-docs... Marin - Integration Test / itest (3.12)... Marin - Lint and Format Check / lint-and-format..."
+
+7. Pending Tasks:
+   - Complete adding `submodules: true` to the remaining levanter-tests.yaml tpu-test checkout step (line 160-162)
+   - Commit all CI fixes and push to trigger new CI runs
+   - The `docs/readthedocs.org:marin` failure may need separate investigation (Read the Docs build config)
+
+8. Current Work:
+   Fixing CI failures on PR #2808. All failures are caused by the `harbor` git submodule not being checked out in CI. I've added `submodules: true` to checkout steps in 10 workflow files and fixed license headers on 2 experiment files. I was reading `levanter-tests.yaml` line 160 to fix the last remaining checkout step (tpu-tests job) when the summary was requested.
+
+9. Optional Next Step:
+   Complete the levanter-tests.yaml tpu-test checkout fix. The file at line 160-162 currently reads:
+   ```yaml
+       - name: Checkout code
+         uses: actions/checkout@v4
+         with:
+   ```
+   Need to add `submodules: true` to this `with:` block. Then commit all CI fixes and push to trigger new CI runs. The user explicitly asked: "Ok, then just fix the CI failures."
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kevin/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+Read the Docs build information
+Build id: 31417335
+Project: marin
+Version: 2808
+Commit: 5ecd52167cf6e3a48b440aca4e355bab9c848c27
+Date: 2026-02-15T01:41:35.557002Z
+State: finished
+Success: False
+
+
+[rtd-command-info] start-time: 2026-02-15T01:41:36.081492Z, end-time: 2026-02-15T01:41:37.373523Z, duration: 1, exit-code: 0
+git clone --depth 1 https://github.com/marin-community/marin.git .
+Cloning into '.'...
+
+[rtd-command-info] start-time: 2026-02-15T01:41:37.414143Z, end-time: 2026-02-15T01:41:38.421353Z, duration: 1, exit-code: 0
+git fetch origin --force --prune --prune-tags --depth 50 pull/2808/head:external-2808
+From https://github.com/marin-community/marin
+ * [new ref]         refs/pull/2808/head -> external-2808
+
+[rtd-command-info] start-time: 2026-02-15T01:41:38.505449Z, end-time: 2026-02-15T01:41:38.759949Z, duration: 0, exit-code: 0
+git checkout --force 5ecd52167cf6e3a48b440aca4e355bab9c848c27
+Note: switching to '5ecd52167cf6e3a48b440aca4e355bab9c848c27'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+HEAD is now at 5ecd521 Add submodules: true to all CI workflow checkout steps
+
+[rtd-command-info] start-time: 2026-02-15T01:41:38.794288Z, end-time: 2026-02-15T01:41:38.831639Z, duration: 0, exit-code: 0
+cat .readthedocs.yaml
+version: 2
+
+build:
+  os: "ubuntu-24.04"
+  tools:
+    python: "3.11"
+  commands:
+    - pip install uv
+    - uv sync --group docs --package marin
+    - uv run --frozen mkdocs build --strict --site-dir $READTHEDOCS_OUTPUT/html
+
+[rtd-command-info] start-time: 2026-02-15T01:41:43.341773Z, end-time: 2026-02-15T01:41:43.399730Z, duration: 0, exit-code: 0
+asdf global python 3.11.12
+
+
+[rtd-command-info] start-time: 2026-02-15T01:41:43.837374Z, end-time: 2026-02-15T01:41:45.992968Z, duration: 2, exit-code: 0
+pip install uv
+Collecting uv
+  Downloading uv-0.10.2-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (11 kB)
+Downloading uv-0.10.2-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (23.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 23.0/23.0 MB 107.8 MB/s eta 0:00:00
+Installing collected packages: uv
+Successfully installed uv-0.10.2
+
+[notice] A new release of pip is available: 24.0 -> 26.0.1
+[notice] To update, run: pip3 install --upgrade pip
+Reshimming asdf python...
+
+[rtd-command-info] start-time: 2026-02-15T01:41:46.411940Z, end-time: 2026-02-15T01:41:46.681777Z, duration: 0, exit-code: 2
+uv sync --group docs --package marin
+Using CPython 3.11.12 interpreter at: /home/docs/.asdf/installs/python/3.11.12/bin/python3
+Creating virtual environment at: .venv
+error: Failed to generate package metadata for `harbor==0.1.42 @ editable+lib/harbor`
+  Caused by: /home/docs/checkouts/readthedocs.org/user_builds/marin/checkouts/2808/lib/harbor does not appear to be a Python project, as neither `pyproject.toml` nor `setup.py` are present in the directory
+ this is the full log for the readthedocs.org build
+
+---
+
+Instead of a git submodule, can we directly have harbor source at lib/harbor, basically clone https://github.com/AlienKevin/harbor/tree/kevin/py311 into there? This should obviate some of the recent changes. What do you think?
+
+---
+
+Cool, go for it
+
+---
+
+Great, can you double check everything is working by running the sanity check on a subset of 10 again?
+
+---
+
+Great, commit and push if there were changes
+
+---
+
+<bash-input>git pull</bash-input>
+
+---
+
+<bash-stdout></bash-stdout><bash-stderr>From github.com:marin-community/marin
+   6626466af..e82a5b23f  kevin/harbor -> origin/kevin/harbor
+There is no tracking information for the current branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+If you wish to set tracking information for this branch you can do so with:
+
+    git branch --set-upstream-to=<remote>/<branch> kevin/harbor
+
+</bash-stderr>
+
+---
+
+git pull changes from upstream
