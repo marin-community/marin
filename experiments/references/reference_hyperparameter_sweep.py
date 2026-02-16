@@ -94,7 +94,7 @@ SWEEP = SweepSettings(
         "epsilon": (1e-15, 1e-6),
         "max_grad_norm": (0.1, 5.0),
     },
-    fixed_batch_size=16,
+    fixed_batch_size=32,
     target_tokens=1_000_000,
     metric_key="eval/uncheatable_eval/macro_loss",
     metric_mode="min",
