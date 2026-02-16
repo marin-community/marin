@@ -372,8 +372,9 @@ def make_local_config(
     if not config.HasField("defaults"):
         config.defaults.CopyFrom(config_pb2.DefaultsConfig())
 
-    # Set fast controller timings for local testing
-    config.controller.worker_timeout.CopyFrom(Duration.from_seconds(1).to_proto())
+    # Set fast controller timings for local testing.
+    # worker_timeout is derived: heartbeat_interval * heartbeat_failure_threshold
+    # = 0.5s * 3 = 1.5s effective timeout.
     config.controller.heartbeat_failure_threshold = 3
 
     # Set fast autoscaler timings for local testing

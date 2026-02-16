@@ -944,14 +944,6 @@ class QueueEntry(NamedTuple):
 
 
 @dataclass
-class WorkerTimeoutResult:
-    """Result of checking worker heartbeat timeouts."""
-
-    tasks_to_kill: set[JobName]
-    failed_vm_addresses: list[str]
-
-
-@dataclass
 class PendingDispatch:
     """Buffered dispatches waiting for next heartbeat.
 
@@ -977,6 +969,7 @@ class HeartbeatSnapshot:
 
     worker_id: WorkerId
     worker_address: str
+    vm_address: str
     running_tasks: list[JobName]
     tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest]
     tasks_to_kill: list[str]
@@ -1074,46 +1067,6 @@ class ControllerState:
                     log(f"  - {action.action} {action.entity_id} {action.details}")
 
             return txn
-
-    def check_worker_timeouts(self, timeout: Duration) -> WorkerTimeoutResult:
-        """Check for timed-out workers and mark them as failed.
-
-        Atomically identifies all workers that have exceeded the heartbeat timeout,
-        marks them as failed, and cascades to their running tasks. Returns tasks
-        that need kill RPCs and VM addresses for autoscaler notification.
-
-        This method acquires the state lock for the entire operation to prevent races
-        with incoming heartbeats.
-
-        Args:
-            timeout: Maximum time since last heartbeat before declaring timeout
-
-        Returns:
-            WorkerTimeoutResult with tasks to kill and failed VM addresses
-        """
-        with self._lock:
-            tasks_to_kill: set[JobName] = set()
-            failed_vm_addresses: list[str] = []
-
-            for worker in list(self._workers.values()):
-                if worker.healthy and worker.is_heartbeat_expired(timeout):
-                    logger.warning(f"Worker {worker.worker_id} timed out (no heartbeat for {timeout.to_ms()}ms)")
-                    txn = TransactionLog(
-                        event=WorkerFailedEvent(
-                            worker_id=worker.worker_id,
-                            error=f"Worker {worker.worker_id} timed out",
-                        )
-                    )
-                    self._on_worker_failed(txn, txn.event)  # type: ignore[arg-type]
-                    self._transactions.append(txn)
-                    tasks_to_kill.update(txn.tasks_to_kill)
-                    if worker.metadata.vm_address:
-                        failed_vm_addresses.append(worker.metadata.vm_address)
-
-            return WorkerTimeoutResult(
-                tasks_to_kill=tasks_to_kill,
-                failed_vm_addresses=failed_vm_addresses,
-            )
 
     # -------------------------------------------------------------------------
     # Worker Event Handlers
@@ -1901,6 +1854,7 @@ class ControllerState:
             return HeartbeatSnapshot(
                 worker_id=worker.worker_id,
                 worker_address=worker.address,
+                vm_address=worker.metadata.vm_address or "",
                 running_tasks=list(worker.running_tasks),
                 tasks_to_run=dispatch.tasks_to_run,
                 tasks_to_kill=dispatch.tasks_to_kill,

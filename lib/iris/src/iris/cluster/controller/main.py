@@ -31,7 +31,6 @@ def cli():
     "--bundle-prefix", default=None, help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path)"
 )
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
-@click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
 def serve(
@@ -39,7 +38,6 @@ def serve(
     port: int,
     bundle_prefix: str | None,
     scheduler_interval: float,
-    worker_timeout: float,
     config_file: str | None,
     log_level: str,
 ):
@@ -106,27 +104,18 @@ def serve(
     else:
         logger.info("No cluster config provided, autoscaler disabled")
 
-    # Use worker_timeout from cluster config if available
-    if cluster_config and cluster_config.controller.worker_timeout.milliseconds > 0:
-        effective_timeout = Duration.from_proto(cluster_config.controller.worker_timeout)
-    else:
-        effective_timeout = Duration.from_seconds(worker_timeout)
-
     heartbeat_failure_threshold = (
         cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
     )
 
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
-    logger.info(
-        "Configuration: scheduler_interval=%.2fs worker_timeout=%.0fms", scheduler_interval, effective_timeout.to_ms()
-    )
+    logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
     config = ControllerConfig(
         host=host,
         port=port,
         bundle_prefix=bundle_prefix,
-        scheduler_interval_seconds=scheduler_interval,
-        worker_timeout=effective_timeout,
+        scheduler_interval=Duration.from_seconds(scheduler_interval),
         heartbeat_failure_threshold=heartbeat_failure_threshold,
     )
 

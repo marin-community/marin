@@ -11,7 +11,6 @@ aggregated from task states.
 import json
 import logging
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -44,7 +43,6 @@ DEFAULT_MAX_TOTAL_LINES = 10000
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
 # Log fetching configuration
-LOG_FETCH_MAX_WORKERS = 16  # Max parallel worker connections
 LOG_FETCH_DEFAULT_TIMEOUT_MS = 10_000  # 10s default if no deadline from client
 LOG_FETCH_MIN_TIMEOUT_MS = 1_000  # 1s minimum per-worker timeout
 
@@ -70,11 +68,10 @@ class _LogFetchResult:
     error: str | None
 
 
-def _fetch_worker_logs(req: _LogFetchRequest, timeout_ms: int) -> _LogFetchResult:
+def _fetch_worker_logs(req: _LogFetchRequest, stub: WorkerServiceClientSync, timeout_ms: int) -> _LogFetchResult:
     """Fetch logs from a single worker with timeout."""
     try:
-        worker_client = WorkerServiceClientSync(f"http://{req.worker_address}")
-        worker_resp = worker_client.fetch_task_logs(
+        worker_resp = stub.fetch_task_logs(
             cluster_pb2.Worker.FetchTaskLogsRequest(
                 task_id=req.task_id_wire,
                 filter=req.log_filter,
@@ -113,27 +110,28 @@ class AutoscalerProtocol(Protocol):
         ...
 
 
-class SchedulerProtocol(Protocol):
-    """Protocol for scheduler operations used by ControllerServiceImpl."""
+class StubFactoryProtocol(Protocol):
+    """Protocol for getting cached worker RPC stubs."""
+
+    def get_stub(self, address: str) -> WorkerServiceClientSync: ...
+    def evict(self, address: str) -> None: ...
+
+
+class ControllerProtocol(Protocol):
+    """Protocol for controller operations used by ControllerServiceImpl."""
 
     def wake(self) -> None: ...
 
-    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
-        """Send KILL RPCs to workers for tasks that were running."""
-        ...
+    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None: ...
 
-    def create_scheduling_context(self, workers: list) -> SchedulingContext:
-        """Create a scheduling context for the given workers."""
-        ...
+    def create_scheduling_context(self, workers: list) -> SchedulingContext: ...
 
-    def get_job_scheduling_diagnostics(self, job, context: SchedulingContext) -> str:
-        """Get detailed diagnostics for why a job cannot be scheduled."""
-        ...
+    def get_job_scheduling_diagnostics(self, job, context: SchedulingContext) -> str: ...
 
     @property
-    def autoscaler(self) -> AutoscalerProtocol | None:
-        """Get the autoscaler instance, if autoscaling is enabled."""
-        ...
+    def autoscaler(self) -> AutoscalerProtocol | None: ...
+
+    stub_factory: StubFactoryProtocol
 
 
 class ControllerServiceImpl:
@@ -149,12 +147,12 @@ class ControllerServiceImpl:
     def __init__(
         self,
         state: ControllerState,
-        scheduler: SchedulerProtocol,
+        controller: ControllerProtocol,
         bundle_prefix: str,
         log_buffer: LogBuffer | None = None,
     ):
         self._state = state
-        self._scheduler = scheduler
+        self._controller = controller
         self._bundle_store = BundleStore(bundle_prefix)
         self._log_buffer = log_buffer
 
@@ -231,7 +229,7 @@ class ControllerServiceImpl:
                     timestamp=Timestamp.now(),
                 )
             )
-            self._scheduler.wake()
+            self._controller.wake()
 
             num_tasks = len(self._state.get_job_tasks(job_id))
             logger.info(f"Job {job_id} submitted with {num_tasks} task(s)")
@@ -301,9 +299,9 @@ class ControllerServiceImpl:
         if job.state == cluster_pb2.JOB_STATE_PENDING:
             # Create scheduling context once for all tasks
             workers = self._state.list_all_workers()
-            sched_context = self._scheduler.create_scheduling_context(workers)
+            sched_context = self._controller.create_scheduling_context(workers)
             # Get job-level diagnostics (expensive but only for detail view)
-            pending_reason = self._scheduler.get_job_scheduling_diagnostics(job, sched_context)
+            pending_reason = self._controller.get_job_scheduling_diagnostics(job, sched_context)
 
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
@@ -372,7 +370,7 @@ class ControllerServiceImpl:
 
         # Send kill RPCs to workers for any tasks that were killed
         if txn.tasks_to_kill:
-            self._scheduler.kill_tasks_on_workers(txn.tasks_to_kill)
+            self._controller.kill_tasks_on_workers(txn.tasks_to_kill)
 
     def list_jobs(
         self,
@@ -660,7 +658,7 @@ class ControllerServiceImpl:
                     timestamp=Timestamp.now(),
                 )
             )
-            self._scheduler.wake()
+            self._controller.wake()
 
             logger.info("Worker registered: %s at %s", worker_id, request.address)
             return cluster_pb2.Controller.RegisterResponse(
@@ -679,7 +677,7 @@ class ControllerServiceImpl:
         heartbeat response.
         """
         # Just wake the scheduler; it will trigger a priority heartbeat for this worker
-        self._scheduler.wake()
+        self._controller.wake()
         return cluster_pb2.Empty()
 
     def list_workers(
@@ -805,7 +803,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get current autoscaler status with worker info populated."""
-        autoscaler = self._scheduler.autoscaler
+        autoscaler = self._controller.autoscaler
         if not autoscaler:
             return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
 
@@ -844,7 +842,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetVmLogsResponse:
         """Get initialization logs for a VM."""
-        autoscaler = self._scheduler.autoscaler
+        autoscaler = self._controller.autoscaler
         if not autoscaler:
             raise ConnectError(Code.UNAVAILABLE, "Autoscaler not configured")
 
@@ -1029,16 +1027,11 @@ class ControllerServiceImpl:
         else:
             per_worker_timeout_ms = LOG_FETCH_DEFAULT_TIMEOUT_MS
 
-        # Phase 3: Fetch logs in parallel
+        # Phase 3: Fetch logs sequentially using cached stubs
         fetch_results: list[_LogFetchResult] = []
-        if fetch_requests:
-            num_workers = min(len(fetch_requests), LOG_FETCH_MAX_WORKERS)
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = {
-                    executor.submit(_fetch_worker_logs, req, per_worker_timeout_ms): req for req in fetch_requests
-                }
-                for future in as_completed(futures):
-                    fetch_results.append(future.result())
+        for req in fetch_requests:
+            stub = self._controller.stub_factory.get_stub(req.worker_address)
+            fetch_results.append(_fetch_worker_logs(req, stub, per_worker_timeout_ms))
 
         # Phase 4: Aggregate results
         task_logs: list[cluster_pb2.Controller.TaskLogBatch] = list(immediate_errors)
@@ -1100,15 +1093,12 @@ class ControllerServiceImpl:
                 raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
 
             timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-            worker_client = WorkerServiceClientSync(f"http://{worker.address}")
-            try:
-                resp = worker_client.profile_task(request, timeout_ms=timeout_ms)
-                return cluster_pb2.ProfileTaskResponse(
-                    profile_data=resp.profile_data,
-                    error=resp.error,
-                )
-            finally:
-                worker_client.close()
+            stub = self._controller.stub_factory.get_stub(worker.address)
+            resp = stub.profile_task(request, timeout_ms=timeout_ms)
+            return cluster_pb2.ProfileTaskResponse(
+                profile_data=resp.profile_data,
+                error=resp.error,
+            )
 
     # --- Transactions ---
 
