@@ -548,6 +548,85 @@ def main(
     )
 
 
+def run_analysis_local(
+    name_prefix: str = NAME,
+    output_dir: str | None = None,
+):
+    """Collect results from W&B locally (no executor/GCS needed for output).
+
+    Loads original weight configs from GCS, merges with current BASELINES,
+    queries W&B, and writes results CSV to a local directory.
+
+    Args:
+        name_prefix: Experiment name prefix (used as W&B tag).
+        output_dir: Directory to write results CSV. Defaults to
+            experiments/domain_phase_mix/exploratory/.
+    """
+    from experiments.domain_phase_mix.analysis import (
+        build_results_dataframe,
+        match_runs_to_configs,
+        query_wandb_runs,
+    )
+
+    # 1. Load original weight configs from GCS
+    print(f"Loading original weight configs for {name_prefix}...")
+    original_configs = _load_original_weight_configs(name_prefix)
+    existing_ids = {c.run_id for c in original_configs}
+
+    # 2. Merge with current baselines
+    baseline_weight_configs = create_baseline_weight_configs(BASELINES)
+    new_baselines = [c for c in baseline_weight_configs if c.run_id not in existing_ids]
+    all_configs = original_configs + new_baselines
+
+    print(
+        f"  {len(original_configs)} original configs + "
+        f"{len(new_baselines)} baselines = {len(all_configs)} total"
+    )
+
+    # 3. Build the configs dict (same format as weight_configs.json)
+    domains = DOMAIN_NAMES
+    phases = ["phase_0", "phase_1"]
+    configs_dicts = [c.to_dict() for c in all_configs]
+
+    # 4. Query W&B
+    tags = [name_prefix]
+    print(f"Querying W&B for runs with tags: {tags}...")
+    runs = query_wandb_runs(
+        entity="marin-community",
+        project="marin",
+        tags=tags,
+        metrics=ANALYSIS_METRICS,
+    )
+    print(f"  Found {len(runs)} W&B runs")
+
+    # 5. Match runs to configs
+    matched = match_runs_to_configs(runs, configs_dicts, experiment_name=name_prefix)
+    n_matched = sum(1 for m in matched if m.get("wandb_run_id"))
+    n_completed = sum(1 for m in matched if m.get("status") == "completed")
+    print(f"  Matched {n_matched} runs ({n_completed} completed)")
+
+    # 6. Build DataFrame and write CSV
+    df = build_results_dataframe(matched, domains, phases)
+
+    if output_dir is None:
+        output_dir = os.path.join(os.path.dirname(__file__), "exploratory")
+
+    # Name CSV after the experiment (last path component)
+    csv_name = name_prefix.rsplit("/", 1)[-1] + ".csv"
+    csv_path = os.path.join(output_dir, csv_name)
+    df.to_csv(csv_path, index=False)
+    print(f"  Wrote {len(df)} rows to {csv_path}")
+
+    # Show summary of missing runs
+    missing = df[df["status"] != "completed"]
+    if len(missing) > 0:
+        print(f"\n  {len(missing)} runs not completed:")
+        for _, row in missing.iterrows():
+            print(f"    run_id={int(row['run_id'])}: status={row['status']}")
+
+    return df
+
+
 def _parse_args():
     import argparse
 
@@ -580,6 +659,11 @@ def _parse_args():
         action="store_true",
         help="Run predefined baseline trial runs instead of random sampling.",
     )
+    parser.add_argument(
+        "--analyze-local",
+        action="store_true",
+        help="Run analysis locally (query W&B, write CSV to exploratory/). No executor/cluster needed.",
+    )
 
     return parser.parse_known_args()
 
@@ -590,10 +674,13 @@ if __name__ == "__main__":
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
 
-    main(
-        n_runs=args.n_runs,
-        seed=args.seed,
-        name_prefix=args.name_prefix,
-        analyze=args.analyze,
-        baseline_runs=args.baseline_runs,
-    )
+    if args.analyze_local:
+        run_analysis_local(name_prefix=args.name_prefix)
+    else:
+        main(
+            n_runs=args.n_runs,
+            seed=args.seed,
+            name_prefix=args.name_prefix,
+            analyze=args.analyze,
+            baseline_runs=args.baseline_runs,
+        )

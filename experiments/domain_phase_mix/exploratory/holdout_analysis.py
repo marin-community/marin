@@ -761,6 +761,206 @@ if not quick_mode:
     plt.close(fig3)
     print(f"  Saved {out3}")
 
+    # =================================================================
+    # Figure 3b: Stability + Predicted vs Actual BPB at 2D optima
+    # =================================================================
+    _optima_csv_3b = script_dir / "two_phase_starcoder_4.csv"
+    if _optima_csv_3b.exists():
+        print("\nGenerating Figure 3b: Stability + predicted vs actual BPB...")
+        _odf = pd.read_csv(_optima_csv_3b)
+        _oruns = _odf[_odf["run_id"] >= 90016]
+        _bpb_col = "eval/paloma/dolma_100_programing_languages/bpb"
+        _actuals_3b: list[tuple[float, float, float]] = []
+        for _, _r in _oruns.iterrows():
+            if _bpb_col in _r and pd.notna(_r[_bpb_col]):
+                _actuals_3b.append((
+                    float(_r["phase_0_starcoder"]),
+                    float(_r["phase_1_starcoder"]),
+                    float(_r[_bpb_col]),
+                ))
+
+        # Compute 2D predicted optimum + match to actual for each model
+        _model_info_3b: list[dict] = []
+        for m in RUN_MODELS:
+            info: dict = {"name": m.name, "model": m}
+            try:
+                X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+                pred_fn, _ = m.fit_fn(X_full, y)
+                _g3b = np.linspace(0.005, 0.995, HEATMAP_RES)
+                X_grid, P0, P1 = make_2d_grid(_g3b, _g3b, kind=m.feature_kind)
+                Z = pred_fn(X_grid).reshape(P0.shape)
+                idx = int(np.argmin(Z))
+                info["opt_p0"] = float(P0.ravel()[idx])
+                info["opt_p1"] = float(P1.ravel()[idx])
+                info["pred_bpb"] = float(Z.ravel()[idx])
+
+                # Match to actual
+                info["actual_bpb"] = None
+                for _ap0, _ap1, _abpb in _actuals_3b:
+                    if (abs(_ap0 - info["opt_p0"]) < 0.02
+                            and abs(_ap1 - info["opt_p1"]) < 0.02):
+                        info["actual_bpb"] = _abpb
+                        break
+            except Exception:
+                info["opt_p0"] = np.nan
+                info["opt_p1"] = np.nan
+                info["pred_bpb"] = np.nan
+                info["actual_bpb"] = None
+
+            # Get bootstrap p1 distribution from ref_data
+            d = ref_data.get(m.name)
+            if d is not None:
+                mask = d["success"]
+                vals = d["opt_p1"][mask]
+                info["p1_vals"] = vals[np.isfinite(vals)]
+            else:
+                info["p1_vals"] = np.array([])
+
+            _model_info_3b.append(info)
+
+        # Sort by ascending actual BPB (None last)
+        _model_info_3b.sort(
+            key=lambda t: (
+                t["actual_bpb"] is None,
+                t["actual_bpb"] if t["actual_bpb"] is not None else 999.0,
+            )
+        )
+
+        n3b = len(_model_info_3b)
+        fig_w_3b = max(8, 1.3 * n3b)
+        fig3b, (ax3b_top, ax3b_bot) = plt.subplots(
+            2, 1, figsize=(fig_w_3b, 9),
+            gridspec_kw={"height_ratios": [2, 3]},
+            sharex=True,
+        )
+        x3b = np.arange(1, n3b + 1)
+        labels_3b = [clean_name(t["name"]) for t in _model_info_3b]
+
+        # --- Top panel: box plots of bootstrap p1, sorted by actual BPB ---
+        bp_data_3b = [t["p1_vals"] for t in _model_info_3b]
+        bp_colors_3b = [
+            model_colors.get(t["name"], "gray") for t in _model_info_3b
+        ]
+        bplot_3b = ax3b_top.boxplot(
+            bp_data_3b, labels=labels_3b, patch_artist=True,
+            widths=0.6, medianprops=dict(color="black", lw=1.5),
+            flierprops=dict(marker="o", ms=3, alpha=0.5),
+        )
+        for patch, color in zip(bplot_3b["boxes"], bp_colors_3b):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.4)
+
+        ax3b_top.axhline(
+            observed_best_p1, color="red", ls="--", lw=2, zorder=0,
+            label=f"Observed best $p_1$={observed_best_p1:.3f}",
+        )
+        ax3b_top.set_ylabel("Predicted optimal $p_1^{\\mathrm{sc}}$")
+        ax3b_top.set_title(
+            f"Stability of Predicted Optimum "
+            f"($n_{{\\mathrm{{train}}}}$={REFERENCE_N}, B={B})"
+        )
+        ax3b_top.legend(loc="upper left", framealpha=0.9, fontsize=8)
+
+        # --- Bottom panel: predicted vs actual BPB ---
+        # Bars for actual BPB; diamond markers for predicted BPB.
+        # Bar color encodes two things via a two-step scheme:
+        #   - Hue: green if actual < best_observed, red if worse
+        #   - Saturation/alpha modulated by |actual - predicted|
+        # Connecting line shows the prediction gap.
+        pred_vals = np.array([
+            t["pred_bpb"] if t["pred_bpb"] is not None else np.nan
+            for t in _model_info_3b
+        ])
+        actual_vals = np.array([
+            t["actual_bpb"] if t["actual_bpb"] is not None else np.nan
+            for t in _model_info_3b
+        ])
+
+        bar_width = 0.35
+        # Actual bars (solid)
+        for i in range(n3b):
+            a_bpb = actual_vals[i]
+            p_bpb = pred_vals[i]
+            if not np.isfinite(a_bpb):
+                continue
+
+            # Base color: green if actual < best observed, red if worse
+            if a_bpb < observed_best_bpb:
+                base_color = "#2ca02c"  # green — found better!
+            else:
+                base_color = "#d62728"  # red — worse than best observed
+
+            ax3b_bot.bar(
+                x3b[i] - bar_width / 2, a_bpb, bar_width,
+                color=base_color, alpha=0.75,
+                edgecolor="black", linewidth=0.5,
+                label="Actual" if i == 0 else None,
+            )
+
+            # Predicted bars (hatched, lighter)
+            if np.isfinite(p_bpb):
+                ax3b_bot.bar(
+                    x3b[i] + bar_width / 2, p_bpb, bar_width,
+                    color="steelblue", alpha=0.45,
+                    edgecolor="black", linewidth=0.5,
+                    hatch="//",
+                    label="Predicted" if i == 0 else None,
+                )
+
+                # Connecting line between bar tops
+                ax3b_bot.plot(
+                    [x3b[i] - bar_width / 2, x3b[i] + bar_width / 2],
+                    [a_bpb, p_bpb],
+                    color="gray", lw=0.8, ls="-", alpha=0.6,
+                )
+
+                # Delta annotation
+                delta = a_bpb - p_bpb
+                ann_y = max(a_bpb, p_bpb) + 0.001
+                ax3b_bot.text(
+                    x3b[i], ann_y,
+                    f"{delta:+.3f}",
+                    ha="center", va="bottom", fontsize=6,
+                    color="green" if delta < 0 else "red",
+                    fontweight="bold",
+                )
+
+        ax3b_bot.axhline(
+            observed_best_bpb, color="red", ls="--", lw=2, zorder=0,
+            label=f"Best observed={observed_best_bpb:.4f}",
+        )
+
+        # Y-axis limits from the data
+        all_bpb_3b = np.concatenate([
+            pred_vals[np.isfinite(pred_vals)],
+            actual_vals[np.isfinite(actual_vals)],
+        ])
+        if len(all_bpb_3b):
+            ylo_3b = min(float(np.min(all_bpb_3b)), observed_best_bpb) - 0.008
+            yhi_3b = max(float(np.max(all_bpb_3b)), observed_best_bpb) + 0.008
+            ax3b_bot.set_ylim(ylo_3b, yhi_3b)
+
+        ax3b_bot.set_ylabel("BPB at predicted optimum")
+        ax3b_bot.set_title(
+            "Predicted vs Actual BPB "
+            "(green = actual beats best observed, "
+            "red = actual worse, $\\Delta$ = actual $-$ predicted)"
+        )
+        ax3b_bot.legend(loc="upper right", framealpha=0.9, fontsize=8)
+        ax3b_bot.set_xlim(0.3, n3b + 0.7)
+        plt.setp(ax3b_bot.get_xticklabels(), rotation=30, ha="right")
+
+        fig3b.tight_layout()
+        out3b = OUT_DIR / "fig3b_stability_predicted_vs_actual.png"
+        fig3b.savefig(out3b)
+        plt.close(fig3b)
+        print(f"  Saved {out3b}")
+    else:
+        print(
+            f"\nSkipping Figure 3b: {_optima_csv_3b} not found "
+            "(run --analyze-local first)"
+        )
+
 
 # =========================================================================
 # Cross-validation metrics table (runs in both quick and full mode)
@@ -910,6 +1110,155 @@ out4 = OUT_DIR / "fig4_heatmaps.png"
 fig4.savefig(out4)
 plt.close(fig4)
 print(f"  Saved {out4}")
+
+
+# =========================================================================
+# Figure 4b: Heatmaps with predicted vs actual BPB at predicted optima
+# =========================================================================
+# Load actual BPB for predicted-optima baseline runs from the v4 analysis CSV.
+_optima_csv = script_dir / "two_phase_starcoder_4.csv"
+if _optima_csv.exists():
+    print("\nGenerating Figure 4b: Heatmaps with predicted vs actual BPB...")
+    _optima_df = pd.read_csv(_optima_csv)
+    # Build lookup: (p0_sc, p1_sc) -> actual BPB (for optima runs, run_id >= 90016)
+    _optima_runs = _optima_df[_optima_df["run_id"] >= 90016].copy()
+    _actuals_lookup: list[tuple[float, float, float]] = []
+    for _, _row in _optima_runs.iterrows():
+        _bpb_col = "eval/paloma/dolma_100_programing_languages/bpb"
+        if _bpb_col in _row and pd.notna(_row[_bpb_col]):
+            _actuals_lookup.append((float(_row["phase_0_starcoder"]), float(_row["phase_1_starcoder"]), float(_row[_bpb_col])))
+
+    # First pass: compute predicted optima and match to actuals for sorting
+    _model_optima: list[tuple[str, object, float, float, float, float | None]] = []
+    for _, m in ranked_model_info:
+        try:
+            X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+            pred_fn, _ = m.fit_fn(X_full, y)
+            X_grid, P0, P1 = make_2d_grid(g, g, kind=m.feature_kind)
+            Z = pred_fn(X_grid).reshape(P0.shape)
+            idx = int(np.argmin(Z))
+            opt_p0 = float(P0.ravel()[idx])
+            opt_p1_val = float(P1.ravel()[idx])
+            opt_bpb = float(Z.ravel()[idx])
+
+            actual_bpb = None
+            for _ap0, _ap1, _abpb in _actuals_lookup:
+                if abs(_ap0 - opt_p0) < 0.02 and abs(_ap1 - opt_p1_val) < 0.02:
+                    actual_bpb = _abpb
+                    break
+            _model_optima.append((m.name, m, opt_p0, opt_p1_val, opt_bpb, actual_bpb))
+        except Exception:
+            _model_optima.append((m.name, m, 0.0, 0.0, 0.0, None))
+
+    # Sort by ascending actual BPB (models without actuals go last)
+    _model_optima.sort(key=lambda t: (t[5] is None, t[5] if t[5] is not None else 999.0))
+
+    n_models_4b = len(_model_optima)
+    ncols4b = min(4, n_models_4b)
+    nrows4b = (n_models_4b + ncols4b - 1) // ncols4b
+
+    fig4b, axes4b = plt.subplots(
+        nrows4b,
+        ncols4b,
+        figsize=(cell_size * ncols4b + 1.8, cell_size * nrows4b),
+        squeeze=False,
+        constrained_layout=True,
+    )
+
+    last_scatter_4b = None
+    for mi, (mname, m, opt_p0, opt_p1_val, opt_bpb, actual_bpb) in enumerate(_model_optima):
+        row, col = divmod(mi, ncols4b)
+        ax = axes4b[row][col]
+
+        try:
+            X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+            pred_fn, _ = m.fit_fn(X_full, y)
+            X_grid, P0, P1 = make_2d_grid(g, g, kind=m.feature_kind)
+            Z = pred_fn(X_grid).reshape(P0.shape)
+            Z_clipped = np.clip(Z, vmin_global, vmax_global + 0.5)
+
+            ax.contourf(
+                P0, P1, Z_clipped, levels=n_contour_levels, cmap="RdYlGn_r",
+                vmin=vmin_global, vmax=vmax_global, extend="both",
+            )
+            cs = ax.contour(P0, P1, Z_clipped, levels=n_contour_levels, colors="black", linewidths=0.4, alpha=0.6)
+            ax.clabel(cs, inline=True, fontsize=6, fmt="%.2f")
+
+            # Star colored by actual BPB on the same colormap as the heatmap
+            if actual_bpb is not None:
+                import matplotlib.colors as mcolors
+
+                _cmap = plt.get_cmap("RdYlGn_r")
+                _norm = mcolors.Normalize(vmin=vmin_global, vmax=vmax_global)
+                star_color = _cmap(_norm(actual_bpb))
+                label_text = (
+                    f"({opt_p0:.2f}, {opt_p1_val:.2f})\n"
+                    f"Pred={opt_bpb:.3f}\n"
+                    f"Actual={actual_bpb:.3f}"
+                )
+            else:
+                star_color = "gray"
+                label_text = (
+                    f"({opt_p0:.2f}, {opt_p1_val:.2f})\n"
+                    f"Pred={opt_bpb:.3f}\nActual=N/A"
+                )
+
+            ax.plot(
+                opt_p0, opt_p1_val, marker="*", ms=14,
+                color=star_color,
+                markeredgecolor="black", markeredgewidth=1.2,
+                zorder=6,
+            )
+
+            ax.annotate(
+                label_text,
+                xy=(opt_p0, opt_p1_val),
+                xytext=(0.97, 0.03),
+                textcoords="axes fraction",
+                fontsize=6.5,
+                ha="right",
+                va="bottom",
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.85),
+                arrowprops=dict(arrowstyle="->", color="gray", lw=0.8),
+                zorder=7,
+            )
+
+        except Exception as e:
+            ax.text(0.5, 0.5, f"Fit failed:\n{e}", ha="center", va="center", transform=ax.transAxes, fontsize=8, color="red")
+
+        last_scatter_4b = ax.scatter(
+            p0_sc, p1_sc, c=y, cmap="RdYlGn_r",
+            vmin=vmin_global, vmax=vmax_global,
+            s=40, marker="o", edgecolors="black", linewidths=1.0, zorder=5,
+        )
+
+        ax.set_title(clean_name(mname), fontsize=10)
+        ax.set_aspect("equal")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        if row == nrows4b - 1:
+            ax.set_xlabel("Phase 0 StarCoder weight")
+        if col == 0:
+            ax.set_ylabel("Phase 1 StarCoder weight")
+
+    for idx in range(n_models_4b, nrows4b * ncols4b):
+        row, col = divmod(idx, ncols4b)
+        axes4b[row][col].set_visible(False)
+
+    if last_scatter_4b is not None:
+        fig4b.colorbar(last_scatter_4b, ax=axes4b.ravel().tolist(), label="BPB", shrink=0.7, pad=0.03, aspect=30)
+
+    fig4b.suptitle(
+        "Predicted vs Actual BPB at Predicted Optima "
+        "($\\bigstar$ colored by actual BPB, sorted by ascending actual)",
+        fontsize=12,
+    )
+    out4b = OUT_DIR / "fig4b_heatmaps_predicted_vs_actual.png"
+    fig4b.savefig(out4b)
+    plt.close(fig4b)
+    print(f"  Saved {out4b}")
+else:
+    print(f"\nSkipping Figure 4b: {_optima_csv} not found (run --analyze-local first)")
 
 
 # =========================================================================
