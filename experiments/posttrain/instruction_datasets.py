@@ -396,6 +396,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=[],
         splits=["train"],
     ),
+    "teetone/temp_qwen3_4b_mot_math_45k_n1_uq3_round1": InstructionDatasetConfig(
+        hf_dataset_id="teetone/temp_qwen3_4b_mot_math_45k_n1_uq3_round1",
+        revision="fae9312",
+        adapter=multi_turn_adapter(),
+        metadata_columns=[],
+        name="teetone/temp_qwen3_4b_mot_math_45k_n1_uq3_round1",
+        subsets=[],
+        splits=["train"],
+    ),
     "teetone/temp_qwen3_4b_ot4_math_n1_uq1_round1": InstructionDatasetConfig(
         hf_dataset_id="teetone/temp_qwen3_4b_ot4_math_n1_uq1_round1",
         revision="c215419",
