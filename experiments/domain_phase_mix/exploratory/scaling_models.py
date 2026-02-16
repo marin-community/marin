@@ -3,76 +3,119 @@
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pandas", "numpy", "scipy", "scikit-learn", "matplotlib"]
+# dependencies = ["numpy", "scipy", "scikit-learn"]
 # ///
-"""v3: Parametric models only, with explicit functional forms in legends (LaTeX).
+"""Pure library of parametric scaling-law models for two-phase training experiments.
 
-Based on v2 and literature_scaling_laws.py findings.
-All models return fitted parameters; legends show the explicit
-functional form on the p0_sc=0 slice with actual numeric values.
+This module contains:
+- 20 parametric model fit functions (each returns (pred_fn, params_array))
+- 20 LaTeX label generators (for visualizing fitted forms on the p0=0 slice)
+- ModelSpec dataclass for clean registry
+- Feature construction and slice builders
+- Cross-validation metrics function
+
+No data loading, no matplotlib, no module-level side effects.
 """
 
-import os
-import sys
-import warnings
+from dataclasses import dataclass
+from collections.abc import Callable
+from typing import Literal
+
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
 from scipy.optimize import minimize
 from scipy.stats import spearmanr
 from sklearn.model_selection import KFold
 
-sys.stdout.reconfigure(line_buffering=True)
-warnings.filterwarnings("ignore")
+# =========================================================================
+# Constants
+# =========================================================================
+EPS = 1e-8
+SC_EPOCH_MULT = 13.2289  # StarCoder epochs per weight fraction
+NEM_EPOCH_MULT = 0.5  # Nemotron epochs per weight fraction
 
-plt.rcParams["text.usetex"] = True
-plt.rcParams["text.latex.preamble"] = r"\usepackage{opensans}\renewcommand{\familydefault}{\sfdefault}"
-plt.rcParams["font.family"] = "sans-serif"
-script_dir = Path(__file__).parent
-_csv_name = os.environ.get("DATA_CSV", "two_phase_starcoder.csv")
-df = pd.read_csv(script_dir / _csv_name)
-df = df[df["status"] == "completed"].copy()
+FeatureKind = Literal["weight", "vdom", "wt_epoch"]
 
-TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
-y = df[TARGET].values
-N = len(df)
 
-SC_EPOCH_MULT = 13.2289
-NEM_EPOCH_MULT = 0.5
+# =========================================================================
+# ModelSpec dataclass
+# =========================================================================
+@dataclass(frozen=True)
+class ModelSpec:
+    """Specification for a parametric scaling-law model.
 
-if __name__ == "__main__":
-    print(f"N={N}, target={TARGET}")
-    print(f"y range: [{y.min():.4f}, {y.max():.4f}], median={np.median(y):.4f}")
+    Attributes:
+        name: Display name (e.g., "Linear", "Quadratic(w-e)")
+        fit_fn: Function (X, y) -> (pred_fn, params_array)
+        feature_kind: One of "weight", "vdom", "wt_epoch"
+        label_fn: Function params_array -> LaTeX string (for p0=0 slice)
+        color: Matplotlib color for plots
+        linestyle: Matplotlib linestyle ("-", "--", "-.", ":")
+    """
+
+    name: str
+    fit_fn: Callable
+    feature_kind: FeatureKind
+    label_fn: Callable
+    color: str
+    linestyle: str
 
 
 # =========================================================================
 # Feature construction
 # =========================================================================
-p0_sc = df["phase_0_starcoder"].values
-p1_sc = df["phase_1_starcoder"].values
+def build_features(kind: FeatureKind, p0_sc: np.ndarray, p1_sc: np.ndarray) -> np.ndarray:
+    """Build feature matrix from raw StarCoder weight fractions.
 
-X_weight = np.column_stack([p0_sc, p1_sc])
-X_vdom = np.column_stack(
-    [
-        0.5 * (1 - p0_sc),
-        0.5 * p0_sc,
-        0.5 * (1 - p1_sc),
-        0.5 * p1_sc,
-    ]
-)
+    Args:
+        kind: Feature type to construct
+        p0_sc: Phase 0 StarCoder weight fractions (N,)
+        p1_sc: Phase 1 StarCoder weight fractions (N,)
 
-EPS = 1e-8
-sc_ep0 = df["phase_0_starcoder_epochs"].values
-sc_ep1 = df["phase_1_starcoder_epochs"].values
-# Weight-epoch features: proportions + log-epoch counts
-X_wt_epoch = np.column_stack([p0_sc, p1_sc, np.log(sc_ep0 + EPS), np.log(sc_ep1 + EPS)])
+    Returns:
+        Feature matrix (N, d) where d depends on kind:
+        - "weight": (N, 2) = [p0_sc, p1_sc]
+        - "vdom": (N, 4) = [nem0_vol, sc0_vol, nem1_vol, sc1_vol]
+        - "wt_epoch": (N, 4) = [p0_sc, p1_sc, log(ep0), log(ep1)]
+    """
+    if kind == "weight":
+        return np.column_stack([p0_sc, p1_sc])
+    elif kind == "vdom":
+        # Virtual domain: volume fractions (each phase contributes 0.5 total)
+        return np.column_stack([
+            0.5 * (1 - p0_sc),  # Nemotron phase 0
+            0.5 * p0_sc,  # StarCoder phase 0
+            0.5 * (1 - p1_sc),  # Nemotron phase 1
+            0.5 * p1_sc,  # StarCoder phase 1
+        ])
+    elif kind == "wt_epoch":
+        # Weight-epoch features: proportions + log-transformed epoch counts
+        # Epochs scale linearly with weight: epoch_j = SC_EPOCH_MULT * p_j
+        return np.column_stack([
+            p0_sc,
+            p1_sc,
+            np.log(SC_EPOCH_MULT * p0_sc + EPS),
+            np.log(SC_EPOCH_MULT * p1_sc + EPS),
+        ])
+    else:
+        raise ValueError(f"Unknown feature kind: {kind}")
 
 
 # =========================================================================
 # Cross-validation
 # =========================================================================
 def cv_metrics(fit_fn, X, y, n_folds=5, seed=42):
+    """5-fold cross-validation metrics for a model.
+
+    Args:
+        fit_fn: Model fit function (X, y) -> (pred_fn, params)
+        X: Feature matrix (N, d)
+        y: Target values (N,)
+        n_folds: Number of CV folds
+        seed: Random seed for reproducibility
+
+    Returns:
+        dict with keys: "R2", "RMSE", "Spearman", "RMSE_bot"
+    """
     kf = KFold(n_folds, shuffle=True, random_state=seed)
     r2s, rmses, spearmans, rmse_bots = [], [], [], []
     median_y = np.median(y)
@@ -941,66 +984,78 @@ def label_huber_logquad(params):
 
 
 # =========================================================================
-# Define all models to test
+# Model registry
 # =========================================================================
-# (name, fit_fn, X_data, label_fn, color, linestyle)
-MODELS = [
-    ("Linear", fit_linear, X_weight, label_linear, "tab:blue", "--"),
-    ("Quadratic", fit_quadratic, X_weight, label_quadratic, "tab:cyan", "--"),
-    ("Quadratic(w{-}e)", fit_quadratic_4d, X_wt_epoch, label_quadratic_4d, "tab:orange", "--"),
-    ("LogLinear(w{-}e)", fit_loglinear, X_wt_epoch, label_loglinear, "tab:brown", "-"),
-    ("PowerLaw", fit_powerlaw, X_weight, label_powerlaw, "black", "-"),
-    ("DML M1", fit_dml_m1, X_vdom, label_dml_m1, "tab:green", "-"),
-    ("SLODM", fit_slodm, X_vdom, label_slodm, "tab:red", "-"),
-    ("BiMix", fit_bimix, X_vdom, label_bimix, "tab:purple", "-"),
-    ("Cobb-Douglas", fit_cobb_douglas, X_vdom, label_cobb_douglas, "tab:olive", "-"),
-    ("CES", fit_ces, X_vdom, label_ces, "darkgoldenrod", "-"),
-    ("Translog", fit_translog, X_vdom, label_translog, "teal", "--"),
-    ("Stone-Geary", fit_stone_geary, X_vdom, label_stone_geary, "deeppink", "-"),
-    ("LogQuad(w{-}e)", fit_logquad_mix, X_wt_epoch, label_logquad_mix, "navy", "--"),
-    ("RidgeTranslog", fit_ridge_translog, X_vdom, label_ridge_translog, "darkviolet", "--"),
-    (r"Scheff\'e+log", fit_scheffe_log, X_vdom, label_scheffe_log, "sienna", "-"),
-    ("ILR Quad", fit_ilr_quad, X_vdom, label_ilr_quad, "darkseagreen", "-"),
-    ("ElasticLogQuad(w{-}e)", fit_elastic_logquad, X_wt_epoch, label_elastic_logquad, "crimson", "-."),
-    ("LogQuad(weight)", fit_logquad_weight, X_weight, label_logquad_weight, "gray", ":"),
-    ("BayesLogQuad(w{-}e)", fit_bayes_logquad, X_wt_epoch, label_bayes_logquad, "mediumblue", "-."),
-    ("HuberLogQuad(w{-}e)", fit_huber_logquad, X_wt_epoch, label_huber_logquad, "darkorange", ":"),
+MODELS: list[ModelSpec] = [
+    ModelSpec("Linear", fit_linear, "weight", label_linear, "tab:blue", "--"),
+    ModelSpec("Quadratic", fit_quadratic, "weight", label_quadratic, "tab:cyan", "--"),
+    ModelSpec("Quadratic(w{-}e)", fit_quadratic_4d, "wt_epoch", label_quadratic_4d, "tab:orange", "--"),
+    ModelSpec("LogLinear(w{-}e)", fit_loglinear, "wt_epoch", label_loglinear, "tab:brown", "-"),
+    ModelSpec("PowerLaw", fit_powerlaw, "weight", label_powerlaw, "black", "-"),
+    ModelSpec("DML M1", fit_dml_m1, "vdom", label_dml_m1, "tab:green", "-"),
+    ModelSpec("SLODM", fit_slodm, "vdom", label_slodm, "tab:red", "-"),
+    ModelSpec("BiMix", fit_bimix, "vdom", label_bimix, "tab:purple", "-"),
+    ModelSpec("Cobb-Douglas", fit_cobb_douglas, "vdom", label_cobb_douglas, "tab:olive", "-"),
+    ModelSpec("CES", fit_ces, "vdom", label_ces, "darkgoldenrod", "-"),
+    ModelSpec("Translog", fit_translog, "vdom", label_translog, "teal", "--"),
+    ModelSpec("Stone-Geary", fit_stone_geary, "vdom", label_stone_geary, "deeppink", "-"),
+    ModelSpec("LogQuad(w{-}e)", fit_logquad_mix, "wt_epoch", label_logquad_mix, "navy", "--"),
+    ModelSpec("RidgeTranslog", fit_ridge_translog, "vdom", label_ridge_translog, "darkviolet", "--"),
+    ModelSpec(r"Scheff\'e+log", fit_scheffe_log, "vdom", label_scheffe_log, "sienna", "-"),
+    ModelSpec("ILR Quad", fit_ilr_quad, "vdom", label_ilr_quad, "darkseagreen", "-"),
+    ModelSpec("ElasticLogQuad(w{-}e)", fit_elastic_logquad, "wt_epoch", label_elastic_logquad, "crimson", "-."),
+    ModelSpec("LogQuad(weight)", fit_logquad_weight, "weight", label_logquad_weight, "gray", ":"),
+    ModelSpec("BayesLogQuad(w{-}e)", fit_bayes_logquad, "wt_epoch", label_bayes_logquad, "mediumblue", "-."),
+    ModelSpec("HuberLogQuad(w{-}e)", fit_huber_logquad, "wt_epoch", label_huber_logquad, "darkorange", ":"),
 ]
 
 
 # =========================================================================
-# Slice builders (module-level for importability)
+# Slice builders (for 1D and 2D predictions)
 # =========================================================================
-slice_grid = np.linspace(0.002, 0.998, 300)
-
-
-def make_slice_weight(g):
+def make_slice_weight(g: np.ndarray) -> np.ndarray:
+    """Build weight features for the p0=0 slice (100% Nemotron phase 0)."""
     return np.column_stack([np.zeros(len(g)), g])
 
 
-def make_slice_vdom(g):
+def make_slice_vdom(g: np.ndarray) -> np.ndarray:
+    """Build vdom features for the p0=0 slice."""
     n = len(g)
     return np.column_stack([np.full(n, 0.5), np.zeros(n), 0.5 * (1 - g), 0.5 * g])
 
 
-def make_slice_wt_epoch(g):
+def make_slice_wt_epoch(g: np.ndarray) -> np.ndarray:
+    """Build wt_epoch features for the p0=0 slice."""
     n = len(g)
     return np.column_stack([np.zeros(n), g, np.full(n, np.log(EPS)), np.log(SC_EPOCH_MULT * g + EPS)])
 
 
-def feature_kind(X_data):
-    """Return 'weight', 'wt_epoch', or 'vdom' based on identity with module globals."""
-    if X_data is X_weight:
-        return "weight"
-    elif X_data is X_wt_epoch:
-        return "wt_epoch"
-    return "vdom"
+def make_slice_for_kind(kind: FeatureKind, g: np.ndarray) -> np.ndarray:
+    """Dispatch to the correct slice builder."""
+    if kind == "weight":
+        return make_slice_weight(g)
+    elif kind == "vdom":
+        return make_slice_vdom(g)
+    elif kind == "wt_epoch":
+        return make_slice_wt_epoch(g)
+    else:
+        raise ValueError(f"Unknown feature kind: {kind}")
 
 
-def make_2d_grid(g0, g1, kind="weight"):
-    """Build a 2D feature matrix for a meshgrid of (p0_sc, p1_sc) values."""
+def make_2d_grid(g0: np.ndarray, g1: np.ndarray, kind: FeatureKind = "weight"):
+    """Build a 2D feature matrix for a meshgrid of (p0_sc, p1_sc) values.
+
+    Args:
+        g0: p0_sc grid (1D array)
+        g1: p1_sc grid (1D array)
+        kind: Feature type
+
+    Returns:
+        (X_grid, P0, P1) where X_grid is (M*N, d) features, P0 and P1 are (M, N) meshgrids
+    """
     p0, p1 = np.meshgrid(g0, g1, indexing="ij")
     p0f, p1f = p0.ravel(), p1.ravel()
+
     if kind == "weight":
         return np.column_stack([p0f, p1f]), p0, p1
     elif kind == "wt_epoch":
@@ -1009,135 +1064,8 @@ def make_2d_grid(g0, g1, kind="weight"):
             np.log(SC_EPOCH_MULT * p0f + EPS),
             np.log(SC_EPOCH_MULT * p1f + EPS),
         ]), p0, p1
-    else:
+    else:  # vdom
         return np.column_stack([
             0.5 * (1 - p0f), 0.5 * p0f,
             0.5 * (1 - p1f), 0.5 * p1f,
         ]), p0, p1
-
-
-if __name__ == "__main__":
-    # =====================================================================
-    # Cross-validation
-    # =====================================================================
-    print("\n" + "=" * 80)
-    print(f"{'Model':<14} {'R2':>7} {'RMSE':>7} {'Spearman':>9} {'RMSE_bot':>9}")
-    print("=" * 80)
-
-    cv_results = {}
-    for name, fit_fn, X_data, _, _, _ in MODELS:
-        m = cv_metrics(fit_fn, X_data, y)
-        cv_results[name] = m
-        print(f"{name:<14} {m['R2']:>7.4f} {m['RMSE']:>7.4f} {m['Spearman']:>9.4f} {m['RMSE_bot']:>9.4f}")
-
-    # =====================================================================
-    # Fit on full data, extract params, build labels
-    # =====================================================================
-    print("\n\nFitting all models on full data...")
-
-    fitted = []  # (name, pred_fn, params, label_str, slice_preds, color, ls, cv_m)
-
-    for name, fit_fn, X_data, label_fn, color, ls in MODELS:
-        pred_fn, params = fit_fn(X_data, y)
-
-        if X_data is X_weight:
-            Xs = make_slice_weight(slice_grid)
-        elif X_data is X_wt_epoch:
-            Xs = make_slice_wt_epoch(slice_grid)
-        else:
-            Xs = make_slice_vdom(slice_grid)
-
-        preds_slice = pred_fn(Xs)
-        label = label_fn(params)
-
-        print(f"\n--- {name} ---")
-        print(f"  Params: {params}")
-        print(f"  Label:  {label}")
-
-        best_i = np.argmin(preds_slice)
-        print(f"  Slice optimal: p1_sc={slice_grid[best_i]:.4f}, pred={preds_slice[best_i]:.4f}")
-
-        fitted.append((name, pred_fn, params, label, preds_slice, color, ls, cv_results[name]))
-
-    # =====================================================================
-    # Actual data on the slice
-    # =====================================================================
-    mask = df["phase_0_nemotron_full"].round(4) == 1.0
-    df_slice = df[mask].sort_values("phase_1_starcoder")
-    x_actual = df_slice["phase_1_starcoder"].values
-    y_actual = df_slice[TARGET].values
-    actual_best_i = np.argmin(y_actual)
-
-    print(f"\nActual best (slice): p1_sc={x_actual[actual_best_i]:.4f}, bpb={y_actual[actual_best_i]:.4f}")
-
-    # =====================================================================
-    # Plot
-    # =====================================================================
-    fig, axes = plt.subplots(1, 3, figsize=(36, 9))
-
-    XLABEL = r"$p$ = StarCoder fraction in the Second Phase"
-    YLABEL = r"eval/paloma/dolma\_100\_programing\_languages/bpb"
-    NOTATION_LINE = (
-        r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{sc\_epochs}_1)$,"
-        r"\; (w{-}e) = weight{-}epoch features"
-    )
-    TOP_MODELS = {"LogQuad(w{-}e)", "Translog", "BayesLogQuad(w{-}e)", "ElasticLogQuad(w{-}e)", "Quadratic(w{-}e)"}
-
-    for panel, (ax, xlim, ylim, title) in enumerate(
-        zip(
-            axes,
-            [(0, 1), (0.1, 0.55), (0.1, 0.55)],
-            [(0.85, 1.75), (0.88, 0.97), (0.88, 0.97)],
-            ["Full range", "Zoomed: all models", "Zoomed: top 5"],
-        )
-    ):
-        ax.scatter(x_actual, y_actual, s=50, c="black", zorder=10, label="Actual data")
-
-        for name, _, params, label, preds_s, color, ls, cv_m in fitted:
-            if panel == 2 and name not in TOP_MODELS:
-                continue
-            if panel == 0:
-                lbl = name
-            elif panel == 2:
-                lbl = rf"{name}: {label}"
-            else:
-                lbl = label
-            ax.plot(slice_grid, preds_s, label=lbl, linewidth=2.0, color=color, linestyle=ls)
-
-        ax.set_xlabel(XLABEL, fontsize=14)
-        ax.set_ylabel(YLABEL, fontsize=14)
-        ax.set_title(rf"Slice: 100\% Nemotron in the First Phase --- {title}", fontsize=15)
-        ax.set_xlim(xlim)
-        ax.set_ylim(ylim)
-        ax.tick_params(labelsize=12)
-
-        secax = ax.secondary_xaxis("top", functions=(lambda w: w * SC_EPOCH_MULT, lambda e: e / SC_EPOCH_MULT))
-        secax.set_xlabel(r"StarCoder epochs in the Second Phase", fontsize=12)
-        secax.tick_params(labelsize=10)
-
-        if panel == 0:
-            ax.legend(fontsize=9, loc="upper right", ncol=2)
-        elif panel == 2:
-            ax.plot([], [], " ", label=NOTATION_LINE)
-            ax.legend(fontsize=11, loc="upper left", framealpha=0.95)
-
-    fig.tight_layout()
-    out_path = script_dir / "debug_epoch_features_v3.png"
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
-    print(f"\nSaved {out_path}")
-
-    # =====================================================================
-    # Summary
-    # =====================================================================
-    print("\n" + "=" * 80)
-    print("SUMMARY -- Ranked by RMSE_bot")
-    print("=" * 80)
-    print(f"{'Model':<14} {'RMSE_bot':>9} {'Spearman':>9} {'R2':>7}  {'Slice opt':>10} {'Pred':>7}")
-    print("-" * 65)
-    for name, _, params, label, preds_s, _, _, cv_m in sorted(fitted, key=lambda x: x[7]["RMSE_bot"]):
-        best_i = np.argmin(preds_s)
-        print(
-            f"{name:<14} {cv_m['RMSE_bot']:>9.4f} {cv_m['Spearman']:>9.4f} {cv_m['R2']:>7.4f}  "
-            f"p1={slice_grid[best_i]:>6.4f} {preds_s[best_i]:>7.4f}"
-        )
-    print(f"{'Actual':14s} {'':>9} {'':>9} {'':>7}  p1={x_actual[actual_best_i]:>6.4f} {y_actual[actual_best_i]:>7.4f}")

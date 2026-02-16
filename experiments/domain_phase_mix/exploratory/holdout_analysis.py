@@ -32,6 +32,7 @@ import time
 import warnings
 
 import numpy as np
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -42,26 +43,45 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 warnings.filterwarnings("ignore")
 
-from debug_epoch_features_v3 import (  # noqa: E402
+from scaling_models import (  # noqa: E402
     EPS,
     MODELS,
+    ModelSpec,
     SC_EPOCH_MULT,
-    X_weight,
-    feature_kind,
+    build_features,
+    cv_metrics,
     fit_linear,
     make_2d_grid,
+    make_slice_for_kind,
     make_slice_vdom,
     make_slice_weight,
     make_slice_wt_epoch,
-    p0_sc,
-    p1_sc,
-    slice_grid,
-    y,
 )
 
 sys.stdout.reconfigure(line_buffering=True)
 
 script_dir = Path(__file__).parent
+
+# =========================================================================
+# Data loading
+# =========================================================================
+_csv_name = os.environ.get("DATA_CSV", "two_phase_starcoder.csv")
+TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
+
+df = pd.read_csv(script_dir / _csv_name)
+df = df[df["status"] == "completed"].copy()
+
+y = df[TARGET].values
+N = len(df)
+p0_sc = df["phase_0_starcoder"].values
+p1_sc = df["phase_1_starcoder"].values
+
+slice_grid = np.linspace(0.002, 0.998, 300)
+
+print(f"Loaded {N} samples from {_csv_name}")
+print(f"Target: {TARGET}")
+print(f"y range: [{y.min():.4f}, {y.max():.4f}], median={np.median(y):.4f}")
+
 _out_name = os.environ.get("HOLDOUT_OUT_DIR", "holdout_plots")
 OUT_DIR = script_dir / _out_name
 OUT_DIR.mkdir(exist_ok=True)
@@ -101,7 +121,6 @@ def clean_name(name: str) -> str:
 # =========================================================================
 # Configuration
 # =========================================================================
-N = len(y)
 # Generate train sizes: 8 evenly spaced values from ~10% to ~87% of N
 _lo, _hi = max(12, N // 10), int(N * 0.87)
 TRAIN_SIZES = sorted(set(int(round(v)) for v in np.linspace(_lo, _hi, 8)))
@@ -130,20 +149,20 @@ cli_filters = [a for a in sys.argv[1:] if not a.startswith("--")]
 
 if cli_filters:
     selected = []
-    for name, fit_fn, X_data, label_fn, color, ls in MODELS:
-        if any(f.lower() in name.lower() for f in cli_filters):
-            selected.append((name, fit_fn, X_data, label_fn, color, ls))
+    for m in MODELS:
+        if any(f.lower() in m.name.lower() for f in cli_filters):
+            selected.append(m)
     if not selected:
         print(f"No models match filters: {cli_filters}")
-        print("Available:", [n for n, *_ in MODELS])
+        print("Available:", [m.name for m in MODELS])
         sys.exit(1)
     RUN_MODELS = selected
 else:
     RUN_MODELS = list(MODELS)
 
 print(f"Models to evaluate ({len(RUN_MODELS)}):")
-for name, *_ in RUN_MODELS:
-    print(f"  {clean_name(name)}")
+for m in RUN_MODELS:
+    print(f"  {clean_name(m.name)}")
 
 
 # =========================================================================
@@ -157,44 +176,18 @@ def huber_loss(y_true, y_pred, delta):
 
 
 # Compute reference delta from full-data Linear model residuals
-_linear_pred, _ = fit_linear(X_weight, y)
-_linear_resid = y - _linear_pred(X_weight)
+_X_weight_for_delta = build_features("weight", p0_sc, p1_sc)
+_linear_pred, _ = fit_linear(_X_weight_for_delta, y)
+_linear_resid = y - _linear_pred(_X_weight_for_delta)
 _mad = np.median(np.abs(_linear_resid - np.median(_linear_resid)))
 HUBER_DELTA = 1.345 * _mad / 0.6745
 print(f"\nHuber delta = {HUBER_DELTA:.6f} (from Linear MAD={_mad:.6f})")
 
 
 # =========================================================================
-# Feature-type dispatch helpers
+# Feature-type dispatch
 # =========================================================================
-FEATURE_KINDS = {}
-for _name, _fit_fn, _X_data, *_rest in MODELS:
-    FEATURE_KINDS[_name] = feature_kind(_X_data)
-
-
-def _make_slice_for_kind(kind, g):
-    if kind == "weight":
-        return make_slice_weight(g)
-    elif kind == "wt_epoch":
-        return make_slice_wt_epoch(g)
-    return make_slice_vdom(g)
-
-
-def _build_features(kind, p0_vals, p1_vals):
-    """Build feature matrix from raw proportions for the given feature kind."""
-    if kind == "weight":
-        return np.column_stack([p0_vals, p1_vals])
-    elif kind == "wt_epoch":
-        return np.column_stack([
-            p0_vals, p1_vals,
-            np.log(SC_EPOCH_MULT * p0_vals + EPS),
-            np.log(SC_EPOCH_MULT * p1_vals + EPS),
-        ])
-    else:
-        return np.column_stack([
-            0.5 * (1 - p0_vals), 0.5 * p0_vals,
-            0.5 * (1 - p1_vals), 0.5 * p1_vals,
-        ])
+FEATURE_KINDS = {m.name: m.feature_kind for m in MODELS}
 
 
 # =========================================================================
@@ -237,8 +230,8 @@ def _run_one_iter(n_train, seed, model_specs, all_p0, all_p1, all_y, delta, sg, 
 
     results = {}
     for name, fit_fn, kind in model_specs:
-        X_train = _build_features(kind, p0_train, p1_train)
-        X_test = _build_features(kind, p0_test, p1_test)
+        X_train = build_features(kind, p0_train, p1_train)
+        X_test = build_features(kind, p0_test, p1_test)
 
         try:
             pred_fn, _ = fit_fn(X_train, y_train)
@@ -252,7 +245,7 @@ def _run_one_iter(n_train, seed, model_specs, all_p0, all_p1, all_y, delta, sg, 
                 results[name] = fail
                 continue
 
-            Xs = _make_slice_for_kind(kind, sg)
+            Xs = make_slice_for_kind(kind, sg)
             slice_pred = pred_fn(Xs)
             valid_mask = np.isfinite(slice_pred) & (np.abs(slice_pred) < max_pred)
             if valid_mask.any():
@@ -276,9 +269,9 @@ def _run_one_iter(n_train, seed, model_specs, all_p0, all_p1, all_y, delta, sg, 
 # =========================================================================
 # Bootstrap: load cache, compute missing, merge & save
 # =========================================================================
-model_specs = [(name, fit_fn, FEATURE_KINDS[name]) for name, fit_fn, *_ in RUN_MODELS]
-model_names = [name for name, *_ in RUN_MODELS]
-model_colors = {name: color for name, _, _, _, color, _ in RUN_MODELS}
+model_specs = [(m.name, m.fit_fn, m.feature_kind) for m in RUN_MODELS]
+model_names = [m.name for m in RUN_MODELS]
+model_colors = {m.name: m.color for m in RUN_MODELS}
 
 sg = np.array(slice_grid)
 
@@ -683,19 +676,19 @@ observed_best_p1 = float(p1_sc[observed_best_idx])
 observed_best_bpb = float(np.min(y))
 
 predicted_bpb_at_opt = {}
-for name, fit_fn, X_data, *_rest in RUN_MODELS:
-    kind = FEATURE_KINDS[name]
-    median_p1 = next(m for n, _, m in opt_data if n == name)
+for m in RUN_MODELS:
+    median_p1 = next(med for n, _, med in opt_data if n == m.name)
     if not np.isfinite(median_p1):
-        predicted_bpb_at_opt[name] = np.nan
+        predicted_bpb_at_opt[m.name] = np.nan
         continue
     try:
-        pred_fn, _ = fit_fn(X_data, y)
-        Xs = _make_slice_for_kind(kind, sg)
+        X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+        pred_fn, _ = m.fit_fn(X_full, y)
+        Xs = make_slice_for_kind(m.feature_kind, sg)
         slice_pred = pred_fn(Xs)
-        predicted_bpb_at_opt[name] = float(np.interp(median_p1, sg, slice_pred))
+        predicted_bpb_at_opt[m.name] = float(np.interp(median_p1, sg, slice_pred))
     except Exception:
-        predicted_bpb_at_opt[name] = np.nan
+        predicted_bpb_at_opt[m.name] = np.nan
 
 fig_width = max(8, 1.3 * len(opt_data))
 fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(fig_width, 8),
@@ -762,8 +755,8 @@ g = np.linspace(0.005, 0.995, HEATMAP_RES)
 
 ranked_model_info = []
 rank_order = {r[0]: i for i, r in enumerate(rankings_huber)}
-for name, fit_fn, X_data, label_fn, color, ls in RUN_MODELS:
-    ranked_model_info.append((rank_order.get(name, 999), name, fit_fn, X_data))
+for m in RUN_MODELS:
+    ranked_model_info.append((rank_order.get(m.name, 999), m))
 ranked_model_info.sort()
 
 n_models = len(ranked_model_info)
@@ -783,14 +776,14 @@ vmax_global = float(np.percentile(y, 90))
 n_contour_levels = 15
 
 last_scatter = None
-for mi, (_, name, fit_fn, X_data) in enumerate(ranked_model_info):
+for mi, (_, m) in enumerate(ranked_model_info):
     row, col = divmod(mi, ncols4)
     ax = axes4[row][col]
-    kind = FEATURE_KINDS[name]
 
     try:
-        pred_fn, _ = fit_fn(X_data, y)
-        X_grid, P0, P1 = make_2d_grid(g, g, kind=kind)
+        X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+        pred_fn, _ = m.fit_fn(X_full, y)
+        X_grid, P0, P1 = make_2d_grid(g, g, kind=m.feature_kind)
         Z = pred_fn(X_grid).reshape(P0.shape)
         Z_clipped = np.clip(Z, vmin_global, vmax_global + 0.5)
 
@@ -824,9 +817,10 @@ for mi, (_, name, fit_fn, X_data) in enumerate(ranked_model_info):
 
     last_scatter = ax.scatter(p0_sc, p1_sc, c=y, cmap="RdYlGn_r",
                               vmin=vmin_global, vmax=vmax_global,
-                              s=40, edgecolors="white", linewidths=1.2, zorder=5)
+                              s=40, marker="o", edgecolors="black",
+                              linewidths=1., zorder=5)
 
-    ax.set_title(clean_name(name), fontsize=10)
+    ax.set_title(clean_name(m.name), fontsize=10)
     ax.set_aspect("equal")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
@@ -851,6 +845,112 @@ out4 = OUT_DIR / "fig4_heatmaps.png"
 fig4.savefig(out4)
 plt.close(fig4)
 print(f"  Saved {out4}")
+
+
+# =========================================================================
+# Cross-validation metrics table
+# =========================================================================
+print("\n" + "=" * 90)
+print("Cross-Validation Metrics (5-fold CV on full data)")
+print("=" * 90)
+print(f"{'Model':<25} {'R2':>7} {'RMSE':>7} {'Spearman':>9} {'RMSE_bot':>9}")
+print("-" * 90)
+
+cv_results_dict = {}
+for m in RUN_MODELS:
+    X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+    cv_res = cv_metrics(m.fit_fn, X_full, y, n_folds=5, seed=42)
+    cv_results_dict[m.name] = cv_res
+    print(f"{clean_name(m.name):<25} {cv_res['R2']:>7.4f} {cv_res['RMSE']:>7.4f} "
+          f"{cv_res['Spearman']:>9.4f} {cv_res['RMSE_bot']:>9.4f}")
+
+print("=" * 90)
+
+
+# =========================================================================
+# Figure 5: 3-panel slice predictions (from debug_epoch_features_v3)
+# =========================================================================
+print("\nGenerating Figure 5: 3-panel slice predictions...")
+
+# Fit all models on full data and get slice predictions
+fitted_models = []
+for m in RUN_MODELS:
+    X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+    pred_fn, params = m.fit_fn(X_full, y)
+
+    # Build slice features
+    Xs = make_slice_for_kind(m.feature_kind, slice_grid)
+    preds_slice = pred_fn(Xs)
+    label = m.label_fn(params)
+
+    best_i = np.argmin(preds_slice)
+    fitted_models.append((m.name, pred_fn, params, label, preds_slice, m.color, m.linestyle, cv_results_dict[m.name]))
+
+# Extract actual data on the p0=0 slice (100% Nemotron in phase 0)
+mask = df["phase_0_nemotron_full"].round(4) == 1.0
+df_slice = df[mask].sort_values("phase_1_starcoder")
+x_actual = df_slice["phase_1_starcoder"].values
+y_actual = df_slice[TARGET].values
+actual_best_i = np.argmin(y_actual)
+
+# Create 3-panel plot
+fig5, axes5 = plt.subplots(1, 3, figsize=(36, 9))
+
+XLABEL = r"$p$ = StarCoder fraction in Phase 1"
+YLABEL = r"BPB (eval/paloma/dolma\_100\_programing\_languages)"
+NOTATION_LINE = (
+    r"\small $p = p_1^{\mathrm{sc}}$,\; $L = \ln(\mathrm{sc\_epochs}_1)$,"
+    r"\; (w{-}e) = weight{-}epoch features"
+)
+TOP_MODELS_FIG5 = set(top_models_huber)
+
+for panel, (ax, xlim, ylim, title) in enumerate(
+    zip(
+        axes5,
+        [(0, 1), (0.1, 0.55), (0.1, 0.55)],
+        [(0.85, 1.75), (0.88, 0.97), (0.88, 0.97)],
+        ["Full range", "Zoomed: all models", "Zoomed: top 5"],
+    )
+):
+    ax.scatter(x_actual, y_actual, s=50, c="black", zorder=10, label="Actual data")
+
+    for name, _, params, label, preds_s, color, ls, cv_m in fitted_models:
+        if panel == 2 and name not in TOP_MODELS_FIG5:
+            continue
+        if panel == 0:
+            lbl = clean_name(name)
+        elif panel == 2:
+            lbl = rf"{clean_name(name)}: {label}"
+        else:
+            lbl = label
+        ax.plot(slice_grid, preds_s, label=lbl, linewidth=2.0, color=color, linestyle=ls)
+
+    ax.set_xlabel(XLABEL, fontsize=14)
+    ax.set_ylabel(YLABEL, fontsize=14)
+    ax.set_title(rf"Slice: 100\% Nemotron in Phase 0 --- {title}", fontsize=15)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.tick_params(labelsize=12)
+
+    # Secondary x-axis showing epoch scale
+    secax = ax.secondary_xaxis("top", functions=(
+        lambda w: w * SC_EPOCH_MULT,
+        lambda e: e / SC_EPOCH_MULT
+    ))
+    secax.set_xlabel(r"StarCoder epochs in Phase 1", fontsize=12)
+    secax.tick_params(labelsize=10)
+
+    if panel == 0:
+        ax.legend(fontsize=9, loc="upper right", ncol=2)
+    elif panel == 2:
+        ax.plot([], [], " ", label=NOTATION_LINE)
+        ax.legend(fontsize=11, loc="upper left", framealpha=0.95)
+
+fig5.tight_layout()
+out5 = OUT_DIR / "fig5_slice_predictions.png"
+fig5.savefig(out5, dpi=300, bbox_inches="tight")
+plt.close(fig5)
+print(f"  Saved {out5}")
 
 
 print(f"\nAll outputs saved to {OUT_DIR}/")
