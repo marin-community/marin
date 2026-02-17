@@ -2162,3 +2162,93 @@ tool_uses: 133
 duration_ms: 591651</usage>
 </task-notification>
 Full transcript available at: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/a45903f.output
+
+---
+
+commit and create a PR
+
+---
+
+[Request interrupted by user]
+
+---
+
+ok, I have a question, in the code below:
+
+---
+
+```
+        fn=lambda output_path, _b=_budget: run_optimal_training(
+            OptimalTrainingConfig(
+                analysis_output_path=analysis_step.output_path,
+                target_budget=_b,
+                label=LABEL,
+                output_path=output_path,
+                tokenized=nemotron_mix,
+                validation_configs=validation_configs,
+            )
+        ),
+```
+
+why are you using `_b=_budget` instead of just bassing `_budget`?
+
+---
+
+ok, right. how about it the `_get_deduped_data_mixture`:
+
+
+```
+def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism: int = 1024) -> LMMixtureDatasetConfig:
+    """Dedup fineweb-edu mixture"""
+    dedup_step = StepSpec(
+        name=f"dedup/{variant}_{mode.lower()}",
+        hash_attrs={
+            "input_paths": downloads[variant],
+            "mode": mode,
+            "processes": max_parallelism,
+        },
+        fn=lambda output_path, _v=variant, _m=mode: deduplicate(
+            DedupConfig(
+                input_paths=downloads[_v],
+                mode=_m,
+                processes=max_parallelism,
+            )
+        ),
+    )
+
+    dedup_mode_to_filter_type = {
+        DedupMode.EXACT_PARAGRAPH: FilterType.REMOVE_SPANS,
+        DedupMode.EXACT_DOCUMENT: FilterType.REMOVE_DOC,
+        DedupMode.FUZZY_DOCUMENT: FilterType.REMOVE_DOC,
+    }
+
+    consolidate_step = StepSpec(
+        name=f"clean/{variant}_{mode.lower()}",
+        hash_attrs={
+            "input_path": downloads[variant],
+            "filetype": "parquet",
+            "mode": str(mode),
+        },
+        deps=[dedup_step],
+        fn=lambda output_path, _v=variant, _m=mode, _ds=dedup_step: consolidate(
+            ConsolidateConfig(
+                input_path=downloads[_v],
+                output_path=output_path,
+                filetype="parquet",
+                filters=[
+                    FilterConfig(
+                        type=dedup_mode_to_filter_type[_m],
+                        attribute_path=os.path.join(_ds.output_path, "data"),
+                        name=str(_m),
+                    ),
+                ],
+            )
+        ),
+    )
+```
+
+There's no loop here for multiple `variant` or `dedup_step` ?
+
+---
+
+yes, please clean that up. check all the files that were commited in the head commit

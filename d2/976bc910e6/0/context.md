@@ -209,3 +209,53 @@ Here is a summary of all the fixes applied:
 - Changed `tulu_3_dataset / "**/*.jsonl.gz"` to `tulu_3_dataset.cd("**/*.jsonl.gz")`
 ...
 
+### Prompt 16
+
+commit and create a PR
+
+### Prompt 17
+
+[Request interrupted by user]
+
+### Prompt 18
+
+ok, I have a question, in the code below:
+
+### Prompt 19
+
+```
+        fn=lambda output_path, _b=_budget: run_optimal_training(
+            OptimalTrainingConfig(
+                analysis_output_path=analysis_step.output_path,
+                target_budget=_b,
+                label=LABEL,
+                output_path=output_path,
+                tokenized=nemotron_mix,
+                validation_configs=validation_configs,
+            )
+        ),
+```
+
+why are you using `_b=_budget` instead of just bassing `_budget`?
+
+### Prompt 20
+
+ok, right. how about it the `_get_deduped_data_mixture`:
+
+
+```
+def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism: int = 1024) -> LMMixtureDatasetConfig:
+    """Dedup fineweb-edu mixture"""
+    dedup_step = StepSpec(
+        name=f"dedup/{variant}_{mode.lower()}",
+        hash_attrs={
+            "input_paths": downloads[variant],
+            "mode": mode,
+            "processes": max_parallelism,
+        },
+        fn=lambda output_path, _v=variant, _m=mode: dedupli...
+
+### Prompt 21
+
+yes, please clean that up. check all the files that were commited in the head commit
+

@@ -3,21 +3,24 @@
   "checkpoint_id": "d2976bc910e6",
   "session_id": "40b04cfc-1072-495b-8c66-db339475e18c",
   "strategy": "manual-commit",
-  "created_at": "2026-02-17T07:40:04.134384Z",
+  "created_at": "2026-02-17T08:50:40.003952Z",
   "branch": "agent/20260216-remove-executor-steps",
   "checkpoints_count": 1,
   "files_touched": [
+    "experiments/dedup/isoflop_analysis.py",
     "experiments/defaults.py",
     "experiments/evals/exp1600_uncheatable_evals.py",
     "experiments/exp808_sft_mixture.py",
     "experiments/models.py",
     "experiments/paloma.py",
+    "experiments/posttrain/instruction_datasets.py",
     "experiments/posttrain/long_context_datasets.py",
     "experiments/posttrain/preference_datasets.py",
     "experiments/speedrun/build_prebuilt_caches.py",
     "experiments/speedrun/olmoe_1b7b_nemotron_40b.py",
     "experiments/tootsie/exp1984_convert_32b_phases.py",
     "experiments/tootsie/exp2062_long_context_8b.py",
+    "experiments/train_test_overlap/train_test_total.py",
     "experiments/tutorials/hello_world.py",
     "lib/marin/src/marin/download/uncheatable_eval/download.py",
     "lib/marin/src/marin/evaluation/log_probs.py",
@@ -43,21 +46,24 @@
     "tests/test_step_runner.py"
   ],
   "agent": "Claude Code",
+  "transcript_identifier_at_start": "5edd4235-7ac1-41df-97fc-e4ec2a9cbe46",
+  "checkpoint_transcript_start": 2241,
+  "transcript_lines_at_start": 2241,
   "token_usage": {
-    "input_tokens": 365,
-    "cache_creation_tokens": 1191477,
-    "cache_read_tokens": 34318823,
-    "output_tokens": 24033,
-    "api_call_count": 327
+    "input_tokens": 21,
+    "cache_creation_tokens": 68180,
+    "cache_read_tokens": 1001545,
+    "output_tokens": 510,
+    "api_call_count": 13
   },
   "initial_attribution": {
-    "calculated_at": "2026-02-17T07:39:36.832763Z",
-    "agent_lines": 1057,
-    "human_added": 2478,
+    "calculated_at": "2026-02-17T08:50:12.898118Z",
+    "agent_lines": 38,
+    "human_added": 0,
     "human_modified": 0,
     "human_removed": 0,
-    "total_committed": 3535,
-    "agent_percentage": 29.9009900990099
+    "total_committed": 38,
+    "agent_percentage": 100
   },
   "transcript_path": ".claude/projects/-Users-rav-projects-marin/40b04cfc-1072-495b-8c66-db339475e18c.jsonl"
 }
