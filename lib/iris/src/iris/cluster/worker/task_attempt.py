@@ -22,9 +22,10 @@ from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, Contain
 from iris.cluster.types import DEFAULT_BASE_IMAGE, JobName, is_task_finished
 from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
+from iris.cluster.worker.gcs_log_syncer import GcsLogSyncer
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker_types import TaskLogs
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
 from iris.time_utils import Deadline, Duration, Timestamp
@@ -198,6 +199,7 @@ class TaskAttempt:
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
         poll_interval_seconds: float = 5.0,
+        gcs_log_syncer: GcsLogSyncer | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -211,6 +213,7 @@ class TaskAttempt:
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
+            gcs_log_syncer: Optional GCS log syncer for persistent logs
         """
         self._bundle_provider = bundle_provider
         self._runtime = container_runtime
@@ -220,6 +223,7 @@ class TaskAttempt:
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
+        self._gcs_log_syncer = gcs_log_syncer
 
         # Task identity (from config)
         self.task_id: JobName = config.task_id
@@ -563,6 +567,10 @@ class TaskAttempt:
         # Track last log timestamp for incremental fetching
         last_log_time: Timestamp | None = None
 
+        # Track last GCS sync time for periodic syncing
+        last_gcs_sync = time.monotonic()
+        gcs_sync_interval = 30.0  # Sync every 30 seconds
+
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
@@ -640,6 +648,14 @@ class TaskAttempt:
             # Stream logs incrementally
             last_log_time = self._stream_logs(last_log_time)
 
+            # Periodically sync logs to GCS
+            if self._gcs_log_syncer and time.monotonic() - last_gcs_sync >= gcs_sync_interval:
+                try:
+                    self._gcs_log_syncer.sync()
+                    last_gcs_sync = time.monotonic()
+                except Exception as e:
+                    logger.warning(f"GCS log sync failed: {e}")
+
             # Collect stats
             try:
                 stats = handle.stats()
@@ -666,7 +682,7 @@ class TaskAttempt:
 
         Returns:
             Timestamp of the last log line + 1ms, or the input 'since' if no new logs.
-            We add 1ms because Docker's --since is inclusive at the timestamp boundary,
+            We add 1ms because Docker's--since is inclusive at the timestamp boundary,
             and we lose nanosecond precision when converting to milliseconds.
         """
         if not self._container_handle:
@@ -676,6 +692,17 @@ class TaskAttempt:
             for log_line in new_logs:
                 ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
                 self.logs.add(log_line.source, log_line.data, timestamp=ts)
+
+                # Also append to GCS log syncer if configured
+                if self._gcs_log_syncer:
+                    log_entry = cluster_pb2.Worker.LogEntry(
+                        timestamp=ts.to_proto(),
+                        source=log_line.source,
+                        data=log_line.data,
+                        attempt_id=self.attempt_id,
+                    )
+                    self._gcs_log_syncer.append(log_entry)
+
             if new_logs:
                 last_ts = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
                 return last_ts.add_ms(1)
@@ -696,6 +723,43 @@ class TaskAttempt:
         if self.cleanup_done:
             return
         self.cleanup_done = True
+
+        # Final GCS log sync and metadata write
+        if self._gcs_log_syncer and is_task_finished(self.status):
+            try:
+                # Sync any remaining logs
+                self._gcs_log_syncer.sync()
+
+                # Write metadata
+                metadata = logging_pb2.TaskAttemptMetadata(
+                    task_id=self.task_id.to_wire(),
+                    attempt_id=self.attempt_id,
+                    worker_id=self._worker_id or "unknown",
+                    status=self.status,
+                    exit_code=self.exit_code or 0,
+                    oom_killed=self._container_handle.status().oom_killed if self._container_handle else False,
+                    error_message=self.error or "",
+                )
+
+                # Add timestamps if available
+                if self.started_at:
+                    metadata.start_time.CopyFrom(self.started_at.to_proto())
+                if self.finished_at:
+                    metadata.end_time.CopyFrom(self.finished_at.to_proto())
+
+                # Add resource usage if available
+                if self.peak_memory_mb > 0:
+                    metadata.resource_usage.CopyFrom(
+                        logging_pb2.ResourceUsage(
+                            peak_memory_bytes=self.peak_memory_mb * 1024 * 1024,
+                            cpu_seconds=0,  # Not tracked currently
+                            gpu_memory_bytes=0,  # Not tracked currently
+                        )
+                    )
+
+                self._gcs_log_syncer.write_metadata(metadata)
+            except Exception as e:
+                logger.error(f"Failed to write final GCS logs/metadata: {e}")
 
         # Clean up container handle (logs already captured in monitor loop)
         if self._container_handle:

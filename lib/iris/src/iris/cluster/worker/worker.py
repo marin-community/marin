@@ -18,6 +18,8 @@ from iris.cluster.types import JobName
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
+from iris.cluster.worker.gcs_config import get_iris_log_prefix
+from iris.cluster.worker.gcs_log_syncer import GcsLogSyncer, GcsLogSyncerConfig
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
@@ -282,6 +284,28 @@ class Worker:
             # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
             logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
 
+    def _create_gcs_log_syncer(self, task_id_wire: str, attempt_id: int) -> GcsLogSyncer | None:
+        """Create GCS log syncer if IRIS_WORKER_PREFIX is configured.
+
+        Args:
+            task_id_wire: Full task ID in wire format
+            attempt_id: Attempt ID for this execution
+
+        Returns:
+            GcsLogSyncer instance or None if GCS logging is not configured
+        """
+        prefix = get_iris_log_prefix()
+        if not prefix:
+            return None
+
+        config = GcsLogSyncerConfig(
+            prefix=prefix,
+            worker_id=self._worker_id or "unknown",
+            task_id_wire=task_id_wire,
+            attempt_id=attempt_id,
+        )
+        return GcsLogSyncer(config)
+
     # Task management methods
 
     _TERMINAL_STATES = frozenset(
@@ -384,6 +408,9 @@ class Worker:
             cache_dir=self._cache_dir,
         )
 
+        # Create GCS log syncer if IRIS_WORKER_PREFIX is configured
+        gcs_log_syncer = self._create_gcs_log_syncer(task_id.to_wire(), attempt_id)
+
         attempt = TaskAttempt(
             config=config,
             bundle_provider=self._bundle_cache,
@@ -394,6 +421,7 @@ class Worker:
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
+            gcs_log_syncer=gcs_log_syncer,
         )
 
         with self._lock:
