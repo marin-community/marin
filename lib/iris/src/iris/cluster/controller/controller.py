@@ -19,6 +19,7 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
+    JobRequirements,
     Scheduler,
     SchedulingContext,
 )
@@ -36,6 +37,7 @@ from iris.cluster.types import (
     JobName,
     VmWorkerStatus,
     VmWorkerStatusMap,
+    WorkerId,
     get_device_type_enum,
     get_device_variant,
 )
@@ -59,6 +61,16 @@ def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint
             if c.value.HasField("string_value"):
                 return c.value.string_value == "true"
     return None
+
+
+def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
+    """Convert a ControllerJob to scheduler-compatible JobRequirements."""
+    return JobRequirements(
+        resources=job.request.resources,
+        constraints=list(job.request.constraints),
+        is_coscheduled=job.is_coscheduled,
+        coscheduling_group_by=job.coscheduling_group_by,
+    )
 
 
 def compute_demand_entries(state: ControllerState) -> list:
@@ -228,7 +240,7 @@ class Controller:
         self.stub_factory = worker_stub_factory
 
         self._state = ControllerState(heartbeat_failure_threshold=config.heartbeat_failure_threshold)
-        self._scheduler = Scheduler(self._state)
+        self._scheduler = Scheduler()
         self._service = ControllerServiceImpl(
             self._state,
             self,
@@ -369,19 +381,41 @@ class Controller:
         if not pending_tasks:
             return
 
-        result = self._scheduler.find_assignments(pending_tasks, workers)
+        # Handle timeouts before scheduling (scheduler doesn't know about deadlines)
+        schedulable_task_ids: list[JobName] = []
+        jobs: dict[JobName, JobRequirements] = {}
+        for task in pending_tasks:
+            if not task.can_be_scheduled():
+                continue
+            job = self._state.get_job(task.job_id)
+            if not job:
+                continue
+            if job.scheduling_deadline is not None and job.scheduling_deadline.expired():
+                self._mark_task_unschedulable(task)
+                continue
+            schedulable_task_ids.append(task.task_id)
+            if task.job_id not in jobs:
+                jobs[task.job_id] = job_requirements_from_job(job)
+
+        if not schedulable_task_ids:
+            return
+
+        building_counts = self._state.snapshot_building_counts()
+        context = self._scheduler.create_scheduling_context(
+            workers,
+            building_counts=building_counts,
+            pending_tasks=schedulable_task_ids,
+            jobs=jobs,
+        )
+        result = self._scheduler.find_assignments(context)
 
         # Buffer assignments for heartbeat delivery (commits resources via TaskAssignedEvent)
         if result.assignments:
             self._buffer_assignments(result.assignments)
 
-        # Handle timed-out tasks
-        for task in result.timed_out_tasks:
-            self._mark_task_unschedulable(task)
-
     def _buffer_assignments(
         self,
-        assignments: list[tuple[ControllerTask, ControllerWorker]],
+        assignments: list[tuple[JobName, WorkerId]],
     ) -> None:
         """Commit resources and buffer task assignments for heartbeat delivery.
 
@@ -389,28 +423,34 @@ class Controller:
         buffers RunTaskRequest protos via state.buffer_dispatch().
         """
         # Group assignments by job for coscheduled handling
-        by_job: dict[JobName, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
-        for task, worker in assignments:
-            by_job[task.job_id].append((task, worker))
+        by_job: dict[JobName, list[tuple[JobName, WorkerId]]] = defaultdict(list)
+        for task_id, worker_id in assignments:
+            job_id = task_id.parent
+            if job_id is not None:
+                by_job[job_id].append((task_id, worker_id))
 
         for job_id, job_assignments in by_job.items():
             job = self._state.get_job(job_id)
             if job is None:
                 continue
 
-            for task, worker in job_assignments:
+            for task_id, worker_id in job_assignments:
+                task = self._state.get_task(task_id)
+                if task is None:
+                    continue
+
                 # Commit resources via event
                 self._state.handle_event(
                     TaskAssignedEvent(
-                        task_id=task.task_id,
-                        worker_id=worker.worker_id,
+                        task_id=task_id,
+                        worker_id=worker_id,
                     )
                 )
 
                 # Build the run request
                 request = cluster_pb2.Worker.RunTaskRequest(
-                    task_id=task.task_id.to_wire(),
-                    num_tasks=len(self._state.get_job_tasks(task.job_id)),
+                    task_id=task_id.to_wire(),
+                    num_tasks=len(self._state.get_job_tasks(job_id)),
                     entrypoint=job.request.entrypoint,
                     environment=job.request.environment,
                     bundle_gcs_path=job.request.bundle_gcs_path,
@@ -423,7 +463,7 @@ class Controller:
                     request.timeout.CopyFrom(job.request.timeout)
 
                 # Buffer dispatch (state handles the lock)
-                self._state.buffer_dispatch(worker.worker_id, request)
+                self._state.buffer_dispatch(worker_id, request)
 
             # Wake heartbeat thread to deliver buffered dispatches immediately
             if job_assignments:
@@ -450,11 +490,18 @@ class Controller:
 
     def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
-        return self._scheduler.create_scheduling_context(workers)
+        building_counts = self._state.snapshot_building_counts()
+        return self._scheduler.create_scheduling_context(
+            workers,
+            building_counts=building_counts,
+        )
 
     def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str:
         """Get detailed diagnostics for why a job cannot be scheduled."""
-        return self._scheduler.get_job_scheduling_diagnostics(job, context)
+        req = job_requirements_from_job(job)
+        tasks = self._state.get_job_tasks(job.job_id)
+        schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
+        return self._scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
     def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
         """Buffer kill requests for delivery via next heartbeat.

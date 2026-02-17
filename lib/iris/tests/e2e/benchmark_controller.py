@@ -101,7 +101,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         ("v5litepod-4", 1, 4, num_small, "64", "64GB", "500GB"),
         ("v5litepod-8", 1, 8, num_medium, "96", "96GB", "1TB"),
         ("v5litepod-16", 4, 16, num_large, "128", "128GB", "1TB"),
-        ("v5litepod-32", 8, 32, num_xlarge, "256", "256GB", "2TB"),
+        ("v5litepod-32", 8, 32, num_xlarge, "256", "128GB", "1TB"),
     ]
 
     for variant, num_vms, tpu_count, count, cpu, memory, disk in slice_configs:
@@ -401,8 +401,8 @@ def _print_profile_table(speedscope_path: Path, top_n: int = 30) -> None:
 @click.option(
     "--profile-output",
     type=click.Path(path_type=Path),
-    default=None,
-    help="Directory for profile output (default: lib/iris/tests/e2e/profiles/)",
+    default=Path("/tmp/profiles"),
+    help="Directory for profile output (default: /tmp/profiles/)",
 )
 def benchmark(
     num_jobs: int,
@@ -412,9 +412,6 @@ def benchmark(
 ) -> None:
     """Run controller benchmark."""
     if profile:
-        if profile_output is None:
-            profile_output = Path(__file__).parent / "profiles"
-
         print(f"\nProfiling enabled: output will be saved to {profile_output}")
         print("Note: py-spy requires sudo permissions\n")
 

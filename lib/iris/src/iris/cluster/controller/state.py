@@ -1642,6 +1642,12 @@ class ControllerState:
             task_ids = self._tasks_by_job.get(job_id, [])
             return [self._tasks[tid] for tid in task_ids if tid in self._tasks]
 
+    def get_jobs_for_tasks(self, tasks: list[ControllerTask]) -> dict[JobName, ControllerJob]:
+        """Return job lookup dict for all jobs referenced by the given tasks."""
+        with self._lock:
+            job_ids = {t.job_id for t in tasks}
+            return {jid: self._jobs[jid] for jid in job_ids if jid in self._jobs}
+
     def peek_pending_tasks(self) -> list[ControllerTask]:
         """Return all schedulable tasks in priority order without removing them.
 
@@ -1822,6 +1828,28 @@ class ControllerState:
     def list_all_workers(self) -> list[ControllerWorker]:
         with self._lock:
             return list(self._workers.values())
+
+    def snapshot_building_counts(self) -> dict[WorkerId, int]:
+        """Atomically count tasks in BUILDING/ASSIGNED state per worker.
+
+        Must be done under the lock because the scheduling thread would otherwise
+        iterate worker.running_tasks while the heartbeat thread mutates it
+        (RuntimeError: Set changed size during iteration).
+        """
+        with self._lock:
+            counts: dict[WorkerId, int] = {}
+            for worker in self._workers.values():
+                count = 0
+                for task_id in worker.running_tasks:
+                    task = self._tasks.get(task_id)
+                    if task and task.state in (
+                        cluster_pb2.TASK_STATE_BUILDING,
+                        cluster_pb2.TASK_STATE_ASSIGNED,
+                    ):
+                        count += 1
+                if count > 0:
+                    counts[worker.worker_id] = count
+            return counts
 
     # =========================================================================
     # Heartbeat Dispatch API
