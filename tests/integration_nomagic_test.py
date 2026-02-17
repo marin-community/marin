@@ -114,7 +114,7 @@ def create_steps(*, prefix: str, synth_data: str) -> list[StepSpec]:
     consolidate_step = StepSpec(
         name="consolidate",
         deps=[hq_step, dedup_exact_step, dedup_fuzzy_step],
-        fn=lambda output_path: consolidate_fn(
+        fn=lambda output_path, deps: consolidate_fn(
             input_path=hq_step.output_path,
             output_path=output_path,
             filters=[
