@@ -71,12 +71,12 @@ logger = logging.getLogger(__name__)
 def _extract_checkpoint_name(checkpoint_path: Optional[str], hf_checkpoint: Optional[str]) -> str:
     """Extract a clean name from checkpoint path for use in filenames.
 
-    Converts paths like:
-    - gs://marin-us-east1/checkpoints/vlm-model-name/hf/step-12345/ -> us_east1_vlm_model_name_step_12345
-    - gs://marin-us-central1/hf/model-name/step-1000/ -> us_central1_model_name_step_1000
-    - Qwen/Qwen2-VL-7B -> Qwen_Qwen2_VL_7B
-
-    Special characters are replaced with underscores.
+    Extracts the experiment name and step number from GCS checkpoint paths:
+    - gs://marin-us-east1/checkpoints/vlm-model-name-0-4e97cb/hf/.../step-12345/
+      -> vlm_model_name_step_12345
+    - gs://marin-us-central1/checkpoints/vlm-model-name-0-e6b2c0/checkpoints/step-39000/step-39000/
+      -> vlm_model_name_step_39000
+    - Qwen/Qwen2-VL-7B -> Qwen2_VL_7B
     """
     import re
 
@@ -85,29 +85,37 @@ def _extract_checkpoint_name(checkpoint_path: Optional[str], hf_checkpoint: Opti
     # Remove trailing slashes
     path = path.rstrip("/")
 
-    # For GCS paths, try to extract meaningful parts
+    # For GCS paths, extract experiment name and step
     if path.startswith("gs://"):
-        # Remove gs:// prefix and bucket name
         parts = path.split("/")
-        # parts[0] is "gs:", parts[1] is "", parts[2] is bucket name
-        bucket_name = parts[2] if len(parts) > 2 else ""
+        # parts: ["gs:", "", bucket, "checkpoints", experiment_name, ...]
 
-        # Extract zone from bucket name (e.g., "marin-us-east1" -> "us-east1")
-        zone_prefix = ""
-        if bucket_name.startswith("marin-"):
-            zone_prefix = bucket_name[len("marin-"):]  # e.g., "us-east1"
+        # Find experiment name: first part after "checkpoints" that isn't "checkpoints", "hf", or "step-*"
+        experiment_name = None
+        step = None
+        for p in parts[3:]:  # skip gs:, "", bucket
+            if p in ("checkpoints", "hf", ""):
+                continue
+            if re.match(r"step-\d+", p):
+                if step is None:
+                    step = p  # take first step-N occurrence
+                continue
+            if experiment_name is None:
+                experiment_name = p
 
-        # Find 'hf' directory if present and take everything after it
-        if "hf" in parts:
-            hf_idx = parts.index("hf")
-            meaningful_parts = parts[hf_idx + 1:]
+        if experiment_name:
+            # Strip trailing hash suffix like "-0-4e97cb" or "-0-e6b2c0"
+            experiment_name = re.sub(r"-\d+-[0-9a-f]{4,}$", "", experiment_name)
+            name_parts = [experiment_name]
         else:
-            # Otherwise take last 2-3 meaningful parts
-            meaningful_parts = [p for p in parts[-3:] if p and p not in ("checkpoints", "hf")]
+            name_parts = parts[-2:]
 
-        path = "_".join([zone_prefix] + meaningful_parts) if zone_prefix else "_".join(meaningful_parts)
+        if step:
+            name_parts.append(step)
+
+        path = "_".join(name_parts)
     else:
-        # For HF model names like "Qwen/Qwen2-VL-7B", just use the path
+        # For HF model names like "Qwen/Qwen2-VL-7B", just use the last part
         path = path.split("/")[-1] if "/" in path else path
 
     # Replace special characters with underscores
