@@ -1,6 +1,6 @@
 # Job Monitoring Loop
 
-Monitor a Ray job, automatically restarting on failure.
+Monitor a Ray job, automatically restarting the **job** on failure.
 
 ## Before Starting
 
@@ -9,6 +9,8 @@ When the user asks you to start a monitoring loop, gather the required informati
 1. **job_id** - What is the Ray job ID? (e.g., `ray-run-held-isoflop_sweep-20260131-051716`)
 2. **cluster** - Which cluster is it running on? (e.g., `us-east5-a`, `us-central2`)
 3. **experiment** - What is the experiment script path? (e.g., `experiments/isoflop_sweep.py`)
+
+Cluster-level actions are out of scope for this loop. Do not restart, recreate, or otherwise mutate the cluster (including head-node restart) unless the user gives explicit consent in the current thread.
 
 Ask the user for any missing information before proceeding. Example:
 
@@ -41,12 +43,18 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
 2. CHECK
    uv run scripts/ray/cluster.py --cluster <CLUSTER> job-logs -n 50 -g "loss\|error" <JOB_ID>
 
-3. EVALUATE
-   - If output contains "error" or "Error" or "Traceback" → go to step 4
-   - If output contains "loss" lines → go to step 1
-   - If no output (job dead) → go to step 4
+3. PRINT W&B RUN IDS/LINKS
+   - Inspect recent logs for W&B run URLs / IDs (for example lines containing `wandb: 🚀 View run` or `/runs/<RUN_ID>`).
+   - Print the run id(s) and full W&B run link(s) once per training run.
+   - If a restart creates a new training run, print the new run id(s)/link(s) once.
 
-4. RESTART
+4. EVALUATE
+   - If output contains "error" or "Error" or "Traceback" → go to step 5
+   - If output contains "loss" lines → go to step 1
+   - If no output (job dead) → go to step 5
+
+5. RESTART
+   - This step restarts only the Ray job. Never restart/recreate/mutate the cluster here without explicit human consent in this thread.
    uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster <CLUSTER> -- python <EXPERIMENT_PATH>
 
    - Capture new job_id from output
@@ -56,7 +64,7 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
 
 ## Fixing Small Bugs
 
-When step 3 (EVALUATE) detects an error, before restarting:
+When step 4 (EVALUATE) detects an error, before restarting:
 
 1. **Analyze the error** in the logs:
    - Look for `Traceback`, `Error`, `Exception`
@@ -65,7 +73,7 @@ When step 3 (EVALUATE) detects an error, before restarting:
 2. **If it's a small fix** (typo, missing import, wrong variable name):
    - Read the relevant file
    - Make the fix with Edit tool
-   - Proceed to step 4 (RESTART)
+   - Proceed to step 5 (RESTART)
 
 3. **If it's a complex issue** (architectural, unclear cause, requires investigation):
    - Do NOT attempt to fix automatically
@@ -90,3 +98,4 @@ Examples of complex issues (do not auto-fix):
 - Track restart_count to detect flapping jobs
 - State file allows resuming if context resets
 - If the same error occurs after a fix attempt, do not retry - report to user
+- Never restart/recreate/mutate the cluster (including restarting the head node) without explicit human consent in this thread
