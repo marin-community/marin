@@ -196,3 +196,93 @@ done'
     - `null_realized=0.501`, `null_assignments=513`, `real_assignments=511`
 - Next action:
   - Run TPU matrix comparing `independent` vs `take_until_null` across the same shape/topk/null grid.
+
+### 2026-02-17 15:32 - TPU mode-comparison sweep complete (`independent` vs `take_until_null`, `null=0.1..0.9`)
+- Command:
+```bash
+RAY_AUTH_MODE=token uv run --python 3.11 scripts/ray/dev_tpu.py \
+  --config infra/marin-us-central1.yaml \
+  --tpu-name dlwh-null-moe-133632 execute --no-sync \
+  -- /bin/bash -lc '
+set -euo pipefail
+OUT=.agents/logbooks/null_routed_moe_mode_compare_$(date +%Y%m%d_%H%M%S).log
+mkdir -p .agents/logbooks
+: > "$OUT"
+for MODE in independent take_until_null; do
+  for shape in "32768 2048 1408 60" "32768 2048 2048 64" "65536 3072 3072 128"; do
+    read -r TOK H MLP E <<<"$shape"
+    for TK in 2 4 8; do
+      echo "RUN mode=$MODE shape=$TOK,$H,$MLP,$E topk=$TK" | tee -a "$OUT"
+      uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py \
+        --distribution random \
+        --tokens "$TOK" --hidden "$H" --mlp-dim "$MLP" --experts "$E" --topk "$TK" \
+        --backend gmm --impl fused_w13 --bench-pass forward_backward \
+        --parallel-mode ep --queue-mode full --iters 3 --warmup 1 \
+        --null-route-sweep --null-routing-mode "$MODE" --renormalize-real-after-null | tee -a "$OUT"
+    done
+  done
+done'
+```
+- Artifacts:
+  - Raw log: `.agents/logbooks/null_routed_moe_mode_compare_20260217_225245.log`
+  - Parsed sweep CSV (`162` rows): `.agents/logbooks/null_routed_moe_mode_compare_20260217_225245.csv`
+  - Mode delta CSV (`take_until_null` vs `independent`, `90` pairs): `.agents/logbooks/null_routed_moe_mode_delta_20260217_233311.csv`
+- Coverage:
+  - `2` modes x `3` shapes x `3` top-k x `9` null fractions = `162` rows
+- Notes:
+  - The harness emitted one trailing `RESULT_SUMMARY` dump with duplicate `RESULT` lines; parsing uses pre-summary rows only.
+- Realized null accuracy:
+  - `independent`: `max |realized-target| = 0.003`, mean abs error `0.000511`
+  - `take_until_null`: `max |realized-target| = 0.004`, mean abs error `0.001578`
+- Interpretation:
+  - Throughput trends vs null fraction are very similar between the two semantics.
+  - No consistent end-to-end throughput advantage for `take_until_null`; mean `take_until_null` vs `independent` delta across all shape/null points:
+    - `topk=2`: `-0.012%`
+    - `topk=4`: `+0.104%`
+    - `topk=8`: `-0.154%`
+
+### 2026-02-17 15:52 - Added full `null=0.0` column for both routing modes
+- Command:
+```bash
+RAY_AUTH_MODE=token uv run --python 3.11 scripts/ray/dev_tpu.py \
+  --config infra/marin-us-central1.yaml \
+  --tpu-name dlwh-null-moe-133632 execute --no-sync \
+  -e LIBTPU_INIT_ARGS='--xla_tpu_scoped_vmem_limit_kib=50000' \
+  -- /bin/bash -lc '
+set -euo pipefail
+OUT=.agents/logbooks/null_routed_moe_mode_compare_null0_$(date +%Y%m%d_%H%M%S).log
+mkdir -p .agents/logbooks
+: > "$OUT"
+for MODE in independent take_until_null; do
+  for shape in "32768 2048 1408 60" "32768 2048 2048 64" "65536 3072 3072 128"; do
+    read -r TOK H MLP E <<<"$shape"
+    for TK in 2 4 8; do
+      echo "RUN mode=$MODE shape=$TOK,$H,$MLP,$E topk=$TK null=0.0" | tee -a "$OUT"
+      uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py \
+        --distribution random \
+        --tokens "$TOK" --hidden "$H" --mlp-dim "$MLP" --experts "$E" --topk "$TK" \
+        --backend gmm --impl fused_w13 --bench-pass forward_backward \
+        --parallel-mode ep --queue-mode full --iters 3 --warmup 1 \
+        --null-route-frac 0.0 --null-routing-mode "$MODE" --renormalize-real-after-null | tee -a "$OUT"
+    done
+  done
+done'
+```
+- Artifacts:
+  - Baseline raw log: `.agents/logbooks/null_routed_moe_mode_compare_null0_20260217_233311.log`
+  - Baseline parsed CSV (`18` rows): `.agents/logbooks/null_routed_moe_mode_compare_null0_20260217_233311.csv`
+  - Full merged matrix CSV (`180` rows, `null=0.0..0.9`): `.agents/logbooks/null_routed_moe_mode_compare_with_null0_20260217_233311.csv`
+
+#### Requested metric: `topk=8`, `null=0.1` vs `null=0.0` (both modes)
+| Mode | Shape | tokens/s @0.0 | tokens/s @0.1 | gain |
+| --- | --- | ---: | ---: | ---: |
+| `independent` | `32768x2048x1408x60` | 863,964 | 918,954 | +6.36% |
+| `independent` | `32768x2048x2048x64` | 772,588 | 814,197 | +5.39% |
+| `independent` | `65536x3072x3072x128` | 357,669 | 381,541 | +6.67% |
+| `take_until_null` | `32768x2048x1408x60` | 861,416 | 920,476 | +6.86% |
+| `take_until_null` | `32768x2048x2048x64` | 771,347 | 813,623 | +5.48% |
+| `take_until_null` | `65536x3072x3072x128` | 357,335 | 380,736 | +6.55% |
+
+- Aggregate for `topk=8`:
+  - `independent`: mean gain `+6.14%`
+  - `take_until_null`: mean gain `+6.30%`

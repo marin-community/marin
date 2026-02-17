@@ -47,4 +47,16 @@ At fixed shape, increasing null-routing fraction should reduce routed expert com
   - `.agents/logbooks/null_routed_moe_baseline0_20260217_223128.log`
   - `.agents/logbooks/null_routed_moe_baseline0_20260217_223128.csv`
   - `.agents/logbooks/null_routed_moe_results_with_null0_20260217_223128.csv`
-- Summary: tokens/s increases with higher null fraction across all combinations; effect size is largest at `topk=8`.
+- Mode-comparison artifacts (`independent` vs `take_until_null`):
+  - `.agents/logbooks/null_routed_moe_mode_compare_20260217_225245.log`
+  - `.agents/logbooks/null_routed_moe_mode_compare_20260217_225245.csv` (`162` rows for `null=0.1..0.9`)
+  - `.agents/logbooks/null_routed_moe_mode_compare_null0_20260217_233311.log`
+  - `.agents/logbooks/null_routed_moe_mode_compare_null0_20260217_233311.csv` (`18` rows for `null=0.0`)
+  - `.agents/logbooks/null_routed_moe_mode_compare_with_null0_20260217_233311.csv` (`180` rows for `null=0.0..0.9`)
+  - `.agents/logbooks/null_routed_moe_mode_delta_20260217_233311.csv`
+- Summary:
+  - Tokens/s increases with higher null fraction across all combinations; effect size is largest at `topk=8`.
+  - `topk=8`, `null=0.1` vs `0.0` mean gain:
+    - `independent`: `+6.14%`
+    - `take_until_null`: `+6.30%`
+  - `take_until_null` does not show a consistent throughput advantage over `independent`; average deltas are near zero (`topk=2`: `-0.012%`, `topk=4`: `+0.104%`, `topk=8`: `-0.154%`).
