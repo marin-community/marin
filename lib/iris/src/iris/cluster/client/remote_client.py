@@ -7,7 +7,7 @@ import logging
 import time
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.task_logging import fetch_logs_for_task, get_log_prefix
+from iris.cluster.task_logging import fetch_logs_for_task
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -258,12 +258,6 @@ class RemoteClusterClient:
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
         """
-        # Get storage prefix
-        prefix = get_log_prefix()
-        if not prefix:
-            logger.warning("IRIS_WORKER_PREFIX not configured, cannot fetch logs from storage")
-            return cluster_pb2.Controller.GetTaskLogsResponse()
-
         # Query controller for task status
         if target.is_task:
             # Single task
@@ -296,6 +290,19 @@ class RemoteClusterClient:
             if not task_status.worker_id:
                 # Task hasn't been assigned to a worker yet
                 continue
+
+            if not task_status.log_directory:
+                # Task has no log directory (worker may not have reported it yet)
+                logger.debug(f"Task {task_status.task_id} has no log_directory, skipping")
+                continue
+
+            # Extract prefix from log_directory
+            # Format: {prefix}/{worker_id}/{task_id}/{attempt_id}
+            log_dir_parts = task_status.log_directory.rsplit("/", 3)
+            if len(log_dir_parts) != 4:
+                logger.warning(f"Invalid log_directory format for {task_status.task_id}: {task_status.log_directory}")
+                continue
+            prefix = log_dir_parts[0]
 
             # Determine which attempts to fetch
             if attempt_id >= 0:
