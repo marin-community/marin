@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Transform any HuggingFace preference dataset (for DPO, etc) to a standard format within each preference "column".
@@ -36,7 +25,7 @@ import datasets
 import draccus
 import fsspec
 from datasets import get_dataset_config_info
-from zephyr import Backend, Dataset, write_jsonl_file
+from zephyr import Dataset, ZephyrContext, write_jsonl_file
 
 from marin.utils import is_path_like
 
@@ -303,7 +292,8 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
 
     # Process all tasks in parallel
     pipeline = Dataset.from_list(tasks).map(process_split_task)
-    results = Backend.execute(pipeline)
+    with ZephyrContext(name="transform-preference") as ctx:
+        results = ctx.execute(pipeline)
 
     # Log summary
     for result in results:

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Codename: hypnotic-spoonbill
@@ -21,6 +10,9 @@ same mix as monument-jellyfish, except that we are adding some flan and tulu.
 We are also only lowering the LR to 2.75e-5 instead of 1.7e-5. After around
 that point the loss started to increase again. I still don't know why.
 """
+
+# NOTE: This historical file originally used linear permutation through Marin's old mixture helpers.
+# Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
 
 import dataclasses
 
@@ -91,7 +83,6 @@ spoonbill_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, spoonbill_weights),
     ],
-    permutation_type="linear",
 )
 
 

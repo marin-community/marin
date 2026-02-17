@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Controller RPC service implementation handling job, task, and worker operations.
 
@@ -22,7 +11,6 @@ aggregated from task states.
 import json
 import logging
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -36,8 +24,14 @@ from iris.cluster.controller.events import (
     JobSubmittedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import SchedulingContext, TaskScheduleResult
-from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
+from iris.cluster.controller.scheduler import SchedulingContext
+from iris.cluster.controller.state import (
+    ControllerEndpoint,
+    ControllerJob,
+    ControllerState,
+    ControllerTask,
+    ControllerWorker,
+)
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
@@ -51,8 +45,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_TRANSACTION_LIMIT = 50
 DEFAULT_MAX_TOTAL_LINES = 10000
 
+# Maximum bundle size in bytes (25 MB) - matches client-side limit
+MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
 # Log fetching configuration
-LOG_FETCH_MAX_WORKERS = 16  # Max parallel worker connections
 LOG_FETCH_DEFAULT_TIMEOUT_MS = 10_000  # 10s default if no deadline from client
 LOG_FETCH_MIN_TIMEOUT_MS = 1_000  # 1s minimum per-worker timeout
 
@@ -78,11 +74,10 @@ class _LogFetchResult:
     error: str | None
 
 
-def _fetch_worker_logs(req: _LogFetchRequest, timeout_ms: int) -> _LogFetchResult:
+def _fetch_worker_logs(req: _LogFetchRequest, stub: WorkerServiceClientSync, timeout_ms: int) -> _LogFetchResult:
     """Fetch logs from a single worker with timeout."""
     try:
-        worker_client = WorkerServiceClientSync(f"http://{req.worker_address}")
-        worker_resp = worker_client.fetch_task_logs(
+        worker_resp = stub.fetch_task_logs(
             cluster_pb2.Worker.FetchTaskLogsRequest(
                 task_id=req.task_id_wire,
                 filter=req.log_filter,
@@ -121,23 +116,28 @@ class AutoscalerProtocol(Protocol):
         ...
 
 
-class SchedulerProtocol(Protocol):
-    """Protocol for scheduler operations used by ControllerServiceImpl."""
+class StubFactoryProtocol(Protocol):
+    """Protocol for getting cached worker RPC stubs."""
+
+    def get_stub(self, address: str) -> WorkerServiceClientSync: ...
+    def evict(self, address: str) -> None: ...
+
+
+class ControllerProtocol(Protocol):
+    """Protocol for controller operations used by ControllerServiceImpl."""
 
     def wake(self) -> None: ...
 
-    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
-        """Send KILL RPCs to workers for tasks that were running."""
-        ...
+    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None: ...
 
-    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
-        """Get the current scheduling status of a task (for dashboard display)."""
-        ...
+    def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext: ...
+
+    def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str: ...
 
     @property
-    def autoscaler(self) -> AutoscalerProtocol | None:
-        """Get the autoscaler instance, if autoscaling is enabled."""
-        ...
+    def autoscaler(self) -> AutoscalerProtocol | None: ...
+
+    stub_factory: StubFactoryProtocol
 
 
 class ControllerServiceImpl:
@@ -153,12 +153,12 @@ class ControllerServiceImpl:
     def __init__(
         self,
         state: ControllerState,
-        scheduler: SchedulerProtocol,
+        controller: ControllerProtocol,
         bundle_prefix: str,
         log_buffer: LogBuffer | None = None,
     ):
         self._state = state
-        self._scheduler = scheduler
+        self._controller = controller
         self._bundle_store = BundleStore(bundle_prefix)
         self._log_buffer = log_buffer
 
@@ -209,6 +209,16 @@ class ControllerServiceImpl:
             # Handle bundle_blob: upload to bundle store, then replace blob
             # with the resulting GCS path (preserving all other fields).
             if request.bundle_blob:
+                # Validate bundle size
+                bundle_size = len(request.bundle_blob)
+                if bundle_size > MAX_BUNDLE_SIZE_BYTES:
+                    bundle_size_mb = bundle_size / (1024 * 1024)
+                    max_size_mb = MAX_BUNDLE_SIZE_BYTES / (1024 * 1024)
+                    raise ConnectError(
+                        Code.INVALID_ARGUMENT,
+                        f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
+                    )
+
                 bundle_path = self._bundle_store.write_bundle(job_id.to_wire(), request.bundle_blob)
 
                 new_request = cluster_pb2.Controller.LaunchJobRequest()
@@ -225,7 +235,7 @@ class ControllerServiceImpl:
                     timestamp=Timestamp.now(),
                 )
             )
-            self._scheduler.wake()
+            self._controller.wake()
 
             num_tasks = len(self._state.get_job_tasks(job_id))
             logger.info(f"Job {job_id} submitted with {num_tasks} task(s)")
@@ -290,6 +300,15 @@ class ControllerServiceImpl:
                 proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
             task_statuses.append(proto_task_status)
 
+        # Get scheduling diagnostics for pending jobs
+        pending_reason = ""
+        if job.state == cluster_pb2.JOB_STATE_PENDING:
+            # Create scheduling context once for all tasks
+            workers = self._state.list_all_workers()
+            sched_context = self._controller.create_scheduling_context(workers)
+            # Get job-level diagnostics (expensive but only for detail view)
+            pending_reason = self._controller.get_job_scheduling_diagnostics(job, sched_context)
+
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -300,6 +319,7 @@ class ControllerServiceImpl:
             preemption_count=total_preemption_count,
             tasks=task_statuses,
             name=job.request.name if job.request else "",
+            pending_reason=pending_reason,
         )
         if job.request:
             proto_job_status.resources.CopyFrom(job.request.resources)
@@ -356,7 +376,7 @@ class ControllerServiceImpl:
 
         # Send kill RPCs to workers for any tasks that were killed
         if txn.tasks_to_kill:
-            self._scheduler.kill_tasks_on_workers(txn.tasks_to_kill)
+            self._controller.kill_tasks_on_workers(txn.tasks_to_kill)
 
     def list_jobs(
         self,
@@ -461,11 +481,42 @@ class ControllerServiceImpl:
 
         all_jobs.sort(key=sort_key, reverse=reverse)
 
+        # Build parent -> children map to keep families together during pagination
+        children_by_parent: dict[str, list[cluster_pb2.JobStatus]] = {}
+        job_by_name = {job.name: job for job in all_jobs}
+
+        for job in all_jobs:
+            # Extract parent name from hierarchical job name (e.g., "/a/b/c" -> "/a/b")
+            if job.name and "/" in job.name:
+                last_slash = job.name.rfind("/")
+                if last_slash > 0:
+                    parent_name = job.name[:last_slash]
+                    if parent_name in job_by_name:
+                        if parent_name not in children_by_parent:
+                            children_by_parent[parent_name] = []
+                        children_by_parent[parent_name].append(job)
+
         # Pagination (limit=0 means return all jobs)
         offset = max(request.offset, 0)
         if request.limit > 0:
             limit = min(request.limit, 500)
+
+            # Include jobs in the requested range
             paginated_jobs = all_jobs[offset : offset + limit]
+
+            # Extend pagination to include all children of any parent in this page
+            # This ensures parent-child groups stay together even when pagination would split them
+            included_names = {job.name for job in paginated_jobs}
+            additional_children = []
+
+            for job in paginated_jobs:
+                if job.name in children_by_parent:
+                    for child in children_by_parent[job.name]:
+                        if child.name not in included_names:
+                            additional_children.append(child)
+                            included_names.add(child.name)
+
+            paginated_jobs.extend(additional_children)
             has_more = offset + limit < total_count
         else:
             paginated_jobs = all_jobs[offset:]
@@ -534,10 +585,6 @@ class ControllerServiceImpl:
             for job in self._state.list_all_jobs():
                 tasks.extend(self._state.get_job_tasks(job.job_id))
 
-        # Build scheduling context once for all pending-task diagnostics
-        workers = self._state.get_available_workers()
-        sched_context = SchedulingContext.from_workers(workers)
-
         task_statuses = []
         for task in tasks:
             # Look up worker address
@@ -547,13 +594,12 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
-            # Add scheduling diagnostics for pending tasks
+            # Don't add scheduling diagnostics in list view - too expensive
+            # Users should check job detail page for scheduling diagnostics
             pending_reason = ""
             can_be_scheduled = False
             if task.state == cluster_pb2.TASK_STATE_PENDING:
                 can_be_scheduled = task.can_be_scheduled()
-                schedule_status = self._scheduler.task_schedule_status(task, sched_context)
-                pending_reason = schedule_status.failure_reason or ""
 
             # Use attempt timestamps since task-level timestamps are not set
             current_attempt = task.current_attempt
@@ -618,7 +664,7 @@ class ControllerServiceImpl:
                     timestamp=Timestamp.now(),
                 )
             )
-            self._scheduler.wake()
+            self._controller.wake()
 
             logger.info("Worker registered: %s at %s", worker_id, request.address)
             return cluster_pb2.Controller.RegisterResponse(
@@ -637,7 +683,7 @@ class ControllerServiceImpl:
         heartbeat response.
         """
         # Just wake the scheduler; it will trigger a priority heartbeat for this worker
-        self._scheduler.wake()
+        self._controller.wake()
         return cluster_pb2.Empty()
 
     def list_workers(
@@ -763,7 +809,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get current autoscaler status with worker info populated."""
-        autoscaler = self._scheduler.autoscaler
+        autoscaler = self._controller.autoscaler
         if not autoscaler:
             return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
 
@@ -802,7 +848,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetVmLogsResponse:
         """Get initialization logs for a VM."""
-        autoscaler = self._scheduler.autoscaler
+        autoscaler = self._controller.autoscaler
         if not autoscaler:
             raise ConnectError(Code.UNAVAILABLE, "Autoscaler not configured")
 
@@ -987,16 +1033,11 @@ class ControllerServiceImpl:
         else:
             per_worker_timeout_ms = LOG_FETCH_DEFAULT_TIMEOUT_MS
 
-        # Phase 3: Fetch logs in parallel
+        # Phase 3: Fetch logs sequentially using cached stubs
         fetch_results: list[_LogFetchResult] = []
-        if fetch_requests:
-            num_workers = min(len(fetch_requests), LOG_FETCH_MAX_WORKERS)
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = {
-                    executor.submit(_fetch_worker_logs, req, per_worker_timeout_ms): req for req in fetch_requests
-                }
-                for future in as_completed(futures):
-                    fetch_results.append(future.result())
+        for req in fetch_requests:
+            stub = self._controller.stub_factory.get_stub(req.worker_address)
+            fetch_results.append(_fetch_worker_logs(req, stub, per_worker_timeout_ms))
 
         # Phase 4: Aggregate results
         task_logs: list[cluster_pb2.Controller.TaskLogBatch] = list(immediate_errors)
@@ -1030,6 +1071,40 @@ class ControllerServiceImpl:
             last_timestamp_ms=last_timestamp_ms,
             truncated=truncated,
         )
+
+    # --- Profiling ---
+
+    def profile_task(
+        self,
+        request: cluster_pb2.ProfileTaskRequest,
+        ctx: RequestContext,
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Profile a running task by proxying to its worker."""
+        with rpc_error_handler("profile_task"):
+            try:
+                task_name = JobName.from_wire(request.task_id)
+                task_name.require_task()
+            except ValueError as exc:
+                raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+            task = self._state.get_task(task_name)
+            if not task:
+                raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+
+            worker_id = task.worker_id
+            if not worker_id:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+
+            worker = self._state.get_worker(worker_id)
+            if not worker or not worker.healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+
+            timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
+            stub = self._controller.stub_factory.get_stub(worker.address)
+            resp = stub.profile_task(request, timeout_ms=timeout_ms)
+            return cluster_pb2.ProfileTaskResponse(
+                profile_data=resp.profile_data,
+                error=resp.error,
+            )
 
     # --- Transactions ---
 

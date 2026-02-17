@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Core types for the iris cluster layer.
 
@@ -28,8 +17,10 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum, IntEnum
+from pathlib import Path
 from typing import Any, NewType
 
+import cloudpickle
 import humanfriendly
 
 from iris.rpc import cluster_pb2
@@ -131,6 +122,24 @@ class JobName:
     def is_task(self) -> bool:
         """True if this is a task (last component is numeric)."""
         return self.task_index is not None
+
+    @property
+    def depth(self) -> int:
+        """Depth in the job hierarchy. Root jobs have depth 1.
+
+        Tasks inherit their parent job's depth (the task index
+        is not counted as a depth level).
+
+        Examples:
+            /root -> 1
+            /root/child -> 2
+            /root/child/grandchild -> 3
+            /root/0 (task) -> 1
+            /root/child/0 (task) -> 2
+        """
+        if self.is_task:
+            return len(self._parts) - 1
+        return len(self._parts)
 
     def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
         """True if this job name is an ancestor of another job name."""
@@ -495,29 +504,6 @@ except Exception:
 """
 
 
-def _build_uv_sync_flags(extras: Sequence[str] | None) -> str:
-    """Build uv sync flags from extras list.
-
-    Accepts 'extra' or 'package:extra' syntax. The package prefix is stripped
-    since --all-packages syncs every workspace member and --extra applies
-    to whichever package defines that extra name.
-    """
-    sync_parts = ["--all-packages", "--no-group", "dev"]
-    for e in extras or []:
-        if ":" in e:
-            _package, extra = e.split(":", 1)
-            sync_parts.append(f"--extra {extra}")
-        else:
-            sync_parts.append(f"--extra {e}")
-    return " ".join(sync_parts)
-
-
-def _build_pip_install_args(pip_packages: Sequence[str] | None) -> str:
-    """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
-    packages = ["cloudpickle", *list(pip_packages or [])]
-    return " ".join(f'"{pkg}"' for pkg in packages)
-
-
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -545,11 +531,6 @@ class EnvironmentSpec:
         }
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
-
-        uv_sync_flags = _build_uv_sync_flags(self.extras)
-        if uv_sync_flags:
-            merged_env_vars["IRIS_UV_SYNC_FLAGS"] = uv_sync_flags
-        merged_env_vars["IRIS_PIP_INSTALL"] = _build_pip_install_args(self.pip_packages)
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
@@ -734,24 +715,25 @@ class Entrypoint:
         payload = self.workdir_files.get("_callable.pkl")
         if payload is None:
             raise ValueError("Not a callable entrypoint")
-        import cloudpickle
 
         return cloudpickle.loads(payload)
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        import sys
-        from pathlib import Path
-
-        import cloudpickle
-
+        # mark any testing code as pickle_by_value so we can use it with cloudpickle
         module = sys.modules.get(fn.__module__)
         module_path = Path(module.__file__).parts if module and getattr(module, "__file__", None) else ()
         if module and (module.__package__ is None or module.__spec__ is None or "tests" in module_path):
             cloudpickle.register_pickle_by_value(module)
 
+        # We use bash -c so that $IRIS_WORKDIR and $IRIS_PYTHON are expanded
+        # at runtime from the container's environment.  ProcessContainerHandle
+        # remaps IRIS_WORKDIR to the host workdir and IRIS_PYTHON to
+        # sys.executable for local execution; in Docker containers these are
+        # set to "/app" and "python" respectively by task_attempt env setup.
+        # `exec` replaces bash with python to avoid an extra parent process.
         return cls(
-            command=["bash", "-c", "exec python -u $IRIS_WORKDIR/_callable_runner.py"],
+            command=["bash", "-c", "exec $IRIS_PYTHON -u $IRIS_WORKDIR/_callable_runner.py"],
             workdir_files={
                 "_callable.pkl": cloudpickle.dumps((fn, args, kwargs)),
                 "_callable_runner.py": CALLABLE_RUNNER.encode(),

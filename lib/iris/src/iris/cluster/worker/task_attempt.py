@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Task execution attempt handling.
 
@@ -93,7 +82,6 @@ class TaskAttemptConfig:
     ports: dict[str, int]
     workdir: Path
     cache_dir: Path
-    uv_cache_dir: Path
 
 
 def _get_host_ip() -> str:
@@ -158,6 +146,7 @@ def build_iris_env(
     env["IRIS_BIND_HOST"] = "0.0.0.0"
     env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
     env["IRIS_WORKDIR"] = "/app"
+    env["IRIS_PYTHON"] = "python"
 
     # Propagate extras and pip_packages so child jobs can inherit them
     extras = list(task.request.environment.extras)
@@ -240,7 +229,6 @@ class TaskAttempt:
         self.ports: dict[str, int] = config.ports
         self.workdir: Path | None = config.workdir
         self._cache_dir: Path = config.cache_dir
-        self._uv_cache_dir: Path = config.uv_cache_dir
         self._bundle_path: Path | None = None
 
         # Task state
@@ -281,6 +269,12 @@ class TaskAttempt:
         if self._container_handle:
             return self._container_handle.container_id
         return None
+
+    def stop(self, force: bool = False) -> None:
+        """Stop the container, if running."""
+        self.should_stop = True
+        if self._container_handle:
+            self._container_handle.stop(force=force)
 
     def transition_to(
         self,
@@ -480,6 +474,12 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
+        # Pre-create cache mount directories so Docker doesn't create them as root
+        uv_cache = self._cache_dir / "uv"
+        cargo_cache = self._cache_dir / "cargo"
+        uv_cache.mkdir(parents=True, exist_ok=True)
+        cargo_cache.mkdir(parents=True, exist_ok=True)
+
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=rt_ep,
@@ -488,7 +488,8 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=[
                 (str(self.workdir), "/app", "rw"),
-                (str(self._uv_cache_dir), "/uv/cache", "rw"),
+                (str(uv_cache), "/uv/cache", "rw"),
+                (str(cargo_cache), "/root/.cargo/registry", "rw"),
             ],
             task_id=self.task_id.to_wire(),
             job_id=job_id.to_wire(),
