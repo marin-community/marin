@@ -6,8 +6,7 @@
 import json
 import logging
 import os
-from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 
@@ -47,6 +46,11 @@ def get_log_prefix() -> str | None:
         return None
 
 
+def _default_sync_interval() -> Duration:
+    """Default sync interval for LogSyncerConfig."""
+    return Duration.from_seconds(30.0)
+
+
 @dataclass
 class LogSyncerConfig:
     """Configuration for log syncing."""
@@ -55,16 +59,14 @@ class LogSyncerConfig:
     worker_id: str
     task_id_wire: str
     attempt_id: int
-    sync_interval: Duration = Duration.from_seconds(30.0)
+    sync_interval: Duration = field(default_factory=_default_sync_interval)
 
 
 class LogSyncer:
     """Periodically syncs task logs to durable storage for post-mortem access.
 
     Writes logs in proto JSON format:
-    - stdout.jsonl: One LogEntry per line (stdout logs)
-    - stderr.jsonl: One LogEntry per line (stderr logs)
-    - build.jsonl: One LogEntry per line (build logs)
+    - logs.jsonl: All log entries (stdout, stderr, build) in a single file, one LogEntry per line
     - metadata.json: TaskAttemptMetadata (written once on completion)
 
     Path structure: {prefix}/{worker_id}/{task_id}/{attempt_id}/
@@ -96,6 +98,7 @@ class LogSyncer:
 
         Only writes when new log data exists since last sync.
         Writes in proto JSON format (one LogEntry per line).
+        All log sources (stdout, stderr, build) are written to a single logs.jsonl file.
         """
         with self._lock:
             if self._last_sync_index >= len(self._logs):
@@ -104,20 +107,14 @@ class LogSyncer:
             new_logs = self._logs[self._last_sync_index :]
             self._last_sync_index = len(self._logs)
 
-        # Group by source (stdout, stderr, build)
-        by_source = defaultdict(list)
-        for entry in new_logs:
-            by_source[entry.source].append(entry)
-
-        # Write each source to its file (append mode)
-        for source, entries in by_source.items():
-            file_path = f"{self.log_path}/{source}.jsonl"
-            try:
-                # Convert proto entries to JSON lines
-                lines = [self._proto_to_json_line(entry) for entry in entries]
-                self._append_lines(file_path, lines)
-            except Exception as e:
-                logger.warning(f"Failed to write {source} logs to {file_path}: {e}")
+        # Write all logs to single file (logs.jsonl)
+        file_path = f"{self.log_path}/logs.jsonl"
+        try:
+            # Convert proto entries to JSON lines
+            lines = [self._proto_to_json_line(entry) for entry in new_logs]
+            self._append_lines(file_path, lines)
+        except Exception as e:
+            logger.warning(f"Failed to write logs to {file_path}: {e}")
 
     def write_metadata(self, metadata: logging_pb2.TaskAttemptMetadata) -> None:
         """Write task metadata on completion.
@@ -200,9 +197,10 @@ class LogLocation:
         task_id = self.task_id_wire.lstrip("/")
         return f"{self.prefix}/{self.worker_id}/{task_id}/{self.attempt_id}"
 
-    def log_path(self, source: str) -> str:
-        """Get the storage path for a specific log source (stdout/stderr/build)."""
-        return f"{self.base_path}/{source}.jsonl"
+    @property
+    def logs_path(self) -> str:
+        """Get the storage path for all logs (single logs.jsonl file)."""
+        return f"{self.base_path}/logs.jsonl"
 
     @property
     def metadata_path(self) -> str:
@@ -242,15 +240,15 @@ def get_log_location(
 
 def read_logs(
     location: LogLocation,
-    source: str = "stdout",
+    source: str | None = None,
     regex: str | None = None,
     max_lines: int = 0,
 ) -> list[logging_pb2.LogEntry]:
-    """Read logs from storage for a specific source.
+    """Read logs from storage.
 
     Args:
         location: Storage location
-        source: Log source ("stdout", "stderr", or "build")
+        source: Optional log source filter ("stdout", "stderr", or "build"). If None, returns all logs.
         regex: Optional regex filter (applied in-memory)
         max_lines: Maximum number of lines to return (0 = unlimited)
 
@@ -264,7 +262,7 @@ def read_logs(
     else:
         fs = fsspec.filesystem("file")
 
-    log_path = location.log_path(source)
+    log_path = location.logs_path
 
     try:
         content = fs.cat_file(log_path).decode("utf-8")
@@ -281,6 +279,10 @@ def read_logs(
             # Parse proto JSON
             log_entry = logging_pb2.LogEntry()
             json_format.Parse(line, log_entry)
+
+            # Apply source filter if specified
+            if source and log_entry.source != source:
+                continue
 
             # Apply regex filter if specified
             if regex:
@@ -335,7 +337,7 @@ def fetch_logs_for_task(
     task_id_wire: str,
     worker_id: str,
     attempt_id: int,
-    source: str = "stdout",
+    source: str | None = None,
     regex: str | None = None,
     max_lines: int = 0,
     prefix: str | None = None,
@@ -346,7 +348,7 @@ def fetch_logs_for_task(
         task_id_wire: Full task ID in wire format
         worker_id: Worker ID that ran the task
         attempt_id: Attempt ID
-        source: Log source ("stdout", "stderr", or "build")
+        source: Optional log source filter ("stdout", "stderr", or "build"). If None, returns all logs.
         regex: Optional regex filter
         max_lines: Maximum number of lines (0 = unlimited)
         prefix: Storage prefix (defaults to get_log_prefix())

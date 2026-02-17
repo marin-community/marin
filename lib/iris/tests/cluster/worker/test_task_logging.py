@@ -6,20 +6,17 @@
 import tempfile
 from pathlib import Path
 
-import pytest
 from google.protobuf import json_format
 
 from iris.cluster.worker.task_logging import (
     LogLocation,
     LogSyncer,
     LogSyncerConfig,
-    get_log_location,
-    get_log_prefix,
     read_logs,
     read_metadata,
 )
 from iris.rpc import logging_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Timestamp
 
 
 def test_log_syncer_writes_new_logs():
@@ -54,8 +51,8 @@ def test_log_syncer_writes_new_logs():
         # Sync
         syncer.sync()
 
-        # Verify file exists and contains logs
-        log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "stdout.jsonl"
+        # Verify file exists and contains logs (single logs.jsonl file)
+        log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "logs.jsonl"
         assert log_path.exists()
 
         content = log_path.read_text()
@@ -88,7 +85,7 @@ def test_log_syncer_skips_when_no_new_logs():
         syncer.sync()
 
         # Get file mtime
-        log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "stdout.jsonl"
+        log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "logs.jsonl"
         mtime1 = log_path.stat().st_mtime
 
         # Sync again without new logs
@@ -133,7 +130,7 @@ def test_log_syncer_appends_to_existing_files():
         syncer.sync()
 
         # Verify both lines are in file
-        log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "stdout.jsonl"
+        log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "logs.jsonl"
         content = log_path.read_text()
         lines = content.strip().split("\n")
         assert len(lines) == 2
@@ -188,16 +185,16 @@ def test_log_location_base_path():
     assert location.base_path == expected
 
 
-def test_log_location_log_path():
-    """Test LogLocation.log_path method."""
+def test_log_location_logs_path():
+    """Test LogLocation.logs_path property."""
     location = LogLocation(
         prefix="gs://bucket",
         worker_id="worker-1",
         task_id_wire="/job/test/task/0",
         attempt_id=0,
     )
-    expected = "gs://bucket/worker-1/job/test/task/0/0/stdout.jsonl"
-    assert location.log_path("stdout") == expected
+    expected = "gs://bucket/worker-1/job/test/task/0/0/logs.jsonl"
+    assert location.logs_path == expected
 
 
 def test_log_location_metadata_path():
@@ -215,7 +212,7 @@ def test_log_location_metadata_path():
 def test_read_logs():
     """Test reading logs from storage."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Write logs
+        # Write logs from multiple sources to single file
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
@@ -234,6 +231,14 @@ def test_read_logs():
         syncer.append(
             logging_pb2.LogEntry(
                 timestamp=Timestamp.now().to_proto(),
+                source="stderr",
+                data="error 1",
+                attempt_id=0,
+            )
+        )
+        syncer.append(
+            logging_pb2.LogEntry(
+                timestamp=Timestamp.now().to_proto(),
                 source="stdout",
                 data="line 2",
                 attempt_id=0,
@@ -241,18 +246,26 @@ def test_read_logs():
         )
         syncer.sync()
 
-        # Read logs
+        # Read all logs
         location = LogLocation(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
             task_id_wire="/job/test/task/0",
             attempt_id=0,
         )
-        logs = read_logs(location, source="stdout")
+        all_logs = read_logs(location)
+        assert len(all_logs) == 3
 
-        assert len(logs) == 2
-        assert logs[0].data == "line 1"
-        assert logs[1].data == "line 2"
+        # Read only stdout logs
+        stdout_logs = read_logs(location, source="stdout")
+        assert len(stdout_logs) == 2
+        assert stdout_logs[0].data == "line 1"
+        assert stdout_logs[1].data == "line 2"
+
+        # Read only stderr logs
+        stderr_logs = read_logs(location, source="stderr")
+        assert len(stderr_logs) == 1
+        assert stderr_logs[0].data == "error 1"
 
 
 def test_read_logs_with_regex_filter():
