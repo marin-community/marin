@@ -155,7 +155,7 @@ VISION_FEATURE_HEIGHT = vision_config.image_size // vision_config.patch_size  # 
 data_config = ImageMixtureDatasetConfig(
     cache_dir="cache/vlm_demo",
     # Processor for image preprocessing
-    processor="gs://marin-vlm-eu/processors/llava-onevision-qwen2-0.5b-ov-hf",
+    processor="gs://marin-vlm-eu/processors/processors/llava-onevision-qwen2-0.5b-ov-hf",
     # Custom tokenizer for text processing (uses CustomVLMProcessor internally)
     tokenizer="Qwen/Qwen3-4B",
     configs={"train": data_source},

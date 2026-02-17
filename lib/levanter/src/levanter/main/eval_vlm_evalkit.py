@@ -557,6 +557,39 @@ class EvalVLMEvalKitConfig:
     """If True, save individual sample outputs."""
 
 
+def _get_vocab_from_levanter_checkpoint(checkpoint_path):
+    """Probe a Levanter checkpoint to determine vocab size from the embedding array shape."""
+    import asyncio
+
+    import tensorstore as ts
+
+    from levanter.checkpoint import discover_latest_checkpoint
+    from levanter.tensorstore_serialization import _create_ocdbt_spec, _list_ocdbt_keys
+
+    ckpt = discover_latest_checkpoint(checkpoint_path)
+    if ckpt is None:
+        return None
+
+    try:
+        keys = asyncio.run(_list_ocdbt_keys(ckpt))
+        # Find the zarr metadata key for the token embedding array
+        embedding_path = None
+        for key in keys:
+            if "token_embeddings" in key and key.endswith("zarr.json"):
+                embedding_path = key.replace("/zarr.json", "")
+                break
+        if embedding_path is None:
+            return None
+
+        # Open the array to read its shape (metadata only, no data loaded)
+        spec = _create_ocdbt_spec(ckpt, embedding_path)
+        store = ts.open(spec, read=True).result()
+        return store.shape[0]  # First dimension is vocab
+    except Exception as e:
+        logger.warning(f"Failed to probe vocab size from Levanter checkpoint: {e}")
+        return None
+
+
 def _load_vlm_model(
     config: EvalVLMEvalKitConfig,
     Vocab: Axis,
@@ -658,6 +691,12 @@ def main(config: EvalVLMEvalKitConfig):
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
     vocab_size = len(tokenizer)
+    # If loading from a Levanter checkpoint, use the checkpoint's vocab size (matches training behavior)
+    if config.checkpoint_path is not None:
+        ckpt_vocab = _get_vocab_from_levanter_checkpoint(config.checkpoint_path)
+        if ckpt_vocab is not None:
+            logger.info(f"Using vocab size {ckpt_vocab} from Levanter checkpoint (tokenizer has {vocab_size})")
+            vocab_size = ckpt_vocab
     # Use bfloat16 for inference to reduce vmem usage and match KV cache dtype
     mp: jmp.Policy = jmp.get_policy("compute=bfloat16,params=bfloat16,output=bfloat16")
     key = jax.random.PRNGKey(0)
