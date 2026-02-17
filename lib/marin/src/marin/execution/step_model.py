@@ -46,7 +46,7 @@ class StepSpec:
 
     def __post_init__(self):
         # Coerce StepSpec instances in deps to their output_path strings
-        # NOTE: https://stackoverflow.com/a/54119384
+        # NOTE: https://stackoverflow.com/a/54119384 - use setattr to handle the frozen class
         object.__setattr__(self, "deps", [dep.output_path if isinstance(dep, StepSpec) else dep for dep in self.deps])
 
     @cached_property
