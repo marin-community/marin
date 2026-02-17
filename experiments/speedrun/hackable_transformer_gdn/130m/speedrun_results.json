@@ -9,11 +9,10 @@
         },
         "description": "Hackable Transformer (130m) w/ hybrid Gated DeltaNet and standard attention layers (Muon)",
         "device_flops": 459000000000000.0,
-        "eval/paloma/c4_en/bpb": 1.1688202619552612,
+        "eval/paloma/c4_en/bpb": 1.1782728433609009,
         "model_config": {
           "activation_function": "silu",
           "attn_backend": null,
-          "cross_entropy_block_size": null,
           "flash_attention_block_size": null,
           "gdn_block_size": 4,
           "gdn_chunk_size": 128,
@@ -27,7 +26,7 @@
           "input_embedding_norm": false,
           "intermediate_dim": 1792,
           "layer_norm_epsilon": 1e-05,
-          "max_seq_len": 2048,
+          "max_seq_len": 4096,
           "num_heads": 8,
           "num_kv_heads": 8,
           "num_layers": 6,
@@ -37,6 +36,7 @@
             "factor": 1.0,
             "theta": 10000
           },
+          "seq_len": 4096,
           "tie_word_embeddings": false,
           "tokenizer": null,
           "upcast_attn": false,
@@ -45,17 +45,17 @@
           "use_gated_deltanet": true,
           "use_layer_norm_weight": true
         },
-        "model_flops": 1.7257003663994388e+18,
-        "model_flops_per_token": 184938496.0,
+        "model_flops": 1.765110981744132e+18,
+        "model_flops_per_token": 189181952.0,
         "model_size": 155530128,
-        "num_chips": 4,
-        "num_devices": 4,
+        "num_chips": 16,
+        "num_devices": 16,
         "resources": {
           "cpu": 1,
           "device": {
             "kind": "tpu",
             "topology": null,
-            "variant": "v5p-8"
+            "variant": "v5p-32"
           },
           "disk": "1g",
           "preemptible": true,
@@ -63,9 +63,9 @@
           "regions": null,
           "replicas": 1
         },
-        "run_completion_timestamp": "2026-01-10 08:11:28 UTC",
+        "run_completion_timestamp": "2026-02-05 15:08:50 UTC",
         "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
-        "total_tokens": 3110404096,
+        "total_tokens": 3110076416,
         "train_config": {
           "allow_partial_checkpoint": false,
           "beta1": null,
@@ -84,13 +84,14 @@
           "max_eval_batches": null,
           "max_grad_norm": null,
           "min_lr_ratio": null,
-          "num_train_steps": 12248,
+          "num_train_steps": 2966,
           "optimizer_config": {
             "adam_lr": 0.0032,
             "adam_weight_decay": null,
             "backend_steps": 5,
             "beta1": 0.8,
             "beta2": 0.98,
+            "coefficient_type": "quintic",
             "cooldown": null,
             "cycle_length": null,
             "cycles": null,
@@ -114,7 +115,7 @@
           },
           "per_device_eval_parallelism": null,
           "profiler": true,
-          "profiler_num_steps": 100,
+          "profiler_num_steps": 25,
           "profiler_start_step": 5,
           "reset_data_loader_on_init": true,
           "rewarmup": null,
@@ -123,7 +124,7 @@
           "steps_per_export": 10000,
           "steps_per_hf_export": -1,
           "steps_per_task_eval": null,
-          "train_batch_size": 124,
+          "train_batch_size": 256,
           "train_seq_len": null,
           "warmup": null,
           "watch": {
@@ -140,9 +141,9 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 2.948374565955375e+19,
-        "training_time": 16058.684999756944,
-        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_130m_gdn_2048_flash_neumann_ch_128_seg_16_fp32-2a5a28"
+        "training_hardware_flops": 1.170355149100662e+20,
+        "training_time": 15936.208457253022,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_130m_gdn_4096_ch_128_new-647382"
       }
     }
   ]

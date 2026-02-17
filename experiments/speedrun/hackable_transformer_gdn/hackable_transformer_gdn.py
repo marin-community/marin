@@ -108,7 +108,8 @@ def _dbg_sharding(tag: str, arr):
 @dataclass(frozen=True)
 class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     # Core dims
-    max_seq_len: int = 2048
+    seq_len: int = 4096
+    max_seq_len: int = 4096
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -539,7 +540,8 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
 
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
-        max_seq_len=2048,
+        seq_len=4096,
+        max_seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
@@ -644,7 +646,8 @@ def _resource_presets(use_gpu: bool = False):
 
 
 def _batch_sizes() -> dict[str, int]:
-    return {"130m": 132, "300m": 92, "520m": 52, "1_2b": 44}
+    # Batch sizes must be divisible by per_device_parallelism * data_axis_size (48)
+    return {"130m": 240, "300m": 144, "520m": 96, "1_2b": 48}
 
 
 def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]:
@@ -672,7 +675,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
         profiler=True,
     )
 
-    run_name = f"hacktx_{size}_gdn_{seq_len}_ch_{model_cfg.gdn_chunk_size}_seg_{model_cfg.gdn_segment_size}_v5p32"
+    run_name = f"hacktx_{size}_gdn_{seq_len}_ch_{model_cfg.gdn_chunk_size}_new"
     desc = f"Hackable Transformer ({size}) w/ hybrid Gated DeltaNet and standard attention layers (Muon)"
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
@@ -695,8 +698,7 @@ if __name__ == "__main__":
     ###
 
 
-    # sizes = ["130m", "300m", "520m", "1_2b"]
-    sizes = ["520m", "1_2b"]
+    sizes = ["130m", "300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     sink = False
     steps = []
