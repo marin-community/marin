@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Image build commands."""
 
@@ -18,6 +7,16 @@ import subprocess
 from pathlib import Path
 
 import click
+
+
+def _find_marin_root() -> Path:
+    """Find the marin monorepo root (contains pyproject.toml + lib/iris)."""
+    iris_root = _find_iris_root()
+    # iris root is lib/iris, marin root is two levels up
+    marin_root = iris_root.parent.parent
+    if (marin_root / "pyproject.toml").exists() and (marin_root / "lib" / "iris").is_dir():
+        return marin_root
+    raise click.ClickException("Cannot find marin repo root. Expected lib/iris to be inside a marin workspace.")
 
 
 def _find_iris_root() -> Path:
@@ -120,7 +119,7 @@ def _build_image(
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["-t", tag])
     cmd.extend(["-f", str(dockerfile_path)])
-    cmd.extend(["--load"])
+    cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])
     cmd.append(str(context_path))
 
     click.echo(f"Building image: {tag}")
@@ -189,6 +188,45 @@ def build_controller_image(
 ):
     """Build Docker image for Iris controller."""
     _build_image("controller", tag, push, dockerfile, context, platform, region, project)
+
+
+@build.command("task-image")
+@click.option("--tag", "-t", default="iris-task:latest", help="Image tag")
+@click.option("--push", is_flag=True, help="Push image to registry after building")
+@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
+@click.option("--platform", default="linux/amd64", help="Target platform")
+@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
+@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+def build_task_image(
+    tag: str,
+    push: bool,
+    dockerfile: str | None,
+    platform: str,
+    region: tuple[str, ...],
+    project: str,
+):
+    """Build base task image with system deps and pre-synced marin core deps.
+
+    The build context is the marin repo root so that pyproject.toml and uv.lock
+    are available for COPY. The Dockerfile lives at lib/iris/Dockerfile.task.
+    """
+    marin_root = _find_marin_root()
+    iris_root = _find_iris_root()
+    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / "Dockerfile.task"
+
+    if not dockerfile_path.exists():
+        raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
+
+    _build_image(
+        "task",
+        tag,
+        push,
+        str(dockerfile_path),
+        str(marin_root),
+        platform,
+        region,
+        project,
+    )
 
 
 @build.command("push")

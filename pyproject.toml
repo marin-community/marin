@@ -121,6 +121,7 @@ disable-search-path-heuristics = true
 # Prevent pyrefly from querying the Python interpreter for site-packages
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
+use-ignore-files = false
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -130,6 +131,9 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
+    # Do not exclude all hidden-path ancestors; this repo is often checked out under
+    # directories such as `.codex/worktrees/...`, and pyrefly evaluates globs on
+    # absolute paths during project mode.
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs

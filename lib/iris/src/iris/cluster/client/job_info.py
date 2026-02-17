@@ -1,22 +1,12 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Lightweight job metadata container without client instances or context logic.
 
 For the full IrisContext with client/registry/resolver, use iris.client.
 """
 
+import json
 import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -40,11 +30,17 @@ class JobInfo:
     advertise_host: str = "127.0.0.1"
     """The externally visible host name to use when advertising services."""
 
-    dockerfile: str | None = None
-    """The Dockerfile used to build this job's container, for inheritance by child jobs."""
+    extras: list[str] = field(default_factory=list)
+    """Extras from parent job, for child job inheritance."""
+
+    pip_packages: list[str] = field(default_factory=list)
+    """Pip packages from parent job, for child job inheritance."""
 
     ports: dict[str, int] = field(default_factory=dict)
     """Name to port number mapping for this task."""
+
+    env: dict[str, str] = field(default_factory=dict)
+    """Explicit env vars from the job's EnvironmentConfig, for child job inheritance."""
 
     @property
     def job_id(self) -> JobName:
@@ -77,6 +73,9 @@ def get_job_info() -> JobInfo | None:
             task_id.require_task()
         except ValueError:
             return None
+        job_env_json = os.environ.get("IRIS_JOB_ENV", "")
+        job_env = json.loads(job_env_json) if job_env_json else {}
+
         info = JobInfo(
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
@@ -84,9 +83,11 @@ def get_job_info() -> JobInfo | None:
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
-            dockerfile=os.environ.get("IRIS_DOCKERFILE"),
+            extras=json.loads(os.environ.get("IRIS_JOB_EXTRAS", "[]")),
+            pip_packages=json.loads(os.environ.get("IRIS_JOB_PIP_PACKAGES", "[]")),
             bundle_gcs_path=os.environ.get("IRIS_BUNDLE_GCS_PATH"),
             ports=_parse_ports_from_env(),
+            env=job_env,
         )
         _job_info.set(info)
         return info

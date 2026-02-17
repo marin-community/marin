@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
@@ -32,21 +21,27 @@ def test_entrypoint_from_callable_resolve_roundtrip():
 def test_entrypoint_proto_roundtrip_preserves_bytes():
     """Bytes survive to_proto -> from_proto without deserialization."""
     ep = Entrypoint.from_callable(_add, 1, 2)
-    original_bytes = ep.callable_bytes
+    original_files = ep.workdir_files
 
     proto = ep.to_proto()
     ep2 = Entrypoint.from_proto(proto)
 
-    assert ep2.callable_bytes == original_bytes
+    assert ep2.workdir_files == original_files
     fn, args, kwargs = ep2.resolve()
     assert fn(*args, **kwargs) == 3
 
 
 def test_entrypoint_command():
     ep = Entrypoint.from_command("echo", "hello")
-    assert ep.is_command
-    assert not ep.is_callable
+    assert not ep.workdir_files
     assert ep.command == ["echo", "hello"]
+
+
+def test_entrypoint_callable_has_workdir_files():
+    ep = Entrypoint.from_callable(_add, 1, 2)
+    assert "_callable.pkl" in ep.workdir_files
+    assert "_callable_runner.py" in ep.workdir_files
+    assert ep.command is not None
 
 
 def test_job_name_roundtrip_and_hierarchy():
@@ -88,3 +83,13 @@ def test_job_name_to_safe_token_and_deep_nesting():
     job = JobName.from_string("/a/b/c/d/e/0")
     assert job.to_safe_token() == "job__a__b__c__d__e__0"
     assert job.require_task()[1] == 0
+
+
+def test_job_name_depth():
+    """Job depth increases with hierarchy; tasks inherit parent depth."""
+    assert JobName.root("train").depth == 1
+    assert JobName.from_string("/train/eval").depth == 2
+    assert JobName.from_string("/train/eval/score").depth == 3
+    # Task depth equals parent job depth
+    assert JobName.from_string("/train/0").depth == 1
+    assert JobName.from_string("/train/eval/0").depth == 2

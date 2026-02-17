@@ -276,10 +276,17 @@ class Trainer:
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
-        if isinstance(config.tracker, Sequence):
-            self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
-        else:
-            self.tracker = config.tracker.init(self.run_id)
+
+        # Use existing global tracker if available (e.g., from levanter.initialize()),
+        # otherwise create a new one. This avoids calling wandb.init() twice.
+        try:
+            self.tracker = levanter.tracker.current_tracker()
+        except RuntimeError:
+            # No global tracker set, create one
+            if isinstance(config.tracker, Sequence):
+                self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
+            else:
+                self.tracker = config.tracker.init(self.run_id)
 
         self._cmanagers = []
 
@@ -527,6 +534,16 @@ class Trainer:
         """
         Performs training until the number of steps is reached.
         """
+        # Handle case where training is already complete (e.g., resuming from final checkpoint)
+        if int(state.step) >= self.num_train_steps:
+            logger.info(
+                f"Training already complete at step {state.step} (target: {self.num_train_steps}). "
+                "Running final hooks only."
+            )
+            info = StepInfo(state, 0.0, 0.0)
+            self.run_hooks(info, force=True)
+            return info
+
         info: Optional[StepInfo[S]] = None
         for info in self.training_steps(state, train_loader):
             pass

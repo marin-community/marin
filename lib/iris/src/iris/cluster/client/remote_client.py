@@ -1,27 +1,19 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """RPC-based cluster client implementation."""
 
-import sys
+import logging
 import time
 
-from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import Entrypoint, JobName, generate_dockerfile, is_job_finished
+from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
+from iris.rpc.errors import call_with_retry
+from iris.time_utils import Deadline, Duration, ExponentialBackoff
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteClusterClient:
@@ -68,34 +60,22 @@ class RemoteClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        fail_if_exists: bool = False,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
 
-        entrypoint_proto = entrypoint.to_proto()
+        if environment is None:
+            environment = EnvironmentSpec().to_proto()
+        env_config = environment
 
-        # If no dockerfile is provided, inherit from the parent job or generate a default.
-        dockerfile = environment.dockerfile if environment and environment.dockerfile else ""
-        if not dockerfile:
-            job_info = get_job_info()
-            if job_info is not None and job_info.dockerfile:
-                dockerfile = job_info.dockerfile
-            else:
-                dockerfile = generate_dockerfile(python_version=f"{sys.version_info.major}.{sys.version_info.minor}")
-
-        env_config = cluster_pb2.EnvironmentConfig(
-            pip_packages=list(environment.pip_packages) if environment else [],
-            env_vars=dict(environment.env_vars) if environment else {},
-            extras=list(environment.extras) if environment else [],
-            python_version=environment.python_version if environment else "",
-            dockerfile=dockerfile,
-        )
+        runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
 
         # Use bundle_gcs_path if available, otherwise use bundle_blob
         if self._bundle_gcs_path:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id.to_wire(),
-                entrypoint=entrypoint_proto,
+                entrypoint=runtime_ep,
                 resources=resources,
                 environment=env_config,
                 bundle_gcs_path=self._bundle_gcs_path,
@@ -104,11 +84,12 @@ class RemoteClusterClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
+                fail_if_exists=fail_if_exists,
             )
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id.to_wire(),
-                entrypoint=entrypoint_proto,
+                entrypoint=runtime_ep,
                 resources=resources,
                 environment=env_config,
                 bundle_blob=self._bundle_blob or b"",
@@ -117,6 +98,7 @@ class RemoteClusterClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
+                fail_if_exists=fail_if_exists,
             )
 
         if scheduling_timeout is not None:
@@ -128,9 +110,12 @@ class RemoteClusterClient:
         self._client.launch_job(request)
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
-        response = self._client.get_job_status(request)
-        return response.job
+        def _call():
+            request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
+            response = self._client.get_job_status(request)
+            return response.job
+
+        return call_with_retry(f"get_job_status({job_id})", _call)
 
     def wait_for_job(
         self,
@@ -204,9 +189,12 @@ class RemoteClusterClient:
         return list(response.endpoints)
 
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
-        request = cluster_pb2.Controller.ListJobsRequest()
-        response = self._client.list_jobs(request)
-        return list(response.jobs)
+        def _call():
+            request = cluster_pb2.Controller.ListJobsRequest()
+            response = self._client.list_jobs(request)
+            return list(response.jobs)
+
+        return call_with_retry("list_jobs", _call)
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
@@ -222,9 +210,13 @@ class RemoteClusterClient:
             TaskStatus proto for the requested task
         """
         task_name.require_task()
-        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
-        response = self._client.get_task_status(request)
-        return response.task
+
+        def _call():
+            request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
+            response = self._client.get_task_status(request)
+            return response.task
+
+        return call_with_retry(f"get_task_status({task_name})", _call)
 
     def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
         """List all tasks for a job.
@@ -235,36 +227,47 @@ class RemoteClusterClient:
         Returns:
             List of TaskStatus protos, one per task in the job
         """
-        request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
-        response = self._client.list_tasks(request)
-        return list(response.tasks)
+
+        def _call():
+            request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
+            response = self._client.list_tasks(request)
+            return list(response.tasks)
+
+        return call_with_retry(f"list_tasks({job_id})", _call)
 
     def fetch_task_logs(
         self,
-        task_name: JobName,
-        start: Timestamp | None = None,
-        max_lines: int = 0,
-    ) -> list[cluster_pb2.Worker.LogEntry]:
-        """Fetch logs for a specific task.
-
-        Uses the controller as a proxy to fetch logs from the worker.
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        """Fetch logs for a task or all tasks in a job.
 
         Args:
-            task_name: Full task name in format "/job/.../index"
-            start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = unlimited)
-
-        Returns:
-            List of LogEntry protos from the worker
+            target: Task ID or Job ID (detected by trailing numeric)
+            include_children: Include logs from child jobs (job ID only)
+            since_ms: Only return logs after this timestamp (exclusive)
+            max_total_lines: Maximum total lines (0 = default 10000)
+            regex: Regex filter for log content
+            attempt_id: Filter to specific attempt (-1 = all attempts)
         """
-        request = cluster_pb2.Controller.GetTaskLogsRequest(
-            task_id=task_name.to_wire(),
-            start_ms=start.epoch_ms() if start else 0,
-            limit=max_lines,
-            start_line=0,
-        )
-        response = self._client.get_task_logs(request)
-        return list(response.logs)
+
+        def _call():
+            request = cluster_pb2.Controller.GetTaskLogsRequest(
+                id=target.to_wire(),
+                include_children=include_children,
+                since_ms=since_ms,
+                max_total_lines=max_total_lines,
+                regex=regex or "",
+                attempt_id=attempt_id,
+            )
+            return self._client.get_task_logs(request)
+
+        return call_with_retry(f"fetch_task_logs({target})", _call)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

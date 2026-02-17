@@ -76,6 +76,68 @@ class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class CpuProfile(_message.Message):
+    __slots__ = ("format", "rate_hz")
+    class Format(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        FORMAT_UNSPECIFIED: _ClassVar[CpuProfile.Format]
+        FLAMEGRAPH: _ClassVar[CpuProfile.Format]
+        SPEEDSCOPE: _ClassVar[CpuProfile.Format]
+        RAW: _ClassVar[CpuProfile.Format]
+    FORMAT_UNSPECIFIED: CpuProfile.Format
+    FLAMEGRAPH: CpuProfile.Format
+    SPEEDSCOPE: CpuProfile.Format
+    RAW: CpuProfile.Format
+    FORMAT_FIELD_NUMBER: _ClassVar[int]
+    RATE_HZ_FIELD_NUMBER: _ClassVar[int]
+    format: CpuProfile.Format
+    rate_hz: int
+    def __init__(self, format: _Optional[_Union[CpuProfile.Format, str]] = ..., rate_hz: _Optional[int] = ...) -> None: ...
+
+class MemoryProfile(_message.Message):
+    __slots__ = ("format", "leaks")
+    class Format(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        FORMAT_UNSPECIFIED: _ClassVar[MemoryProfile.Format]
+        FLAMEGRAPH: _ClassVar[MemoryProfile.Format]
+        TABLE: _ClassVar[MemoryProfile.Format]
+        STATS: _ClassVar[MemoryProfile.Format]
+    FORMAT_UNSPECIFIED: MemoryProfile.Format
+    FLAMEGRAPH: MemoryProfile.Format
+    TABLE: MemoryProfile.Format
+    STATS: MemoryProfile.Format
+    FORMAT_FIELD_NUMBER: _ClassVar[int]
+    LEAKS_FIELD_NUMBER: _ClassVar[int]
+    format: MemoryProfile.Format
+    leaks: bool
+    def __init__(self, format: _Optional[_Union[MemoryProfile.Format, str]] = ..., leaks: _Optional[bool] = ...) -> None: ...
+
+class ProfileType(_message.Message):
+    __slots__ = ("cpu", "memory")
+    CPU_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_FIELD_NUMBER: _ClassVar[int]
+    cpu: CpuProfile
+    memory: MemoryProfile
+    def __init__(self, cpu: _Optional[_Union[CpuProfile, _Mapping]] = ..., memory: _Optional[_Union[MemoryProfile, _Mapping]] = ...) -> None: ...
+
+class ProfileTaskRequest(_message.Message):
+    __slots__ = ("task_id", "duration_seconds", "profile_type")
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    DURATION_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    duration_seconds: int
+    profile_type: ProfileType
+    def __init__(self, task_id: _Optional[str] = ..., duration_seconds: _Optional[int] = ..., profile_type: _Optional[_Union[ProfileType, _Mapping]] = ...) -> None: ...
+
+class ProfileTaskResponse(_message.Message):
+    __slots__ = ("profile_data", "error")
+    PROFILE_DATA_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    profile_data: bytes
+    error: str
+    def __init__(self, profile_data: _Optional[bytes] = ..., error: _Optional[str] = ...) -> None: ...
+
 class ProcessLogRecord(_message.Message):
     __slots__ = ("timestamp", "level", "logger_name", "message")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
@@ -306,19 +368,28 @@ class EnvironmentConfig(_message.Message):
     dockerfile: str
     def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ..., python_version: _Optional[str] = ..., dockerfile: _Optional[str] = ...) -> None: ...
 
-class Entrypoint(_message.Message):
-    __slots__ = ("callable", "command")
-    CALLABLE_FIELD_NUMBER: _ClassVar[int]
-    COMMAND_FIELD_NUMBER: _ClassVar[int]
-    callable: bytes
-    command: CommandEntrypoint
-    def __init__(self, callable: _Optional[bytes] = ..., command: _Optional[_Union[CommandEntrypoint, _Mapping]] = ...) -> None: ...
-
 class CommandEntrypoint(_message.Message):
     __slots__ = ("argv",)
     ARGV_FIELD_NUMBER: _ClassVar[int]
     argv: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, argv: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class RuntimeEntrypoint(_message.Message):
+    __slots__ = ("setup_commands", "run_command", "workdir_files")
+    class WorkdirFilesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: bytes
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[bytes] = ...) -> None: ...
+    SETUP_COMMANDS_FIELD_NUMBER: _ClassVar[int]
+    RUN_COMMAND_FIELD_NUMBER: _ClassVar[int]
+    WORKDIR_FILES_FIELD_NUMBER: _ClassVar[int]
+    setup_commands: _containers.RepeatedScalarFieldContainer[str]
+    run_command: CommandEntrypoint
+    workdir_files: _containers.ScalarMap[str, bytes]
+    def __init__(self, setup_commands: _Optional[_Iterable[str]] = ..., run_command: _Optional[_Union[CommandEntrypoint, _Mapping]] = ..., workdir_files: _Optional[_Mapping[str, bytes]] = ...) -> None: ...
 
 class AttributeValue(_message.Message):
     __slots__ = ("string_value", "int_value", "float_value")
@@ -393,8 +464,30 @@ class WorkerMetadata(_message.Message):
 
 class Controller(_message.Message):
     __slots__ = ()
+    class JobSortField(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        JOB_SORT_FIELD_UNSPECIFIED: _ClassVar[Controller.JobSortField]
+        JOB_SORT_FIELD_DATE: _ClassVar[Controller.JobSortField]
+        JOB_SORT_FIELD_NAME: _ClassVar[Controller.JobSortField]
+        JOB_SORT_FIELD_STATE: _ClassVar[Controller.JobSortField]
+        JOB_SORT_FIELD_FAILURES: _ClassVar[Controller.JobSortField]
+        JOB_SORT_FIELD_PREEMPTIONS: _ClassVar[Controller.JobSortField]
+    JOB_SORT_FIELD_UNSPECIFIED: Controller.JobSortField
+    JOB_SORT_FIELD_DATE: Controller.JobSortField
+    JOB_SORT_FIELD_NAME: Controller.JobSortField
+    JOB_SORT_FIELD_STATE: Controller.JobSortField
+    JOB_SORT_FIELD_FAILURES: Controller.JobSortField
+    JOB_SORT_FIELD_PREEMPTIONS: Controller.JobSortField
+    class SortDirection(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        SORT_DIRECTION_UNSPECIFIED: _ClassVar[Controller.SortDirection]
+        SORT_DIRECTION_ASC: _ClassVar[Controller.SortDirection]
+        SORT_DIRECTION_DESC: _ClassVar[Controller.SortDirection]
+    SORT_DIRECTION_UNSPECIFIED: Controller.SortDirection
+    SORT_DIRECTION_ASC: Controller.SortDirection
+    SORT_DIRECTION_DESC: Controller.SortDirection
     class LaunchJobRequest(_message.Message):
-        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout")
+        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists")
         NAME_FIELD_NUMBER: _ClassVar[int]
         ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -411,8 +504,9 @@ class Controller(_message.Message):
         COSCHEDULING_FIELD_NUMBER: _ClassVar[int]
         REPLICAS_FIELD_NUMBER: _ClassVar[int]
         TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+        FAIL_IF_EXISTS_FIELD_NUMBER: _ClassVar[int]
         name: str
-        entrypoint: Entrypoint
+        entrypoint: RuntimeEntrypoint
         resources: ResourceSpecProto
         environment: EnvironmentConfig
         bundle_gcs_path: str
@@ -427,7 +521,8 @@ class Controller(_message.Message):
         coscheduling: CoschedulingConfig
         replicas: int
         timeout: _time_pb2.Duration
-        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[Entrypoint, _Mapping]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+        fail_if_exists: bool
+        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -441,23 +536,41 @@ class Controller(_message.Message):
         include_result: bool
         def __init__(self, job_id: _Optional[str] = ..., include_result: _Optional[bool] = ...) -> None: ...
     class GetJobStatusResponse(_message.Message):
-        __slots__ = ("job",)
+        __slots__ = ("job", "request")
         JOB_FIELD_NUMBER: _ClassVar[int]
+        REQUEST_FIELD_NUMBER: _ClassVar[int]
         job: JobStatus
-        def __init__(self, job: _Optional[_Union[JobStatus, _Mapping]] = ...) -> None: ...
+        request: Controller.LaunchJobRequest
+        def __init__(self, job: _Optional[_Union[JobStatus, _Mapping]] = ..., request: _Optional[_Union[Controller.LaunchJobRequest, _Mapping]] = ...) -> None: ...
     class TerminateJobRequest(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
+        __slots__ = ("offset", "limit", "sort_field", "sort_direction", "name_filter", "state_filter")
+        OFFSET_FIELD_NUMBER: _ClassVar[int]
+        LIMIT_FIELD_NUMBER: _ClassVar[int]
+        SORT_FIELD_FIELD_NUMBER: _ClassVar[int]
+        SORT_DIRECTION_FIELD_NUMBER: _ClassVar[int]
+        NAME_FILTER_FIELD_NUMBER: _ClassVar[int]
+        STATE_FILTER_FIELD_NUMBER: _ClassVar[int]
+        offset: int
+        limit: int
+        sort_field: Controller.JobSortField
+        sort_direction: Controller.SortDirection
+        name_filter: str
+        state_filter: str
+        def __init__(self, offset: _Optional[int] = ..., limit: _Optional[int] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ...) -> None: ...
     class ListJobsResponse(_message.Message):
-        __slots__ = ("jobs",)
+        __slots__ = ("jobs", "total_count", "has_more")
         JOBS_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_COUNT_FIELD_NUMBER: _ClassVar[int]
+        HAS_MORE_FIELD_NUMBER: _ClassVar[int]
         jobs: _containers.RepeatedCompositeFieldContainer[JobStatus]
-        def __init__(self, jobs: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ...) -> None: ...
+        total_count: int
+        has_more: bool
+        def __init__(self, jobs: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ..., total_count: _Optional[int] = ..., has_more: _Optional[bool] = ...) -> None: ...
     class GetTaskStatusRequest(_message.Message):
         __slots__ = ("task_id",)
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
@@ -673,23 +786,40 @@ class Controller(_message.Message):
         actions: _containers.RepeatedCompositeFieldContainer[Controller.TransactionAction]
         def __init__(self, actions: _Optional[_Iterable[_Union[Controller.TransactionAction, _Mapping]]] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
-        __slots__ = ("task_id", "start_ms", "limit", "start_line")
+        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex", "attempt_id")
+        ID_FIELD_NUMBER: _ClassVar[int]
+        INCLUDE_CHILDREN_FIELD_NUMBER: _ClassVar[int]
+        SINCE_MS_FIELD_NUMBER: _ClassVar[int]
+        MAX_TOTAL_LINES_FIELD_NUMBER: _ClassVar[int]
+        REGEX_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+        id: str
+        include_children: bool
+        since_ms: int
+        max_total_lines: int
+        regex: str
+        attempt_id: int
+        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., regex: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
+    class TaskLogBatch(_message.Message):
+        __slots__ = ("task_id", "logs", "error", "worker_id")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        START_MS_FIELD_NUMBER: _ClassVar[int]
-        LIMIT_FIELD_NUMBER: _ClassVar[int]
-        START_LINE_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        start_ms: int
-        limit: int
-        start_line: int
-        def __init__(self, task_id: _Optional[str] = ..., start_ms: _Optional[int] = ..., limit: _Optional[int] = ..., start_line: _Optional[int] = ...) -> None: ...
-    class GetTaskLogsResponse(_message.Message):
-        __slots__ = ("logs", "worker_address")
         LOGS_FIELD_NUMBER: _ClassVar[int]
-        WORKER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+        ERROR_FIELD_NUMBER: _ClassVar[int]
+        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+        task_id: str
         logs: _containers.RepeatedCompositeFieldContainer[Worker.LogEntry]
-        worker_address: str
-        def __init__(self, logs: _Optional[_Iterable[_Union[Worker.LogEntry, _Mapping]]] = ..., worker_address: _Optional[str] = ...) -> None: ...
+        error: str
+        worker_id: str
+        def __init__(self, task_id: _Optional[str] = ..., logs: _Optional[_Iterable[_Union[Worker.LogEntry, _Mapping]]] = ..., error: _Optional[str] = ..., worker_id: _Optional[str] = ...) -> None: ...
+    class GetTaskLogsResponse(_message.Message):
+        __slots__ = ("task_logs", "last_timestamp_ms", "truncated")
+        TASK_LOGS_FIELD_NUMBER: _ClassVar[int]
+        LAST_TIMESTAMP_MS_FIELD_NUMBER: _ClassVar[int]
+        TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+        task_logs: _containers.RepeatedCompositeFieldContainer[Controller.TaskLogBatch]
+        last_timestamp_ms: int
+        truncated: bool
+        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., last_timestamp_ms: _Optional[int] = ..., truncated: _Optional[bool] = ...) -> None: ...
     class GetProcessLogsRequest(_message.Message):
         __slots__ = ("prefix", "limit")
         PREFIX_FIELD_NUMBER: _ClassVar[int]
@@ -719,14 +849,14 @@ class Worker(_message.Message):
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         num_tasks: int
-        entrypoint: Entrypoint
+        entrypoint: RuntimeEntrypoint
         environment: EnvironmentConfig
         bundle_gcs_path: str
         resources: ResourceSpecProto
         timeout: _time_pb2.Duration
         ports: _containers.RepeatedScalarFieldContainer[str]
         attempt_id: int
-        def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[Entrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
+        def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class GetTaskStatusRequest(_message.Message):
         __slots__ = ("task_id", "include_result")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
@@ -743,14 +873,16 @@ class Worker(_message.Message):
         tasks: _containers.RepeatedCompositeFieldContainer[TaskStatus]
         def __init__(self, tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ...) -> None: ...
     class LogEntry(_message.Message):
-        __slots__ = ("timestamp", "source", "data")
+        __slots__ = ("timestamp", "source", "data", "attempt_id")
         TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
         SOURCE_FIELD_NUMBER: _ClassVar[int]
         DATA_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         timestamp: _time_pb2.Timestamp
         source: str
         data: str
-        def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., data: _Optional[str] = ...) -> None: ...
+        attempt_id: int
+        def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., data: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class FetchLogsFilter(_message.Message):
         __slots__ = ("regex", "start_line", "start_ms", "end_ms", "max_lines")
         REGEX_FIELD_NUMBER: _ClassVar[int]
@@ -765,12 +897,14 @@ class Worker(_message.Message):
         max_lines: int
         def __init__(self, regex: _Optional[str] = ..., start_line: _Optional[int] = ..., start_ms: _Optional[int] = ..., end_ms: _Optional[int] = ..., max_lines: _Optional[int] = ...) -> None: ...
     class FetchTaskLogsRequest(_message.Message):
-        __slots__ = ("task_id", "filter")
+        __slots__ = ("task_id", "filter", "attempt_id")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         FILTER_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         filter: Worker.FetchLogsFilter
-        def __init__(self, task_id: _Optional[str] = ..., filter: _Optional[_Union[Worker.FetchLogsFilter, _Mapping]] = ...) -> None: ...
+        attempt_id: int
+        def __init__(self, task_id: _Optional[str] = ..., filter: _Optional[_Union[Worker.FetchLogsFilter, _Mapping]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class FetchTaskLogsResponse(_message.Message):
         __slots__ = ("logs",)
         LOGS_FIELD_NUMBER: _ClassVar[int]

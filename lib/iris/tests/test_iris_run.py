@@ -1,18 +1,7 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for iris_run.py script."""
+"""Integration tests for iris job CLI helpers."""
 
 import sys
 from pathlib import Path
@@ -21,9 +10,9 @@ import pytest
 import yaml
 
 from iris.client import IrisClient
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import IrisConfig, make_local_config, load_config
-from iris.cli.run import (
+from iris.cluster.config import IrisConfig, make_local_config, load_config
+from iris.cluster.manager import connect_cluster
+from iris.cli.job import (
     build_resources,
     load_env_vars,
     run_iris_job,
@@ -76,8 +65,7 @@ def local_cluster_and_config(tmp_path):
     config = load_config(demo_config_path)
     config = make_local_config(config)
 
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         # Create a test config file with controller_address for local access
         # Uses the local platform with controller_address set
         test_config = tmp_path / "cluster.yaml"
@@ -94,7 +82,7 @@ def local_cluster_and_config(tmp_path):
                             "max_slices": 1,
                             "accelerator_type": "cpu",
                             "vm_type": "local_vm",
-                            "slice_size": 1,
+                            "num_vms": 1,
                             "resources": {
                                 "cpu": 1,
                                 "ram": "1GB",
@@ -114,7 +102,7 @@ def local_cluster_and_config(tmp_path):
 
 @pytest.mark.slow
 def test_iris_run_cli_simple_job(local_cluster_and_config, tmp_path):
-    """Test iris_run.py submits and runs a simple job successfully."""
+    """Test iris job submission runs a simple job successfully."""
     _test_config, url, _client = local_cluster_and_config
 
     # Create test script that prints and exits
@@ -162,7 +150,7 @@ sys.exit(0 if val == "test_value" else 1)
 
 @pytest.mark.slow
 def test_iris_run_cli_job_failure(local_cluster_and_config, tmp_path):
-    """Test iris_run.py returns non-zero on job failure."""
+    """Test job submission returns non-zero on job failure."""
     _test_config, url, _client = local_cluster_and_config
 
     test_script = tmp_path / "fail.py"
