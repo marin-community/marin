@@ -70,7 +70,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
 PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
-GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
+GRADIENT_ACCUMULATION_STEPS = 2  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
 # ============================================================================
@@ -173,8 +173,8 @@ data_config = ImageMixtureDatasetConfig(
 # 4. TRAINING CONFIGURATION
 # ============================================================================
 # Dataset size: 558K samples
-# DATASET_SIZE = 47141442
-DATASET_SIZE=10*1000*1000
+DATASET_SIZE = 47141442
+# DATASET_SIZE=10*1000*1000
 NUM_EPOCHS = 1
 NUM_TRAIN_STEPS = (DATASET_SIZE // BATCH_SIZE) * NUM_EPOCHS
 
