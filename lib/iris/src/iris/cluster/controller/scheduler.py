@@ -582,7 +582,7 @@ class Scheduler:
         # Use posting lists for fast constraint matching
         matching_worker_ids = context.matching_workers(constraints)
 
-        # Cheap mode: early exit on first rejection, no details
+        # Cheap mode: try all matching workers, no detailed rejection tracking
         if not collect_details:
             for worker_id in matching_worker_ids:
                 if worker_id in context.scheduled_workers:
@@ -593,9 +593,7 @@ class Scheduler:
                     capacity.deduct(job)
                     context.scheduled_workers.add(worker_id)
                     return TaskScheduleResult(task=task, worker=capacity.worker)
-                # First rejection - exit early with no details
-                return TaskScheduleResult(task=task, failure_reason=None)
-            # No matching workers found
+            # No matching worker had capacity
             return TaskScheduleResult(task=task, failure_reason=None)
 
         # Expensive mode: collect all rejection reasons with counts
@@ -873,6 +871,8 @@ class Scheduler:
 
         # Use expensive mode to collect detailed rejection reasons
         result = self.try_schedule_task(task, context, collect_details=True)
+        if result.success:
+            return "Schedulable — waiting for next scheduling cycle"
         return result.failure_reason or "Unknown scheduling failure"
 
     def _diagnose_coscheduled_job(self, job: ControllerJob, context: SchedulingContext) -> str:
@@ -892,6 +892,8 @@ class Scheduler:
             task = next((t for t in tasks if t.can_be_scheduled()), None)
             if task:
                 result = self.try_schedule_task(task, context, collect_details=True)
+                if result.success:
+                    return "Schedulable — waiting for next scheduling cycle"
                 return result.failure_reason or "Unknown scheduling failure"
             return "No schedulable tasks"
 

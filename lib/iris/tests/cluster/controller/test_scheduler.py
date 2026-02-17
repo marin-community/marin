@@ -1462,6 +1462,19 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worke
     assert "2" in diagnostics or "4" in diagnostics
 
 
+def test_diagnostics_for_schedulable_job_does_not_say_unknown_failure(scheduler, state, job_request, worker_metadata):
+    """When a job can be scheduled, diagnostics should not say 'Unknown scheduling failure'."""
+    register_worker(state, "w1", "addr1", worker_metadata())
+    tasks = submit_job(state, "j1", job_request())
+
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(job, context)
+
+    assert "unknown" not in diagnostics.lower()
+    assert "schedulable" in diagnostics.lower()
+
+
 def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state):
     """Two coscheduled TPU jobs cannot use the same TPU group simultaneously.
 
@@ -1565,3 +1578,49 @@ def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request
     # child-a submitted first
     assert child_assignments[0][0].job_id == JobName.from_string("/tree/child-a")
     assert child_assignments[1][0].job_id == JobName.from_string("/tree/child-b")
+
+
+def test_scheduler_tries_all_workers_before_rejecting(scheduler, state, worker_metadata):
+    """Scheduler must try all matching workers, not give up on first rejection.
+
+    Regression test: the cheap scheduling path previously exited on the first
+    worker rejection, so a v5litepod-4 job would fail if a v5litepod-32 worker
+    happened to be tried first (non-deterministic set iteration order).
+    """
+    # Register many workers with the wrong variant to increase the chance
+    # that the matching worker is not tried first
+    for i in range(10):
+        meta = worker_metadata(tpu_name="v5litepod-32")
+        meta.device.tpu.variant = "v5litepod-32"
+        meta.device.tpu.count = 4
+        register_worker(state, f"wrong-{i}", f"addr-wrong-{i}", meta)
+
+    # Register one worker with the correct variant
+    meta = worker_metadata(tpu_name="v5litepod-4")
+    meta.device.tpu.variant = "v5litepod-4"
+    meta.device.tpu.count = 4
+    register_worker(state, "correct", "addr-correct", meta)
+
+    # Job requesting v5litepod-4
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-4", count=2)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    result = scheduler.find_assignments(tasks, workers)
+
+    assert len(result.assignments) == 1, (
+        f"Job should be scheduled on the v5litepod-4 worker regardless of iteration order, "
+        f"got {len(result.assignments)} assignments"
+    )
+    _, assigned_worker = result.assignments[0]
+    assert assigned_worker.worker_id == WorkerId("correct")

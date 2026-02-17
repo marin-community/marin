@@ -556,16 +556,15 @@ class Controller:
             raise Exception("chaos: heartbeat unavailable")
         stub = self.stub_factory.get_stub(snapshot.worker_address)
 
-        # Build expected_tasks list using the pre-snapshotted running_tasks.
-        # Chaos injection point for race condition testing.
+        # Build expected_tasks from snapshot — no state lock needed.
         expected_tasks = []
-        for tid in snapshot.running_tasks:
+        for entry in snapshot.running_tasks:
             if rule := chaos("controller.heartbeat.iteration"):
                 sleep(rule.delay_seconds)
             expected_tasks.append(
                 cluster_pb2.Controller.RunningTaskEntry(
-                    task_id=tid.to_wire(),
-                    attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
+                    task_id=entry.task_id.to_wire(),
+                    attempt_id=entry.attempt_id,
                 )
             )
         request = cluster_pb2.HeartbeatRequest(

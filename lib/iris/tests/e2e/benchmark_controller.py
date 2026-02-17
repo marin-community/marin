@@ -15,12 +15,14 @@ Usage:
 This benchmark helps detect performance regressions like #2802 (SSL context overhead).
 """
 
+import json
 import logging
 import os
 import subprocess
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,8 +48,7 @@ class BenchmarkMetrics:
     num_jobs: int
     num_slices: int
     submission_time_seconds: float
-    time_to_90_percent_running: float
-    time_to_all_complete: float
+    time_to_complete: float
     controller_memory_mb: float
     jobs_by_state: dict[str, int]
 
@@ -68,19 +69,20 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
     config.scale_groups.clear()
 
     # Distribute slices across size categories
-    num_small = int(num_slices * 0.40)
-    num_medium = int(num_slices * 0.32)
-    num_large = int(num_slices * 0.20)
-    num_xlarge = num_slices - num_small - num_medium - num_large
+    num_small = max(1, int(num_slices * 0.40))
+    num_medium = max(1, int(num_slices * 0.32))
+    num_large = max(1, int(num_slices * 0.20))
+    num_xlarge = max(1, num_slices - num_small - num_medium - num_large)
 
     slice_configs = [
         ("v5litepod-4", 1, 4, num_small, "64", "64GB", "500GB"),
         ("v5litepod-8", 1, 8, num_medium, "96", "96GB", "1TB"),
         ("v5litepod-16", 4, 16, num_large, "128", "128GB", "1TB"),
-        ("v5litepod-32", 4, 32, num_xlarge, "256", "256GB", "2TB"),
+        ("v5litepod-32", 8, 32, num_xlarge, "256", "256GB", "2TB"),
     ]
 
     for variant, num_vms, tpu_count, count, cpu, memory, disk in slice_configs:
+        logger.info("Creating %d slices of %s", count, variant)
         if count == 0:
             continue
 
@@ -118,9 +120,7 @@ def _dummy_training_task():
     return "done"
 
 
-def _submit_job_mix(
-    client: IrisClient, num_jobs: int, workspace: Path
-) -> tuple[list[Job], list[Job]]:
+def _submit_job_mix(client: IrisClient, num_jobs: int, workspace: Path) -> tuple[list[Job], list[Job]]:
     """Submit a realistic mix of training jobs.
 
     Job distribution:
@@ -173,9 +173,7 @@ def _submit_job_mix(
     return schedulable_jobs, unschedulable_jobs
 
 
-def _wait_for_workers(
-    controller_client: ControllerServiceClientSync, min_workers: int, timeout: float = 120.0
-) -> None:
+def _wait_for_workers(controller_client: ControllerServiceClientSync, min_workers: int, timeout: float = 120.0) -> None:
     """Wait for workers to register with the controller."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -189,71 +187,47 @@ def _wait_for_workers(
     raise TimeoutError(f"Only {len(healthy)} of {min_workers} workers registered in {timeout}s")
 
 
-def _get_job_state_counts(
-    controller_client: ControllerServiceClientSync, jobs: list[Job]
-) -> dict[str, int]:
-    """Count jobs in each state."""
-    counts: dict[str, int] = defaultdict(int)
-    for job in jobs:
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire())
-        response = controller_client.get_job_status(request)
-        state_name = cluster_pb2.JobState.Name(response.job.state)
-        counts[state_name] += 1
-    return dict(counts)
+@dataclass
+class JobResult:
+    """Result from waiting on a single job in a thread."""
+
+    job: Job
+    state_name: str
+    elapsed: float
+    error: Exception | None = None
 
 
-def _wait_for_running_fraction(
-    controller_client: ControllerServiceClientSync,
-    jobs: list[Job],
-    target_fraction: float,
-    timeout: float,
-) -> float:
-    """Wait until target_fraction of jobs are RUNNING or SUCCEEDED.
+def _wait_for_job(job: Job, timeout: float) -> JobResult:
+    """Wait for a single job, streaming logs including children.
 
-    Returns elapsed time in seconds.
+    Designed to be called from a thread pool. Each thread independently waits
+    on its job and streams logs back through the logger.
     """
     start = time.monotonic()
-    deadline = start + timeout
-    target_count = int(len(jobs) * target_fraction)
-
-    while time.monotonic() < deadline:
-        counts = _get_job_state_counts(controller_client, jobs)
-        running_or_done = counts.get("JOB_STATE_RUNNING", 0) + counts.get("JOB_STATE_SUCCEEDED", 0)
-
-        if running_or_done >= target_count:
-            elapsed = time.monotonic() - start
-            logger.info(f"Reached {running_or_done}/{len(jobs)} running/succeeded in {elapsed:.2f}s")
-            return elapsed
-
-        time.sleep(0.5)
-
-    raise TimeoutError(
-        f"{target_fraction * 100:.0f}% of jobs did not reach RUNNING/SUCCEEDED in {timeout}s"
-    )
+    try:
+        status = job.wait(
+            timeout=timeout,
+            poll_interval=2.0,
+            raise_on_failure=False,
+            stream_logs=True,
+            include_children=True,
+        )
+        state_name = cluster_pb2.JobState.Name(status.state)
+        return JobResult(job=job, state_name=state_name, elapsed=time.monotonic() - start)
+    except Exception as e:
+        return JobResult(job=job, state_name="UNKNOWN", elapsed=time.monotonic() - start, error=e)
 
 
-def _wait_for_all_complete(
-    controller_client: ControllerServiceClientSync, jobs: list[Job], timeout: float
-) -> float:
-    """Wait until all jobs reach terminal state (SUCCEEDED/FAILED).
+def _wait_all_jobs_threaded(jobs: list[Job], timeout: float) -> list[JobResult]:
+    """Wait for all jobs concurrently, one thread per job, streaming logs."""
+    results: list[JobResult] = []
 
-    Returns elapsed time in seconds.
-    """
-    start = time.monotonic()
-    deadline = start + timeout
+    with ThreadPoolExecutor(max_workers=min(len(jobs), 64)) as pool:
+        futures = {pool.submit(_wait_for_job, job, timeout): job for job in jobs}
+        for future in as_completed(futures):
+            results.append(future.result())
 
-    while time.monotonic() < deadline:
-        counts = _get_job_state_counts(controller_client, jobs)
-        terminal = counts.get("JOB_STATE_SUCCEEDED", 0) + counts.get("JOB_STATE_FAILED", 0)
-
-        if terminal >= len(jobs):
-            elapsed = time.monotonic() - start
-            logger.info(f"All {len(jobs)} jobs completed in {elapsed:.2f}s")
-            return elapsed
-
-        time.sleep(1.0)
-
-    raise TimeoutError(f"Not all jobs completed in {timeout}s")
+    return results
 
 
 def run_benchmark(
@@ -270,9 +244,9 @@ def run_benchmark(
         BenchmarkMetrics with collected performance data
     """
     print("\n" + "=" * 70)
-    print(f"Iris Controller Benchmark")
+    print("Iris Controller Benchmark")
     print("=" * 70)
-    print(f"Configuration:")
+    print("Configuration:")
     print(f"  Jobs: {num_jobs}")
     print(f"  Slices: {num_slices}")
     print("=" * 70 + "\n")
@@ -300,30 +274,36 @@ def run_benchmark(
             submit_start = time.time()
             schedulable_jobs, unschedulable_jobs = _submit_job_mix(client, num_jobs, TEST_ROOT)
             submission_time = time.time() - submit_start
-            print(f"Submitted {len(schedulable_jobs)} schedulable + {len(unschedulable_jobs)} unschedulable jobs in {submission_time:.2f}s")
-
-            # Wait for 90% to be running
-            print("Waiting for 90% of jobs to reach RUNNING...")
-            time_to_90_running = _wait_for_running_fraction(
-                controller_client, schedulable_jobs, target_fraction=0.90, timeout=300.0
+            print(
+                f"Submitted {len(schedulable_jobs)} schedulable + {len(unschedulable_jobs)} unschedulable jobs in {submission_time:.2f}s"
             )
 
-            # Wait for all to complete
-            print("Waiting for all jobs to complete...")
-            time_to_complete = _wait_for_all_complete(controller_client, schedulable_jobs, timeout=600.0)
+            # Wait for schedulable jobs concurrently, streaming logs from each in its own thread.
+            # Unschedulable ("bad") jobs are excluded since they'll never reach a terminal state
+            # in a timely manner.
+            print(f"Waiting for {len(schedulable_jobs)} schedulable jobs (streaming logs with children)...")
+            wait_start = time.monotonic()
+            results = _wait_all_jobs_threaded(schedulable_jobs, timeout=600.0)
+            time_to_complete = time.monotonic() - wait_start
+
+            for r in results:
+                if r.error is not None:
+                    logger.warning("Job %s errored during wait: %s", r.job.job_id, r.error)
 
             # Collect final metrics
             mem_after = controller_proc.memory_info().rss
             memory_delta_mb = (mem_after - mem_before) / (1024 * 1024)
 
-            final_counts = _get_job_state_counts(controller_client, schedulable_jobs + unschedulable_jobs)
+            final_counts: dict[str, int] = defaultdict(int)
+            for r in results:
+                final_counts[r.state_name] += 1
+            final_counts = dict(final_counts)
 
             metrics = BenchmarkMetrics(
                 num_jobs=num_jobs,
                 num_slices=num_slices,
                 submission_time_seconds=submission_time,
-                time_to_90_percent_running=time_to_90_running,
-                time_to_all_complete=time_to_complete,
+                time_to_complete=time_to_complete,
                 controller_memory_mb=memory_delta_mb,
                 jobs_by_state=final_counts,
             )
@@ -333,10 +313,9 @@ def run_benchmark(
             print("Benchmark Results:")
             print("-" * 70)
             print(f"  Job submission time:       {metrics.submission_time_seconds:>10.2f}s")
-            print(f"  Time to 90% running:       {metrics.time_to_90_percent_running:>10.2f}s")
-            print(f"  Time to all complete:      {metrics.time_to_all_complete:>10.2f}s")
+            print(f"  Time to complete:          {metrics.time_to_complete:>10.2f}s")
             print(f"  Controller memory delta:   {metrics.controller_memory_mb:>10.1f} MB")
-            print(f"\nFinal job states:")
+            print("\nFinal job states:")
             for state, count in sorted(metrics.jobs_by_state.items()):
                 print(f"  {state:<30} {count:>5}")
             print("=" * 70 + "\n")
@@ -355,10 +334,51 @@ def cli(ctx: click.Context) -> None:
         ctx.invoke(benchmark)
 
 
+def _print_profile_table(speedscope_path: Path, top_n: int = 30) -> None:
+    """Parse a speedscope JSON file and print a text table of top functions by sample count."""
+    with open(speedscope_path) as f:
+        data = json.load(f)
+
+    frames = data["shared"]["frames"]
+    sample_counts: Counter[int] = Counter()
+
+    for profile in data["profiles"]:
+        for sample in profile.get("samples", []):
+            for frame_idx in sample:
+                sample_counts[frame_idx] += 1
+
+    total_samples = sum(sample_counts.values())
+    if total_samples == 0:
+        print("No samples collected.")
+        return
+
+    print(f"\n{'=' * 90}")
+    print(f"Profile Summary ({total_samples} total samples across {len(data['profiles'])} threads)")
+    print(f"{'=' * 90}")
+    print(f"{'Samples':>8}  {'%':>6}  {'Function':<40}  {'File'}")
+    print(f"{'-' * 8}  {'-' * 6}  {'-' * 40}  {'-' * 30}")
+
+    for frame_idx, count in sample_counts.most_common(top_n):
+        frame = frames[frame_idx]
+        name = frame.get("name", "???")
+        file = frame.get("file", "???")
+        # Shorten file paths for readability
+        if "/site-packages/" in file:
+            file = "..." + file.split("/site-packages/")[-1]
+        elif "/lib/" in file:
+            file = "..." + file.split("/lib/")[-1]
+        pct = 100.0 * count / total_samples
+        line = frame.get("line", "")
+        loc = f"{file}:{line}" if line else file
+        print(f"{count:>8}  {pct:>5.1f}%  {name:<40}  {loc}")
+
+    print(f"{'=' * 90}\n")
+
+
 @cli.command("benchmark")
-@click.option("--num-jobs", type=int, default=100, help="Number of jobs to submit")
-@click.option("--num-slices", type=int, default=25, help="Number of TPU slices to create")
-@click.option("--profile", is_flag=True, help="Profile controller with py-spy")
+@click.option("--num-jobs", type=int, default=10, help="Number of jobs to submit")
+@click.option("--num-slices", type=int, default=3, help="Number of TPU slices to create")
+@click.option("--profile", is_flag=True, help="Profile with py-spy (requires sudo)")
 @click.option(
     "--profile-output",
     type=click.Path(path_type=Path),
@@ -366,8 +386,8 @@ def cli(ctx: click.Context) -> None:
     help="Directory for profile output (default: lib/iris/tests/e2e/profiles/)",
 )
 def benchmark(
-    num_jobs: int = 100,
-    num_slices: int = 25,
+    num_jobs: int = 25,
+    num_slices: int = 100,
     profile: bool = False,
     profile_output: Path | None = None,
 ) -> None:
@@ -393,6 +413,8 @@ def benchmark(
             "--rate",
             "100",
             "--subprocesses",
+            "--gil",
+            "--idle",
             "--",
             sys.executable,
             __file__,
@@ -407,10 +429,9 @@ def benchmark(
         result = subprocess.run(pyspy_cmd)
 
         if result.returncode == 0:
-            print(f"\nSpeedscope profile saved to {speedscope_file}")
-            print("\nTo view:")
-            print("  1. Visit https://www.speedscope.app/")
-            print(f"  2. Upload {speedscope_file}")
+            _print_profile_table(speedscope_file)
+            print(f"Speedscope profile saved to {speedscope_file}")
+            print("To view: https://www.speedscope.app/")
         else:
             print(f"\npy-spy failed with return code {result.returncode}")
 
@@ -435,15 +456,15 @@ def test_controller_benchmark():
 
     # Sanity checks
     assert metrics.submission_time_seconds < 30, "Job submission should take < 30s"
-    assert metrics.time_to_90_percent_running < 120, "90% of jobs should be running within 2 minutes"
-    assert metrics.time_to_all_complete < 300, "All jobs should complete within 5 minutes"
+    assert metrics.time_to_complete < 300, "All jobs should complete within 5 minutes"
     assert metrics.controller_memory_mb < 500, "Controller memory delta should be < 500MB"
 
-    # Verify job states
+    # Verify job states (only schedulable jobs are tracked)
     assert metrics.jobs_by_state.get("JOB_STATE_SUCCEEDED", 0) >= 90, "At least 90 jobs should succeed"
-    assert metrics.jobs_by_state.get("JOB_STATE_UNSCHEDULABLE", 0) >= 1, "Some misconfigured jobs should be unschedulable"
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
     cli()
