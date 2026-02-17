@@ -8,6 +8,7 @@ import time
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
+from iris.cluster.worker.task_logging import fetch_logs_for_task, get_log_prefix
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry
@@ -245,7 +246,9 @@ class RemoteClusterClient:
         regex: str | None = None,
         attempt_id: int = -1,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Fetch logs for a task or all tasks in a job.
+        """Fetch logs for a task or all tasks in a job from storage.
+
+        Queries the controller for task status, then reads logs directly from storage.
 
         Args:
             target: Task ID or Job ID (detected by trailing numeric)
@@ -255,19 +258,104 @@ class RemoteClusterClient:
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
         """
+        # Get storage prefix
+        prefix = get_log_prefix()
+        if not prefix:
+            logger.warning("IRIS_WORKER_PREFIX not configured, cannot fetch logs from storage")
+            return cluster_pb2.Controller.GetTaskLogsResponse()
 
-        def _call():
-            request = cluster_pb2.Controller.GetTaskLogsRequest(
-                id=target.to_wire(),
-                include_children=include_children,
-                since_ms=since_ms,
-                max_total_lines=max_total_lines,
-                regex=regex or "",
-                attempt_id=attempt_id,
-            )
-            return self._client.get_task_logs(request)
+        # Query controller for task status
+        if target.is_task:
+            # Single task
+            parent_job = target.parent
+            if not parent_job:
+                return cluster_pb2.Controller.GetTaskLogsResponse()
+            status = self.get_job_status(parent_job).task_statuses[target.task_index()]
+            tasks = [status] if status else []
+        else:
+            # Job or job prefix
+            job_status = self.get_job_status(target)
+            tasks = list(job_status.task_statuses.values())
 
-        return call_with_retry(f"fetch_task_logs({target})", _call)
+            if include_children:
+                # Also include child jobs
+                all_jobs = self.list_all_jobs()
+                prefix_wire = target.to_wire()
+                for job in all_jobs:
+                    if job.job_id.to_wire().startswith(prefix_wire + "/"):
+                        child_status = self.get_job_status(job.job_id)
+                        tasks.extend(child_status.task_statuses.values())
+
+        # Fetch logs from storage for each task
+        task_logs = []
+        total_lines = 0
+        last_timestamp_ms = since_ms
+        max_lines = max_total_lines if max_total_lines > 0 else 10000
+
+        for task_status in tasks:
+            if not task_status.worker_id:
+                # Task hasn't been assigned to a worker yet
+                continue
+
+            # Determine which attempts to fetch
+            if attempt_id >= 0:
+                attempts_to_fetch = [attempt_id] if attempt_id <= task_status.current_attempt_id else []
+            else:
+                # Fetch all attempts
+                attempts_to_fetch = list(range(task_status.current_attempt_id + 1))
+
+            for att_id in attempts_to_fetch:
+                # Read logs from storage
+                log_entries = fetch_logs_for_task(
+                    task_id_wire=task_status.task_id,
+                    worker_id=task_status.worker_id,
+                    attempt_id=att_id,
+                    source="stdout",  # TODO: Support multiple sources
+                    regex=regex,
+                    max_lines=max_lines - total_lines,
+                    prefix=prefix,
+                )
+
+                # Filter by timestamp
+                filtered_logs = []
+                for entry in log_entries:
+                    if since_ms > 0 and entry.timestamp.epoch_ms <= since_ms:
+                        continue
+                    filtered_logs.append(entry)
+                    if entry.timestamp.epoch_ms > last_timestamp_ms:
+                        last_timestamp_ms = entry.timestamp.epoch_ms
+
+                # Convert logging_pb2.LogEntry to cluster_pb2.Worker.LogEntry for compatibility
+                worker_logs = []
+                for entry in filtered_logs:
+                    worker_log = cluster_pb2.Worker.LogEntry(
+                        timestamp=entry.timestamp,
+                        source=entry.source,
+                        data=entry.data,
+                        attempt_id=entry.attempt_id,
+                    )
+                    worker_logs.append(worker_log)
+
+                if worker_logs:
+                    batch = cluster_pb2.Controller.TaskLogBatch(
+                        task_id=task_status.task_id,
+                        worker_id=task_status.worker_id,
+                        logs=worker_logs,
+                    )
+                    task_logs.append(batch)
+                    total_lines += len(worker_logs)
+
+                if total_lines >= max_lines:
+                    break
+
+            if total_lines >= max_lines:
+                break
+
+        return cluster_pb2.Controller.GetTaskLogsResponse(
+            task_logs=task_logs,
+            last_timestamp_ms=last_timestamp_ms,
+            truncated=total_lines >= max_lines,
+        )
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

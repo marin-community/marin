@@ -1,0 +1,367 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Task logging for persisting and reading logs from durable storage."""
+
+import json
+import logging
+import os
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from threading import Lock
+
+import fsspec
+from google.protobuf import json_format
+
+from iris.rpc import logging_pb2
+from iris.time_utils import Duration
+
+logger = logging.getLogger(__name__)
+
+
+def get_log_prefix() -> str | None:
+    """Get storage prefix for Iris worker logs.
+
+    Returns the IRIS_WORKER_PREFIX environment variable if set, otherwise
+    infers from GCP region metadata. Returns None if not on GCP or env var not set.
+
+    Returns:
+        Storage prefix like "gs://marin-tmp-us-central2/ttl=30d/iris-logs" or None
+    """
+    # Explicit configuration takes precedence
+    prefix = os.environ.get("IRIS_WORKER_PREFIX")
+    if prefix:
+        return prefix
+
+    # Fallback: infer from VM region
+    try:
+        from marin.utilities.gcs_utils import get_vm_region
+
+        region = get_vm_region()
+        inferred_prefix = f"gs://marin-tmp-{region}/ttl=30d/iris-logs"
+        logger.info(f"Inferred IRIS_WORKER_PREFIX from region: {inferred_prefix}")
+        return inferred_prefix
+    except (ImportError, ValueError) as e:
+        logger.debug(f"Could not infer IRIS_WORKER_PREFIX: {e}")
+        return None
+
+
+@dataclass
+class LogSyncerConfig:
+    """Configuration for log syncing."""
+
+    prefix: str  # Storage prefix from IRIS_WORKER_PREFIX
+    worker_id: str
+    task_id_wire: str
+    attempt_id: int
+    sync_interval: Duration = Duration.from_seconds(30.0)
+
+
+class LogSyncer:
+    """Periodically syncs task logs to durable storage for post-mortem access.
+
+    Writes logs in proto JSON format:
+    - stdout.jsonl: One LogEntry per line (stdout logs)
+    - stderr.jsonl: One LogEntry per line (stderr logs)
+    - build.jsonl: One LogEntry per line (build logs)
+    - metadata.json: TaskAttemptMetadata (written once on completion)
+
+    Path structure: {prefix}/{worker_id}/{task_id}/{attempt_id}/
+    """
+
+    def __init__(self, config: LogSyncerConfig):
+        self._config = config
+        self._logs: list[logging_pb2.LogEntry] = []
+        self._last_sync_index = 0
+        self._lock = Lock()
+
+        # Parse prefix to get filesystem and path
+        if "://" in config.prefix:
+            scheme, path = config.prefix.split("://", 1)
+            self._fs = fsspec.filesystem(scheme)
+            self._path_prefix = path
+        else:
+            # Default to local filesystem
+            self._fs = fsspec.filesystem("file")
+            self._path_prefix = config.prefix
+
+    def append(self, log_entry: logging_pb2.LogEntry) -> None:
+        """Append a log entry (called by TaskAttempt)."""
+        with self._lock:
+            self._logs.append(log_entry)
+
+    def sync(self) -> None:
+        """Sync new logs to storage (called periodically).
+
+        Only writes when new log data exists since last sync.
+        Writes in proto JSON format (one LogEntry per line).
+        """
+        with self._lock:
+            if self._last_sync_index >= len(self._logs):
+                return  # No new logs
+
+            new_logs = self._logs[self._last_sync_index :]
+            self._last_sync_index = len(self._logs)
+
+        # Group by source (stdout, stderr, build)
+        by_source = defaultdict(list)
+        for entry in new_logs:
+            by_source[entry.source].append(entry)
+
+        # Write each source to its file (append mode)
+        for source, entries in by_source.items():
+            file_path = f"{self.log_path}/{source}.jsonl"
+            try:
+                # Convert proto entries to JSON lines
+                lines = [self._proto_to_json_line(entry) for entry in entries]
+                self._append_lines(file_path, lines)
+            except Exception as e:
+                logger.warning(f"Failed to write {source} logs to {file_path}: {e}")
+
+    def write_metadata(self, metadata: logging_pb2.TaskAttemptMetadata) -> None:
+        """Write task metadata on completion.
+
+        Args:
+            metadata: TaskAttemptMetadata proto to persist
+        """
+        path = f"{self.log_path}/metadata.json"
+        try:
+            # Convert proto to JSON (compact, no pretty printing)
+            json_str = json_format.MessageToJson(
+                metadata,
+                preserving_proto_field_name=True,
+            )
+
+            # Ensure parent directory exists
+            parent = str(Path(path).parent)
+            self._fs.makedirs(parent, exist_ok=True)
+
+            self._fs.write_text(path, json_str)
+        except Exception as e:
+            logger.error(f"Failed to write metadata to {path}: {e}")
+
+    @property
+    def log_path(self) -> str:
+        """Get path for this task attempt's logs (without scheme)."""
+        # Strip leading slash from task_id_wire to avoid double slashes
+        task_id = self._config.task_id_wire.lstrip("/")
+        return f"{self._path_prefix}/{self._config.worker_id}/{task_id}/{self._config.attempt_id}"
+
+    def _proto_to_json_line(self, entry: logging_pb2.LogEntry) -> str:
+        """Convert LogEntry proto to JSON line (compact, single-line)."""
+        # Convert to dict, then to compact JSON
+        json_dict = json_format.MessageToDict(
+            entry,
+            preserving_proto_field_name=True,
+        )
+        return json.dumps(json_dict, ensure_ascii=False)
+
+    def _append_lines(self, path: str, lines: list[str]) -> None:
+        """Append lines to a file using fsspec append mode.
+
+        Args:
+            path: File path (without scheme)
+            lines: Lines to append
+        """
+        # Ensure parent directory exists
+        parent = str(Path(path).parent)
+        self._fs.makedirs(parent, exist_ok=True)
+
+        # Try to use append mode if supported
+        try:
+            with self._fs.open(path, mode="a") as f:
+                for line in lines:
+                    f.write(line + "\n")
+        except (AttributeError, NotImplementedError):
+            # Fallback: read existing content and rewrite
+            try:
+                existing = self._fs.cat_file(path).decode("utf-8")
+            except (FileNotFoundError, OSError):
+                existing = ""
+
+            content = existing + "".join(line + "\n" for line in lines)
+            self._fs.write_text(path, content)
+
+
+@dataclass
+class LogLocation:
+    """Location of logs in storage for a specific task attempt."""
+
+    prefix: str
+    worker_id: str
+    task_id_wire: str
+    attempt_id: int
+
+    @property
+    def base_path(self) -> str:
+        """Get the base storage path for this task attempt."""
+        # Strip leading slash from task_id_wire to avoid double slashes
+        task_id = self.task_id_wire.lstrip("/")
+        return f"{self.prefix}/{self.worker_id}/{task_id}/{self.attempt_id}"
+
+    def log_path(self, source: str) -> str:
+        """Get the storage path for a specific log source (stdout/stderr/build)."""
+        return f"{self.base_path}/{source}.jsonl"
+
+    @property
+    def metadata_path(self) -> str:
+        """Get the storage path for task metadata."""
+        return f"{self.base_path}/metadata.json"
+
+
+def get_log_location(
+    task_id_wire: str,
+    worker_id: str,
+    attempt_id: int,
+    prefix: str | None = None,
+) -> LogLocation:
+    """Get storage location for a task attempt.
+
+    Args:
+        task_id_wire: Full task ID in wire format
+        worker_id: Worker ID that ran the task
+        attempt_id: Attempt ID
+        prefix: Storage prefix (defaults to get_log_prefix())
+
+    Returns:
+        LogLocation for accessing logs
+    """
+    if prefix is None:
+        prefix = get_log_prefix()
+        if prefix is None:
+            raise ValueError("IRIS_WORKER_PREFIX not configured and could not infer from region")
+
+    return LogLocation(
+        prefix=prefix,
+        worker_id=worker_id,
+        task_id_wire=task_id_wire,
+        attempt_id=attempt_id,
+    )
+
+
+def read_logs(
+    location: LogLocation,
+    source: str = "stdout",
+    regex: str | None = None,
+    max_lines: int = 0,
+) -> list[logging_pb2.LogEntry]:
+    """Read logs from storage for a specific source.
+
+    Args:
+        location: Storage location
+        source: Log source ("stdout", "stderr", or "build")
+        regex: Optional regex filter (applied in-memory)
+        max_lines: Maximum number of lines to return (0 = unlimited)
+
+    Returns:
+        List of LogEntry protos
+    """
+    # Parse prefix to get filesystem
+    if "://" in location.prefix:
+        scheme, _ = location.prefix.split("://", 1)
+        fs = fsspec.filesystem(scheme)
+    else:
+        fs = fsspec.filesystem("file")
+
+    log_path = location.log_path(source)
+
+    try:
+        content = fs.cat_file(log_path).decode("utf-8")
+    except FileNotFoundError:
+        logger.debug(f"Log file not found: {log_path}")
+        return []
+
+    # Parse JSONL
+    entries = []
+    for line in content.strip().split("\n"):
+        if not line:
+            continue
+        try:
+            # Parse proto JSON
+            log_entry = logging_pb2.LogEntry()
+            json_format.Parse(line, log_entry)
+
+            # Apply regex filter if specified
+            if regex:
+                import re
+
+                if not re.search(regex, log_entry.data):
+                    continue
+
+            entries.append(log_entry)
+
+            if max_lines > 0 and len(entries) >= max_lines:
+                break
+        except Exception as e:
+            logger.warning(f"Failed to parse log entry: {e}")
+            continue
+
+    return entries
+
+
+def read_metadata(location: LogLocation) -> logging_pb2.TaskAttemptMetadata | None:
+    """Read task metadata from storage.
+
+    Args:
+        location: Storage location
+
+    Returns:
+        TaskAttemptMetadata proto or None if not found
+    """
+    # Parse prefix to get filesystem
+    if "://" in location.prefix:
+        scheme, _ = location.prefix.split("://", 1)
+        fs = fsspec.filesystem(scheme)
+    else:
+        fs = fsspec.filesystem("file")
+
+    metadata_path = location.metadata_path
+
+    try:
+        content = fs.cat_file(metadata_path).decode("utf-8")
+        metadata = logging_pb2.TaskAttemptMetadata()
+        json_format.Parse(content, metadata)
+        return metadata
+    except FileNotFoundError:
+        logger.debug(f"Metadata file not found: {metadata_path}")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to read metadata from {metadata_path}: {e}")
+        return None
+
+
+def fetch_logs_for_task(
+    task_id_wire: str,
+    worker_id: str,
+    attempt_id: int,
+    source: str = "stdout",
+    regex: str | None = None,
+    max_lines: int = 0,
+    prefix: str | None = None,
+) -> list[logging_pb2.LogEntry]:
+    """Convenience function to fetch logs from storage for a specific task attempt.
+
+    Args:
+        task_id_wire: Full task ID in wire format
+        worker_id: Worker ID that ran the task
+        attempt_id: Attempt ID
+        source: Log source ("stdout", "stderr", or "build")
+        regex: Optional regex filter
+        max_lines: Maximum number of lines (0 = unlimited)
+        prefix: Storage prefix (defaults to get_log_prefix())
+
+    Returns:
+        List of LogEntry protos, or empty list if logs not found
+    """
+    try:
+        location = get_log_location(
+            task_id_wire=task_id_wire,
+            worker_id=worker_id,
+            attempt_id=attempt_id,
+            prefix=prefix,
+        )
+        return read_logs(location, source=source, regex=regex, max_lines=max_lines)
+    except Exception as e:
+        logger.warning(f"Failed to fetch logs for {task_id_wire} attempt {attempt_id}: {e}")
+        return []
