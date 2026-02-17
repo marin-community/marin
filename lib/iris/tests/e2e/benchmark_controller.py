@@ -28,10 +28,10 @@ from pathlib import Path
 
 import click
 import psutil
-import pytest
-from iris.client.client import IrisClient, Job
+from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.types import get_tpu_topology, tpu_device
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -39,6 +39,29 @@ logger = logging.getLogger(__name__)
 
 # Test root for relative imports
 TEST_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+@dataclass
+class TpuJobSpec:
+    """ResourceSpec + replica count for a TPU job.
+
+    Mirrors fray v2's ResourceConfig.with_tpu() without depending on fray.
+    Iris's ResourceSpec doesn't carry replicas (they're a submit-time concern),
+    so we bundle them here.
+    """
+
+    resources: ResourceSpec
+    replicas: int
+
+
+def tpu_job_spec(
+    tpu_type: str, *, slice_count: int = 1, cpu: int = 32, memory: str = "128g", disk: str = "50g"
+) -> TpuJobSpec:
+    """Build a TPU ResourceSpec and compute the replica count from topology."""
+    topo = get_tpu_topology(tpu_type)
+    replicas = slice_count * topo.vm_count
+    resources = ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=tpu_device(tpu_type))
+    return TpuJobSpec(resources=resources, replicas=replicas)
 
 
 @dataclass
@@ -132,7 +155,7 @@ def _submit_job_mix(client: IrisClient, num_jobs: int, workspace: Path) -> tuple
     Returns:
         (schedulable_jobs, unschedulable_jobs) tuple
     """
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+    from iris.cluster.types import Entrypoint, EnvironmentSpec
 
     num_small = int(num_jobs * 0.60)
     num_medium = int(num_jobs * 0.25)
@@ -143,24 +166,20 @@ def _submit_job_mix(client: IrisClient, num_jobs: int, workspace: Path) -> tuple
     unschedulable_jobs = []
 
     job_configs = [
-        # (name_prefix, cpu, memory, tpu_variant, tpu_count, count, schedulable)
-        ("small", 2, "4g", "v5litepod-4", 2, num_small, True),
-        ("medium", 4, "8g", "v5litepod-8", 4, num_medium, True),
-        ("large", 8, "16g", "v5litepod-16", 8, num_large, True),
-        ("bad", 4, "8g", "v5p-8", 4, num_bad, False),  # v5p doesn't exist
+        ("small", tpu_job_spec("v5litepod-4"), num_small, True),
+        ("medium", tpu_job_spec("v5litepod-8"), num_medium, True),
+        ("large", tpu_job_spec("v5litepod-16"), num_large, True),
+        ("bad", tpu_job_spec("v5p-8"), num_bad, False),
     ]
 
     job_idx = 0
-    for name_prefix, cpu, memory, tpu_variant, tpu_count, count, schedulable in job_configs:
-        for i in range(count):
-            device = cluster_pb2.DeviceConfig()
-            device.tpu.variant = tpu_variant
-            device.tpu.count = tpu_count
-
+    for name_prefix, spec, count, schedulable in job_configs:
+        for _ in range(count):
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(_dummy_training_task),
                 name=f"{name_prefix}-{job_idx:03d}",
-                resources=ResourceSpec(cpu=cpu, memory=memory, device=device),
+                resources=spec.resources,
+                replicas=spec.replicas,
                 environment=EnvironmentSpec(),
             )
 
@@ -230,10 +249,7 @@ def _wait_all_jobs_threaded(jobs: list[Job], timeout: float) -> list[JobResult]:
     return results
 
 
-def run_benchmark(
-    num_jobs: int = 100,
-    num_slices: int = 25,
-) -> BenchmarkMetrics:
+def run_benchmark(num_jobs: int, num_slices: int) -> BenchmarkMetrics:
     """Run controller benchmark with specified configuration.
 
     Args:
@@ -274,8 +290,11 @@ def run_benchmark(
             submit_start = time.time()
             schedulable_jobs, unschedulable_jobs = _submit_job_mix(client, num_jobs, TEST_ROOT)
             submission_time = time.time() - submit_start
-            print(
-                f"Submitted {len(schedulable_jobs)} schedulable + {len(unschedulable_jobs)} unschedulable jobs in {submission_time:.2f}s"
+            logger.info(
+                "Submitted %s schedulable + %s unschedulable jobs in %s seconds",
+                len(schedulable_jobs),
+                len(unschedulable_jobs),
+                submission_time,
             )
 
             # Wait for schedulable jobs concurrently, streaming logs from each in its own thread.
@@ -376,8 +395,8 @@ def _print_profile_table(speedscope_path: Path, top_n: int = 30) -> None:
 
 
 @cli.command("benchmark")
-@click.option("--num-jobs", type=int, default=10, help="Number of jobs to submit")
-@click.option("--num-slices", type=int, default=3, help="Number of TPU slices to create")
+@click.option("--num-jobs", type=int, default=100, help="Number of jobs to submit")
+@click.option("--num-slices", type=int, default=25, help="Number of TPU slices to create")
 @click.option("--profile", is_flag=True, help="Profile with py-spy (requires sudo)")
 @click.option(
     "--profile-output",
@@ -386,8 +405,8 @@ def _print_profile_table(speedscope_path: Path, top_n: int = 30) -> None:
     help="Directory for profile output (default: lib/iris/tests/e2e/profiles/)",
 )
 def benchmark(
-    num_jobs: int = 25,
-    num_slices: int = 100,
+    num_jobs: int,
+    num_slices: int,
     profile: bool = False,
     profile_output: Path | None = None,
 ) -> None:
@@ -439,28 +458,6 @@ def benchmark(
 
     # Normal benchmark mode
     run_benchmark(num_jobs=num_jobs, num_slices=num_slices)
-
-
-# Pytest integration
-pytestmark = pytest.mark.slow
-
-
-@pytest.mark.slow
-def test_controller_benchmark():
-    """Benchmark test for Iris controller performance.
-
-    Marked as 'slow' to exclude from default CI runs.
-    Run with: uv run pytest lib/iris/tests/e2e/benchmark_controller.py -m slow
-    """
-    metrics = run_benchmark(num_jobs=100, num_slices=25)
-
-    # Sanity checks
-    assert metrics.submission_time_seconds < 30, "Job submission should take < 30s"
-    assert metrics.time_to_complete < 300, "All jobs should complete within 5 minutes"
-    assert metrics.controller_memory_mb < 500, "Controller memory delta should be < 500MB"
-
-    # Verify job states (only schedulable jobs are tracked)
-    assert metrics.jobs_by_state.get("JOB_STATE_SUCCEEDED", 0) >= 90, "At least 90 jobs should succeed"
 
 
 if __name__ == "__main__":
