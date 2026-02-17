@@ -221,3 +221,20 @@ The wrapper remains a pragmatic bridge, but the intended direction is to shrink/
 - For tokenizer caching, is it acceptable to rely solely on HF local cache, or should we add explicit `deserialize_leaves_tensorstore` support for tokenizers stored in checkpoints?
 - What minimum TPU/GPU topology should the CI tests assume (2 devices vs 4)?
 - Loss: the current blockwise CE (`cross_entropy_block_size`) is a tradeoff; in the 125M speedrun we saw MFU jump from ~20 -> ~40 when disabling chunking (`block_size=None`). We need a better large-vocab loss kernel eventually.
+
+## 2026-02-12: Canonical MoE Module (Dense Grug Unchanged)
+
+- Implemented a separate MoE core at `lib/levanter/src/levanter/grug/grug_moe.py` instead of modifying `levanter.grug.model`.
+- Kept the dense Grug path untouched.
+- MoE design choices (intentionally minimal):
+  - single routing strategy (`top_k` + argsort dispatch),
+  - grouped matmul path only (`gmm_sharded`),
+  - shared expert branch included,
+  - local `_Pbatch = P(("data", "expert"))` used by MoE module.
+- To avoid explicit-sharding failures in megablox metadata ops, MoE FFN runs inside `jax.shard_map` (`_moe_mlp_local` + `mlp` wrapper) when a mesh is active.
+- Added coverage in `lib/levanter/tests/grug/test_grugformer_moe.py` (forward+jit and loss smoke test).
+
+### Validation commands
+
+- `uv run --package levanter --group test pytest lib/levanter/tests/grug/test_grugformer.py lib/levanter/tests/grug/test_grugformer_core.py lib/levanter/tests/grug/test_grugformer_model_loss.py lib/levanter/tests/grug/test_grugformer_compilation.py lib/levanter/tests/grug/test_grugformer_fused_loss.py lib/levanter/tests/grug/test_grugformer_moe.py`
+  - result: `19 passed, 2 skipped`.
