@@ -889,6 +889,86 @@ class TestScalingGroupAvailability:
         assert not group.matches_device_requirement(DeviceType.GPU, None)
 
 
+class TestFailedSliceReaping:
+    """Tests for failed slice reaping after retention period."""
+
+    def test_reap_failed_slices_after_retention_period(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Slices marked as FAILED are deleted after the retention period."""
+        platform = make_mock_platform()
+        # Use short retention period for testing
+        group = ScalingGroup(unbounded_config, platform, failed_slice_retention=Duration.from_seconds(10))
+
+        # Create and mark a slice as failed at timestamp 1000
+        handle = _tracked_scale_up(group, timestamp=Timestamp.from_ms(1000))
+        group.mark_slice_failed(handle.slice_id, timestamp=Timestamp.from_ms(1000))
+
+        assert group.slice_count() == 1
+        counts = group.slice_state_counts()
+        assert counts[SliceLifecycleState.FAILED] == 1
+
+        # Before retention period expires (at 5 seconds), should not reap
+        reaped = group.reap_failed_slices(timestamp=Timestamp.from_ms(5000))
+        assert len(reaped) == 0
+        assert group.slice_count() == 1
+
+        # After retention period (at 10.001 seconds), should reap
+        reaped = group.reap_failed_slices(timestamp=Timestamp.from_ms(11001))
+        assert len(reaped) == 1
+        assert reaped[0].slice_id == handle.slice_id
+        assert group.slice_count() == 0
+
+    def test_reap_ignores_non_failed_slices(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Reaping only affects FAILED slices, not READY or BOOTING."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform, failed_slice_retention=Duration.from_seconds(10))
+
+        # Create one FAILED slice and one READY slice
+        failed_handle = _tracked_scale_up(group, timestamp=Timestamp.from_ms(1000))
+        group.mark_slice_failed(failed_handle.slice_id, timestamp=Timestamp.from_ms(1000))
+
+        ready_handle = _tracked_scale_up(group, timestamp=Timestamp.from_ms(1000))
+        vm_addresses = [vm.internal_address for vm in ready_handle.describe().vms]
+        group.mark_slice_ready(ready_handle.slice_id, vm_addresses)
+
+        assert group.slice_count() == 2
+        counts = group.slice_state_counts()
+        assert counts[SliceLifecycleState.FAILED] == 1
+        assert counts[SliceLifecycleState.READY] == 1
+
+        # Reap at 11 seconds - only FAILED slice should be deleted
+        reaped = group.reap_failed_slices(timestamp=Timestamp.from_ms(11001))
+        assert len(reaped) == 1
+        assert reaped[0].slice_id == failed_handle.slice_id
+        assert group.slice_count() == 1
+        assert group.slice_state_counts()[SliceLifecycleState.READY] == 1
+
+    def test_reap_multiple_failed_slices(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Multiple failed slices can be reaped in one call."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform, failed_slice_retention=Duration.from_seconds(10))
+
+        # Create two failed slices at different times
+        handle1 = _tracked_scale_up(group, timestamp=Timestamp.from_ms(1000))
+        group.mark_slice_failed(handle1.slice_id, timestamp=Timestamp.from_ms(1000))
+
+        handle2 = _tracked_scale_up(group, timestamp=Timestamp.from_ms(5000))
+        group.mark_slice_failed(handle2.slice_id, timestamp=Timestamp.from_ms(5000))
+
+        assert group.slice_count() == 2
+
+        # At 11 seconds, only first slice should be reaped
+        reaped = group.reap_failed_slices(timestamp=Timestamp.from_ms(11001))
+        assert len(reaped) == 1
+        assert reaped[0].slice_id == handle1.slice_id
+        assert group.slice_count() == 1
+
+        # At 15.001 seconds, second slice should also be reaped
+        reaped = group.reap_failed_slices(timestamp=Timestamp.from_ms(15001))
+        assert len(reaped) == 1
+        assert reaped[0].slice_id == handle2.slice_id
+        assert group.slice_count() == 0
+
+
 class TestVerifySliceIdle:
     """Tests for _verify_slice_idle behavior with unknown workers."""
 

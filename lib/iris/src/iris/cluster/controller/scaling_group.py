@@ -72,6 +72,7 @@ DEFAULT_BACKOFF_MAX = Duration.from_minutes(5)
 DEFAULT_BACKOFF_FACTOR = 2.0
 DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(5)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
+DEFAULT_FAILED_SLICE_RETENTION = Duration.from_minutes(5)
 
 
 @dataclass
@@ -87,6 +88,7 @@ class SliceState:
     last_active: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     vm_addresses: list[str] = field(default_factory=list)
+    failed_at: Timestamp | None = None
 
 
 def prepare_slice_config(
@@ -181,6 +183,7 @@ class ScalingGroup:
         backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
         idle_threshold: Duration = DEFAULT_IDLE_THRESHOLD,
         quota_timeout: Duration = DEFAULT_QUOTA_TIMEOUT,
+        failed_slice_retention: Duration = DEFAULT_FAILED_SLICE_RETENTION,
     ):
         self._config = config
         self._platform = platform
@@ -194,6 +197,7 @@ class ScalingGroup:
         self._peak_demand: int = 0
 
         self._idle_threshold = idle_threshold
+        self._failed_slice_retention = failed_slice_retention
 
         # Backoff state
         self._backoff_until: Deadline | None = None
@@ -294,12 +298,19 @@ class ScalingGroup:
                 state.lifecycle = SliceLifecycleState.READY
                 state.vm_addresses = vm_addresses
 
-    def mark_slice_failed(self, slice_id: str) -> None:
-        """Mark a slice as FAILED. Called when bootstrap fails."""
+    def mark_slice_failed(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
+        """Mark a slice as FAILED. Called when bootstrap fails.
+
+        Args:
+            slice_id: ID of the slice to mark as failed
+            timestamp: Optional timestamp for when the failure occurred (for testing)
+        """
+        timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
                 state.lifecycle = SliceLifecycleState.FAILED
+                state.failed_at = timestamp
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
@@ -456,6 +467,39 @@ class ScalingGroup:
                 eligible.append((state, state.last_active.epoch_ms()))
         eligible.sort(key=lambda x: x[1])
         return [s[0] for s in eligible]
+
+    def reap_failed_slices(self, timestamp: Timestamp | None = None) -> list[SliceHandle]:
+        """Delete failed slices that have exceeded the retention period.
+
+        Args:
+            timestamp: Current timestamp for age calculation
+
+        Returns:
+            List of terminated slice handles
+        """
+        timestamp = timestamp or Timestamp.now()
+        with self._slices_lock:
+            snapshot = list(self._slices.items())
+
+        reaped = []
+        for slice_id, state in snapshot:
+            if state.lifecycle != SliceLifecycleState.FAILED:
+                continue
+            if state.failed_at is None:
+                continue
+
+            age = Duration.from_ms(timestamp.epoch_ms() - state.failed_at.epoch_ms())
+            if age >= self._failed_slice_retention:
+                logger.info(
+                    "Reaping failed slice %s in %s (failed %dms ago)",
+                    slice_id,
+                    self.name,
+                    age.to_ms(),
+                )
+                self.scale_down(slice_id, timestamp)
+                reaped.append(state.handle)
+
+        return reaped
 
     def scale_down_if_idle(
         self,

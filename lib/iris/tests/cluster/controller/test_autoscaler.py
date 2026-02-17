@@ -655,7 +655,7 @@ class TestAutoscalerWorkerFailure:
     """Tests for worker failure handling."""
 
     def test_notify_worker_failed_terminates_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """notify_worker_failed() terminates the slice containing the worker."""
+        """notify_worker_failed() marks the slice as FAILED (will be reaped later)."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
@@ -666,7 +666,10 @@ class TestAutoscalerWorkerFailure:
         vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
         autoscaler.notify_worker_failed(vm_address)
 
-        assert group.slice_count() == 0
+        # Slice should still be tracked but marked as FAILED
+        assert group.slice_count() == 1
+        counts = group.slice_state_counts()
+        assert counts[SliceLifecycleState.FAILED] == 1
 
     def test_notify_worker_failed_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """notify_worker_failed() does nothing for unknown workers."""
@@ -679,6 +682,33 @@ class TestAutoscalerWorkerFailure:
         autoscaler.notify_worker_failed("10.1.2.3")
 
         assert group.slice_count() == 1
+
+    def test_failed_slice_reaping_after_retention_period(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Failed slices are reaped after the retention period via refresh()."""
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        # Use short retention period for testing
+        group = ScalingGroup(scale_group_config, platform, failed_slice_retention=Duration.from_seconds(10))
+        autoscaler = make_autoscaler({"test-group": group})
+        autoscaler.reconcile()
+        _mark_discovered_ready(group, [mock_handle])
+
+        # Mark slice as failed at timestamp 1000
+        group.mark_slice_failed("slice-001", timestamp=Timestamp.from_ms(1000))
+
+        # Slice should be tracked and marked as FAILED
+        assert group.slice_count() == 1
+        counts = group.slice_state_counts()
+        assert counts[SliceLifecycleState.FAILED] == 1
+
+        # Before retention period expires, refresh should not reap
+        vm_status_map = {}
+        autoscaler.refresh(vm_status_map, timestamp=Timestamp.from_ms(5000))
+        assert group.slice_count() == 1
+
+        # After retention period (10 seconds), refresh should reap the slice
+        autoscaler.refresh(vm_status_map, timestamp=Timestamp.from_ms(11001))
+        assert group.slice_count() == 0
 
 
 class TestAutoscalerIdleVerification:

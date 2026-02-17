@@ -687,13 +687,14 @@ class Autoscaler:
     def _bootstrap_slice_safe(self, handle: SliceHandle, group: ScalingGroup) -> None:
         """Bootstrap a slice with error handling. Runs in a background thread.
 
-        On failure, marks slice as failed, scales it down, and records a failure on the group.
+        On failure, marks slice as failed and records a failure on the group.
+        The slice will be reaped after the retention period by refresh().
         """
         try:
             self._bootstrap_slice(handle, group.name)
         except Exception as e:
             logger.error(
-                "Bootstrap failed for slice %s in %s, cleaning up: %s",
+                "Bootstrap failed for slice %s in %s, marking as failed: %s",
                 handle.slice_id,
                 group.name,
                 e,
@@ -702,8 +703,6 @@ class Autoscaler:
             self._log_action(
                 "slice_failed", group.name, handle.slice_id, reason=f"bootstrap failed: {e}", status="failed"
             )
-            group.scale_down(handle.slice_id)
-            self._unregister_slice_vms(handle.slice_id)
             group.record_failure()
 
     def _bootstrap_slice(self, handle: SliceHandle, scale_group: str) -> None:
@@ -751,15 +750,28 @@ class Autoscaler:
             del self._vms[vm_id]
 
     def refresh(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """I/O phase: scale down idle slices.
+        """I/O phase: scale down idle slices and reap failed slices.
 
-        Failed slices are handled by bootstrap (mark_slice_failed -> scale_down)
-        and worker failure notifications (notify_worker_failed). Dead VMs are
-        detected by worker heartbeat timeouts in the controller.
+        Failed slices are marked by bootstrap (_bootstrap_slice_safe) and worker
+        failure notifications (notify_worker_failed), then reaped here after the
+        retention period. Dead VMs are detected by worker heartbeat timeouts in
+        the controller.
         """
         timestamp = timestamp or Timestamp.now()
 
         for group in self._groups.values():
+            # Reap failed slices that have exceeded retention period
+            reaped = group.reap_failed_slices(timestamp)
+            for handle in reaped:
+                self._unregister_slice_vms(handle.slice_id)
+                self._log_action(
+                    "reap_failed",
+                    group.name,
+                    slice_id=handle.slice_id,
+                    reason="failed slice exceeded retention period",
+                )
+
+            # Scale down idle slices
             target_capacity = max(group.current_demand, group.min_slices)
             scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
             if scaled_down:
@@ -907,13 +919,13 @@ class Autoscaler:
         return self._groups
 
     def notify_worker_failed(self, vm_address: str) -> None:
-        """Called by controller when a worker fails. Terminates the containing slice.
+        """Called by controller when a worker fails. Marks the containing slice as failed.
 
         This integrates with the existing controller failure cascade:
         1. Controller detects worker timeout/failure
         2. Controller emits WorkerFailedEvent (cascades to tasks)
         3. Controller calls this method (with worker's vm_address)
-        4. Autoscaler terminates the slice containing the failed worker
+        4. Autoscaler marks the slice as failed (will be reaped later)
 
         If the slice was short-lived (died soon after creation), applies backoff
         to the scale group to prevent thrashing on bad zones/preemption.
@@ -923,7 +935,7 @@ class Autoscaler:
             logger.debug("VM %s not found in any managed slice", vm_address)
             return
 
-        logger.info("Worker at VM %s failed, terminating slice %s", vm_address, slice_id)
+        logger.info("Worker at VM %s failed, marking slice %s as failed", vm_address, slice_id)
         self._log_action(
             "worker_failed",
             group.name,
@@ -934,11 +946,8 @@ class Autoscaler:
         # Check if this was a short-lived slice (preemption detection)
         self._record_slice_failure(slice_id, group)
 
-        try:
-            group.scale_down(slice_id)
-            self._unregister_slice_vms(slice_id)
-        except Exception as e:
-            logger.warning("Failed to terminate slice %s: %s", slice_id, e)
+        # Mark slice as failed - it will be reaped after retention period
+        group.mark_slice_failed(slice_id)
 
     def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
         """Find the slice and group containing a worker by VM address."""
