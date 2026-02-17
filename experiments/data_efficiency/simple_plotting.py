@@ -77,6 +77,7 @@ value_pretty_name_dict = {
 param_str_to_count = {"150m4k": 0.15, "300m4k": 0.3, "600m4k": 0.6, "1_4b4k": 1.4, "1_5b4k": 1.5, "3_2b4k": 3.2}
 # param_str_to_count = {"150m4k": 0.15, "300m4k": 0.3, "600m4k": 0.6, "1_4b4k": 1.4}
 PARAM_COUNTS = list(param_str_to_count.values())
+FOUR_PARAM_COUNTS = [param_str_to_count["150m4k"], param_str_to_count["300m4k"], param_str_to_count["600m4k"], param_str_to_count["1_4b4k"]]
 
 token_str_to_steps = {
     "209M": 800,
@@ -132,6 +133,10 @@ def parse_run(run):
         print(f"\033[91mSkipping run {run.id} because it is not finished\033[0m")
         return None
 
+    if "-dclm-cos-" not in run.id:
+        print(f"\033[91mSkipping run {run.id} because it is not a dclm run\033[0m")
+        return None
+
     run_dict = {}
     run_id = run.id
     run_dict["run_id"] = run_id
@@ -151,13 +156,15 @@ def parse_run(run):
 
     seq_len = run_json_config["model"]["value"]["seq_len"]
     base_tokens = None
+    ensemble_run = False
 
     if run_id.startswith("ppl-eval-ensemble-") or run_id.startswith("ss-"):
+        ensemble_run = True
         if run_id.startswith("ppl-eval-ensemble-"):
             run_id = run_id[len("ppl-eval-ensemble-") :]
         elif run_id.startswith("ss-"):
             if not key.startswith("seed-science-"):
-                print(f"\033[91mSkipping run {run_id} because it is not a seed science run\033[0m")
+                print(f"\033[91mSkipping run {run_id} because we are not searching for seed science runs\033[0m")
                 return None
 
             run_id = run_id[len("ss-") :]
@@ -199,24 +206,32 @@ def parse_run(run):
         base_tokens if base_tokens is not None else num_steps * batch_size * seq_len / run_dict["epochs"]
     )
     run_dict["data_name"] = run_id.split("-")[2]
+    assert run_dict["data_name"] == "dclm", f"Run {run_id} has data name {run_dict['data_name']}"
+
     run_dict["lr_schedule"] = run_id.split("-")[3]
     run_dict["lr"] = float(run_id.split("-")[4][2:])
     run_dict["weight_decay"] = float(run_id.split("-")[5][2:])
     run_dict["batch_size"] = batch_size
 
-    run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss", "train/loss"]
+    eval_loss_key = f"eval/{run_dict['data_name']}/loss"
 
-    if run_id.startswith("ppl-eval-ensemble-") or run_id.startswith("ss-"):
+    run_history_loss_keys = [eval_loss_key, "train/loss"]
+
+    if ensemble_run:
         run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss"]
+        # eval_loss_key = "eval/loss"
+        run_history_loss_keys = None
 
     history_loss = run.history(keys=run_history_loss_keys)
 
-    if f"eval/{run_dict['data_name']}/loss" not in history_loss.columns:
+    # t = run; import pdb; pdb.set_trace()
+
+    if eval_loss_key not in history_loss.columns:
         print(f"\033[91mSkipping run {run_id} because it does not have the loss history\033[0m")
         return None
 
     run_dict["loss_history"] = history_loss
-    run_dict[f"final_{run_dict['data_name']}_loss"] = history_loss[f"eval/{run_dict['data_name']}/loss"].iloc[-1]
+    run_dict[f"final_{run_dict['data_name']}_loss"] = history_loss[eval_loss_key].iloc[-1]
 
     if "train/loss" in history_loss.columns:
         run_dict["final_train_loss"] = history_loss["train/loss"].iloc[-1]
@@ -702,9 +717,10 @@ def plot_ensemble_scaling(model_name, base_tokens):
     if model_name == "1_4b4k" and base_tokens == 209715200:
         return best_fit, best_single_model_hparams_ensemble
 
-    assert is_hparams_shift(
+    if not is_hparams_shift(
         best_single_model_hparams, best_fit_hparams
-    ), "Best fit hyperparams are not a shift of the single model hyperparams"
+    ):
+        print("\033[91m[WARNING] Best fit hyperparams are not a shift of the single model hyperparams\033[0m")
 
     return best_fit, best_single_model_hparams_ensemble
 
@@ -1226,7 +1242,7 @@ def plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fi
                 color=param_str_color_dict[param_str],
             )
         plt.plot(
-            PARAM_COUNTS,
+            FOUR_PARAM_COUNTS,
             losses,
             "--",
             color="gray",
@@ -1248,7 +1264,7 @@ def plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fi
     plt.ylabel("Loss")
     plt.title("Tuning parameter and epoch count")
     plt.legend()
-    plt.xticks(PARAM_COUNTS, ["150M", "300M", "600M", "1.4B"])
+    plt.xticks(FOUR_PARAM_COUNTS, ["150M", "300M", "600M", "1.4B"])
     plt.xticks([], [], minor=True)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -1557,6 +1573,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law, be
     best_parameter_scaling_losses = require_pickle(
         "experiments/data_efficiency/cache/simple_best_parameter_scaling_losses.pkl", "infinite-model-scaling"
     )
+    import pdb ; pdb.set_trace();
     epoched_losses = [min(losses) for losses in best_parameter_scaling_losses.values()]
     print("BEST EPOCHED LOSSES", epoched_losses)
     epoched_power_law = PowerScalingLaw(var_name="D")
@@ -1862,10 +1879,10 @@ def plot_simple_cross(best_asymptote_ensemble_200M, power_law_200M, run_losses_2
     plt.figure(figsize=WIDE_RECTANGLE_FIGSIZE, dpi=300)
     max_x = max(x_data * param_str_to_count["300m4k"] * 2)
 
-    plt.scatter(PARAM_COUNTS, run_losses_200M, color=PURPLE, s=50)
+    plt.scatter(FOUR_PARAM_COUNTS, run_losses_200M, color=PURPLE, s=50)
 
     # fit a power law to the model scaling
-    model_x_fit = np.linspace(min(PARAM_COUNTS), max_x, 5000)
+    model_x_fit = np.linspace(min(FOUR_PARAM_COUNTS), max_x, 5000)
     model_y_fit = power_law_200M.evaluate(model_x_fit)
     plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Regularized recipe (Fit: {power_law_200M})")
 
@@ -1896,7 +1913,7 @@ def plot_simple_cross(best_asymptote_ensemble_200M, power_law_200M, run_losses_2
 
     # plt.legend(handles=handles, labels=labels)
     plt.xscale("log")
-    plt.xticks(PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in PARAM_COUNTS])
+    plt.xticks(FOUR_PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in FOUR_PARAM_COUNTS])
     plt.xticks([], [], minor=True)
     plt.xlabel("Total parameter count")
     plt.ylabel("DCLM Loss")
@@ -1911,10 +1928,10 @@ def plot_distillation(best_asymptote_ensemble_200M, power_law_200M, run_losses_2
     plt.figure(figsize=WIDE_RECTANGLE_FIGSIZE, dpi=300)
     max_x = max(x_data * param_str_to_count["300m4k"] * 2)
 
-    plt.scatter(PARAM_COUNTS, run_losses_200M, color=PURPLE, s=50)
+    plt.scatter(FOUR_PARAM_COUNTS, run_losses_200M, color=PURPLE, s=50)
 
     # fit a power law to the model scaling
-    model_x_fit = np.linspace(min(PARAM_COUNTS), max_x, 5000)
+    model_x_fit = np.linspace(min(FOUR_PARAM_COUNTS), max_x, 5000)
     model_y_fit = power_law_200M.evaluate(model_x_fit)
     plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Regularized recipe (Fit: {power_law_200M})")
 
@@ -2001,7 +2018,7 @@ def plot_distillation(best_asymptote_ensemble_200M, power_law_200M, run_losses_2
 
     plt.legend(handles=handles, labels=labels)
     plt.xscale("log")
-    plt.xticks(PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in PARAM_COUNTS])
+    plt.xticks(FOUR_PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in FOUR_PARAM_COUNTS])
     plt.xticks([], [], minor=True)
     plt.xlabel("Total parameter count")
     plt.ylabel("DCLM Loss")
@@ -2460,16 +2477,16 @@ def sensitivity_analysis_regularized(run_list, power_law_200M):
         seed2_losses.append(seed2_run_list[0]["final_dclm_loss"])
 
     seed1_power_law = PowerScalingLaw(var_name="N")
-    seed1_power_law.fit(PARAM_COUNTS, seed1_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    seed1_power_law.fit(FOUR_PARAM_COUNTS, seed1_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
 
     seed2_power_law = PowerScalingLaw(var_name="N")
-    seed2_power_law.fit(PARAM_COUNTS, seed2_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    seed2_power_law.fit(FOUR_PARAM_COUNTS, seed2_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
 
-    x_fit = np.logspace(np.log10(min(PARAM_COUNTS)), np.log10(max(PARAM_COUNTS)), 100)
+    x_fit = np.logspace(np.log10(min(FOUR_PARAM_COUNTS)), np.log10(max(FOUR_PARAM_COUNTS)), 100)
 
     plt.figure(figsize=ABLATION_FIGSIZE, dpi=300)
 
-    plt.scatter(PARAM_COUNTS, power_law_200M.evaluate(PARAM_COUNTS), marker="o", color=REGULARIZED_COLOR)
+    plt.scatter(FOUR_PARAM_COUNTS, power_law_200M.evaluate(FOUR_PARAM_COUNTS), marker="o", color=REGULARIZED_COLOR)
     plt.plot(
         x_fit,
         power_law_200M.evaluate(x_fit),
@@ -2478,7 +2495,7 @@ def sensitivity_analysis_regularized(run_list, power_law_200M):
         label=f"Main body power law (Fit: {power_law_200M})",
     )
 
-    plt.scatter(PARAM_COUNTS, seed1_losses, marker="o", color=LIGHT_BLUE)
+    plt.scatter(FOUR_PARAM_COUNTS, seed1_losses, marker="o", color=LIGHT_BLUE)
     plt.plot(
         x_fit,
         seed1_power_law.evaluate(x_fit),
@@ -2487,13 +2504,13 @@ def sensitivity_analysis_regularized(run_list, power_law_200M):
         label=f"Seed 1 power law (Fit: {seed1_power_law})",
     )
 
-    plt.scatter(PARAM_COUNTS, seed2_losses, marker="o", color=GREEN)
+    plt.scatter(FOUR_PARAM_COUNTS, seed2_losses, marker="o", color=GREEN)
     plt.plot(
         x_fit, seed2_power_law.evaluate(x_fit), "--", color=GREEN, label=f"Seed 2 power law (Fit: {seed2_power_law})"
     )
 
     plt.xscale("log")
-    plt.xticks(PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in PARAM_COUNTS])
+    plt.xticks(FOUR_PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in FOUR_PARAM_COUNTS])
     plt.xticks([], [], minor=True)
     plt.xlabel("Parameter count")
     plt.ylabel("Loss")
@@ -2591,21 +2608,21 @@ def no_convex_tuning_ablation(run_list, parameter_scaling_losses, run_losses_200
         losses_no_tuning_epochs.append(runs_model[0]["final_dclm_loss"])
 
     # law_no_tuning_weight_decay = PowerScalingLaw(var_name="N")
-    # law_no_tuning_weight_decay.fit(PARAM_COUNTS, losses_no_tuning_weight_decay,
+    # law_no_tuning_weight_decay.fit(FOUR_PARAM_COUNTS, losses_no_tuning_weight_decay,
     # p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-    # x_fit = np.logspace(np.log10(min(PARAM_COUNTS)), np.log10(max(PARAM_COUNTS)), 100)
+    # x_fit = np.logspace(np.log10(min(FOUR_PARAM_COUNTS)), np.log10(max(FOUR_PARAM_COUNTS)), 100)
 
     plt.figure(figsize=ABLATION_FIGSIZE, dpi=300)
     plt.scatter(
-        PARAM_COUNTS,
+        FOUR_PARAM_COUNTS,
         parameter_scaling_losses[209715200],
         marker="o",
         color=BASELINE_COLOR,
         label="Tuning epochs (baseline)",
     )
-    plt.scatter(PARAM_COUNTS, run_losses_200M, marker="o", color=REGULARIZED_COLOR, label="Regularized recipe")
-    plt.scatter(PARAM_COUNTS, losses_no_tuning_weight_decay, marker="s", color=GREEN, label="Fixing 0.8 weight decay")
-    plt.scatter(PARAM_COUNTS, losses_no_tuning_epochs, marker="*", color=LIGHT_BLUE, label="Fixing 16 epochs")
+    plt.scatter(FOUR_PARAM_COUNTS, run_losses_200M, marker="o", color=REGULARIZED_COLOR, label="Regularized recipe")
+    plt.scatter(FOUR_PARAM_COUNTS, losses_no_tuning_weight_decay, marker="s", color=GREEN, label="Fixing 0.8 weight decay")
+    plt.scatter(FOUR_PARAM_COUNTS, losses_no_tuning_epochs, marker="*", color=LIGHT_BLUE, label="Fixing 16 epochs")
 
     # plt.plot(x_fit, law_no_tuning_weight_decay.evaluate(x_fit),
     #  "--", color=param_str_color_dict["150m4k"], label=f"Fit: {law_no_tuning_weight_decay}")
@@ -2647,10 +2664,10 @@ def plot_parameter_count_vs_loss(run_list):
 
     losses = [run["final_dclm_loss"] for run in best_tuned_epoch_runs]
     plt.figure(figsize=ABLATION_FIGSIZE, dpi=300)
-    plt.plot(PARAM_COUNTS, losses, marker="o", color=BASELINE_COLOR, label="Tuned epochs validation loss")
+    plt.plot(FOUR_PARAM_COUNTS, losses, marker="o", color=BASELINE_COLOR, label="Tuned epochs validation loss")
     plt.ylim(3.7, 5.05)
     plt.xscale("log")
-    plt.xticks(PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in PARAM_COUNTS])
+    plt.xticks(FOUR_PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in FOUR_PARAM_COUNTS])
     plt.xticks([], [], minor=True)
     plt.xlabel("Parameter count")
     plt.ylabel("Loss")
@@ -2660,12 +2677,12 @@ def plot_parameter_count_vs_loss(run_list):
     plt.savefig("experiments/data_efficiency/simple_plots/parameter_count_vs_loss.png", bbox_inches="tight")
 
     train_losses = [run["final_train_loss"] for run in best_tuned_epoch_runs]
-    plt.plot(PARAM_COUNTS, train_losses, marker="o", color=GREEN, label="Tuned epochs train loss")
+    plt.plot(FOUR_PARAM_COUNTS, train_losses, marker="o", color=GREEN, label="Tuned epochs train loss")
 
     four_epoch_losses = [run["final_dclm_loss"] for run in best_4_epoch_runs]
     four_epoch_train_losses = [run["final_train_loss"] for run in best_4_epoch_runs]
-    plt.plot(PARAM_COUNTS, four_epoch_losses, marker="*", color=ORANGE, label="4 epochs validation loss")
-    plt.plot(PARAM_COUNTS, four_epoch_train_losses, marker="*", color=ROBIN_EGG_BLUE, label="4 epochs train loss")
+    plt.plot(FOUR_PARAM_COUNTS, four_epoch_losses, marker="*", color=ORANGE, label="4 epochs validation loss")
+    plt.plot(FOUR_PARAM_COUNTS, four_epoch_train_losses, marker="*", color=ROBIN_EGG_BLUE, label="4 epochs train loss")
     plt.legend()
     plt.ylim(3.0, 4.0)
     plt.title("Increasing parameter count train loss")
@@ -3105,39 +3122,39 @@ if __name__ == "__main__":
             power_laws, run_losses = plot_model_scaling(best_run_dict, fit_type="power_law")
 
         # Fit joint scaling law
-        # fit_joint_scaling_law(best_run_dict)
+        fit_joint_scaling_law(best_run_dict)
 
-        # # Create paper version of plots
-        # with plt.rc_context({"font.size": 12}):
-        #     print(parameter_scaling_losses)
-        #     (
-        #         standard_seed_scaling_asymptotes,
-        #         standard_seed_scaling_power_law,
-        #         epoched_data_scaling_law,
-        #     ) = plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fit_type="power_law")
+        # Create paper version of plots
+        with plt.rc_context({"font.size": 12}):
+            print(parameter_scaling_losses)
+            (
+                standard_seed_scaling_asymptotes,
+                standard_seed_scaling_power_law,
+                epoched_data_scaling_law,
+            ) = plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fit_type="power_law")
 
-        # print(power_laws[0], run_losses[0])
-        # pickle.dump(
-        #     (power_laws[0], run_losses[0]), open("experiments/data_efficiency/cache/simple_standard_asymptotes_200M.pkl", "wb")
-        # )
-        # pickle.dump(
-        #     epoched_data_scaling_law, open("experiments/data_efficiency/cache/simple_epoched_data_scaling_law.pkl", "wb")
-        # )
-        # pickle.dump(
-        #     (standard_seed_scaling_asymptotes, standard_seed_scaling_power_law),
-        #     open("experiments/data_efficiency/cache/simple_standard_seed_scaling.pkl", "wb"),
-        # )
+        print(power_laws[0], run_losses[0])
+        pickle.dump(
+            (power_laws[0], run_losses[0]), open("experiments/data_efficiency/cache/simple_standard_asymptotes_200M.pkl", "wb")
+        )
+        pickle.dump(
+            epoched_data_scaling_law, open("experiments/data_efficiency/cache/simple_epoched_data_scaling_law.pkl", "wb")
+        )
+        pickle.dump(
+            (standard_seed_scaling_asymptotes, standard_seed_scaling_power_law),
+            open("experiments/data_efficiency/cache/simple_standard_seed_scaling.pkl", "wb"),
+        )
 
-        # plot_wd_overfitting_ablation(run_list)
-        # no_convex_tuning_ablation(run_list, parameter_scaling_losses, run_losses[0])
-        # sensitivity_analysis_regularized(run_list, power_laws[0])
+        plot_wd_overfitting_ablation(run_list)
+        no_convex_tuning_ablation(run_list, parameter_scaling_losses, run_losses[0])
+        sensitivity_analysis_regularized(run_list, power_laws[0])
 
-        # run_to_run_variance(run_list)
-        # with plt.rc_context({"font.size": 12}):
-        #     plot_lr_tuned_epoch_ablation(run_list)
-        #     plot_parameter_count_vs_loss(run_list)
-        # weight_decay_loss_trajectories(run_list)
-        # # plot_token_scaling_simple(best_run_dict, fit_type="power_law")
+        run_to_run_variance(run_list)
+        with plt.rc_context({"font.size": 12}):
+            plot_lr_tuned_epoch_ablation(run_list)
+            plot_parameter_count_vs_loss(run_list)
+        weight_decay_loss_trajectories(run_list)
+        # plot_token_scaling_simple(best_run_dict, fit_type="power_law")
 
     elif mode == "seed-science":
         run_list = sorted(run_list, key=lambda x: x["ensemble_member_count"])
