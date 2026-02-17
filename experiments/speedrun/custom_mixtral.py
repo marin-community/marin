@@ -89,6 +89,11 @@ class MixtralConfig(MistralConfig):
     n_routed_experts: int = 8
     n_shared_experts: int = 0
 
+    # Null expert data sparsity (arXiv:2601.15370). rho in (0, 1].
+    # 1.0 = standard MoE. < 1.0 adds M = N*(1-rho)/rho null (zero-output) experts to the
+    # routing pool so the router can drop tokens from compute entirely.
+    data_sparsity: float = 1.0
+
     lbl_coef: float | None = 0.01
     rzl_coef: float | None = 0.001
 
@@ -122,6 +127,19 @@ class MixtralConfig(MistralConfig):
     Experts = property(lambda self: Axis(name="experts", size=self.n_routed_experts))
     SharedExperts = property(lambda self: Axis(name="shared_experts", size=self.n_shared_experts))
     TopExperts = property(lambda self: Axis(name="top_experts", size=self.num_experts_per_tok))
+    NullExperts = property(
+        lambda self: Axis(
+            name="null_experts",
+            size=(
+                round(self.n_routed_experts * (1 - self.data_sparsity) / self.data_sparsity)
+                if self.data_sparsity < 1.0
+                else 0
+            ),
+        )
+    )
+    ExpandedExperts = property(
+        lambda self: Axis(name="expanded_experts", size=self.n_routed_experts + self.NullExperts.size)
+    )
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
@@ -130,6 +148,7 @@ class MixtralConfig(MistralConfig):
         assert (
             self.num_experts_per_tok <= self.n_routed_experts
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
+        assert 0 < self.data_sparsity <= 1.0, f"data_sparsity must be in (0, 1], got {self.data_sparsity}"
 
     def hf_checkpoint_converter(
         self, ref_checkpoint: str | None = None
@@ -315,11 +334,21 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
 
 
 class MixtralSparseMoeBlock(eqx.Module):
-    """Mixture-of-Experts"""
+    """Mixture-of-Experts with optional null expert data sparsity (arXiv:2601.15370).
+
+    When ``config.data_sparsity < 1.0``, M = N*(1-rho)/rho null (zero-output) experts are
+    added to the routing pool. A separate ``null_gate`` linear produces a single per-token
+    logit that is duplicated M times and concatenated with the real expert logits before
+    softmax/top-k. Tokens routed to null slots contribute no compute: their weights are
+    zeroed and the remaining real-expert weights are renormalized. Because ``bincount``
+    with ``length=N`` ignores null indices (≥ N) that sort to the tail of the permuted
+    array, the MLP kernels (ragged-dot / GMM) naturally skip those tokens.
+    """
 
     config: MistralConfig = eqx.field(static=True)
     gate: hnn.Linear  # projection from Embed to Experts
     experts: MixtralMoEMlp
+    null_gate: hnn.Linear | None  # projection from Embed to scalar null logit
 
     @staticmethod
     def init(config: MistralConfig, *, key) -> "MixtralSparseMoeBlock":
@@ -336,9 +365,24 @@ class MixtralSparseMoeBlock(eqx.Module):
             use_gmm=config.use_gmm,
         )
 
-        return MixtralSparseMoeBlock(config, gate, experts)
+        null_gate = None
+        if config.data_sparsity < 1.0:
+            k_null, key = maybe_rng_split(key, 2)
+            NullLogit = Axis("null_logit", 1)
+            null_gate = hnn.Linear.init(config.Embed, NullLogit, key=k_null, use_bias=False)
 
-    def _route(self, router_probs: NamedArray, Token: Axis, TopExperts: Axis):
+        return MixtralSparseMoeBlock(config, gate, experts, null_gate)
+
+    def _route(self, router_probs: NamedArray, Token: Axis, TopExperts: Axis, n_real_experts: int | None = None):
+        """Route tokens to experts via top-k selection.
+
+        Args:
+            router_probs: Routing probabilities. Shape is [Token, Experts] for standard
+                routing or [Token, ExpandedExperts] when null experts are active.
+            n_real_experts: When set, indices ≥ this value are null experts whose weights
+                are zeroed before renormalization over the remaining real selections.
+        """
+
         @partial(
             shard_map,
             mesh=hax.partitioning._get_mesh(),
@@ -351,7 +395,15 @@ class MixtralSparseMoeBlock(eqx.Module):
         )
         def sharded_route(router_probs_):
             selected_weights_, selected_experts_ = jax.lax.top_k(router_probs_, TopExperts.size)
-            selected_weights_ = selected_weights_ / selected_weights_.sum(-1, keepdims=True)
+
+            if n_real_experts is not None:
+                # Null expert renormalization: zero null weights, renormalize over real only
+                is_real = selected_experts_ < n_real_experts
+                selected_weights_ = jnp.where(is_real, selected_weights_, 0.0)
+                real_sum = jnp.maximum(selected_weights_.sum(-1, keepdims=True), 1e-8)
+                selected_weights_ = selected_weights_ / real_sum
+            else:
+                selected_weights_ = selected_weights_ / selected_weights_.sum(-1, keepdims=True)
 
             return selected_weights_, selected_experts_
 
@@ -433,6 +485,23 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         return out_repeat_unflat
 
+    def _compute_expanded_loads(self, topk_idx_flat: NamedArray, ExpandedExperts: Axis) -> NamedArray:
+        """Compute routing load for each slot in the expanded expert pool (real + null)."""
+        NM = ExpandedExperts.size
+
+        @partial(
+            shard_map,
+            mesh=hax.partitioning._get_mesh(),
+            in_specs=hax.partitioning.pspec_for_axis(topk_idx_flat.axes),
+            out_specs=hax.partitioning.pspec_for_axis((ExpandedExperts,)),
+            check_rep=False,
+        )
+        def expanded_bincount(idx_flat_):
+            return jnp.bincount(idx_flat_, length=NM)
+
+        result_ = expanded_bincount(topk_idx_flat.array)
+        return NamedArray(result_, (ExpandedExperts,))
+
     @named_call
     def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
         if x.has_axis("batch"):
@@ -441,44 +510,71 @@ class MixtralSparseMoeBlock(eqx.Module):
             squash_axes = [x.resolve_axis(self.config.Pos.name)]
         Experts = self.config.Experts
         TopExperts = self.config.TopExperts
+        N = self.config.n_routed_experts
 
         k_gate, k_experts, key = maybe_rng_split(key, 3)
 
         x_flat = hax.flatten_axes(x, old_axes=squash_axes, new_axis="token")  # [Batch, Pos, Embed] -> [Token, Embed]
         Token = x_flat.resolve_axis("token")
 
-        router_logits = self.gate(x_flat, key=k_gate)
+        router_logits = self.gate(x_flat, key=k_gate)  # [Token, Experts(N)]
 
-        router_probs = hnn.softmax(router_logits, axis=Experts)
+        # Null expert expansion: duplicate a learned null logit M times, concatenate with
+        # real logits, then softmax/top-k over the expanded pool.  Null-routed slots get
+        # weight 0 and are skipped by the MLP kernels (they sort to the tail in _permute
+        # and are excluded from group_sizes via bincount(length=N)).
+        if self.null_gate is not None:
+            M = self.config.NullExperts.size
+            ExpandedExperts = self.config.ExpandedExperts
+            null_logit = self.null_gate(x_flat)  # [Token, NullLogit(1)]
+            null_logits_raw = jnp.broadcast_to(null_logit.array, (*null_logit.array.shape[:-1], M))
+            expanded_logits_raw = jnp.concatenate([router_logits.array, null_logits_raw], axis=-1)
+            expanded_logits = NamedArray(expanded_logits_raw, (Token, ExpandedExperts))
 
-        topk_weights, topk_idx = self._route(router_probs, Token, TopExperts)
+            router_probs = hnn.softmax(expanded_logits, axis=ExpandedExperts)
+            topk_weights, topk_idx = self._route(router_probs, Token, TopExperts, n_real_experts=N)
+        else:
+            expanded_logits = router_logits
+            ExpandedExperts = Experts
+            router_probs = hnn.softmax(router_logits, axis=Experts)
+            topk_weights, topk_idx = self._route(router_probs, Token, TopExperts)
 
         topk_idx_flat = hax.flatten_axes(topk_idx, old_axes=[Token, TopExperts], new_axis="token_repeat")
         TokenRepeat = topk_idx_flat.resolve_axis("token_repeat")
+        # _permute: argsort places null indices (≥ N) at the tail; bincount(length=N)
+        # counts only real experts, so the MLP kernels process fewer tokens.
         x_repeat_sort, group_sizes, sort_idx, TokenRepeat = self._permute(x_flat, topk_idx_flat, TokenRepeat)
 
         out_repeat_sort = self.experts(x_repeat_sort, group_sizes, key=k_experts)
 
         out_repeat_unflat = self._unpermute(
             out_repeat_sort, sort_idx, topk_weights, Token, TokenRepeat, TopExperts
-        )  # [TokenRepeat, Embed]
+        )  # [Token, TopExperts, Embed]
 
         out = out_repeat_unflat.dot(topk_weights, axis=TopExperts)  # [Token, Embed]
 
-        # aux loss
+        # --- aux losses ---
         extras = {}
         expert_loads = group_sizes / hax.sum(group_sizes, axis=Experts)
+        extras["expert_loads"] = expert_loads
 
-        extras = {
-            "expert_loads": expert_loads,
-        }
         if self.config.lbl_coef is not None:
-            f = expert_loads * self.config.n_routed_experts / self.config.num_experts_per_tok
-            p = hax.mean(router_probs, axis=Token)
-            extras["load_balancing_loss"] = self.config.lbl_coef * hax.sum(f * p, axis=Experts)
+            if self.null_gate is not None:
+                # Load balancing over expanded pool (N+M) incentivizes data sparsity
+                expanded_group_sizes = self._compute_expanded_loads(topk_idx_flat, ExpandedExperts)
+                expanded_loads = expanded_group_sizes / hax.sum(expanded_group_sizes, axis=ExpandedExperts)
+                f = expanded_loads * ExpandedExperts.size / self.config.num_experts_per_tok
+                p = hax.mean(router_probs, axis=Token)
+                extras["load_balancing_loss"] = self.config.lbl_coef * hax.sum(f * p, axis=ExpandedExperts)
+            else:
+                f = expert_loads * N / self.config.num_experts_per_tok
+                p = hax.mean(router_probs, axis=Token)
+                extras["load_balancing_loss"] = self.config.lbl_coef * hax.sum(f * p, axis=Experts)
+
         if self.config.rzl_coef is not None:
+            # Z-loss over expanded logits to stabilise routing
             extras["router_z_loss"] = self.config.rzl_coef * hax.mean(
-                hnn.logsumexp(router_logits, axis=Experts) ** 2, axis=Token
+                hnn.logsumexp(expanded_logits, axis=ExpandedExperts) ** 2, axis=Token
             )
 
         return hax.unflatten_axis(out, axis=Token, new_axes=squash_axes), extras  # [Batch, Pos, Embed]
