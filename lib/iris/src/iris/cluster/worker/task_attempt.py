@@ -22,6 +22,7 @@ from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, Contain
 from iris.cluster.types import DEFAULT_BASE_IMAGE, JobName, is_task_finished
 from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
+from iris.cluster.worker.gcs_log_syncer import GcsLogSyncer, LogEntry as GcsLogEntry
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker_types import TaskLogs
 from iris.rpc import cluster_pb2
@@ -198,6 +199,7 @@ class TaskAttempt:
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
         poll_interval_seconds: float = 5.0,
+        gcs_log_syncer: GcsLogSyncer | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -211,6 +213,7 @@ class TaskAttempt:
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
+            gcs_log_syncer: Optional GCS log syncer for persistent log storage
         """
         self._bundle_provider = bundle_provider
         self._runtime = container_runtime
@@ -220,6 +223,7 @@ class TaskAttempt:
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
+        self._gcs_log_syncer = gcs_log_syncer
 
         # Task identity (from config)
         self.task_id: JobName = config.task_id
@@ -261,6 +265,9 @@ class TaskAttempt:
         # Structured logs (build logs stored here, container logs fetched from Docker)
         self.logs: TaskLogs = TaskLogs()
 
+        # Track last GCS sync time for periodic syncing
+        self._last_gcs_sync = time.time()
+
         self.result: bytes | None = None  # cloudpickle serialized return value from container
 
     @property
@@ -269,6 +276,29 @@ class TaskAttempt:
         if self._container_handle:
             return self._container_handle.container_id
         return None
+
+    def _add_log(self, source: str, data: str, timestamp: Timestamp | None = None) -> None:
+        """Add a log entry to both in-memory logs and GCS syncer (if configured).
+
+        Args:
+            source: Log source ("stdout", "stderr", "build", "error")
+            data: Log line content
+            timestamp: Optional explicit timestamp (uses now() if None)
+        """
+        # Add to in-memory logs
+        self._add_log(source, data, timestamp=timestamp)
+
+        # Also add to GCS syncer if configured
+        if self._gcs_log_syncer:
+            ts = timestamp.epoch_seconds() if timestamp else time.time()
+            self._gcs_log_syncer.append(
+                GcsLogEntry(
+                    timestamp=ts,
+                    source=source,
+                    data=data,
+                    attempt_id=self.attempt_id,
+                )
+            )
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
@@ -376,12 +406,14 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_KILLED)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            self.logs.add("error", f"Task failed:\n{error_msg}")
+            self._add_log("error", f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             if is_task_finished(self.status):
                 self._report_state()
             self._cleanup()
+            # Final GCS sync and metadata write
+            self._finalize_gcs_logs()
             logger.info(
                 "TaskAttempt finished: task_id=%s attempt=%s state=%s exit_code=%s",
                 self.task_id,
@@ -519,7 +551,7 @@ class TaskAttempt:
         # Capture build logs into task.logs
         for log_line in build_logs:
             ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
-            self.logs.add(log_line.source, log_line.data, timestamp=ts)
+            self._add_log(log_line.source, log_line.data, timestamp=ts)
 
         self.build_finished = Timestamp.now()
         if self.request.entrypoint.setup_commands:
@@ -608,7 +640,7 @@ class TaskAttempt:
                         try:
                             self.result = result_path.read_bytes()
                         except Exception as e:
-                            self.logs.add("error", f"Failed to read result file: {e}")
+                            self._add_log("error", f"Failed to read result file: {e}")
 
                 # Container has stopped
                 if status.error:
@@ -629,7 +661,7 @@ class TaskAttempt:
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
-                        self.logs.add("error", "Container was OOM killed by the kernel")
+                        self._add_log("error", "Container was OOM killed by the kernel")
                     self.transition_to(
                         cluster_pb2.TASK_STATE_FAILED,
                         error=error,
@@ -639,6 +671,9 @@ class TaskAttempt:
 
             # Stream logs incrementally
             last_log_time = self._stream_logs(last_log_time)
+
+            # Periodic GCS log sync (every 30 seconds)
+            self._sync_logs_to_gcs()
 
             # Collect stats
             try:
@@ -675,7 +710,7 @@ class TaskAttempt:
             new_logs = self._container_handle.logs(since=since)
             for log_line in new_logs:
                 ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
-                self.logs.add(log_line.source, log_line.data, timestamp=ts)
+                self._add_log(log_line.source, log_line.data, timestamp=ts)
             if new_logs:
                 last_ts = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
                 return last_ts.add_ms(1)
@@ -716,3 +751,74 @@ class TaskAttempt:
                 shutil.rmtree(self.workdir)
             except Exception as e:
                 logger.warning("Failed to remove %s: %s", self.workdir, e)
+
+    def _sync_logs_to_gcs(self) -> None:
+        """Sync new logs to GCS if syncer is configured and interval has passed."""
+        if not self._gcs_log_syncer:
+            return
+
+        # Only sync if 30 seconds have passed since last sync
+        now = time.time()
+        if now - self._last_gcs_sync < 30.0:
+            return
+
+        try:
+            self._gcs_log_syncer.sync()
+            self._last_gcs_sync = now
+            logger.debug("Synced logs to GCS for task %s", self.task_id)
+        except Exception as e:
+            logger.warning("Failed to sync logs to GCS for task %s: %s", self.task_id, e)
+
+    def _finalize_gcs_logs(self) -> None:
+        """Perform final GCS log sync and write metadata on task completion."""
+        if not self._gcs_log_syncer:
+            return
+
+        try:
+            # Final sync of any remaining logs
+            self._gcs_log_syncer.sync()
+            logger.debug("Final GCS log sync completed for task %s", self.task_id)
+
+            # Determine OOM killed status
+            oom_killed = False
+            if self._container_handle:
+                status = self._container_handle.status()
+                oom_killed = status.oom_killed if status else False
+
+            # Write metadata - use dict[str, Any] to avoid type checker issues
+            from typing import Any
+
+            metadata: dict[str, Any] = {
+                "task_id": self.task_id.to_wire(),
+                "attempt_id": self.attempt_id,
+                "worker_id": self._worker_id or "unknown",
+                "status": cluster_pb2.TaskState.Name(self.status),
+                "exit_code": self.exit_code,
+                "oom_killed": oom_killed,
+                "error_message": self.error or "",
+                "status_message": self.status_message,
+            }
+
+            # Add timestamps if available
+            if self.started_at:
+                metadata["start_time"] = self.started_at.epoch_seconds()
+            if self.finished_at:
+                metadata["end_time"] = self.finished_at.epoch_seconds()
+            if self.build_started:
+                metadata["build_start_time"] = self.build_started.epoch_seconds()
+            if self.build_finished:
+                metadata["build_end_time"] = self.build_finished.epoch_seconds()
+
+            # Add resource usage
+            metadata["resource_usage"] = {
+                "memory_mb": self.current_memory_mb,
+                "memory_peak_mb": self.peak_memory_mb,
+                "disk_mb": self.disk_mb,
+                "cpu_percent": self.current_cpu_percent,
+                "process_count": self.process_count,
+            }
+
+            self._gcs_log_syncer.write_metadata(metadata)
+            logger.info("Wrote metadata to GCS for task %s", self.task_id)
+        except Exception as e:
+            logger.error("Failed to finalize GCS logs for task %s: %s", self.task_id, e)
