@@ -32,7 +32,6 @@ from dataclasses import dataclass
 import dataclasses
 import functools
 import os
-import math
 from typing import Literal, Optional, Tuple
 
 import equinox as eqx

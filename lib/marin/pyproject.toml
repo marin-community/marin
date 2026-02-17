@@ -102,7 +102,6 @@ dev = [
     { include-group = "lint" },
     { include-group = "docs" },
     { include-group = "math" },
-    "watchdog>=3.0.0",
 ]
 
 [tool.uv]
@@ -192,6 +191,17 @@ torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 
 [tool.hatch.metadata]
 allow-direct-references = true
