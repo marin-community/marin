@@ -465,10 +465,7 @@ def run_analysis_local(
     new_baselines = [c for c in baseline_weight_configs if c.run_id not in existing_ids]
     all_configs = original_configs + new_baselines
 
-    print(
-        f"  {len(original_configs)} original configs + "
-        f"{len(new_baselines)} baselines = {len(all_configs)} total"
-    )
+    print(f"  {len(original_configs)} original configs + " f"{len(new_baselines)} baselines = {len(all_configs)} total")
 
     domains = DOMAIN_NAMES
     phases = PHASE_NAMES

@@ -542,6 +542,120 @@ def fit_scheffe_log(X, y, **_kwargs):
     return pred, coef
 
 
+def _epoch_entropy(p):
+    """Epoch-space entropy H(q) for a binary phase with StarCoder fraction p."""
+    e_sc = SC_EPOCH_MULT * p
+    e_nem = NEM_EPOCH_MULT * (1.0 - p)
+    denom = e_sc + e_nem
+    q_sc = np.clip(e_sc / denom, 1e-10, 1.0)
+    q_nem = np.clip(e_nem / denom, 1e-10, 1.0)
+    return q_sc * np.log(q_sc) + q_nem * np.log(q_nem)
+
+
+def _scheffe_log_design(V):
+    """Build Scheffé+log design matrix from virtual-domain volumes (n, nf)."""
+    nf = V.shape[1]
+    safe_V = np.maximum(V, 1e-10)
+    parts = []
+    for j in range(nf):
+        parts.append(V[:, j : j + 1])
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((V[:, j] * V[:, k]).reshape(-1, 1))
+    for j in range(nf):
+        parts.append((safe_V[:, j] * np.log(safe_V[:, j])).reshape(-1, 1))
+    return np.hstack(parts)
+
+
+def _weights_to_vdom(X):
+    """Convert weight features [p0_sc, p1_sc] to vdom [nem0, sc0, nem1, sc1]."""
+    p0_sc, p1_sc = X[:, 0], X[:, 1]
+    return np.column_stack([0.5 * (1 - p0_sc), 0.5 * p0_sc, 0.5 * (1 - p1_sc), 0.5 * p1_sc])
+
+
+def fit_scheffe_log_epoch_entropy(X, y, **_kwargs):
+    """Scheffé+log + epoch-entropy: 14 Scheffé features on vdom + 2 epoch-entropy.  Features: weight."""
+    vdom = _weights_to_vdom(X)
+    Z_scheffe = _scheffe_log_design(vdom)
+    ent0 = _epoch_entropy(X[:, 0]).reshape(-1, 1)
+    ent1 = _epoch_entropy(X[:, 1]).reshape(-1, 1)
+    Z = np.hstack([Z_scheffe, ent0, ent1])  # 4 + 6 + 4 + 2 = 16 columns
+    coef, _, _, _ = np.linalg.lstsq(Z, y, rcond=None)
+
+    def pred(Xn):
+        vd = _weights_to_vdom(Xn)
+        Zs = _scheffe_log_design(vd)
+        e0 = _epoch_entropy(Xn[:, 0]).reshape(-1, 1)
+        e1 = _epoch_entropy(Xn[:, 1]).reshape(-1, 1)
+        return np.hstack([Zs, e0, e1]) @ coef
+
+    return pred, coef
+
+
+def _epoch_overfit_quadratic(X):
+    """Epoch-overfit quadratic features for StarCoder: [e0_sc², e1_sc², e0_sc*e1_sc]."""
+    e0_sc = SC_EPOCH_MULT * X[:, 0]
+    e1_sc = SC_EPOCH_MULT * X[:, 1]
+    return np.column_stack([e0_sc**2, e1_sc**2, e0_sc * e1_sc])
+
+
+def _sheq_design(X):
+    """Build SHEQ design matrix from weight features [p0_sc, p1_sc].
+
+    19 columns: 14 Scheffé+log on vdom + 2 epoch-entropy + 3 epoch-overfit quadratic.
+    """
+    vdom = _weights_to_vdom(X)
+    Z_scheffe = _scheffe_log_design(vdom)
+    ent0 = _epoch_entropy(X[:, 0]).reshape(-1, 1)
+    ent1 = _epoch_entropy(X[:, 1]).reshape(-1, 1)
+    Z_eq = _epoch_overfit_quadratic(X)
+    return np.hstack([Z_scheffe, ent0, ent1, Z_eq])
+
+
+def fit_sheq(X, y, **_kwargs):
+    """SHEQ: Scheffé+log + epoch-entropy + epoch-overfit quadratic.  19 params, OLS.
+
+    Design: 4 linear + 6 pairwise + 4 r·ln(r) + 2 epoch-entropy + 3 epoch²/cross.
+    Features: weight.
+    """
+    Z = _sheq_design(X)
+    coef, _, _, _ = np.linalg.lstsq(Z, y, rcond=None)
+
+    def pred(Xn):
+        return _sheq_design(Xn) @ coef
+
+    return pred, coef
+
+
+def _scheffe_tied_design(X):
+    """Build Scheffé + phase-tied entropy design from vdom features (n, 4)."""
+    nf = X.shape[1]
+    safe_X = np.maximum(X, 1e-10)
+    parts = []
+    for j in range(nf):
+        parts.append(X[:, j : j + 1])
+    for j in range(nf):
+        for k in range(j + 1, nf):
+            parts.append((X[:, j] * X[:, k]).reshape(-1, 1))
+    # Phase-tied entropy: sum r_j*ln(r_j) over phase components
+    # Phase 0: indices 0,1 (nem0, sc0); Phase 1: indices 2,3 (nem1, sc1)
+    ent0 = np.sum(safe_X[:, :2] * np.log(safe_X[:, :2]), axis=1, keepdims=True)
+    ent1 = np.sum(safe_X[:, 2:] * np.log(safe_X[:, 2:]), axis=1, keepdims=True)
+    parts.extend([ent0, ent1])
+    return np.hstack(parts)  # 4 + 6 + 2 = 12 columns
+
+
+def fit_scheffe_tied_entropy(X, y, **_kwargs):
+    """Scheffé + phase-tied entropy: linear + pairwise + lambda_k * H_k(vdom).  Features: vdom."""
+    Z = _scheffe_tied_design(X)
+    coef, _, _, _ = np.linalg.lstsq(Z, y, rcond=None)
+
+    def pred(Xn):
+        return _scheffe_tied_design(Xn) @ coef
+
+    return pred, coef
+
+
 def _ilr_transform(X):
     """ILR transform for d=4 compositional data (sequential binary partition)."""
     r = np.maximum(X, 1e-10)
@@ -788,13 +902,18 @@ def _build_soe_base(X):
     e0, e1, n0, n1 = _epochs_from_weights(X)
     s0, s1 = np.log1p(e0), np.log1p(e1)
     t0, t1 = np.log1p(n0), np.log1p(n1)
-    return np.column_stack([
-        np.ones(len(X)),
-        s0, s1,          # satiety (code)
-        t0, t1,          # satiety (nemotron)
-        e0**2, e1**2,    # convex overfit
-        e0 * e1,         # cross-phase reuse
-    ])
+    return np.column_stack(
+        [
+            np.ones(len(X)),
+            s0,
+            s1,  # satiety (code)
+            t0,
+            t1,  # satiety (nemotron)
+            e0**2,
+            e1**2,  # convex overfit
+            e0 * e1,  # cross-phase reuse
+        ]
+    )
 
 
 def fit_soe_base(X, y):
@@ -809,15 +928,22 @@ def _build_soe_plus(X):
     e0, e1, n0, n1 = _epochs_from_weights(X)
     s0, s1 = np.log1p(e0), np.log1p(e1)
     t0, t1 = np.log1p(n0), np.log1p(n1)
-    return np.column_stack([
-        np.ones(len(X)),
-        s0, s1,              # satiety (code)
-        t0, t1,              # satiety (nemotron)
-        e0, e1,              # linear code epochs
-        e0**2, e1**2,        # convex overfit
-        e0 * e1,             # cross-phase reuse
-        s0 * t0, s1 * t1,   # within-phase regularization
-    ])
+    return np.column_stack(
+        [
+            np.ones(len(X)),
+            s0,
+            s1,  # satiety (code)
+            t0,
+            t1,  # satiety (nemotron)
+            e0,
+            e1,  # linear code epochs
+            e0**2,
+            e1**2,  # convex overfit
+            e0 * e1,  # cross-phase reuse
+            s0 * t0,
+            s1 * t1,  # within-phase regularization
+        ]
+    )
 
 
 def fit_soe_plus(X, y):
@@ -832,20 +958,31 @@ def _build_soe_curric(X):
     e0, e1, n0, n1 = _epochs_from_weights(X)
     s0, s1 = np.log1p(e0), np.log1p(e1)
     t0, t1 = np.log1p(n0), np.log1p(n1)
-    return np.column_stack([
-        np.ones(len(X)),
-        # satiety (both domains)
-        s0, s1, t0, t1,
-        # code linear + convex overfit
-        e0, e1, e0**2, e1**2,
-        # curriculum / interaction structure
-        e0 * e1,         # repeated code across phases
-        s0 * e0, s1 * e1,  # within-phase diminishing returns
-        s0 * e1, s1 * e0,  # cross-phase carryover
-        s0 * s1,         # cross-phase code persistence
-        t0 * t1,         # cross-phase nemotron persistence
-        s0 * t0, s1 * t1,  # within-phase regularization
-    ])
+    return np.column_stack(
+        [
+            np.ones(len(X)),
+            # satiety (both domains)
+            s0,
+            s1,
+            t0,
+            t1,
+            # code linear + convex overfit
+            e0,
+            e1,
+            e0**2,
+            e1**2,
+            # curriculum / interaction structure
+            e0 * e1,  # repeated code across phases
+            s0 * e0,
+            s1 * e1,  # within-phase diminishing returns
+            s0 * e1,
+            s1 * e0,  # cross-phase carryover
+            s0 * s1,  # cross-phase code persistence
+            t0 * t1,  # cross-phase nemotron persistence
+            s0 * t0,
+            s1 * t1,  # within-phase regularization
+        ]
+    )
 
 
 def fit_soe_curric(X, y):
@@ -862,14 +999,22 @@ def _build_threshold_design(X, tau):
     t0, t1 = np.log1p(n0), np.log1p(n1)
     h0 = np.maximum(0.0, e0 - tau)
     h1 = np.maximum(0.0, e1 - tau)
-    return np.column_stack([
-        np.ones(len(X)),
-        s0, s1, t0, t1,       # satiety
-        e0, e1,                # linear code epochs
-        h0, h1,                # hinge
-        h0**2, h1**2,          # squared hinge (convex penalty)
-        e0 * e1,               # cross-phase reuse
-    ])
+    return np.column_stack(
+        [
+            np.ones(len(X)),
+            s0,
+            s1,
+            t0,
+            t1,  # satiety
+            e0,
+            e1,  # linear code epochs
+            h0,
+            h1,  # hinge
+            h0**2,
+            h1**2,  # squared hinge (convex penalty)
+            e0 * e1,  # cross-phase reuse
+        ]
+    )
 
 
 def fit_threshold_overfit(X, y):
@@ -940,17 +1085,19 @@ def fit_ces_overfit(X, y, n_restarts=15, seed=0):
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
-        p0 = np.array([
-            y.max() + rng.normal(0, 0.05),
-            rng.normal(0, 1),
-            rng.uniform(-2, 0.8),
-            rng.normal(0, 1),
-            rng.normal(0, 1),
-            rng.uniform(-2, 0.8),
-            rng.normal(0, 1),
-            rng.normal(-3, 1),
-            np.log(E_sc_med) + rng.normal(0, 0.5),
-        ])
+        p0 = np.array(
+            [
+                y.max() + rng.normal(0, 0.05),
+                rng.normal(0, 1),
+                rng.uniform(-2, 0.8),
+                rng.normal(0, 1),
+                rng.normal(0, 1),
+                rng.uniform(-2, 0.8),
+                rng.normal(0, 1),
+                rng.normal(-3, 1),
+                np.log(E_sc_med) + rng.normal(0, 0.5),
+            ]
+        )
         try:
             res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
             if np.isfinite(res.fun) and res.fun < best_l:
@@ -963,6 +1110,89 @@ def fit_ces_overfit(X, y, n_restarts=15, seed=0):
         best_p[0] = np.mean(y)
 
     return lambda Xn: model(Xn, best_p), best_p
+
+
+# =========================================================================
+# PCEQ: Phase CES utility + epoch-entropy + epoch-overfit quadratic
+# =========================================================================
+
+
+def _ces_utility_per_phase(X, rho0, rho1, a0_sc, a1_sc):
+    """Compute per-phase CES utility on log1p(epochs).
+
+    U_k = (a_sc * s_sc^rho + (1-a_sc) * s_nem^rho)^(1/rho)
+    where s = log1p(epoch).
+    """
+    e0_sc, e1_sc, e0_nem, e1_nem = _epochs_from_weights(X)
+    s0_sc = np.maximum(np.log1p(e0_sc), 1e-10)
+    s0_nem = np.maximum(np.log1p(e0_nem), 1e-10)
+    s1_sc = np.maximum(np.log1p(e1_sc), 1e-10)
+    s1_nem = np.maximum(np.log1p(e1_nem), 1e-10)
+
+    rho0 = np.clip(rho0, -10, 0.99)
+    rho1 = np.clip(rho1, -10, 0.99)
+
+    inner0 = a0_sc * np.power(s0_sc, rho0) + (1 - a0_sc) * np.power(s0_nem, rho0)
+    U0 = np.power(np.maximum(inner0, 1e-10), 1.0 / rho0)
+
+    inner1 = a1_sc * np.power(s1_sc, rho1) + (1 - a1_sc) * np.power(s1_nem, rho1)
+    U1 = np.power(np.maximum(inner1, 1e-10), 1.0 / rho1)
+
+    return U0, U1
+
+
+def _pceq_design(X, rho0, rho1, a0_sc, a1_sc):
+    """Build PCEQ design matrix for given CES hyperparameters.
+
+    9 columns: [1, U0, U1, U0*U1, Ent0, Ent1, e0_sc², e1_sc², e0_sc*e1_sc].
+    """
+    U0, U1 = _ces_utility_per_phase(X, rho0, rho1, a0_sc, a1_sc)
+    ent0 = _epoch_entropy(X[:, 0])
+    ent1 = _epoch_entropy(X[:, 1])
+    eq = _epoch_overfit_quadratic(X)
+    return np.column_stack([np.ones(len(X)), U0, U1, U0 * U1, ent0, ent1, eq])
+
+
+def fit_pceq(X, y, n_folds=5, seed=42, **_kwargs):
+    """PCEQ: Phase CES utility + entropy + epoch-overfit quadratic.
+
+    Grid search over 4 CES hyperparams (rho0, rho1, a0_sc, a1_sc),
+    then OLS for 9 linear coefficients.  Best hyperparams by 5-fold CV.
+
+    Features: weight.
+    """
+    rho_grid = np.linspace(-5.0, 0.9, 15)
+    a_grid = np.linspace(0.05, 0.95, 10)
+
+    kf = KFold(n_folds, shuffle=True, random_state=seed)
+    folds = list(kf.split(X))
+
+    best_sse = np.inf
+    best_hyp = (0.0, 0.0, 0.5, 0.5)
+
+    for rho0 in rho_grid:
+        for rho1 in rho_grid:
+            for a0 in a_grid:
+                for a1 in a_grid:
+                    cv_sse = 0.0
+                    for tr, te in folds:
+                        Phi_tr = _pceq_design(X[tr], rho0, rho1, a0, a1)
+                        beta, _, _, _ = np.linalg.lstsq(Phi_tr, y[tr], rcond=None)
+                        Phi_te = _pceq_design(X[te], rho0, rho1, a0, a1)
+                        cv_sse += float(np.sum((Phi_te @ beta - y[te]) ** 2))
+                    if cv_sse < best_sse:
+                        best_sse = cv_sse
+                        best_hyp = (rho0, rho1, a0, a1)
+
+    rho0, rho1, a0, a1 = best_hyp
+    Phi = _pceq_design(X, rho0, rho1, a0, a1)
+    coef, _, _, _ = np.linalg.lstsq(Phi, y, rcond=None)
+    params = np.concatenate([[rho0, rho1, a0, a1], coef])
+
+    def pred(Xn):
+        return _pceq_design(Xn, rho0, rho1, a0, a1) @ coef
+
+    return pred, params
 
 
 # =========================================================================
@@ -1098,7 +1328,7 @@ def label_ces(params):
     a = a / a.sum()
     return (
         rf"${_f(C)} - {_f(np.exp(log_A))}"
-        rf"(\sum a_j r_j^{{{rho:.2f}}})^{{{1/rho:.2f}}}$"
+        rf"(\sum a_j r_j^{{{rho:.2f}}})^{{{1 / rho:.2f}}}$"
         rf" \ $a=[{a[0]:.2f},{a[1]:.2f},{a[2]:.2f},{a[3]:.2f}]$"
     )
 
@@ -1125,6 +1355,16 @@ def label_scheffe_log(params):
     # params: [b1..b4, b12..b34, g1..g4] = 14 coefficients
     # On slice: r_nem0=0.5, r_sc0≈0, r_nem1=(1-p)/2, r_sc1=p/2
     return r"$\sum \beta_j r_j + \sum \beta_{jk} r_j r_k + \sum \gamma_j r_j \ln r_j$"
+
+
+def label_scheffe_log_epoch_entropy(params):
+    lam0, lam1 = params[-2], params[-1]
+    return rf"Scheffé+log $+ {lam0:.2f}\,H_0^{{ep}} + {lam1:.2f}\,H_1^{{ep}}$"
+
+
+def label_scheffe_tied_entropy(params):
+    lam0, lam1 = params[-2], params[-1]
+    return rf"$\sum \beta_j r_j + \sum \beta_{{jk}} r_j r_k + {lam0:.2f}\,H_0^v + {lam1:.2f}\,H_1^v$"
 
 
 def label_ilr_quad(params):
@@ -1189,9 +1429,9 @@ def label_soe_base(params):
     # t0=log(1+NEM_EPOCH_MULT)=log(1.5) constant → absorbed
     c = params
     const = c[0] + c[3] * np.log(1.5)  # β0 + β3·ln(1.5)
-    b_s = c[2]    # satiety code: log(1+εp)
-    b_t = c[4]    # satiety nem: log(1+½(1-p))
-    b_e2 = c[6]   # overfit: (εp)²
+    b_s = c[2]  # satiety code: log(1+εp)
+    b_t = c[4]  # satiety nem: log(1+½(1-p))
+    b_e2 = c[6]  # overfit: (εp)²
     return (
         rf"${_f(const)} {b_s:+.3f}\,\ln(1+\varepsilon p)"
         rf" {b_t:+.3f}\,\ln(1+\frac{1}{2}(1-p))"
@@ -1205,10 +1445,10 @@ def label_soe_plus(params):
     # t0=log(1.5) absorbed
     c = params
     const = c[0] + c[3] * np.log(1.5)  # β0 + t0 coeff * ln(1.5)
-    b_s = c[2]    # s1: log(1+εp)
-    b_t = c[4]    # t1: log(1+½(1-p))
-    b_e = c[6]    # e1: εp
-    b_e2 = c[8]   # e1²: (εp)²
+    b_s = c[2]  # s1: log(1+εp)
+    b_t = c[4]  # t1: log(1+½(1-p))
+    b_e = c[6]  # e1: εp
+    b_e2 = c[8]  # e1²: (εp)²
     b_st = c[11]  # s1*t1
     return (
         rf"${_f(const)} {b_s:+.3f}\,s {b_t:+.3f}\,t"
@@ -1229,13 +1469,13 @@ def label_soe_curric(params):
     # t0=log(1.5) absorbed
     c = params
     ln15 = np.log(1.5)
-    const = c[0] + c[3] * ln15                # β0 + t0 coeff * ln(1.5)
-    b_s = c[2]                                  # s1
-    b_t = c[4] + c[15] * ln15                  # t1 + t0*t1 coeff * ln(1.5)
-    b_e = c[6]                                  # e1
-    b_e2 = c[8]                                 # e1²
-    b_se = c[11]                                # s1*e1
-    b_st = c[17]                                # s1*t1
+    const = c[0] + c[3] * ln15  # β0 + t0 coeff * ln(1.5)
+    b_s = c[2]  # s1
+    b_t = c[4] + c[15] * ln15  # t1 + t0*t1 coeff * ln(1.5)
+    b_e = c[6]  # e1
+    b_e2 = c[8]  # e1²
+    b_se = c[11]  # s1*e1
+    b_st = c[17]  # s1*t1
     return (
         rf"${_f(const)} {b_s:+.2f}\,s {b_t:+.2f}\,t"
         rf" {b_e:+.3f}\,e {b_e2:+.4f}\,e^2"
@@ -1251,9 +1491,9 @@ def label_threshold_overfit(params):
     tau = params[0]
     c = params[1:]
     const = c[0] + c[3] * np.log(1.5)  # intercept + t0*ln(1.5)
-    b_s = c[2]   # s1: log(1+εp)
-    b_t = c[4]   # t1: log(1+½(1-p))
-    b_e = c[6]   # e1: εp
+    b_s = c[2]  # s1: log(1+εp)
+    b_t = c[4]  # t1: log(1+½(1-p))
+    b_e = c[6]  # e1: εp
     b_h2 = c[10]  # h1²: [εp-τ]₊²
     return (
         rf"${_f(const)} {b_s:+.3f}\,\ln(1+\varepsilon p)"
@@ -1277,6 +1517,25 @@ def label_ces_overfit(params):
     )
 
 
+def label_sheq(params):
+    # 19 params: [b1..b4, b12..b34, g1..g4, eta0, eta1, c_e0sq, c_e1sq, c_e0e1]
+    # On p0=0 slice: e0_sc=0, so e0² and e0*e1 terms vanish → only e1² matters
+    eta0, eta1 = params[14], params[15]
+    c_e1sq = params[17]
+    return rf"Scheffé+log $+ {eta0:.2f}\,H_0^{{ep}} + {eta1:.2f}\,H_1^{{ep}}" rf" + {c_e1sq:.4f}\,e_1^2$"
+
+
+def label_pceq(params):
+    # params: [rho0, rho1, a0_sc, a1_sc, intercept, c_U0, c_U1, c_U0U1,
+    #          c_Ent0, c_Ent1, c_e0sq, c_e1sq, c_e0e1]
+    rho0, rho1 = params[0], params[1]
+    a0_sc, a1_sc = params[2], params[3]
+    return (
+        rf"$\rho_0\!=\!{rho0:.2f}$, $\rho_1\!=\!{rho1:.2f}$, "
+        rf"$a_0^{{sc}}\!=\!{a0_sc:.2f}$, $a_1^{{sc}}\!=\!{a1_sc:.2f}$"
+    )
+
+
 # =========================================================================
 # Model registry
 # =========================================================================
@@ -1296,6 +1555,10 @@ MODELS: list[ModelSpec] = [
     ModelSpec("LogQuad(w{-}e)", fit_logquad_mix, "wt_epoch", label_logquad_mix, "navy", "--"),
     ModelSpec("RidgeTranslog", fit_ridge_translog, "vdom", label_ridge_translog, "darkviolet", "--"),
     ModelSpec(r"Scheff\'e+log", fit_scheffe_log, "vdom", label_scheffe_log, "sienna", "-"),
+    ModelSpec(
+        r"Scheff\'e+EpEnt", fit_scheffe_log_epoch_entropy, "weight", label_scheffe_log_epoch_entropy, "chocolate", "-"
+    ),
+    ModelSpec(r"Scheff\'e+TiedEnt", fit_scheffe_tied_entropy, "vdom", label_scheffe_tied_entropy, "peru", "--"),
     ModelSpec("ILR Quad", fit_ilr_quad, "vdom", label_ilr_quad, "darkseagreen", "-"),
     ModelSpec("ElasticLogQuad(w{-}e)", fit_elastic_logquad, "wt_epoch", label_elastic_logquad, "crimson", "-."),
     ModelSpec("LogQuad(weight)", fit_logquad_weight, "weight", label_logquad_weight, "gray", ":"),
@@ -1308,6 +1571,9 @@ MODELS: list[ModelSpec] = [
     ModelSpec("Threshold Overfit", fit_threshold_overfit, "weight", label_threshold_overfit, "seagreen", "-."),
     # CES-Overfit: per-phase CES utility on log1p(epochs) + overtraining penalty
     ModelSpec("CES-Overfit", fit_ces_overfit, "weight", label_ces_overfit, "darkcyan", "-"),
+    # Hybrid models: mixture design + economics utility + information theory
+    ModelSpec("SHEQ", fit_sheq, "weight", label_sheq, "darkmagenta", "-"),
+    ModelSpec("PCEQ", fit_pceq, "weight", label_pceq, "steelblue", "-"),
 ]
 
 

@@ -188,44 +188,68 @@ BASELINES.append((_unimax_weights, _unimax_weights))
 
 # ---- Predicted optima from 24 scaling models (116-pt combined dataset) ----
 # Each entry is the argmin of the model's predicted BPB on an 80x80 grid.
-# Near-identical predictions (L1 < 0.02) are deduplicated into one run.
 # Appended after UniMax to preserve existing run_id assignments (90000-90015).
-BASELINES.extend([
-    # Linear: predicted BPB=0.758
-    ([0.9950, 0.0050], [0.9950, 0.0050]),
-    # Quadratic, LogQuad(weight): predicted BPB=0.892
-    ([0.9950, 0.0050], [0.6191, 0.3809]),
-    # Quadratic(w-e): predicted BPB=0.903
-    ([0.4185, 0.5815], [0.8697, 0.1303]),
-    # LogLinear(w-e), BiMix: predicted BPB=0.760
-    ([0.9950, 0.0050], [0.9699, 0.0301]),
-    # PowerLaw, LogQuad(w-e), ILR Quad, BayesLogQuad(w-e): predicted BPB=0.897
-    ([0.9950, 0.0050], [0.7694, 0.2306]),
-    # DML M1, Translog, RidgeTranslog, ElasticLogQuad(w-e): predicted BPB=0.841
-    ([0.9950, 0.0050], [0.8196, 0.1804]),
-    # SLODM: predicted BPB=0.853
-    ([0.9825, 0.0175], [0.8446, 0.1554]),
-    # Cobb-Douglas: predicted BPB=0.835
-    ([0.9950, 0.0050], [0.9449, 0.0551]),
-    # CES: predicted BPB=0.880
-    ([0.9198, 0.0802], [0.7318, 0.2682]),
-    # Stone-Geary: predicted BPB=0.847
-    ([0.9950, 0.0050], [0.8947, 0.1053]),
-    # Scheffe+log: predicted BPB=0.883
-    ([0.7820, 0.2180], [0.7569, 0.2431]),
-    # HuberLogQuad(w-e): predicted BPB=0.878
-    ([0.8822, 0.1178], [0.7820, 0.2180]),
-    # SOE-Base: predicted BPB=0.881
-    ([0.7569, 0.2431], [0.7318, 0.2682]),
-    # SOE-Plus: predicted BPB=0.893
-    ([0.6566, 0.3434], [0.8321, 0.1679]),
-    # SOE-Curric: predicted BPB=0.890
-    ([0.7318, 0.2682], [0.8822, 0.1178]),
-    # Threshold Overfit: predicted BPB=0.880
-    ([0.8572, 0.1428], [0.7318, 0.2682]),
-    # CES-Overfit: predicted BPB=0.889
-    ([0.985, 0.015], [0.770, 0.230]),
-])
+BASELINES.extend(
+    [
+        # Linear: predicted BPB=0.758
+        ([0.9950, 0.0050], [0.9950, 0.0050]),
+        # Quadratic, LogQuad(weight): predicted BPB=0.892
+        ([0.9950, 0.0050], [0.6191, 0.3809]),
+        # Quadratic(w-e): predicted BPB=0.903
+        ([0.4185, 0.5815], [0.8697, 0.1303]),
+        # LogLinear(w-e), BiMix: predicted BPB=0.760
+        ([0.9950, 0.0050], [0.9699, 0.0301]),
+        # PowerLaw, LogQuad(w-e), ILR Quad, BayesLogQuad(w-e): predicted BPB=0.897
+        ([0.9950, 0.0050], [0.7694, 0.2306]),
+        # DML M1, Translog, RidgeTranslog, ElasticLogQuad(w-e): predicted BPB=0.841
+        ([0.9950, 0.0050], [0.8196, 0.1804]),
+        # SLODM: predicted BPB=0.853
+        ([0.9825, 0.0175], [0.8446, 0.1554]),
+        # Cobb-Douglas: predicted BPB=0.835
+        ([0.9950, 0.0050], [0.9449, 0.0551]),
+        # CES: predicted BPB=0.880
+        ([0.9198, 0.0802], [0.7318, 0.2682]),
+        # Stone-Geary: predicted BPB=0.847
+        ([0.9950, 0.0050], [0.8947, 0.1053]),
+        # Scheffe+log: predicted BPB=0.883
+        ([0.7820, 0.2180], [0.7569, 0.2431]),
+        # HuberLogQuad(w-e): predicted BPB=0.878
+        ([0.8822, 0.1178], [0.7820, 0.2180]),
+        # SOE-Base: predicted BPB=0.881
+        ([0.7569, 0.2431], [0.7318, 0.2682]),
+        # SOE-Plus: predicted BPB=0.893
+        ([0.6566, 0.3434], [0.8321, 0.1679]),
+        # SOE-Curric: predicted BPB=0.890
+        ([0.7318, 0.2682], [0.8822, 0.1178]),
+        # Threshold Overfit: predicted BPB=0.880
+        ([0.8572, 0.1428], [0.7318, 0.2682]),
+        # ---- Precise grid-point optima (3dp matching) ----
+        # Models whose predicted optima don't match any run above at 3dp.
+        # CES-Overfit: predicted BPB=0.889
+        ([0.982, 0.018], [0.769, 0.231]),
+        # Scheffe+EpEnt: predicted BPB=0.894
+        ([0.769, 0.231], [0.744, 0.256]),
+        # Scheffe+TiedEnt: predicted BPB=0.904
+        ([0.769, 0.231], [0.757, 0.243]),
+        # BiMix: predicted BPB=0.916
+        ([0.995, 0.005], [0.957, 0.043]),
+        # ElasticLogQuad(w-e): predicted BPB=0.882
+        ([0.995, 0.005], [0.832, 0.168]),
+        # LogQuad(w-e), ILR Quad, BayesLogQuad(w-e): predicted BPB=0.885
+        ([0.995, 0.005], [0.757, 0.243]),
+        # LogQuad(weight): predicted BPB=0.912
+        ([0.995, 0.005], [0.632, 0.368]),
+        # Quadratic(w-e): predicted BPB=0.903
+        ([0.419, 0.581], [0.87, 0.13]),
+        # SHEQ: same optimum as Scheffe+EpEnt (epoch-quad features are inert on this data)
+        # Submitted at wrong grid point; correct optimum matches run 90033.
+        ([0.769, 0.231], [0.744, 0.256]),
+        # PCEQ: predicted BPB=0.883
+        # Submitted at wrong grid point; correct optimum is ([0.794, 0.206], [0.782, 0.218]).
+        ([0.797, 0.203], [0.772, 0.228]),
+        ([0.794, 0.206], [0.782, 0.218])
+    ]
+)
 
 
 # ============================================================================
@@ -351,7 +375,7 @@ def _load_original_weight_configs(name_prefix: str) -> list[WeightConfig]:
 
     if not matches:
         raise FileNotFoundError(
-            f"No weight_configs found at {prefix}/{pattern}. " "Run the training swarm first before running --analyze."
+            f"No weight_configs found at {prefix}/{pattern}. Run the training swarm first before running --analyze."
         )
 
     if len(matches) > 1:
@@ -580,10 +604,7 @@ def run_analysis_local(
     new_baselines = [c for c in baseline_weight_configs if c.run_id not in existing_ids]
     all_configs = original_configs + new_baselines
 
-    print(
-        f"  {len(original_configs)} original configs + "
-        f"{len(new_baselines)} baselines = {len(all_configs)} total"
-    )
+    print(f"  {len(original_configs)} original configs + {len(new_baselines)} baselines = {len(all_configs)} total")
 
     # 3. Build the configs dict (same format as weight_configs.json)
     domains = DOMAIN_NAMES

@@ -1,3 +1,6 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["numpy", "pandas", "scipy", "scikit-learn"]
@@ -91,9 +94,7 @@ def _extract_phase_domain_columns(columns: list[str]) -> tuple[list[str], list[s
     # Preserve column order for domains (use first phase)
     if phase_names:
         first_phase = phase_names[0]
-        domain_names = [
-            c.replace(f"{first_phase}_", "") for c in columns if c.startswith(f"{first_phase}_")
-        ]
+        domain_names = [c.replace(f"{first_phase}_", "") for c in columns if c.startswith(f"{first_phase}_")]
     else:
         domain_names = sorted(domains)
     return phase_names, domain_names
@@ -174,8 +175,13 @@ def cross_validate(
             all_preds[test_idx] = preds
         except Exception as e:
             log.warning(f"  {model.name} fold {fold_i} failed: {e}")
-            return {"R²": float("nan"), "RMSE": float("nan"), "MAE": float("nan"),
-                    "Spearman": float("nan"), "Huber": float("nan")}
+            return {
+                "R²": float("nan"),
+                "RMSE": float("nan"),
+                "MAE": float("nan"),
+                "Spearman": float("nan"),
+                "Huber": float("nan"),
+            }
 
     y_true = spec.y
     residuals = y_true - all_preds
@@ -259,19 +265,23 @@ def main():
         for model in GENERAL_MODELS:
             if not model.applicable(spec):
                 log.info(f"  {model.name:25s} — SKIPPED (underdetermined)")
-                results.append({
-                    "dataset": spec.name,
-                    "model": model.name,
-                    "R²": float("nan"),
-                    "RMSE": float("nan"),
-                    "MAE": float("nan"),
-                    "Spearman": float("nan"),
-                    "Huber": float("nan"),
-                    "status": "skipped",
-                })
+                results.append(
+                    {
+                        "dataset": spec.name,
+                        "model": model.name,
+                        "R²": float("nan"),
+                        "RMSE": float("nan"),
+                        "MAE": float("nan"),
+                        "Spearman": float("nan"),
+                        "Huber": float("nan"),
+                        "status": "skipped",
+                    }
+                )
                 continue
 
-            log.info(f"  {model.name:25s} — fitting...", )
+            log.info(
+                f"  {model.name:25s} — fitting...",
+            )
             metrics = cross_validate(spec, model)
             log.info(
                 f"  {model.name:25s}   R²={metrics['R²']:+.4f}  "
@@ -279,12 +289,14 @@ def main():
                 f"Spearman={metrics['Spearman']:.4f}  "
                 f"Huber={metrics['Huber']:.6f}"
             )
-            results.append({
-                "dataset": spec.name,
-                "model": model.name,
-                **metrics,
-                "status": "ok" if not np.isnan(metrics["R²"]) else "failed",
-            })
+            results.append(
+                {
+                    "dataset": spec.name,
+                    "model": model.name,
+                    **metrics,
+                    "status": "ok" if not np.isnan(metrics["R²"]) else "failed",
+                }
+            )
 
     # Build results DataFrame
     df = pd.DataFrame(results)

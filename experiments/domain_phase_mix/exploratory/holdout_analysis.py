@@ -494,13 +494,24 @@ def _plot_fig1(metric_id, rankings, top_models, suffix):
         if ax_idx == 0:
             ax.set_ylabel(f"Held-out {label}, median")
         ax.set_title(title)
-        ax.legend(framealpha=0.9, loc="upper right")
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
+    # Collect handles/labels from the left (all models) panel for a shared legend below
+    handles, labels = axes[0].get_legend_handles_labels()
     fig.suptitle(f"Learning Curves: Held-out {label} vs Training Set Size", fontsize=13, y=1.02)
     fig.tight_layout()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.02),
+        ncol=min(5, len(labels)),
+        framealpha=0.9,
+        fontsize=8,
+    )
+    fig.subplots_adjust(bottom=0.22 if len(labels) > 10 else 0.15)
     out = OUT_DIR / f"fig1_learning_curves_{suffix}.png"
-    fig.savefig(out)
+    fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved {out}")
 
@@ -667,6 +678,21 @@ if not quick_mode:
         _plot_fig2(metric_id, rnk, metric_id)
 
 
+# =========================================================================
+# Cache full-data fits so each model is fit exactly once (avoids redundant
+# grid-search in PCEQ when regenerating multiple plots).
+# =========================================================================
+_full_fit_cache: dict[str, tuple] = {}
+
+
+def _get_full_fit(m):
+    """Return (pred_fn, params) for model *m* fit on all training data, cached."""
+    if m.name not in _full_fit_cache:
+        X_full = build_features(m.feature_kind, p0_sc, p1_sc)
+        _full_fit_cache[m.name] = m.fit_fn(X_full, y)
+    return _full_fit_cache[m.name]
+
+
 if not quick_mode:
     # =====================================================================
     # Figure 3: Stability of predicted optimum + BPB sanity check
@@ -696,8 +722,7 @@ if not quick_mode:
             predicted_bpb_at_opt[m.name] = np.nan
             continue
         try:
-            X_full = build_features(m.feature_kind, p0_sc, p1_sc)
-            pred_fn, _ = m.fit_fn(X_full, y)
+            pred_fn, _ = _get_full_fit(m)
             Xs = make_slice_for_kind(m.feature_kind, sg)
             slice_pred = pred_fn(Xs)
             predicted_bpb_at_opt[m.name] = float(np.interp(median_p1, sg, slice_pred))
@@ -773,19 +798,20 @@ if not quick_mode:
         _actuals_3b: list[tuple[float, float, float]] = []
         for _, _r in _oruns.iterrows():
             if _bpb_col in _r and pd.notna(_r[_bpb_col]):
-                _actuals_3b.append((
-                    float(_r["phase_0_starcoder"]),
-                    float(_r["phase_1_starcoder"]),
-                    float(_r[_bpb_col]),
-                ))
+                _actuals_3b.append(
+                    (
+                        float(_r["phase_0_starcoder"]),
+                        float(_r["phase_1_starcoder"]),
+                        float(_r[_bpb_col]),
+                    )
+                )
 
         # Compute 2D predicted optimum + match to actual for each model
         _model_info_3b: list[dict] = []
         for m in RUN_MODELS:
             info: dict = {"name": m.name, "model": m}
             try:
-                X_full = build_features(m.feature_kind, p0_sc, p1_sc)
-                pred_fn, _ = m.fit_fn(X_full, y)
+                pred_fn, _ = _get_full_fit(m)
                 _g3b = np.linspace(0.005, 0.995, HEATMAP_RES)
                 X_grid, P0, P1 = make_2d_grid(_g3b, _g3b, kind=m.feature_kind)
                 Z = pred_fn(X_grid).reshape(P0.shape)
@@ -797,8 +823,7 @@ if not quick_mode:
                 # Match to actual
                 info["actual_bpb"] = None
                 for _ap0, _ap1, _abpb in _actuals_3b:
-                    if (abs(_ap0 - info["opt_p0"]) < 0.02
-                            and abs(_ap1 - info["opt_p1"]) < 0.02):
+                    if abs(_ap0 - info["opt_p0"]) < 0.02 and abs(_ap1 - info["opt_p1"]) < 0.02:
                         info["actual_bpb"] = _abpb
                         break
             except Exception:
@@ -829,7 +854,9 @@ if not quick_mode:
         n3b = len(_model_info_3b)
         fig_w_3b = max(8, 1.3 * n3b)
         fig3b, (ax3b_top, ax3b_bot) = plt.subplots(
-            2, 1, figsize=(fig_w_3b, 9),
+            2,
+            1,
+            figsize=(fig_w_3b, 9),
             gridspec_kw={"height_ratios": [2, 3]},
             sharex=True,
         )
@@ -838,12 +865,13 @@ if not quick_mode:
 
         # --- Top panel: box plots of bootstrap p1, sorted by actual BPB ---
         bp_data_3b = [t["p1_vals"] for t in _model_info_3b]
-        bp_colors_3b = [
-            model_colors.get(t["name"], "gray") for t in _model_info_3b
-        ]
+        bp_colors_3b = [model_colors.get(t["name"], "gray") for t in _model_info_3b]
         bplot_3b = ax3b_top.boxplot(
-            bp_data_3b, labels=labels_3b, patch_artist=True,
-            widths=0.6, medianprops=dict(color="black", lw=1.5),
+            bp_data_3b,
+            labels=labels_3b,
+            patch_artist=True,
+            widths=0.6,
+            medianprops=dict(color="black", lw=1.5),
             flierprops=dict(marker="o", ms=3, alpha=0.5),
         )
         for patch, color in zip(bplot_3b["boxes"], bp_colors_3b):
@@ -851,14 +879,15 @@ if not quick_mode:
             patch.set_alpha(0.4)
 
         ax3b_top.axhline(
-            observed_best_p1, color="red", ls="--", lw=2, zorder=0,
+            observed_best_p1,
+            color="red",
+            ls="--",
+            lw=2,
+            zorder=0,
             label=f"Observed best $p_1$={observed_best_p1:.3f}",
         )
         ax3b_top.set_ylabel("Predicted optimal $p_1^{\\mathrm{sc}}$")
-        ax3b_top.set_title(
-            f"Stability of Predicted Optimum "
-            f"($n_{{\\mathrm{{train}}}}$={REFERENCE_N}, B={B})"
-        )
+        ax3b_top.set_title(f"Stability of Predicted Optimum ($n_{{\\mathrm{{train}}}}$={REFERENCE_N}, B={B})")
         ax3b_top.legend(loc="upper left", framealpha=0.9, fontsize=8)
 
         # --- Bottom panel: predicted vs actual BPB ---
@@ -867,14 +896,8 @@ if not quick_mode:
         #   - Hue: green if actual < best_observed, red if worse
         #   - Saturation/alpha modulated by |actual - predicted|
         # Connecting line shows the prediction gap.
-        pred_vals = np.array([
-            t["pred_bpb"] if t["pred_bpb"] is not None else np.nan
-            for t in _model_info_3b
-        ])
-        actual_vals = np.array([
-            t["actual_bpb"] if t["actual_bpb"] is not None else np.nan
-            for t in _model_info_3b
-        ])
+        pred_vals = np.array([t["pred_bpb"] if t["pred_bpb"] is not None else np.nan for t in _model_info_3b])
+        actual_vals = np.array([t["actual_bpb"] if t["actual_bpb"] is not None else np.nan for t in _model_info_3b])
 
         bar_width = 0.35
         # Actual bars (solid)
@@ -891,18 +914,26 @@ if not quick_mode:
                 base_color = "#d62728"  # red — worse than best observed
 
             ax3b_bot.bar(
-                x3b[i] - bar_width / 2, a_bpb, bar_width,
-                color=base_color, alpha=0.75,
-                edgecolor="black", linewidth=0.5,
+                x3b[i] - bar_width / 2,
+                a_bpb,
+                bar_width,
+                color=base_color,
+                alpha=0.75,
+                edgecolor="black",
+                linewidth=0.5,
                 label="Actual" if i == 0 else None,
             )
 
             # Predicted bars (hatched, lighter)
             if np.isfinite(p_bpb):
                 ax3b_bot.bar(
-                    x3b[i] + bar_width / 2, p_bpb, bar_width,
-                    color="steelblue", alpha=0.45,
-                    edgecolor="black", linewidth=0.5,
+                    x3b[i] + bar_width / 2,
+                    p_bpb,
+                    bar_width,
+                    color="steelblue",
+                    alpha=0.45,
+                    edgecolor="black",
+                    linewidth=0.5,
                     hatch="//",
                     label="Predicted" if i == 0 else None,
                 )
@@ -911,30 +942,42 @@ if not quick_mode:
                 ax3b_bot.plot(
                     [x3b[i] - bar_width / 2, x3b[i] + bar_width / 2],
                     [a_bpb, p_bpb],
-                    color="gray", lw=0.8, ls="-", alpha=0.6,
+                    color="gray",
+                    lw=0.8,
+                    ls="-",
+                    alpha=0.6,
                 )
 
                 # Delta annotation
                 delta = a_bpb - p_bpb
                 ann_y = max(a_bpb, p_bpb) + 0.001
                 ax3b_bot.text(
-                    x3b[i], ann_y,
+                    x3b[i],
+                    ann_y,
                     f"{delta:+.3f}",
-                    ha="center", va="bottom", fontsize=6,
+                    ha="center",
+                    va="bottom",
+                    fontsize=6,
                     color="green" if delta < 0 else "red",
                     fontweight="bold",
                 )
 
         ax3b_bot.axhline(
-            observed_best_bpb, color="red", ls="--", lw=2, zorder=0,
+            observed_best_bpb,
+            color="red",
+            ls="--",
+            lw=2,
+            zorder=0,
             label=f"Best observed={observed_best_bpb:.4f}",
         )
 
         # Y-axis limits from the data
-        all_bpb_3b = np.concatenate([
-            pred_vals[np.isfinite(pred_vals)],
-            actual_vals[np.isfinite(actual_vals)],
-        ])
+        all_bpb_3b = np.concatenate(
+            [
+                pred_vals[np.isfinite(pred_vals)],
+                actual_vals[np.isfinite(actual_vals)],
+            ]
+        )
         if len(all_bpb_3b):
             ylo_3b = min(float(np.min(all_bpb_3b)), observed_best_bpb) - 0.008
             yhi_3b = max(float(np.max(all_bpb_3b)), observed_best_bpb) + 0.008
@@ -956,10 +999,7 @@ if not quick_mode:
         plt.close(fig3b)
         print(f"  Saved {out3b}")
     else:
-        print(
-            f"\nSkipping Figure 3b: {_optima_csv_3b} not found "
-            "(run --analyze-local first)"
-        )
+        print(f"\nSkipping Figure 3b: {_optima_csv_3b} not found (run --analyze-local first)")
 
 
 # =========================================================================
@@ -986,9 +1026,7 @@ print("=" * 90)
 # In quick mode, derive rankings from CV metrics (for fig 4 ordering and fig 5 top models)
 if quick_mode:
     _cv_ranked = sorted(cv_results_dict.items(), key=lambda x: -x[1]["R2"])
-    rankings_huber = [
-        (name, cv["RMSE"], 0.0, cv["RMSE"], cv["RMSE"], 1.0, 0.0, 0.0, 100.0) for name, cv in _cv_ranked
-    ]
+    rankings_huber = [(name, cv["RMSE"], 0.0, cv["RMSE"], cv["RMSE"], 1.0, 0.0, 0.0, 100.0) for name, cv in _cv_ranked]
     top_models_huber = [name for name, _ in _cv_ranked[:5]]
     print(f"\nTop 5 by CV R²: {[clean_name(n) for n in top_models_huber]}")
 
@@ -1028,22 +1066,22 @@ for mi, (_, m) in enumerate(ranked_model_info):
     row, col = divmod(mi, ncols4)
     ax = axes4[row][col]
 
+    n_params = None
     try:
-        X_full = build_features(m.feature_kind, p0_sc, p1_sc)
-        pred_fn, _ = m.fit_fn(X_full, y)
+        pred_fn, params = _get_full_fit(m)
+        n_params = len(params)
         X_grid, P0, P1 = make_2d_grid(g, g, kind=m.feature_kind)
         Z = pred_fn(X_grid).reshape(P0.shape)
         Z_clipped = np.clip(Z, vmin_global, vmax_global + 0.5)
 
-        ax.contourf(
+        ax.pcolormesh(
             P0,
             P1,
             Z_clipped,
-            levels=n_contour_levels,
             cmap="RdYlGn_r",
             vmin=vmin_global,
             vmax=vmax_global,
-            extend="both",
+            shading="gouraud",
         )
         cs = ax.contour(P0, P1, Z_clipped, levels=n_contour_levels, colors="black", linewidths=0.4, alpha=0.6)
         ax.clabel(cs, inline=True, fontsize=6, fmt="%.2f")
@@ -1086,7 +1124,10 @@ for mi, (_, m) in enumerate(ranked_model_info):
         zorder=5,
     )
 
-    ax.set_title(clean_name(m.name), fontsize=10)
+    title = clean_name(m.name)
+    if n_params is not None:
+        title += f" ({n_params}p)"
+    ax.set_title(title, fontsize=10)
     ax.set_aspect("equal")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
@@ -1126,14 +1167,15 @@ if _optima_csv.exists():
     for _, _row in _optima_runs.iterrows():
         _bpb_col = "eval/paloma/dolma_100_programing_languages/bpb"
         if _bpb_col in _row and pd.notna(_row[_bpb_col]):
-            _actuals_lookup.append((float(_row["phase_0_starcoder"]), float(_row["phase_1_starcoder"]), float(_row[_bpb_col])))
+            _actuals_lookup.append(
+                (float(_row["phase_0_starcoder"]), float(_row["phase_1_starcoder"]), float(_row[_bpb_col]))
+            )
 
     # First pass: compute predicted optima and match to actuals for sorting
     _model_optima: list[tuple[str, object, float, float, float, float | None]] = []
     for _, m in ranked_model_info:
         try:
-            X_full = build_features(m.feature_kind, p0_sc, p1_sc)
-            pred_fn, _ = m.fit_fn(X_full, y)
+            pred_fn, _ = _get_full_fit(m)
             X_grid, P0, P1 = make_2d_grid(g, g, kind=m.feature_kind)
             Z = pred_fn(X_grid).reshape(P0.shape)
             idx = int(np.argmin(Z))
@@ -1143,7 +1185,7 @@ if _optima_csv.exists():
 
             actual_bpb = None
             for _ap0, _ap1, _abpb in _actuals_lookup:
-                if abs(_ap0 - opt_p0) < 0.02 and abs(_ap1 - opt_p1_val) < 0.02:
+                if round(_ap0, 3) == round(opt_p0, 3) and round(_ap1, 3) == round(opt_p1_val, 3):
                     actual_bpb = _abpb
                     break
             _model_optima.append((m.name, m, opt_p0, opt_p1_val, opt_bpb, actual_bpb))
@@ -1170,16 +1212,22 @@ if _optima_csv.exists():
         row, col = divmod(mi, ncols4b)
         ax = axes4b[row][col]
 
+        n_params_4b = None
         try:
-            X_full = build_features(m.feature_kind, p0_sc, p1_sc)
-            pred_fn, _ = m.fit_fn(X_full, y)
+            pred_fn, params_4b = _get_full_fit(m)
+            n_params_4b = len(params_4b)
             X_grid, P0, P1 = make_2d_grid(g, g, kind=m.feature_kind)
             Z = pred_fn(X_grid).reshape(P0.shape)
             Z_clipped = np.clip(Z, vmin_global, vmax_global + 0.5)
 
-            ax.contourf(
-                P0, P1, Z_clipped, levels=n_contour_levels, cmap="RdYlGn_r",
-                vmin=vmin_global, vmax=vmax_global, extend="both",
+            ax.pcolormesh(
+                P0,
+                P1,
+                Z_clipped,
+                cmap="RdYlGn_r",
+                vmin=vmin_global,
+                vmax=vmax_global,
+                shading="gouraud",
             )
             cs = ax.contour(P0, P1, Z_clipped, levels=n_contour_levels, colors="black", linewidths=0.4, alpha=0.6)
             ax.clabel(cs, inline=True, fontsize=6, fmt="%.2f")
@@ -1191,22 +1239,19 @@ if _optima_csv.exists():
                 _cmap = plt.get_cmap("RdYlGn_r")
                 _norm = mcolors.Normalize(vmin=vmin_global, vmax=vmax_global)
                 star_color = _cmap(_norm(actual_bpb))
-                label_text = (
-                    f"({opt_p0:.2f}, {opt_p1_val:.2f})\n"
-                    f"Pred={opt_bpb:.3f}\n"
-                    f"Actual={actual_bpb:.3f}"
-                )
+                label_text = f"({opt_p0:.2f}, {opt_p1_val:.2f})\nPred={opt_bpb:.3f}\nActual={actual_bpb:.3f}"
             else:
                 star_color = "gray"
-                label_text = (
-                    f"({opt_p0:.2f}, {opt_p1_val:.2f})\n"
-                    f"Pred={opt_bpb:.3f}\nActual=N/A"
-                )
+                label_text = f"({opt_p0:.2f}, {opt_p1_val:.2f})\nPred={opt_bpb:.3f}\nActual=N/A"
 
             ax.plot(
-                opt_p0, opt_p1_val, marker="*", ms=14,
+                opt_p0,
+                opt_p1_val,
+                marker="*",
+                ms=14,
                 color=star_color,
-                markeredgecolor="black", markeredgewidth=1.2,
+                markeredgecolor="black",
+                markeredgewidth=1.2,
                 zorder=6,
             )
 
@@ -1224,15 +1269,28 @@ if _optima_csv.exists():
             )
 
         except Exception as e:
-            ax.text(0.5, 0.5, f"Fit failed:\n{e}", ha="center", va="center", transform=ax.transAxes, fontsize=8, color="red")
+            ax.text(
+                0.5, 0.5, f"Fit failed:\n{e}", ha="center", va="center", transform=ax.transAxes, fontsize=8, color="red"
+            )
 
         last_scatter_4b = ax.scatter(
-            p0_sc, p1_sc, c=y, cmap="RdYlGn_r",
-            vmin=vmin_global, vmax=vmax_global,
-            s=40, marker="o", edgecolors="black", linewidths=1.0, zorder=5,
+            p0_sc,
+            p1_sc,
+            c=y,
+            cmap="RdYlGn_r",
+            vmin=vmin_global,
+            vmax=vmax_global,
+            s=40,
+            marker="o",
+            edgecolors="black",
+            linewidths=1.0,
+            zorder=5,
         )
 
-        ax.set_title(clean_name(mname), fontsize=10)
+        title_4b = clean_name(mname)
+        if n_params_4b is not None:
+            title_4b += f" ({n_params_4b}p)"
+        ax.set_title(title_4b, fontsize=10)
         ax.set_aspect("equal")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
@@ -1249,8 +1307,7 @@ if _optima_csv.exists():
         fig4b.colorbar(last_scatter_4b, ax=axes4b.ravel().tolist(), label="BPB", shrink=0.7, pad=0.03, aspect=30)
 
     fig4b.suptitle(
-        "Predicted vs Actual BPB at Predicted Optima "
-        "($\\bigstar$ colored by actual BPB, sorted by ascending actual)",
+        "Predicted vs Actual BPB at Predicted Optima ($\\bigstar$ colored by actual BPB, sorted by ascending actual)",
         fontsize=12,
     )
     out4b = OUT_DIR / "fig4b_heatmaps_predicted_vs_actual.png"
@@ -1269,8 +1326,7 @@ print("\nGenerating Figure 5: 3-panel slice predictions...")
 # Fit all models on full data and get slice predictions
 fitted_models = []
 for m in RUN_MODELS:
-    X_full = build_features(m.feature_kind, p0_sc, p1_sc)
-    pred_fn, params = m.fit_fn(X_full, y)
+    pred_fn, params = _get_full_fit(m)
 
     # Build slice features
     Xs = make_slice_for_kind(m.feature_kind, slice_grid)

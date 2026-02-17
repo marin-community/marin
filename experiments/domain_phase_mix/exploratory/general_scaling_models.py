@@ -1,3 +1,6 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """General scaling models for arbitrary M domains and N phases.
 
 Generalizes the 24 scaling models from scaling_models.py (which are hardcoded
@@ -12,7 +15,8 @@ Models are organized as:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Literal
+from typing import Literal
+from collections.abc import Callable
 
 import numpy as np
 from scipy.optimize import minimize
@@ -52,7 +56,7 @@ class DatasetSpec:
     def M(self) -> int:
         return self.weights.shape[2]
 
-    def subset(self, idx: np.ndarray) -> "DatasetSpec":
+    def subset(self, idx: np.ndarray) -> DatasetSpec:
         return DatasetSpec(
             weights=self.weights[idx],
             y=self.y[idx],
@@ -670,9 +674,7 @@ def _fit_elastic_logquad_weight(spec: DatasetSpec):
 # Model: SOE-Base
 # ---------------------------------------------------------------------------
 def _fit_soe_base(spec: DatasetSpec):
-    Phi, feat_names, n_params = soe_base_design(
-        spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains
-    )
+    Phi, feat_names, n_params = soe_base_design(spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains)
     beta = _fit_ols(Phi, spec.y)
     emult = spec.epoch_multipliers
     sd = spec.small_domains
@@ -693,9 +695,7 @@ def _applicable_soe_base(spec: DatasetSpec) -> bool:
 # Model: SOE-Plus
 # ---------------------------------------------------------------------------
 def _fit_soe_plus(spec: DatasetSpec):
-    Phi, feat_names, n_params = soe_plus_design(
-        spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains
-    )
+    Phi, feat_names, n_params = soe_plus_design(spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains)
     beta = _fit_ols(Phi, spec.y)
     emult = spec.epoch_multipliers
     sd = spec.small_domains
@@ -716,9 +716,7 @@ def _applicable_soe_plus(spec: DatasetSpec) -> bool:
 # Model: SOE-Curric
 # ---------------------------------------------------------------------------
 def _fit_soe_curric(spec: DatasetSpec):
-    Phi, feat_names, n_params = soe_curric_design(
-        spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains
-    )
+    Phi, feat_names, n_params = soe_curric_design(spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains)
     beta = _fit_ols(Phi, spec.y)
     emult = spec.epoch_multipliers
     sd = spec.small_domains
@@ -739,9 +737,7 @@ def _applicable_soe_curric(spec: DatasetSpec) -> bool:
 # Model: SOE-Plus(ridge) — ridge-regularized SOE-Plus
 # ---------------------------------------------------------------------------
 def _fit_soe_plus_ridge(spec: DatasetSpec):
-    Phi, feat_names, n_params = soe_plus_design(
-        spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains
-    )
+    Phi, feat_names, n_params = soe_plus_design(spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains)
     beta = _fit_ridge(Phi, spec.y, ridge=1.0)
     emult = spec.epoch_multipliers
     sd = spec.small_domains
@@ -757,9 +753,7 @@ def _fit_soe_plus_ridge(spec: DatasetSpec):
 # Model: SOE-Curric(ridge) — ridge-regularized SOE-Curric
 # ---------------------------------------------------------------------------
 def _fit_soe_curric_ridge(spec: DatasetSpec):
-    Phi, feat_names, n_params = soe_curric_design(
-        spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains
-    )
+    Phi, feat_names, n_params = soe_curric_design(spec.weights, spec.epoch_multipliers, small_domains=spec.small_domains)
     beta = _fit_ridge(Phi, spec.y, ridge=1.0)
     emult = spec.epoch_multipliers
     sd = spec.small_domains
@@ -897,6 +891,201 @@ def _fit_scheffe_log(spec: DatasetSpec):
 
 
 # ---------------------------------------------------------------------------
+# Model: Scheffé+EpEnt (Scheffé+log + epoch-entropy per phase)
+# ---------------------------------------------------------------------------
+def _epoch_entropy_features(spec: DatasetSpec) -> np.ndarray:
+    """(R, N) epoch-entropy per phase: H_k = sum_d q_{k,d} * ln(q_{k,d})."""
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, spec.N, spec.M)
+    E = _compute_epochs(spec.weights, C)  # (R, N, M)
+    denom = E.sum(axis=2, keepdims=True)  # (R, N, 1)
+    q = np.clip(E / np.maximum(denom, 1e-10), 1e-10, 1.0)
+    H = np.sum(q * np.log(q), axis=2)  # (R, N)
+    return H
+
+
+def _fit_scheffe_log_epoch_entropy(spec: DatasetSpec):
+    V = _vdom_features(spec)
+    d = V.shape[1]
+    Z_scheffe = _scheffe_log_features(V)
+    H = _epoch_entropy_features(spec)  # (R, N)
+    Z = np.column_stack([Z_scheffe, H])
+    n_params = _scheffe_nparams(d) + spec.N
+
+    if spec.R > n_params:
+        coef = _fit_ols(Z, spec.y)
+    else:
+        from sklearn.linear_model import RidgeCV
+
+        mu, sigma = Z.mean(0), Z.std(0)
+        sigma[sigma < 1e-12] = 1.0
+        Z_std = (Z - mu) / sigma
+        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=False)
+        ridge.fit(Z_std, spec.y)
+        coef = ridge.coef_ / sigma
+        coef -= ridge.coef_ * mu / sigma
+
+    phase_fracs = np.ones(spec.N) / spec.N
+    C_mult = _broadcast_epoch_mult(spec.epoch_multipliers, spec.N, spec.M)
+
+    def predict(W_new):
+        sp = _as_3d(W_new)
+        Vn = (sp * phase_fracs[None, :, None]).reshape(sp.shape[0], -1)
+        Z_s = _scheffe_log_features(Vn)
+        E = sp * C_mult[None, :, :]
+        denom = E.sum(axis=2, keepdims=True)
+        q = np.clip(E / np.maximum(denom, 1e-10), 1e-10, 1.0)
+        Hn = np.sum(q * np.log(q), axis=2)
+        return np.column_stack([Z_s, Hn]) @ coef
+
+    return predict, {"n_params": n_params}
+
+
+# ---------------------------------------------------------------------------
+# Model: Scheffé+TiedEnt (phase-tied entropy instead of per-component log)
+# ---------------------------------------------------------------------------
+def _scheffe_tied_entropy_features(V: np.ndarray, N: int, M: int) -> np.ndarray:
+    """Scheffé design with phase-tied entropy: linear + pairwise + N phase-tied entropy terms."""
+    d = V.shape[1]
+    safe_V = np.maximum(V, 1e-10)
+    parts: list[np.ndarray] = []
+    for j in range(d):
+        parts.append(V[:, j : j + 1])
+    for j in range(d):
+        for k in range(j + 1, d):
+            parts.append((V[:, j] * V[:, k]).reshape(-1, 1))
+    for ph in range(N):
+        cols = safe_V[:, ph * M : (ph + 1) * M]
+        ent = np.sum(cols * np.log(cols), axis=1, keepdims=True)
+        parts.append(ent)
+    return np.hstack(parts)
+
+
+def _scheffe_tied_nparams(d: int, N: int) -> int:
+    return d + d * (d - 1) // 2 + N
+
+
+def _fit_scheffe_tied_entropy(spec: DatasetSpec):
+    V = _vdom_features(spec)
+    d = V.shape[1]
+    n_params = _scheffe_tied_nparams(d, spec.N)
+    Z = _scheffe_tied_entropy_features(V, spec.N, spec.M)
+
+    if spec.R > n_params:
+        coef = _fit_ols(Z, spec.y)
+    else:
+        from sklearn.linear_model import RidgeCV
+
+        mu, sigma = Z.mean(0), Z.std(0)
+        sigma[sigma < 1e-12] = 1.0
+        Z_std = (Z - mu) / sigma
+        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=False)
+        ridge.fit(Z_std, spec.y)
+        coef = ridge.coef_ / sigma
+        coef -= ridge.coef_ * mu / sigma
+
+    phase_fracs = np.ones(spec.N) / spec.N
+
+    def predict(W_new):
+        sp = _as_3d(W_new)
+        Vn = (sp * phase_fracs[None, :, None]).reshape(sp.shape[0], -1)
+        return _scheffe_tied_entropy_features(Vn, spec.N, spec.M) @ coef
+
+    return predict, {"n_params": n_params}
+
+
+# ---------------------------------------------------------------------------
+# Model: SHEQ (Scheffé+log + epoch-entropy + epoch-overfit quadratic)
+# ---------------------------------------------------------------------------
+def _epoch_overfit_quadratic_raw(
+    W: np.ndarray,
+    epoch_multipliers: np.ndarray,
+    small_domains: list[int] | None,
+    N: int,
+    M: int,
+) -> tuple[np.ndarray, int]:
+    """Epoch² + cross-phase epoch products for small domains.
+
+    For each small domain d: N per-phase e²_{k,d} + S cross-phase e_{k1,d}*e_{k2,d}.
+    Returns (features, n_cols).
+    """
+    W3d = _as_3d(W)
+    R = W3d.shape[0]
+    C = _broadcast_epoch_mult(epoch_multipliers, N, M)
+    E = _compute_epochs(W3d, C)
+    S_list = _parse_small(small_domains, M)
+    pairs = _phase_pairs(N, "adjacent")
+    cols: list[np.ndarray] = []
+    for k in range(N):
+        for d in S_list:
+            cols.append(E[:, k, d] ** 2)
+    for d in S_list:
+        for k1, k2 in pairs:
+            cols.append(E[:, k1, d] * E[:, k2, d])
+    n_cols = len(cols)
+    features = np.column_stack(cols) if cols else np.empty((R, 0))
+    return features, n_cols
+
+
+def _epoch_overfit_nparams(N: int, M: int, small_domains: list[int] | None) -> int:
+    S = len(_parse_small(small_domains, M))
+    P = len(_phase_pairs(N, "adjacent"))
+    return N * S + S * P
+
+
+def _fit_sheq(spec: DatasetSpec):
+    """SHEQ: Scheffé+log + epoch-entropy + epoch-overfit quadratic.
+
+    Combines mixture-design polynomial, epoch-entropy, and convex overtraining cost.
+    """
+    V = _vdom_features(spec)
+    d = V.shape[1]
+    Z_scheffe = _scheffe_log_features(V)
+    H = _epoch_entropy_features(spec)
+    Z_eq, n_eq = _epoch_overfit_quadratic_raw(spec.weights, spec.epoch_multipliers, spec.small_domains, spec.N, spec.M)
+
+    parts = [Z_scheffe, H]
+    if n_eq > 0:
+        parts.append(Z_eq)
+    Z = np.column_stack(parts)
+    n_params = _scheffe_nparams(d) + spec.N + n_eq
+
+    if spec.R > n_params:
+        coef = _fit_ols(Z, spec.y)
+    else:
+        from sklearn.linear_model import RidgeCV
+
+        mu, sigma = Z.mean(0), Z.std(0)
+        sigma[sigma < 1e-12] = 1.0
+        Z_std = (Z - mu) / sigma
+        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=False)
+        ridge.fit(Z_std, spec.y)
+        coef = ridge.coef_ / sigma
+        coef -= ridge.coef_ * mu / sigma
+
+    phase_fracs = np.ones(spec.N) / spec.N
+    C_mult = _broadcast_epoch_mult(spec.epoch_multipliers, spec.N, spec.M)
+    emult = spec.epoch_multipliers
+    sd = spec.small_domains
+
+    def predict(W_new):
+        sp = _as_3d(W_new)
+        R_new = sp.shape[0]
+        Vn = (sp * phase_fracs[None, :, None]).reshape(R_new, -1)
+        Z_s = _scheffe_log_features(Vn)
+        E = sp * C_mult[None, :, :]
+        denom = E.sum(axis=2, keepdims=True)
+        q = np.clip(E / np.maximum(denom, 1e-10), 1e-10, 1.0)
+        Hn = np.sum(q * np.log(q), axis=2)
+        Z_eq_new, _ = _epoch_overfit_quadratic_raw(sp, emult, sd, spec.N, spec.M)
+        pparts = [Z_s, Hn]
+        if n_eq > 0:
+            pparts.append(Z_eq_new)
+        return np.column_stack(pparts) @ coef
+
+    return predict, {"n_params": n_params}
+
+
+# ---------------------------------------------------------------------------
 # Model: CES (general, on vdom features)
 # ---------------------------------------------------------------------------
 def _fit_ces(spec: DatasetSpec, n_restarts: int = 40, seed: int = 42):
@@ -1016,15 +1205,17 @@ def _fit_ces_overfit(spec: DatasetSpec, n_restarts: int = 15, seed: int = 0):
     for _ in range(n_restarts):
         p0_list: list[float] = [float(y.max()) + rng.normal(0, 0.05)]
         for _k in range(N):
-            p0_list.append(float(rng.normal(0, 1)))              # logA
-            p0_list.append(float(rng.uniform(-2, 0.8)))           # rho
-            p0_list.extend(rng.normal(0, 0.5, M - 1).tolist())   # logit shares
+            p0_list.append(float(rng.normal(0, 1)))  # logA
+            p0_list.append(float(rng.uniform(-2, 0.8)))  # rho
+            p0_list.extend(rng.normal(0, 0.5, M - 1).tolist())  # logit shares
         for d in S_list:
-            p0_list.append(float(rng.normal(-3, 1)))              # logbeta
+            p0_list.append(float(rng.normal(-3, 1)))  # logbeta
             p0_list.append(float(np.log(med_epochs[d]) + rng.normal(0, 0.5)))  # logtau
         try:
             res = minimize(
-                loss, np.array(p0_list), method="L-BFGS-B",
+                loss,
+                np.array(p0_list),
+                method="L-BFGS-B",
                 options={"maxiter": 800, "ftol": 1e-10},
             )
             if np.isfinite(res.fun) and res.fun < best_l:
@@ -1054,6 +1245,169 @@ def _applicable_ces_overfit(spec: DatasetSpec) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Model: PCEQ (Phase CES utility + entropy + epoch-overfit quadratic)
+# ---------------------------------------------------------------------------
+def _ces_utility_features_general(
+    W: np.ndarray,
+    epoch_multipliers: np.ndarray,
+    rho: np.ndarray,
+    a_small: np.ndarray,
+    small_domains: list[int],
+    N: int,
+    M: int,
+) -> np.ndarray:
+    """Per-phase CES utility on log1p(epochs).  Returns (R, N).
+
+    CES weights: a_small[k, i] for small domain i in phase k,
+    remainder split evenly among non-small domains.
+    """
+    W3d = _as_3d(W)
+    R = W3d.shape[0]
+    C = _broadcast_epoch_mult(epoch_multipliers, N, M)
+    E = _compute_epochs(W3d, C)
+    nonsmall = [d for d in range(M) if d not in small_domains]
+    n_nonsmall = len(nonsmall)
+
+    U = np.zeros((R, N))
+    for k in range(N):
+        rho_k = np.clip(rho[k], -10, 0.99)
+        a_full = np.zeros(M)
+        a_small_sum = 0.0
+        for i, d in enumerate(small_domains):
+            a_full[d] = a_small[k, i]
+            a_small_sum += a_small[k, i]
+        if n_nonsmall > 0:
+            remaining = max(1.0 - a_small_sum, 0.0)
+            for d in nonsmall:
+                a_full[d] = remaining / n_nonsmall
+
+        sat = np.maximum(np.log1p(E[:, k, :]), 1e-10)
+        inner = np.sum(a_full[None, :] * np.power(sat, rho_k), axis=1)
+        U[:, k] = np.power(np.maximum(inner, 1e-10), 1.0 / rho_k)
+
+    return U
+
+
+def _pceq_design_general(
+    W: np.ndarray,
+    epoch_multipliers: np.ndarray,
+    small_domains: list[int],
+    N: int,
+    M: int,
+    rho: np.ndarray,
+    a_small: np.ndarray,
+) -> np.ndarray:
+    """Build PCEQ design: [1, U_k, U_k*U_l, H_k, epoch_quad]."""
+    W3d = _as_3d(W)
+    R = W3d.shape[0]
+
+    U = _ces_utility_features_general(W3d, epoch_multipliers, rho, a_small, small_domains, N, M)
+
+    # Epoch entropy per phase
+    C = _broadcast_epoch_mult(epoch_multipliers, N, M)
+    E = _compute_epochs(W3d, C)
+    denom = E.sum(axis=2, keepdims=True)
+    q = np.clip(E / np.maximum(denom, 1e-10), 1e-10, 1.0)
+    H = np.sum(q * np.log(q), axis=2)
+
+    # Epoch-overfit quadratic
+    Z_eq, _ = _epoch_overfit_quadratic_raw(W3d, epoch_multipliers, small_domains, N, M)
+
+    cols: list[np.ndarray] = [np.ones((R, 1))]
+    for k in range(N):
+        cols.append(U[:, k : k + 1])
+    for k1 in range(N):
+        for k2 in range(k1 + 1, N):
+            cols.append((U[:, k1] * U[:, k2]).reshape(-1, 1))
+    cols.append(H)
+    if Z_eq.shape[1] > 0:
+        cols.append(Z_eq)
+
+    return np.hstack(cols)
+
+
+def _pceq_nparams(N: int, M: int, small_domains: list[int] | None) -> int:
+    """Number of linear coefficients in PCEQ."""
+    S = len(_parse_small(small_domains, M))
+    P = len(_phase_pairs(N, "adjacent"))
+    return 1 + N + N * (N - 1) // 2 + N + N * S + S * P
+
+
+def _fit_pceq(spec: DatasetSpec, n_folds: int = 5, seed: int = 42):
+    """PCEQ: Phase CES utility + entropy + epoch-overfit quadratic.
+
+    Grid search over CES hyperparams (rho per phase, a per small domain per phase),
+    then OLS.  Best hyperparams by k-fold CV.
+    """
+    from itertools import product as cart_product
+
+    from sklearn.model_selection import KFold
+
+    N, M = spec.N, spec.M
+    S_list = _parse_small(spec.small_domains, M)
+    S = len(S_list)
+    n_linear = _pceq_nparams(N, M, spec.small_domains)
+
+    rho_values = np.linspace(-5.0, 0.9, 12)
+    a_values = np.linspace(0.1, 0.9, 8)
+
+    kf = KFold(n_folds, shuffle=True, random_state=seed)
+    folds = list(kf.split(spec.weights))
+
+    rho_combos = list(cart_product(rho_values, repeat=N))
+    a_combos = list(cart_product(a_values, repeat=N * S)) if S > 0 else [()]
+
+    best_cv_sse = np.inf
+    best_rho = np.zeros(N)
+    best_a = np.zeros((N, max(S, 1)))
+
+    for rho_tuple in rho_combos:
+        rho = np.array(rho_tuple)
+        for a_tuple in a_combos:
+            a_small = np.array(a_tuple).reshape(N, S) if S > 0 else np.empty((N, 0))
+
+            cv_sse = 0.0
+            valid = True
+            for tr, te in folds:
+                try:
+                    Phi_tr = _pceq_design_general(spec.weights[tr], spec.epoch_multipliers, S_list, N, M, rho, a_small)
+                    beta = _fit_ols(Phi_tr, spec.y[tr])
+                    Phi_te = _pceq_design_general(spec.weights[te], spec.epoch_multipliers, S_list, N, M, rho, a_small)
+                    cv_sse += float(np.sum((Phi_te @ beta - spec.y[te]) ** 2))
+                except Exception:
+                    valid = False
+                    break
+
+            if valid and cv_sse < best_cv_sse:
+                best_cv_sse = cv_sse
+                best_rho = rho.copy()
+                best_a = a_small.copy() if S > 0 else np.empty((N, 0))
+
+    # Refit on all data
+    Phi = _pceq_design_general(spec.weights, spec.epoch_multipliers, S_list, N, M, best_rho, best_a)
+    coef = _fit_ols(Phi, spec.y)
+
+    emult = spec.epoch_multipliers
+    sd_list = S_list
+    final_rho = best_rho
+    final_a = best_a
+
+    def predict(W_new):
+        return _pceq_design_general(W_new, emult, sd_list, N, M, final_rho, final_a) @ coef
+
+    return predict, {
+        "n_params": n_linear,
+        "rho": final_rho.tolist(),
+        "a_small": final_a.tolist(),
+    }
+
+
+def _applicable_pceq(spec: DatasetSpec) -> bool:
+    n_linear = _pceq_nparams(spec.N, spec.M, spec.small_domains)
+    return spec.R > n_linear
+
+
+# ---------------------------------------------------------------------------
 # Model list
 # ---------------------------------------------------------------------------
 GENERAL_MODELS: list[GeneralModelSpec] = [
@@ -1065,8 +1419,12 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
     GeneralModelSpec("BayesLogQuad(w-e)", _fit_bayes_logquad_we, lambda _: True, "Bayesian Ridge logquad"),
     GeneralModelSpec("ElasticLogQuad(w-e)", _fit_elastic_logquad_we, lambda _: True, "ElasticNet logquad"),
     GeneralModelSpec("HuberLogQuad(w-e)", _fit_huber_logquad_we, lambda _: True, "Huber logquad"),
-    GeneralModelSpec("BayesLogQuad(wt)", _fit_bayes_logquad_weight, _always_applicable, "Bayesian Ridge logquad on weights only"),
-    GeneralModelSpec("ElasticLogQuad(wt)", _fit_elastic_logquad_weight, _always_applicable, "ElasticNet logquad on weights only"),
+    GeneralModelSpec(
+        "BayesLogQuad(wt)", _fit_bayes_logquad_weight, _always_applicable, "Bayesian Ridge logquad on weights only"
+    ),
+    GeneralModelSpec(
+        "ElasticLogQuad(wt)", _fit_elastic_logquad_weight, _always_applicable, "ElasticNet logquad on weights only"
+    ),
     GeneralModelSpec("SOE-Base", _fit_soe_base, _applicable_soe_base, "Satiety+overfit, OLS"),
     GeneralModelSpec("SOE-Plus", _fit_soe_plus, _applicable_soe_plus, "SOE-Base + within-phase coupling"),
     GeneralModelSpec("SOE-Plus(ridge)", _fit_soe_plus_ridge, _applicable_soe_plus, "SOE-Plus with ridge=1"),
@@ -1076,8 +1434,15 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
         "Threshold Overfit", _fit_threshold_overfit, _applicable_threshold, "Hinge penalty at learned threshold"
     ),
     GeneralModelSpec("Scheffé+log", _fit_scheffe_log, lambda _: True, "Scheffé polynomial + log terms"),
+    GeneralModelSpec(
+        "Scheffé+EpEnt", _fit_scheffe_log_epoch_entropy, lambda _: True, "Scheffé+log + epoch-entropy per phase"
+    ),
+    GeneralModelSpec("Scheffé+TiedEnt", _fit_scheffe_tied_entropy, lambda _: True, "Scheffé with phase-tied entropy"),
     GeneralModelSpec("CES", _fit_ces, _applicable_ces, "Constant Elasticity of Substitution"),
     GeneralModelSpec(
         "CES-Overfit", _fit_ces_overfit, _applicable_ces_overfit, "CES utility + softplus overtraining penalty"
     ),
+    # Hybrid models: mixture design + economics utility + information theory
+    GeneralModelSpec("SHEQ", _fit_sheq, lambda _: True, "Scheffé+log + epoch-entropy + epoch-overfit quadratic"),
+    GeneralModelSpec("PCEQ", _fit_pceq, _applicable_pceq, "Phase CES utility + entropy + epoch-overfit quadratic"),
 ]
