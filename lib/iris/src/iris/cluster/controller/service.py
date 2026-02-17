@@ -25,7 +25,13 @@ from iris.cluster.controller.events import (
     WorkerRegisteredEvent,
 )
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
+from iris.cluster.controller.state import (
+    ControllerEndpoint,
+    ControllerJob,
+    ControllerState,
+    ControllerTask,
+    ControllerWorker,
+)
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
@@ -124,9 +130,9 @@ class ControllerProtocol(Protocol):
 
     def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None: ...
 
-    def create_scheduling_context(self, workers: list) -> SchedulingContext: ...
+    def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext: ...
 
-    def get_job_scheduling_diagnostics(self, job, context: SchedulingContext) -> str: ...
+    def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str: ...
 
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...

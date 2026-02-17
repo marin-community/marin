@@ -52,39 +52,43 @@ that live as standalone documents.
 ```markdown
 ## Problem
 
+(What's the reason for this PR? What are we trying to accomplish? Why is it important?)
+
 `ExecutorStepInfo` (executor.py:324) has no timing fields. Developers cannot
 identify pipeline bottlenecks without manual instrumentation.
 
 ## Approach
 
+(Describe the way the problem has been solved in sufficient detail as to ensure
+another competent engineer would be able to recover your code given the description.)
+
 Extend `StatusEvent` with `execution_start_time`/`execution_end_time` fields.
 Wrap step functions in `_launch_step()` to record timestamps. Compute durations
 in `get_infos()` from existing status events.
 
-## Files touched
+## Key changes
 
-- `lib/marin/src/marin/execution/executor_step_status.py` — Add timing fields to StatusEvent
-- `lib/marin/src/marin/execution/executor.py` — Add `_create_timed_wrapper()`, update `_launch_step()` and `get_infos()`
-- `tests/test_executor_timing.py` — New: timing capture, persistence, failure cases
-
-## Key code
+(What changes in the code base? Provide psuedo-code samples to describe
+high-level changes or important details.)
 
 ```python
-def _create_timed_wrapper(self, original_fn, output_path):
-    def timed_wrapper(config):
-        start = time.time()
-        result = original_fn(config)
-        append_status(status_path, STATUS_SUCCESS,
-                     execution_start_time=start, execution_end_time=time.time())
-        return result
-    return timed_wrapper
+class StatusEvent
+  execution_start_time: Timestamp
+  execution_end_time: Timestamp
+...
+
+def launch_step:
+  event = StatusEvent(... start_time = TimeStamp.now())
+  ...
+  event.execution_end_time = TimeStamp.now()
 ```
 
-## Tests
+## Testing
 
-- `test_step_timing` — Verify start/end captured for successful steps
-- `test_timing_on_failure` — Verify timing captured when step raises
-- `test_timing_in_executor_json` — Verify timing appears in `.executor_info` output
+Write out the set of test cases and their intentions. Why is this the correct
+set of tests, why do we believe it covers the complete change and will identify
+bugs and regressions?
+
 ```
 
 ## Review Process
