@@ -3,13 +3,17 @@
 
 """RPC-based cluster client implementation."""
 
+import logging
 import time
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.errors import call_with_retry
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteClusterClient:
@@ -106,9 +110,12 @@ class RemoteClusterClient:
         self._client.launch_job(request)
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
-        response = self._client.get_job_status(request)
-        return response.job
+        def _call():
+            request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
+            response = self._client.get_job_status(request)
+            return response.job
+
+        return call_with_retry(f"get_job_status({job_id})", _call)
 
     def wait_for_job(
         self,
@@ -182,9 +189,12 @@ class RemoteClusterClient:
         return list(response.endpoints)
 
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
-        request = cluster_pb2.Controller.ListJobsRequest()
-        response = self._client.list_jobs(request)
-        return list(response.jobs)
+        def _call():
+            request = cluster_pb2.Controller.ListJobsRequest()
+            response = self._client.list_jobs(request)
+            return list(response.jobs)
+
+        return call_with_retry("list_jobs", _call)
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
@@ -200,9 +210,13 @@ class RemoteClusterClient:
             TaskStatus proto for the requested task
         """
         task_name.require_task()
-        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
-        response = self._client.get_task_status(request)
-        return response.task
+
+        def _call():
+            request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
+            response = self._client.get_task_status(request)
+            return response.task
+
+        return call_with_retry(f"get_task_status({task_name})", _call)
 
     def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
         """List all tasks for a job.
@@ -213,9 +227,13 @@ class RemoteClusterClient:
         Returns:
             List of TaskStatus protos, one per task in the job
         """
-        request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
-        response = self._client.list_tasks(request)
-        return list(response.tasks)
+
+        def _call():
+            request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
+            response = self._client.list_tasks(request)
+            return list(response.tasks)
+
+        return call_with_retry(f"list_tasks({job_id})", _call)
 
     def fetch_task_logs(
         self,
@@ -237,15 +255,19 @@ class RemoteClusterClient:
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
         """
-        request = cluster_pb2.Controller.GetTaskLogsRequest(
-            id=target.to_wire(),
-            include_children=include_children,
-            since_ms=since_ms,
-            max_total_lines=max_total_lines,
-            regex=regex or "",
-            attempt_id=attempt_id,
-        )
-        return self._client.get_task_logs(request)
+
+        def _call():
+            request = cluster_pb2.Controller.GetTaskLogsRequest(
+                id=target.to_wire(),
+                include_children=include_children,
+                since_ms=since_ms,
+                max_total_lines=max_total_lines,
+                regex=regex or "",
+                attempt_id=attempt_id,
+            )
+            return self._client.get_task_logs(request)
+
+        return call_with_retry(f"fetch_task_logs({target})", _call)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.
