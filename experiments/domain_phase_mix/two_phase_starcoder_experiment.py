@@ -223,6 +223,8 @@ BASELINES.extend([
     ([0.7318, 0.2682], [0.8822, 0.1178]),
     # Threshold Overfit: predicted BPB=0.880
     ([0.8572, 0.1428], [0.7318, 0.2682]),
+    # CES-Overfit: predicted BPB=0.889
+    ([0.985, 0.015], [0.770, 0.230]),
 ])
 
 

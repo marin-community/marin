@@ -207,7 +207,7 @@ def fit_loglinear(X, y):
     log_y = np.log(y)
     X_aug = np.column_stack([np.ones(len(X)), X])
     coef, _, _, _ = np.linalg.lstsq(X_aug, log_y, rcond=None)
-    return lambda Xn: np.exp(np.column_stack([np.ones(len(Xn)), Xn]) @ coef), coef
+    return lambda Xn: np.exp(np.clip(np.column_stack([np.ones(len(Xn)), Xn]) @ coef, -50, 50)), coef
 
 
 def fit_powerlaw(X, y, n_restarts=50, seed=42):
@@ -224,7 +224,8 @@ def fit_powerlaw(X, y, n_restarts=50, seed=42):
         return r
 
     def loss(p):
-        return float(np.sum((model(X, p) - y) ** 2))
+        r = model(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
@@ -257,7 +258,8 @@ def fit_dml_m1(X, y, n_restarts=40, seed=42):
         return r
 
     def loss(p):
-        return float(np.sum((model(X, p) - y) ** 2))
+        r = model(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
@@ -288,7 +290,8 @@ def fit_slodm(X, y, n_restarts=40, seed=42):
         return p[0] + 1.0 / denom
 
     def loss(p):
-        return float(np.sum((model(X, p) - y) ** 2))
+        r = model(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
@@ -320,7 +323,8 @@ def fit_bimix(X, y, n_restarts=40, seed=42):
         return r
 
     def loss(p):
-        return float(np.sum((model(X, p) - y) ** 2))
+        r = model(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
@@ -346,10 +350,11 @@ def fit_cobb_douglas(X, y, n_restarts=40, seed=42):
         C, log_A = p[0], p[1]
         alphas = np.abs(p[2 : 2 + nf]) + 1e-6
         log_prod = np.sum(alphas * np.log(np.maximum(X, 1e-10)), axis=1)
-        return C - np.exp(log_A + log_prod)
+        return C - np.exp(np.clip(log_A + log_prod, -50, 50))
 
     def loss(p):
-        return float(np.sum((model(X, p) - y) ** 2))
+        r = model(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
@@ -391,7 +396,7 @@ def fit_translog(X, y, **_kwargs):
         for j in range(nf):
             for k in range(j + 1, nf):
                 ps.append((log_Xn[:, j] * log_Xn[:, k]).reshape(-1, 1))
-        return np.exp(np.hstack(ps) @ coef)
+        return np.exp(np.clip(np.hstack(ps) @ coef, -50, 50))
 
     return pred, coef
 
@@ -407,10 +412,11 @@ def fit_stone_geary(X, y, n_restarts=40, seed=42):
         betas = np.abs(p[2 + nf : 2 + 2 * nf]) + 1e-6
         shifted = np.maximum(X - gammas, 1e-10)
         log_prod = np.sum(betas * np.log(shifted), axis=1)
-        return C - np.exp(log_A + log_prod)
+        return C - np.exp(np.clip(log_A + log_prod, -50, 50))
 
     def loss(p):
-        return float(np.sum((model(X, p) - y) ** 2))
+        r = model(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
@@ -454,7 +460,7 @@ def fit_logquad_mix(X, y, **_kwargs):
         for j in range(nf):
             for k in range(j + 1, nf):
                 ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
-        return np.exp(np.hstack(ps) @ coef)
+        return np.exp(np.clip(np.hstack(ps) @ coef, -50, 50))
 
     return pred, coef
 
@@ -500,7 +506,7 @@ def fit_ridge_translog(X, y, **_kwargs):
         for j in range(nf):
             for k in range(j + 1, nf):
                 ps.append((log_Xn[:, j] * log_Xn[:, k]).reshape(-1, 1))
-        return np.exp(np.hstack(ps) @ coef)
+        return np.exp(np.clip(np.hstack(ps) @ coef, -50, 50))
 
     return pred, coef
 
@@ -584,13 +590,15 @@ def fit_ces(X, y, n_restarts=40, seed=42):
     def model(X, p):
         C, log_A, rho = p[0], p[1], np.clip(p[2], -10, 0.99)
         log_a = p[3 : 3 + nf]
-        a = np.exp(log_a)
+        log_a_shifted = log_a - np.max(log_a)
+        a = np.exp(log_a_shifted)
         a = a / a.sum()
         inner = np.sum(a * np.power(np.maximum(X, 1e-10), rho), axis=1)
-        return C - np.exp(log_A) * np.power(np.maximum(inner, 1e-10), 1.0 / rho)
+        return C - np.exp(np.clip(log_A, -20, 20)) * np.power(np.maximum(inner, 1e-10), 1.0 / rho)
 
     def loss(p):
-        return float(np.sum((model(X, p) - y) ** 2))
+        r = model(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
@@ -650,7 +658,7 @@ def fit_elastic_logquad(X, y, **_kwargs):
         for j in range(nf2):
             for k in range(j + 1, nf2):
                 ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
-        return np.exp(np.hstack(ps) @ coef)
+        return np.exp(np.clip(np.hstack(ps) @ coef, -50, 50))
 
     return pred, coef
 
@@ -681,7 +689,7 @@ def fit_logquad_weight(X, y, **_kwargs):
         for j in range(nf2):
             for k in range(j + 1, nf2):
                 ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
-        return np.exp(np.hstack(ps) @ coef)
+        return np.exp(np.clip(np.hstack(ps) @ coef, -50, 50))
 
     return pred, coef
 
@@ -725,7 +733,7 @@ def fit_bayes_logquad(X, y, **_kwargs):
         for j in range(nf2):
             for k in range(j + 1, nf2):
                 ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
-        return np.exp(np.hstack(ps) @ coef)
+        return np.exp(np.clip(np.hstack(ps) @ coef, -50, 50))
 
     return pred, coef
 
@@ -765,7 +773,7 @@ def fit_huber_logquad(X, y, **_kwargs):
         for j in range(nf2):
             for k in range(j + 1, nf2):
                 ps.append((Xn[:, j] * Xn[:, k]).reshape(-1, 1))
-        return np.exp(np.hstack(ps) @ coef)
+        return np.exp(np.clip(np.hstack(ps) @ coef, -50, 50))
 
     return pred, coef
 
@@ -881,6 +889,80 @@ def fit_threshold_overfit(X, y):
         return _build_threshold_design(Xn, best_tau) @ best_beta
 
     return pred, params
+
+
+# =========================================================================
+# CES-Overfit: per-phase CES utility on log1p(epochs) + overtraining penalty
+# =========================================================================
+
+
+def _sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -20, 20)))
+
+
+def fit_ces_overfit(X, y, n_restarts=15, seed=0):
+    """CES-Overfit: per-phase CES on log1p(epochs) + softplus overfit penalty.
+
+    L = C - A0*CES0(log1p(e)) - A1*CES1(log1p(e)) + beta*softplus(E_sc - tau)^2
+
+    9 parameters: C, logA0, rho0, logit_a0, logA1, rho1, logit_a1, logbeta, logtau.
+    Features: weight (epochs computed internally).
+    """
+    rng = np.random.default_rng(seed)
+
+    def model(X, p):
+        e_sc0, e_sc1, e_nem0, e_nem1 = _epochs_from_weights(X)
+        result = np.full(len(X), p[0])  # C
+
+        for e_sc, e_nem, logA, rho_raw, logit_a in [
+            (e_sc0, e_nem0, p[1], p[2], p[3]),
+            (e_sc1, e_nem1, p[4], p[5], p[6]),
+        ]:
+            rho = np.clip(rho_raw, -10, 0.99)
+            a_nem = _sigmoid(logit_a)
+            s_nem = np.maximum(np.log1p(e_nem), 1e-10)
+            s_sc = np.maximum(np.log1p(e_sc), 1e-10)
+            inner = a_nem * np.power(s_nem, rho) + (1 - a_nem) * np.power(s_sc, rho)
+            ces_val = np.power(np.maximum(inner, 1e-10), 1.0 / rho)
+            result -= np.exp(np.clip(logA, -20, 20)) * ces_val
+
+        beta = np.exp(np.clip(p[7], -10, 10))
+        tau = np.exp(np.clip(p[8], -5, 5))
+        E_sc_total = e_sc0 + e_sc1
+        result += beta * _softplus(E_sc_total - tau) ** 2
+        return result
+
+    def loss(p):
+        r = model(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
+
+    E_sc_med = np.median(SC_EPOCH_MULT * (X[:, 0] + X[:, 1])) + 1e-6
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = np.array([
+            y.max() + rng.normal(0, 0.05),
+            rng.normal(0, 1),
+            rng.uniform(-2, 0.8),
+            rng.normal(0, 1),
+            rng.normal(0, 1),
+            rng.uniform(-2, 0.8),
+            rng.normal(0, 1),
+            rng.normal(-3, 1),
+            np.log(E_sc_med) + rng.normal(0, 0.5),
+        ])
+        try:
+            res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        best_p = np.zeros(9)
+        best_p[0] = np.mean(y)
+
+    return lambda Xn: model(Xn, best_p), best_p
 
 
 # =========================================================================
@@ -1181,6 +1263,20 @@ def label_threshold_overfit(params):
     )
 
 
+def label_ces_overfit(params):
+    # 9 params: C, logA0, rho0, logit_a0, logA1, rho1, logit_a1, logbeta, logtau
+    # On p0=0: phase 0 is constant (e_sc0=0), only phase 1 + penalty vary
+    rho1 = np.clip(params[5], -10, 0.99)
+    a1_nem = _sigmoid(params[6])
+    beta = np.exp(np.clip(params[7], -10, 10))
+    tau = np.exp(np.clip(params[8], -5, 5))
+    return (
+        rf"$\rho_1\!=\!{rho1:.2f}$, "
+        rf"$a_{{nem}}^1\!=\!{a1_nem:.2f}$, "
+        rf"$\beta\!=\!{beta:.3f}$, $\tau\!=\!{tau:.1f}$"
+    )
+
+
 # =========================================================================
 # Model registry
 # =========================================================================
@@ -1210,6 +1306,8 @@ MODELS: list[ModelSpec] = [
     ModelSpec("SOE-Plus", fit_soe_plus, "weight", label_soe_plus, "dodgerblue", "-"),
     ModelSpec("SOE-Curric", fit_soe_curric, "weight", label_soe_curric, "orangered", "-"),
     ModelSpec("Threshold Overfit", fit_threshold_overfit, "weight", label_threshold_overfit, "seagreen", "-."),
+    # CES-Overfit: per-phase CES utility on log1p(epochs) + overtraining penalty
+    ModelSpec("CES-Overfit", fit_ces_overfit, "weight", label_ces_overfit, "darkcyan", "-"),
 ]
 
 

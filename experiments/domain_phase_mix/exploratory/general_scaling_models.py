@@ -948,6 +948,112 @@ def _applicable_ces(spec: DatasetSpec) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Model: CES-Overfit (per-phase CES on log1p epochs + overtraining penalty)
+# ---------------------------------------------------------------------------
+def _softplus(x: np.ndarray) -> np.ndarray:
+    return np.where(x > 20, x, np.log1p(np.exp(np.minimum(x, 20))))
+
+
+def _fit_ces_overfit(spec: DatasetSpec, n_restarts: int = 15, seed: int = 0):
+    """CES-Overfit: per-phase CES on log1p(epochs) + softplus overfit penalty.
+
+    L = C - sum_k A_k * CES_k(log1p(e)) + sum_{d in S} beta_d * softplus(E_d - tau_d)^2
+
+    Parameters: C (1) + per-phase logA_k, rho_k, (M-1) logit shares (N*(M+1)) +
+                per-small-domain logbeta_d, logtau_d (2*S).
+    """
+    rng = np.random.default_rng(seed)
+    W = spec.weights  # (R, N, M)
+    y = spec.y
+    _, N, M = W.shape
+    C_mult = _broadcast_epoch_mult(spec.epoch_multipliers, N, M)
+    E = _compute_epochs(W, C_mult)  # (R, N, M)
+    S_list = _parse_small(spec.small_domains, M)
+    S = len(S_list)
+
+    n_per_phase = 2 + (M - 1)  # logA, rho, (M-1) logit shares
+    n_params = 1 + N * n_per_phase + 2 * S
+
+    def _softmax(logits):
+        x = logits - np.max(logits)
+        e = np.exp(x)
+        return e / e.sum()
+
+    def model(E_data, p):
+        result = np.full(E_data.shape[0], p[0])  # C
+        idx = 1
+        for k in range(N):
+            logA = p[idx]
+            rho = np.clip(p[idx + 1], -10, 0.99)
+            logit_a = np.concatenate([p[idx + 2 : idx + 2 + (M - 1)], [0.0]])
+            a = _softmax(logit_a)
+            idx += n_per_phase
+
+            sat = np.maximum(np.log1p(E_data[:, k, :]), 1e-10)  # (R, M)
+            inner = np.sum(a[None, :] * np.power(sat, rho), axis=1)
+            ces_val = np.power(np.maximum(inner, 1e-10), 1.0 / rho)
+            result -= np.exp(np.clip(logA, -20, 20)) * ces_val
+
+        for d in S_list:
+            logbeta = p[idx]
+            logtau = p[idx + 1]
+            idx += 2
+            beta = np.exp(np.clip(logbeta, -10, 10))
+            tau = np.exp(np.clip(logtau, -5, 5))
+            E_d_total = E_data[:, :, d].sum(axis=1)
+            result += beta * _softplus(E_d_total - tau) ** 2
+
+        return result
+
+    def loss(p):
+        r = model(E, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
+
+    # Precompute median total epochs for small domains (for tau init)
+    med_epochs = {d: float(np.median(E[:, :, d].sum(axis=1))) + 1e-6 for d in S_list}
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0_list: list[float] = [float(y.max()) + rng.normal(0, 0.05)]
+        for _k in range(N):
+            p0_list.append(float(rng.normal(0, 1)))              # logA
+            p0_list.append(float(rng.uniform(-2, 0.8)))           # rho
+            p0_list.extend(rng.normal(0, 0.5, M - 1).tolist())   # logit shares
+        for d in S_list:
+            p0_list.append(float(rng.normal(-3, 1)))              # logbeta
+            p0_list.append(float(np.log(med_epochs[d]) + rng.normal(0, 0.5)))  # logtau
+        try:
+            res = minimize(
+                loss, np.array(p0_list), method="L-BFGS-B",
+                options={"maxiter": 800, "ftol": 1e-10},
+            )
+            if np.isfinite(res.fun) and res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        raise RuntimeError("CES-Overfit optimization failed to converge")
+
+    emult = spec.epoch_multipliers
+    final_p = best_p
+
+    def predict(W_new):
+        sp = _as_3d(W_new)
+        C_new = _broadcast_epoch_mult(emult, sp.shape[1], sp.shape[2])
+        E_new = _compute_epochs(sp, C_new)
+        return model(E_new, final_p)
+
+    return predict, {"n_params": n_params}
+
+
+def _applicable_ces_overfit(spec: DatasetSpec) -> bool:
+    S = len(_parse_small(spec.small_domains, spec.M))
+    n_params = 1 + spec.N * (spec.M + 1) + 2 * S
+    return spec.R > n_params
+
+
+# ---------------------------------------------------------------------------
 # Model list
 # ---------------------------------------------------------------------------
 GENERAL_MODELS: list[GeneralModelSpec] = [
@@ -971,4 +1077,7 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
     ),
     GeneralModelSpec("Scheffé+log", _fit_scheffe_log, lambda _: True, "Scheffé polynomial + log terms"),
     GeneralModelSpec("CES", _fit_ces, _applicable_ces, "Constant Elasticity of Substitution"),
+    GeneralModelSpec(
+        "CES-Overfit", _fit_ces_overfit, _applicable_ces_overfit, "CES utility + softplus overtraining penalty"
+    ),
 ]
