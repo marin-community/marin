@@ -129,13 +129,14 @@ TOKENIZER_CACHE_BASE = "gs://marin-us-central1/raw/tokenizers"
 # Tokenizer used by regmix_60m_proxy and all domains
 TOKENIZER_NAME = marin_tokenizer  # "marin-community/marin-tokenizer"
 
-# Dirichlet sampling with lower min_weight for 18 domains
+# Dirichlet sampling with lower min_weight for 18 domains.
+# strength is per-domain concentration: 0.2 = sparse (few active), 2.0 = dense (most active).
 SAMPLING_PARAMS = DirichletSamplingParams(
     strategy=SamplingStrategy.DIRICHLET,
     min_weight=0.01,
     min_config_distance=0.001,
     min_strength=0.2,
-    max_strength=1.0,
+    max_strength=2.0,
     temp=0.5,
 )
 

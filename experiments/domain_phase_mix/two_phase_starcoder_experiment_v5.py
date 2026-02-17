@@ -30,7 +30,7 @@ Key differences from v4:
 - Supports --dry-run mode for visualizing sampling coverage before submitting.
 
 Sampling uses the same Dirichlet parameters as v4 (min_weight=0.05,
-min_strength=0.2, max_strength=1.0, temp=0.5) with two overrides:
+min_strength=0.1, max_strength=0.5, temp=0.5) with two overrides:
 - min_phase_change=0.0 (allows configs where both phases are similar)
 - max_ratio cap removed (v4 had 15x, limiting StarCoder to ~56%)
 min_config_distance is handled by a custom rejection loop against all

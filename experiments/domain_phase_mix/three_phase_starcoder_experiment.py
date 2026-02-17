@@ -15,28 +15,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Two-phase starcoder experiment for sanity-checking RegMix.
+"""Three-phase starcoder experiment extending the two-phase setup.
 
-This experiment replicates the two_stage experiment setup using RegMix infrastructure:
+Same two domains (Nemotron + StarCoder) but with three training phases,
+giving a (N=3, M=2) configuration to complement the existing (N=2, M=2) data.
+
 - Two domains: Nemotron (common web, ~5.7T tokens) and StarCoder (code, ~217B tokens)
-- Two phases: [0, 0.5) pretraining and [0.5, 1.0) code-focused
+- Three phases: [0, 0.33), [0.33, 0.67), [0.67, 1.0]
+- 1.5B token budget
 - Evaluates on code-related benchmarks (CODE_TASKS + starcoder validation)
 - Uses Dirichlet sampling for weight exploration
 
-Key differences from three_phase_experiment:
-- Only 2 domains and 2 phases (simpler, cleaner signal)
-- Uses Nemotron (large common data) and StarCoder (rare code data) from Dolma
-- Code evals should directly benefit from more StarCoder data
-
 Usage:
     # Run training with random weight sampling (Dirichlet)
-    python -m experiments.domain_phase_mix.two_phase_starcoder_experiment [--n_runs N] [--seed SEED]
+    python -m experiments.domain_phase_mix.three_phase_starcoder_experiment [--n_runs N] [--seed SEED]
 
     # Run predefined baseline runs
-    python -m experiments.domain_phase_mix.two_phase_starcoder_experiment --baseline_runs
+    python -m experiments.domain_phase_mix.three_phase_starcoder_experiment --baseline_runs
 
     # Run analysis (after training completes)
-    python -m experiments.domain_phase_mix.two_phase_starcoder_experiment --analyze
+    python -m experiments.domain_phase_mix.three_phase_starcoder_experiment --analyze
 """
 
 import json
@@ -68,10 +66,10 @@ logger = logging.getLogger("ray")
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 
-NAME = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_4"
+NAME = "pinlin_calvin_xu/data_mixture/three_phase_starcoder_1"
 
-# Token budget: 1B tokens (as specified in RegMix paper)
-EXPERIMENT_BUDGET = 1_000_000_000  # Actual tokens we train with
+# Token budget: 1.5B tokens
+EXPERIMENT_BUDGET = 1_500_000_000
 
 # Target budget: set to size of Nemotron (~5.7T tokens)
 # StarCoder can be epoched at most ~26x (5.7T / 217B)
@@ -82,7 +80,9 @@ BATCH_SIZE = 128
 SEQ_LEN = 2048
 
 # Phase boundaries (fractions of total training)
-PHASE_BOUNDARIES = [0.5]  # Creates 2 phases: [0, 0.5), [0.5, 1.0]
+PHASE_BOUNDARIES = [0.33, 0.67]  # Creates 3 phases: [0, 0.33), [0.33, 0.67), [0.67, 1.0]
+
+PHASE_NAMES = ["phase_0", "phase_1", "phase_2"]
 
 # Domain names (must match names from get_nemotron_starcoder_domains())
 DOMAIN_NAMES = ["nemotron_full", "starcoder"]
@@ -91,12 +91,6 @@ DOMAIN_NAMES = ["nemotron_full", "starcoder"]
 EVAL_TASKS = CORE_TASKS + CODE_TASKS
 
 # Metrics to collect from W&B for analysis.
-# Built from actual W&B metric names (different tasks log different metric types):
-# - Multiple-choice tasks: acc, acc_norm, bpb, choice_logprob
-# - code2text tasks: smoothed_bleu_4
-# - humaneval: pass@1,create_test
-# - jsonschema_bench tasks: json_validity, schema_compliance
-# - lambada: acc, perplexity
 ANALYSIS_METRICS = [
     "eval/loss",
     # CORE_TASKS: acc and acc_norm for multiple-choice tasks
@@ -130,21 +124,18 @@ ANALYSIS_METRICS = [
 # GCS paths for pre-cached data to avoid HuggingFace rate limiting
 EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/code-tasks"
 TOKENIZER_CACHE_BASE = "gs://marin-us-central1/raw/tokenizers"
-# EVAL_DATASETS_CACHE_PATH = "gs://marin-us-east5/raw/eval-datasets/code-tasks"
-# TOKENIZER_CACHE_BASE = "gs://marin-us-east5/raw/tokenizers"
 
 # Tokenizer used by regmix_60m_proxy and all domains
 TOKENIZER_NAME = llama3_tokenizer  # "meta-llama/Meta-Llama-3.1-8B"
 
-# Use uniform sampling strategy for weight exploration
+# Use Dirichlet sampling strategy for weight exploration
 SAMPLING_PARAMS = DirichletSamplingParams(
     strategy=SamplingStrategy.DIRICHLET,
     min_weight=0.05,
-    min_config_distance=0.001,
+    min_config_distance=0.05,
     min_strength=0.1,
     max_strength=0.5,
     temp=0.5,
-    # min_phase_change=0.15,
 )
 
 
@@ -153,77 +144,41 @@ SAMPLING_PARAMS = DirichletSamplingParams(
 # ============================================================================
 
 # Predefined baseline configurations for baseline runs
-# Each entry is a tuple of phase weights: [[phase_0_weights], [phase_1_weights]]
+# Each entry is a tuple of phase weights: [[phase_0], [phase_1], [phase_2]]
 # Weights correspond to domains in order: [nemotron_full, starcoder]
-BASELINES: list[tuple[list[float], list[float]]] = [
-    # Pure transitions
-    ([1, 0], [0, 1]),  # Nemotron-only -> StarCoder-only
-    ([0.5, 0.5], [0.5, 0.5]),  # Balanced throughout
-    # Two-stage inspired (matching replay_ratio=0.8, rare_stage2_allocation=0.9)
-    ([0.99, 0.01], [0.2, 0.8]),  # Original two_stage defaults
-    ([0.95, 0.05], [0.2, 0.8]),  # Slightly more code in phase 1
-    ([0.99, 0.01], [0.5, 0.5]),  # More balanced phase 2
+BASELINES: list[tuple[list[float], list[float], list[float]]] = [
+    # Gradual transition: Nemotron -> balanced -> StarCoder
+    ([1, 0], [0.5, 0.5], [0, 1]),
+    # Balanced throughout
+    ([0.5, 0.5], [0.5, 0.5], [0.5, 0.5]),
+    # Two-stage-inspired: web-heavy first two phases, code-focused last phase
+    ([0.99, 0.01], [0.99, 0.01], [0.2, 0.8]),
+    # Gradual code ramp
+    ([0.99, 0.01], [0.5, 0.5], [0.2, 0.8]),
+    ([0.95, 0.05], [0.7, 0.3], [0.2, 0.8]),
+    # More balanced phase 3
+    ([0.99, 0.01], [0.8, 0.2], [0.5, 0.5]),
     # Single-domain baselines
-    ([1, 0], [1, 0]),  # Nemotron only (no code)
-    ([0, 1], [0, 1]),  # StarCoder only (no web)
-    # RegMix-optimized for eval/paloma/dolma_100_programing_languages/bpb, leaves=15
-    ([0.9725, 0.0275], [0.6874, 0.3126]),
-    # RegMix-optimized, leaves=63
-    ([0.9347, 0.0653], [0.6536, 0.3464]),
-    # Power Law optimized
-    ([1, 0], [0.814, 0.186]),
-    # cover more of the U shape slice
-    ([1, 0], [0.975, 0.025]),
-    ([1, 0], [0.95, 0.05]),
-    ([1, 0], [0.9, 0.1]),
-    ([1, 0], [0.875, 0.125]),
-    ([1, 0], [0.85, 0.15]),
+    ([1, 0], [1, 0], [1, 0]),  # Nemotron only (no code)
+    ([0, 1], [0, 1], [0, 1]),  # StarCoder only (no web)
+    # Code in the middle phase only
+    ([1, 0], [0.2, 0.8], [1, 0]),
+    # Code ramp then taper
+    ([0.2, 0.8], [0.5, 0.5], [0.99, 0.01]),
+    # Late code burst
+    ([1, 0], [1, 0], [0, 1]),
+    # Early code then web
+    ([0, 1], [1, 0], [1, 0]),
+    # Constant moderate code
+    ([0.8, 0.2], [0.8, 0.2], [0.8, 0.2]),
+    ([0.7, 0.3], [0.7, 0.3], [0.7, 0.3]),
 ]
 
 # UniMax baseline (Chung et al., 2023): uniform budget with epoch cap N=1
-_unimax_phase_budget = TARGET_BUDGET * PHASE_BOUNDARIES[0]  # Per-phase budget
+_unimax_phase_budget = TARGET_BUDGET * (PHASE_BOUNDARIES[0])  # Per-phase budget (~33%)
 _unimax_domain_sizes = [NEMOTRON_FULL_DOMAIN.total_weight, STARCODER_DOMAIN.total_weight]
 _unimax_weights = compute_unimax_weights(_unimax_domain_sizes, _unimax_phase_budget, max_epochs=1.0)
-BASELINES.append((_unimax_weights, _unimax_weights))
-
-# ---- Predicted optima from 24 scaling models (116-pt combined dataset) ----
-# Each entry is the argmin of the model's predicted BPB on an 80x80 grid.
-# Near-identical predictions (L1 < 0.02) are deduplicated into one run.
-# Appended after UniMax to preserve existing run_id assignments (90000-90015).
-BASELINES.extend([
-    # Linear: predicted BPB=0.758
-    ([0.9950, 0.0050], [0.9950, 0.0050]),
-    # Quadratic, LogQuad(weight): predicted BPB=0.892
-    ([0.9950, 0.0050], [0.6191, 0.3809]),
-    # Quadratic(w-e): predicted BPB=0.903
-    ([0.4185, 0.5815], [0.8697, 0.1303]),
-    # LogLinear(w-e), BiMix: predicted BPB=0.760
-    ([0.9950, 0.0050], [0.9699, 0.0301]),
-    # PowerLaw, LogQuad(w-e), ILR Quad, BayesLogQuad(w-e): predicted BPB=0.897
-    ([0.9950, 0.0050], [0.7694, 0.2306]),
-    # DML M1, Translog, RidgeTranslog, ElasticLogQuad(w-e): predicted BPB=0.841
-    ([0.9950, 0.0050], [0.8196, 0.1804]),
-    # SLODM: predicted BPB=0.853
-    ([0.9825, 0.0175], [0.8446, 0.1554]),
-    # Cobb-Douglas: predicted BPB=0.835
-    ([0.9950, 0.0050], [0.9449, 0.0551]),
-    # CES: predicted BPB=0.880
-    ([0.9198, 0.0802], [0.7318, 0.2682]),
-    # Stone-Geary: predicted BPB=0.847
-    ([0.9950, 0.0050], [0.8947, 0.1053]),
-    # Scheffe+log: predicted BPB=0.883
-    ([0.7820, 0.2180], [0.7569, 0.2431]),
-    # HuberLogQuad(w-e): predicted BPB=0.878
-    ([0.8822, 0.1178], [0.7820, 0.2180]),
-    # SOE-Base: predicted BPB=0.881
-    ([0.7569, 0.2431], [0.7318, 0.2682]),
-    # SOE-Plus: predicted BPB=0.893
-    ([0.6566, 0.3434], [0.8321, 0.1679]),
-    # SOE-Curric: predicted BPB=0.890
-    ([0.7318, 0.2682], [0.8822, 0.1178]),
-    # Threshold Overfit: predicted BPB=0.880
-    ([0.8572, 0.1428], [0.7318, 0.2682]),
-])
+BASELINES.append((_unimax_weights, _unimax_weights, _unimax_weights))
 
 
 # ============================================================================
@@ -232,10 +187,9 @@ BASELINES.extend([
 
 
 def get_nemotron_starcoder_domains():
-    """Get domains for two-phase starcoder experiment.
+    """Get domains for the experiment.
 
     Uses Nemotron (large common web data, ~5.7T tokens) and StarCoder (rare code data, ~217B tokens).
-    This ensures StarCoder is truly "rare" relative to the common data.
 
     Returns:
         List of [NEMOTRON_FULL_DOMAIN, STARCODER_DOMAIN]
@@ -243,38 +197,26 @@ def get_nemotron_starcoder_domains():
     return [NEMOTRON_FULL_DOMAIN, STARCODER_DOMAIN]
 
 
-def create_two_phase_experiment(
+def create_three_phase_experiment(
     name: str = NAME,
     experiment_budget: int = EXPERIMENT_BUDGET,
     target_budget: int = TARGET_BUDGET,
     batch_size: int = BATCH_SIZE,
     seq_len: int = SEQ_LEN,
 ) -> MixtureExperiment:
-    """Create the two-phase starcoder experiment.
+    """Create the three-phase starcoder experiment.
 
     This sets up:
     - 2 domains: Nemotron (common web, ~5.7T tokens) and StarCoder (code, ~217B tokens)
-    - 2 phases: [0, 0.5), [0.5, 1.0)
+    - 3 phases: [0, 0.33), [0.33, 0.67), [0.67, 1.0]
     - RegMix 60M proxy model
-    - Simulated epoching with max 32x epoching on smallest dataset (StarCoder)
-
-    Args:
-        name: Experiment name.
-        experiment_budget: Actual token budget for training.
-        target_budget: Target budget for simulated epoching.
-        batch_size: Training batch size.
-        seq_len: Sequence length.
-
-    Returns:
-        MixtureExperiment configured for two-phase starcoder experiment.
+    - Simulated epoching with max ~26x epoching on smallest dataset (StarCoder)
     """
-    # Create two-phase schedule
     phase_schedule = PhaseSchedule.from_boundaries(
         boundaries=PHASE_BOUNDARIES,
-        names=["phase_0", "phase_1"],
+        names=PHASE_NAMES,
     )
 
-    # Get domains: Nemotron (common) and StarCoder (rare code)
     domains = get_nemotron_starcoder_domains()
 
     return MixtureExperiment(
@@ -298,31 +240,30 @@ def create_two_phase_experiment(
 
 
 def create_baseline_weight_configs(
-    baselines: list[tuple[list[float], list[float]]] = BASELINES,
+    baselines: list[tuple[list[float], list[float], list[float]]] = BASELINES,
     phase_names: list[str] | None = None,
     domain_names: list[str] | None = None,
 ) -> list[WeightConfig]:
     """Create WeightConfig objects from predefined baseline weights.
 
     Args:
-        baselines: List of baseline configurations. Each is a tuple of 2 lists,
+        baselines: List of baseline configurations. Each is a tuple of 3 lists,
             one per phase, with weights for each domain.
-        phase_names: Names of phases. Defaults to ["phase_0", "phase_1"].
+        phase_names: Names of phases. Defaults to PHASE_NAMES.
         domain_names: Names of domains. Defaults to DOMAIN_NAMES.
 
     Returns:
         List of WeightConfig objects with unique run_ids starting from 90000.
     """
-    phase_names = phase_names or ["phase_0", "phase_1"]
+    phase_names = phase_names or PHASE_NAMES
     domain_names = domain_names or DOMAIN_NAMES
 
-    # Start baseline run_ids at 90000 to avoid conflicts with swarm run_ids (0-99)
     BASELINE_RUN_ID_START = 90000
     configs = []
-    for i, (phase0, phase1) in enumerate(baselines):
+    for i, phases in enumerate(baselines):
         phase_weights = {
-            phase_names[0]: dict(zip(domain_names, phase0, strict=True)),
-            phase_names[1]: dict(zip(domain_names, phase1, strict=True)),
+            pname: dict(zip(domain_names, pweights, strict=True))
+            for pname, pweights in zip(phase_names, phases, strict=True)
         }
         configs.append(WeightConfig(run_id=BASELINE_RUN_ID_START + i, phase_weights=phase_weights))
 
@@ -330,17 +271,7 @@ def create_baseline_weight_configs(
 
 
 def _load_original_weight_configs(name_prefix: str) -> list[WeightConfig]:
-    """Load weight configs saved by the original training swarm from GCS.
-
-    This avoids re-sampling, which would produce different configs if sampling
-    parameters have changed since the training run.
-
-    Args:
-        name_prefix: Experiment name prefix (e.g. "pinlin_calvin_xu/data_mixture/two_phase_starcoder_4").
-
-    Returns:
-        List of WeightConfig objects from the original training run.
-    """
+    """Load weight configs saved by the original training swarm from GCS."""
     prefix = os.environ.get("MARIN_PREFIX", "gs://marin-us-central1")
     pattern = f"{name_prefix}/weight_configs-*/weight_configs.json"
 
@@ -366,46 +297,36 @@ def _load_original_weight_configs(name_prefix: str) -> list[WeightConfig]:
 
 def run_baselines(
     name_prefix: str = NAME,
-    baselines: list[tuple[list[float], list[float]]] | None = None,
+    baselines: list[tuple[list[float], list[float], list[float]]] | None = None,
 ):
-    """Run predefined baseline trial runs.
-
-    Args:
-        name_prefix: Prefix for run names.
-        baselines: List of baseline configurations. If None, uses BASELINES.
-    """
+    """Run predefined baseline trial runs."""
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment.")
         return
 
     baselines = baselines or BASELINES
-    experiment = create_two_phase_experiment(name=name_prefix)
+    experiment = create_three_phase_experiment(name=name_prefix)
 
-    # Set environment variable for tokenizer GCS caching (used by defaults.py)
     os.environ["MARIN_TOKENIZER_CACHE_PATH"] = TOKENIZER_CACHE_BASE
 
-    # Create step to pre-cache tokenizer to GCS (runs once before training)
     cache_tokenizer_step = create_cache_tokenizer_step(
         tokenizer_name=TOKENIZER_NAME,
         gcs_path=os.path.join(TOKENIZER_CACHE_BASE, TOKENIZER_NAME.replace("/", "--")),
         name_prefix=name_prefix,
     )
 
-    # Create step to pre-cache eval datasets to GCS (runs once before training)
     cache_eval_datasets_step = create_cache_eval_datasets_step(
         eval_tasks=EVAL_TASKS,
         gcs_path=EVAL_DATASETS_CACHE_PATH,
         name_prefix=name_prefix,
     )
 
-    # Create weight configs from baselines
     weight_configs = create_baseline_weight_configs(baselines)
 
     logger.info(f"Running {len(weight_configs)} baseline configurations:")
     for config in weight_configs:
         logger.info(f"  baseline_run_{config.run_id}: {config.phase_weights}")
 
-    # Create training steps with baseline_run naming
     training_steps = []
     for config in weight_configs:
         step = experiment.create_training_step(
@@ -428,43 +349,26 @@ def main(
     analyze: bool = False,
     baseline_runs: bool = False,
 ):
-    """Main entry point for running the swarm experiment.
-
-    Args:
-        n_runs: Number of training runs.
-        seed: Random seed for weight sampling.
-        name_prefix: Prefix for run names.
-        analyze: If True, only run analysis step (collect results from W&B).
-        baseline_runs: If True, run predefined baseline trial runs instead of random sampling.
-
-    Note:
-        Additional executor options like --max_concurrent and --force_run_failed
-        are handled by executor_main via draccus CLI parsing.
-    """
+    """Main entry point for running the swarm experiment."""
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment.")
         return
 
-    # Handle trial runs mode
     if baseline_runs:
         run_baselines(name_prefix=name_prefix)
         return
 
-    experiment = create_two_phase_experiment(name=name_prefix)
+    experiment = create_three_phase_experiment(name=name_prefix)
 
-    # Set environment variable for tokenizer GCS caching (used by defaults.py)
     os.environ["MARIN_TOKENIZER_CACHE_PATH"] = TOKENIZER_CACHE_BASE
-
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
-    # Create step to pre-cache tokenizer to GCS (runs once before training)
     cache_tokenizer_step = create_cache_tokenizer_step(
         tokenizer_name=TOKENIZER_NAME,
         gcs_path=os.path.join(TOKENIZER_CACHE_BASE, TOKENIZER_NAME.replace("/", "--")),
         name_prefix=name_prefix,
     )
 
-    # Create step to pre-cache eval datasets to GCS (runs once before training)
     cache_eval_datasets_step = create_cache_eval_datasets_step(
         eval_tasks=EVAL_TASKS,
         gcs_path=EVAL_DATASETS_CACHE_PATH,
@@ -483,13 +387,10 @@ def main(
     )
 
     if analyze:
-        # Load original weight configs from GCS (preserves the exact configs
-        # that were used for training, even if sampling params have changed).
         logger.info("Running analysis only (collecting results from W&B)")
         original_configs = _load_original_weight_configs(name_prefix)
         existing_ids = {c.run_id for c in original_configs}
 
-        # Append any baselines not already present in the original configs.
         baseline_weight_configs = create_baseline_weight_configs(BASELINES)
         new_baselines = [c for c in baseline_weight_configs if c.run_id not in existing_ids]
         all_configs = original_configs + new_baselines
@@ -507,7 +408,7 @@ def main(
         )
         analysis_step_for_analysis = create_analysis_step(
             weight_configs_step=weight_configs_step_for_analysis,
-            name_prefix=name_prefix,  # Keep original name for W&B tag matching
+            name_prefix=name_prefix,
             metrics=ANALYSIS_METRICS,
         )
         all_steps = [weight_configs_step_for_analysis, analysis_step_for_analysis]
@@ -517,10 +418,10 @@ def main(
         )
         return
 
-    # Log experiment details
     tokens_per_step = BATCH_SIZE * SEQ_LEN
     total_steps = EXPERIMENT_BUDGET // tokens_per_step
     phase1_end = int(total_steps * PHASE_BOUNDARIES[0])
+    phase2_end = int(total_steps * PHASE_BOUNDARIES[1])
 
     logger.info(
         f"Created {len(training_steps)} training steps + 1 tokenizer cache step + "
@@ -528,13 +429,10 @@ def main(
     )
     logger.info(f"Total tokens per run: {EXPERIMENT_BUDGET:,}")
     logger.info(f"Total steps per run: {total_steps:,}")
-    logger.info(f"Phase boundary: step {phase1_end} (50%)")
+    logger.info(f"Phase boundaries: step {phase1_end} (33%), step {phase2_end} (67%)")
     logger.info(f"Target budget (simulated epoching): {TARGET_BUDGET:,}")
-    logger.info("Max epoching on smallest dataset: 32x")
+    logger.info("Max epoching on smallest dataset (StarCoder): ~26x")
 
-    # Run all steps through executor_main, which handles --max_concurrent and
-    # --force_run_failed via draccus CLI parsing
-    # Cache steps run first to pre-cache tokenizer and datasets before training
     all_steps = [
         cache_tokenizer_step,
         cache_eval_datasets_step,
@@ -544,7 +442,7 @@ def main(
     ]
     executor_main(
         steps=all_steps,
-        description=f"Two-phase starcoder experiment: {n_runs} runs",
+        description=f"Three-phase starcoder experiment: {n_runs} runs",
     )
 
 
@@ -552,28 +450,17 @@ def run_analysis_local(
     name_prefix: str = NAME,
     output_dir: str | None = None,
 ):
-    """Collect results from W&B locally (no executor/GCS needed for output).
-
-    Loads original weight configs from GCS, merges with current BASELINES,
-    queries W&B, and writes results CSV to a local directory.
-
-    Args:
-        name_prefix: Experiment name prefix (used as W&B tag).
-        output_dir: Directory to write results CSV. Defaults to
-            experiments/domain_phase_mix/exploratory/.
-    """
+    """Collect results from W&B locally (no executor/GCS needed for output)."""
     from experiments.domain_phase_mix.analysis import (
         build_results_dataframe,
         match_runs_to_configs,
         query_wandb_runs,
     )
 
-    # 1. Load original weight configs from GCS
     print(f"Loading original weight configs for {name_prefix}...")
     original_configs = _load_original_weight_configs(name_prefix)
     existing_ids = {c.run_id for c in original_configs}
 
-    # 2. Merge with current baselines
     baseline_weight_configs = create_baseline_weight_configs(BASELINES)
     new_baselines = [c for c in baseline_weight_configs if c.run_id not in existing_ids]
     all_configs = original_configs + new_baselines
@@ -583,12 +470,10 @@ def run_analysis_local(
         f"{len(new_baselines)} baselines = {len(all_configs)} total"
     )
 
-    # 3. Build the configs dict (same format as weight_configs.json)
     domains = DOMAIN_NAMES
-    phases = ["phase_0", "phase_1"]
+    phases = PHASE_NAMES
     configs_dicts = [c.to_dict() for c in all_configs]
 
-    # 4. Query W&B
     tags = [name_prefix]
     print(f"Querying W&B for runs with tags: {tags}...")
     runs = query_wandb_runs(
@@ -599,25 +484,21 @@ def run_analysis_local(
     )
     print(f"  Found {len(runs)} W&B runs")
 
-    # 5. Match runs to configs
     matched = match_runs_to_configs(runs, configs_dicts, experiment_name=name_prefix)
     n_matched = sum(1 for m in matched if m.get("wandb_run_id"))
     n_completed = sum(1 for m in matched if m.get("status") == "completed")
     print(f"  Matched {n_matched} runs ({n_completed} completed)")
 
-    # 6. Build DataFrame and write CSV
     df = build_results_dataframe(matched, domains, phases)
 
     if output_dir is None:
         output_dir = os.path.join(os.path.dirname(__file__), "exploratory")
 
-    # Name CSV after the experiment (last path component)
     csv_name = name_prefix.rsplit("/", 1)[-1] + ".csv"
     csv_path = os.path.join(output_dir, csv_name)
     df.to_csv(csv_path, index=False)
     print(f"  Wrote {len(df)} rows to {csv_path}")
 
-    # Show summary of missing runs
     missing = df[df["status"] != "completed"]
     if len(missing) > 0:
         print(f"\n  {len(missing)} runs not completed:")
@@ -630,7 +511,7 @@ def run_analysis_local(
 def _parse_args():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Two-phase starcoder experiment for RegMix sanity check.")
+    parser = argparse.ArgumentParser(description="Three-phase starcoder experiment (N=3, M=2).")
     parser.add_argument(
         "--n_runs",
         type=int,

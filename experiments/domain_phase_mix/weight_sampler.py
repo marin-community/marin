@@ -51,8 +51,11 @@ class DirichletSamplingParams:
 
     Attributes:
         temp: Temperature for the prior distribution (0.5 smooths skewed distributions).
-        min_strength: Minimum Dirichlet concentration parameter.
-        max_strength: Maximum Dirichlet concentration parameter.
+        min_strength: Minimum per-domain Dirichlet concentration. Values < 1 produce
+            sparse samples (few active domains); values > 1 produce dense samples.
+            The total concentration is strength * n_domains, so the same range works
+            across different numbers of domains.
+        max_strength: Maximum per-domain Dirichlet concentration.
         min_weight: Minimum weight threshold for statistical significance.
         max_ratio: Maximum ratio vs natural proportion to prevent extreme weights.
         strategy: Sampling strategy to use.
@@ -221,8 +224,11 @@ class WeightSampler:
         base_probs = np.array([self.natural_proportions[d] ** self.params.temp for d in self.domain_names])
         base_probs = base_probs / base_probs.sum()
 
-        # Calculate Dirichlet alphas
-        alphas = strength * base_probs
+        # Calculate Dirichlet alphas.
+        # Scale by n_domains so that `strength` represents the per-domain
+        # concentration regardless of M. Without this, the same strength range
+        # produces wildly different sparsity for M=2 vs M=18.
+        alphas = strength * self.n_domains * base_probs
 
         # Rejection sampling loop
         max_attempts = 1000
