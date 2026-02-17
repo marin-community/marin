@@ -54,6 +54,8 @@ class TrainLmConfig:
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
     z_loss_weight: float = 0.0
+    cross_entropy_block_size: int | None = None
+    """When set, use blockwise fused cross-entropy with this vocabulary block size."""
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -111,7 +113,12 @@ def main(config: TrainLmConfig):
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+        return model.compute_next_token_loss(
+            example,
+            key=key,
+            logsumexp_weight=config.z_loss_weight,
+            cross_entropy_block_size=config.cross_entropy_block_size,
+        )
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh

@@ -37,6 +37,7 @@ class SimpleTrainConfig:
     min_lr_ratio: float | None = None
     cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None
+    cross_entropy_block_size: int | None = None
     ema_beta: float | None = None
     """exponential moving average beta"""
     skip_bad_steps: bool = False
