@@ -63,7 +63,7 @@ N_REPEAT_BENCHMARK_PATHS = {
     "CodeElo": "eval/chat_benchmarks/CodeElo/eval_instruct.py",
     "GPQADiamond": "eval/chat_benchmarks/GPQADiamond/eval_instruct.py",
     "JEEBench": "eval/chat_benchmarks/JEEBench/eval_instruct.py",
-    "HumanitysLastExam": "eval/chat_benchmarks/HLE/eval_instruct.py",
+    "HLE": "eval/chat_benchmarks/HLE/eval_instruct.py",
 }
 
 
@@ -343,6 +343,7 @@ class EvalchemyEvaluator(Evaluator):
         self._patch_vllm_version()
         self._patch_vllm_seed_for_tpu()
         self._patch_vllm_stat_logging()
+        self._patch_matharena_check_answers()
 
     def _patch_benchmark_n_repeat(self, task_name: str, n_repeat: int) -> None:
         """
@@ -611,34 +612,225 @@ _enable_vllm_stat_logging()
                 f"Evalchemy commit {EVALCHEMY_COMMIT} may have changed - update the patch marker."
             )
 
+    def _patch_matharena_check_answers(self) -> None:
+        """Patch matharena's check_answers to handle sympy .equals() returning None.
+
+        sympy's Expr.equals() can return None when it cannot determine equality,
+        but check_answers passes this through directly, causing TypeError when
+        the caller does `solved += is_correct` (int + NoneType).
+        """
+        path = os.path.join(self.EVALCHEMY_PATH, "eval", "chat_benchmarks", "HMMT", "matharena", "parser.py")
+        if not os.path.exists(path):
+            return
+
+        content = self._read_file(path)
+        if "# Patch: handle sympy .equals() returning None" in content:
+            return  # Already patched
+
+        old = "        return ans1.equals(ans2)"
+        new = (
+            "        # Patch: handle sympy .equals() returning None\n"
+            "        result = ans1.equals(ans2)\n"
+            "        return bool(result) if result is not None else False"
+        )
+
+        if old in content:
+            self._write_file(path, content.replace(old, new, 1))
+            logger.info("Patched matharena check_answers to handle sympy .equals() returning None")
+        else:
+            logger.warning(
+                "Could not find expected 'return ans1.equals(ans2)' in matharena parser.py. "
+                f"Evalchemy commit {EVALCHEMY_COMMIT} may have changed."
+            )
+
+    def _patch_model_streamer_config(self, local_config_dir: str) -> None:
+        """Patch eval.py to copy config files into vLLM's model_streamer cache.
+
+        When vLLM uses load_format=runai_streamer, ObjectStorageModel.__init__
+        creates an empty local cache directory. ModelConfig validation then checks
+        for config.json in that directory BEFORE pull_files() downloads weights.
+        This patch wraps ObjectStorageModel.__init__ to copy config files from our
+        config cache into self.dir immediately after init, so they're present when
+        ModelConfig validation runs.
+        """
+        path = os.path.join(self.EVALCHEMY_PATH, "eval", "eval.py")
+        if not os.path.exists(path):
+            return
+
+        content = self._read_file(path)
+        if "# Patch model_streamer config" in content:
+            return  # Already patched
+
+        patch = f'''
+# Patch model_streamer config - copy config files into vLLM's streamer cache dir
+# after __init__ creates it, so ModelConfig validation finds config.json
+def _patch_model_streamer_config():
+    import os, shutil, logging
+    try:
+        from vllm.transformers_utils.runai_utils import ObjectStorageModel
+        _orig_init = ObjectStorageModel.__init__
+        _config_src = "{local_config_dir}"
+
+        def _patched_init(self, *args, **kwargs):
+            _orig_init(self, *args, **kwargs)
+            cache_dir = getattr(self, 'dir', None)
+            if cache_dir and os.path.isdir(_config_src) and os.path.isdir(cache_dir):
+                for fname in os.listdir(_config_src):
+                    src = os.path.join(_config_src, fname)
+                    dst = os.path.join(cache_dir, fname)
+                    if os.path.isfile(src) and not os.path.exists(dst):
+                        shutil.copy2(src, dst)
+                logging.getLogger("evalchemy").info(
+                    f"Copied config files from {{_config_src}} to model_streamer cache {{cache_dir}}"
+                )
+
+        ObjectStorageModel.__init__ = _patched_init
+        logging.getLogger("evalchemy").info("Patched ObjectStorageModel.__init__ to copy config files into cache")
+    except ImportError:
+        logging.getLogger("evalchemy").debug("ObjectStorageModel not available, skipping config patch")
+    except Exception as e:
+        logging.getLogger("evalchemy").warning(f"Could not patch model_streamer config: {{e}}")
+
+_patch_model_streamer_config()
+'''
+        marker = "_patch_autoconfig_for_gcs()\n"
+        if marker in content:
+            self._write_file(path, content.replace(marker, marker + patch, 1))
+            logger.info("Patched eval.py to copy config files into model_streamer cache")
+        else:
+            logger.warning(
+                "Could not find _patch_autoconfig_for_gcs() marker in eval.py for model_streamer patch. "
+                "GCS config patch may not have been applied yet."
+            )
+
     def _download_config_files_from_gcs(self, gcs_path: str) -> str:
         """
         Download config/tokenizer files from GCS for lm-eval's AutoConfig.
 
         vLLM streams model weights directly from GCS, but transformers AutoConfig
         doesn't support GCS paths. We download only the config files locally.
-        """
-        try:
-            import fsspec
-        except ImportError as e:
-            raise ImportError("fsspec is required for GCS model paths. " "Install with: pip install fsspec gcsfs") from e
 
+        Uses google.cloud.storage Python SDK as primary method (authenticated via
+        GCE service account), with GCS REST API + metadata service token as fallback.
+        Both work inside Docker containers on GCP VMs without needing gcloud CLI.
+        """
         path_hash = hashlib.md5(gcs_path.encode()).hexdigest()[:8]
         local_dir = os.path.join(self.CONFIG_CACHE_PATH, f"config_{path_hash}")
         os.makedirs(local_dir, exist_ok=True)
 
-        fs = fsspec.filesystem("gcs")
         gcs_path_clean = gcs_path.rstrip("/")
 
-        for filename in self.CONFIG_FILES:
-            remote = f"{gcs_path_clean}/{filename}"
-            local = os.path.join(local_dir, filename)
+        # Parse bucket and prefix from gs:// path
+        path_without_scheme = gcs_path_clean.replace("gs://", "")
+        parts = path_without_scheme.split("/", 1)
+        bucket_name = parts[0]
+        prefix = parts[1] if len(parts) > 1 else ""
+
+        downloaded_any = False
+
+        # Method 1: google.cloud.storage Python SDK (uses GCE service account)
+        try:
+            from google.cloud import storage as gcs_storage
+
+            client = gcs_storage.Client()
+            bucket = client.bucket(bucket_name)
+            for filename in self.CONFIG_FILES:
+                local = os.path.join(local_dir, filename)
+                if os.path.exists(local):
+                    logger.info(f"Config file {filename} already cached at {local}")
+                    downloaded_any = True
+                    continue
+                blob_path = f"{prefix}/{filename}" if prefix else filename
+                blob = bucket.blob(blob_path)
+                try:
+                    blob.download_to_filename(local)
+                    if os.path.exists(local):
+                        logger.info(f"Downloaded {filename} from GCS (storage SDK) to {local}")
+                        downloaded_any = True
+                except Exception as e:
+                    logger.debug(f"Could not download {filename} via storage SDK: {e}")
+                    # Clean up partial file
+                    if os.path.exists(local):
+                        os.remove(local)
+        except ImportError:
+            logger.info("google.cloud.storage not available, trying REST API fallback")
+        except Exception as e:
+            logger.info(f"google.cloud.storage failed: {e}, trying REST API fallback")
+
+        # Method 2: GCS REST API with GCE metadata service token (stdlib only)
+        if not downloaded_any:
+            logger.info("Trying GCS REST API with metadata service token...")
             try:
-                if fs.exists(remote):
-                    fs.get(remote, local)
-                    logger.info(f"Downloaded {filename} from GCS to {local}")
+                import urllib.request
+
+                # Get access token from GCE metadata service
+                token_req = urllib.request.Request(
+                    "http://metadata.google.internal/computeMetadata/v1/"
+                    "instance/service-accounts/default/token",
+                    headers={"Metadata-Flavor": "Google"},
+                )
+                token_resp = urllib.request.urlopen(token_req, timeout=5)
+                token_data = json.loads(token_resp.read().decode())
+                access_token = token_data["access_token"]
+
+                for filename in self.CONFIG_FILES:
+                    local = os.path.join(local_dir, filename)
+                    if os.path.exists(local):
+                        logger.info(f"Config file {filename} already cached at {local}")
+                        downloaded_any = True
+                        continue
+                    blob_path = f"{prefix}/{filename}" if prefix else filename
+                    url = f"https://storage.googleapis.com/{bucket_name}/{blob_path}"
+                    req = urllib.request.Request(
+                        url, headers={"Authorization": f"Bearer {access_token}"}
+                    )
+                    try:
+                        resp = urllib.request.urlopen(req, timeout=30)
+                        with open(local, "wb") as f:
+                            f.write(resp.read())
+                        logger.info(f"Downloaded {filename} from GCS (REST API) to {local}")
+                        downloaded_any = True
+                    except urllib.error.HTTPError as e:
+                        if e.code == 404:
+                            logger.debug(f"File {filename} not found in GCS (404)")
+                        else:
+                            logger.debug(f"Could not download {filename} via REST API: {e}")
+                    except Exception as e:
+                        logger.debug(f"Could not download {filename} via REST API: {e}")
             except Exception as e:
-                logger.debug(f"Could not download {filename}: {e}")
+                logger.info(f"GCS REST API fallback failed: {e}")
+
+        # Method 3: subprocess gcloud/gsutil (may work on host VMs)
+        if not downloaded_any:
+            logger.info("Trying subprocess gcloud/gsutil...")
+            for filename in self.CONFIG_FILES:
+                remote = f"{gcs_path_clean}/{filename}"
+                local = os.path.join(local_dir, filename)
+                if os.path.exists(local):
+                    downloaded_any = True
+                    continue
+                for cmd in [["gcloud", "storage", "cp"], ["gsutil", "cp"]]:
+                    try:
+                        result = subprocess.run(
+                            cmd + [remote, local],
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                        )
+                        if result.returncode == 0 and os.path.exists(local):
+                            logger.info(f"Downloaded {filename} from GCS ({cmd[0]}) to {local}")
+                            downloaded_any = True
+                            break
+                    except (FileNotFoundError, Exception) as e:
+                        logger.debug(f"{cmd[0]} failed for {filename}: {e}")
+
+        # Verify config.json was downloaded
+        config_json = os.path.join(local_dir, "config.json")
+        if not os.path.isfile(config_json):
+            raise RuntimeError(
+                f"Failed to download config.json from {gcs_path_clean}/config.json "
+                f"to {config_json}. The model config is required for evaluation."
+            )
 
         return local_dir
 
@@ -941,6 +1133,12 @@ _patch_autoconfig_for_gcs()
                 if max_gen_toks:
                     # Set at model level so lm-eval's default (256) is overridden
                     model_args_parts.append(f"max_gen_toks={max_gen_toks}")
+
+                # For GCS models, point vLLM's ModelConfig to our local config cache
+                # so it can find config.json during validation (runai_streamer only
+                # downloads weight files, not config files)
+                if local_config_dir:
+                    model_args_parts.append(f"hf_config_path={local_config_dir}")
 
                 # Add remaining engine_kwargs (e.g., tensor_parallel_size=4 for multi-chip TPU)
                 for key, value in engine_kwargs.items():

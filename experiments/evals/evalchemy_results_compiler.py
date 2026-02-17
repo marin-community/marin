@@ -33,6 +33,35 @@ def _extract_base_model_and_seed(model_name: str) -> tuple[str, int | None]:
     return model_name, None
 
 
+def _extract_correctness(example: dict) -> float:
+    """Extract correctness from an evalchemy example, handling different result schemas.
+
+    Evalchemy benchmarks use different schemas for storing per-example results:
+    - Code tasks (CodeForces, LiveCodeBench, CodeElo): boolean "correctness" field
+    - JEEBench: per-repetition "score" list (can be fractional for partial credit)
+    - Math tasks (AIME24/25, AMC23, HMMT, etc.): "expected_answer"/"answer" + "model_answers"
+      string matching
+    - HLE, GPQA Diamond: "expected_answer" + "model_answers" string matching
+    """
+    # 1. Boolean correctness field (code tasks: CodeForces, LiveCodeBench, CodeElo)
+    if "correctness" in example:
+        return 1 if example["correctness"] else 0
+
+    # 2. Score field (JEEBench) — list of per-repetition scores, possibly fractional
+    if "score" in example:
+        score = example["score"]
+        if isinstance(score, list):
+            return sum(score) / len(score) if score else 0
+        return float(score)
+
+    # 3. String matching for answer fields (math tasks, HLE, GPQA Diamond)
+    # Some tasks (e.g. AIME24) use "expected_answer", some (e.g. AIME25/AMC23) use "answer"
+    expected = str(example.get("answer", example.get("expected_answer", ""))).strip()
+    model_answers = example.get("model_answers", [])
+    model_answer = str(model_answers[0]).strip() if model_answers else ""
+    return 1 if (model_answer == expected and expected) else 0
+
+
 def _load_results_from_input_paths(
     input_paths: list[str],
     fs: fsspec.AbstractFileSystem,
@@ -102,12 +131,7 @@ def _load_results_from_input_paths(
 
             for _task_name, task_data in data.get("results", {}).items():
                 for example in task_data.get("examples", []):
-                    # Some tasks (e.g. AIME24) use "expected_answer",
-                    # some (e.g. AIME25/AMC23) use "answer"
-                    expected = str(example.get("answer", example.get("expected_answer", ""))).strip()
-                    model_answers = example.get("model_answers", [])
-                    model_answer = str(model_answers[0]).strip() if model_answers else ""
-                    correct = 1 if (model_answer == expected and expected) else 0
+                    correct = _extract_correctness(example)
 
                     record = {
                         "id": example.get("id"),

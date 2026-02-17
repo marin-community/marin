@@ -76,7 +76,7 @@ JEEBENCH = EvalTaskConfig(name="JEEBench", num_fewshot=0, task_alias="JEEBench",
 # =============================================================================
 ALICE_IN_WONDERLAND = EvalTaskConfig(name="AIW", num_fewshot=0, task_alias="AIW")
 HUMANITYS_LAST_EXAM = EvalTaskConfig(
-    name="HumanitysLastExam", num_fewshot=0, task_alias="HumanitysLastExam", task_kwargs={"n_repeat": 1}
+    name="HLE", num_fewshot=0, task_alias="HumanitysLastExam", task_kwargs={"n_repeat": 1}
 )
 
 # =============================================================================

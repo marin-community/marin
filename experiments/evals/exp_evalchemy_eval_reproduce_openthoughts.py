@@ -38,6 +38,9 @@ CHECKPOINTS: dict[str | None, list[str]] = {
     None: [
         "open-thoughts/OpenThinker3-7B",
     ],
+    # None: [
+    #     "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    # ],
 }
 
 # Whether to auto-discover the latest checkpoint in a training run directory.
