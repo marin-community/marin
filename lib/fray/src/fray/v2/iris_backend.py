@@ -423,7 +423,7 @@ class FrayIrisClient:
         instance._iris = iris_client
         return instance
 
-    def submit(self, request: JobRequest) -> IrisJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = False) -> IrisJobHandle:
         from iris.cluster.types import CoschedulingConfig
 
         iris_resources = convert_resources(request.resources)
@@ -450,6 +450,9 @@ class FrayIrisClient:
                 replicas=replicas,
             )
         except IrisJobAlreadyExists as e:
+            if adopt_existing:
+                logger.info("Job %s already exists, adopting existing job", request.name)
+                return IrisJobHandle(e.job)
             raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
         return IrisJobHandle(job)
 

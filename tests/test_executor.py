@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from draccus.utils import Dataclass
-from fray.v2.client import JobAlreadyExists, JobStatus
+from fray.v2.client import JobStatus
 from fray.v2.types import Entrypoint, JobRequest
 from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.executor import (
@@ -619,7 +619,7 @@ def test_parent_will_run_if_some_child_is_not_skippable():
 
 
 def test_step_runner_adopts_on_job_already_exists(tmp_path):
-    """StepRunner.launch() should adopt an existing job instead of crashing."""
+    """StepRunner.launch() should pass adopt_existing=True to client.submit()."""
 
     class FakeHandle:
         @property
@@ -638,7 +638,7 @@ def test_step_runner_adopts_on_job_already_exists(tmp_path):
     fake_handle = FakeHandle()
 
     client = MagicMock()
-    client.submit.side_effect = JobAlreadyExists("my-job", handle=fake_handle)
+    client.submit.return_value = fake_handle
 
     status_file = StatusFile(str(tmp_path), worker_id="test-worker")
     runner = StepRunner(client, status_file)
@@ -649,25 +649,10 @@ def test_step_runner_adopts_on_job_already_exists(tmp_path):
     )
     runner.launch(job_request)
 
+    # Verify that submit was called with adopt_existing=True
+    client.submit.assert_called_once_with(job_request, adopt_existing=True)
     assert runner._job is fake_handle
     assert status_file.status == STATUS_RUNNING
-    runner._stop_heartbeat()
-
-
-def test_step_runner_raises_job_already_exists_without_handle(tmp_path):
-    """StepRunner.launch() should re-raise JobAlreadyExists when handle is None."""
-    client = MagicMock()
-    client.submit.side_effect = JobAlreadyExists("orphan-job", handle=None)
-
-    status_file = StatusFile(str(tmp_path), worker_id="test-worker")
-    runner = StepRunner(client, status_file)
-
-    job_request = JobRequest(
-        name="orphan-job",
-        entrypoint=Entrypoint.from_callable(lambda: None),
-    )
-    with pytest.raises(JobAlreadyExists):
-        runner.launch(job_request)
     runner._stop_heartbeat()
 
 
