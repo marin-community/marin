@@ -24,7 +24,6 @@ from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.task_logging import LogSink
-from iris.cluster.worker.worker_types import TaskLogs
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
@@ -262,9 +261,6 @@ class TaskAttempt:
         self.cleanup_done: bool = False
         self.should_stop: bool = False
 
-        # Structured logs (build logs stored here, container logs fetched from Docker)
-        self.logs: TaskLogs = TaskLogs()
-
         self.result: bytes | None = None  # cloudpickle serialized return value from container
 
     @property
@@ -273,6 +269,11 @@ class TaskAttempt:
         if self._container_handle:
             return self._container_handle.container_id
         return None
+
+    @property
+    def log_directory(self) -> str:
+        """Return the storage directory for this task's logs."""
+        return self._log_sink.log_path
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
@@ -380,7 +381,14 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_KILLED)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            self.logs.add("error", f"Task failed:\n{error_msg}")
+            self._log_sink.append(
+                logging_pb2.LogEntry(
+                    timestamp=Timestamp.now().to_proto(),
+                    source="error",
+                    data=f"Task failed:\n{error_msg}",
+                    attempt_id=self.attempt_id,
+                )
+            )
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             if is_task_finished(self.status):
@@ -520,10 +528,17 @@ class TaskAttempt:
 
         build_logs = self._container_handle.build()
 
-        # Capture build logs into task.logs
+        # Capture build logs into log sink
         for log_line in build_logs:
             ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
-            self.logs.add(log_line.source, log_line.data, timestamp=ts)
+            self._log_sink.append(
+                logging_pb2.LogEntry(
+                    timestamp=ts.to_proto(),
+                    source=log_line.source,
+                    data=log_line.data,
+                    attempt_id=self.attempt_id,
+                )
+            )
 
         self.build_finished = Timestamp.now()
         if self.request.entrypoint.setup_commands:
@@ -615,7 +630,14 @@ class TaskAttempt:
                         try:
                             self.result = result_path.read_bytes()
                         except Exception as e:
-                            self.logs.add("error", f"Failed to read result file: {e}")
+                            self._log_sink.append(
+                                logging_pb2.LogEntry(
+                                    timestamp=Timestamp.now().to_proto(),
+                                    source="error",
+                                    data=f"Failed to read result file: {e}",
+                                    attempt_id=self.attempt_id,
+                                )
+                            )
 
                 # Container has stopped
                 if status.error:
@@ -636,7 +658,14 @@ class TaskAttempt:
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
-                        self.logs.add("error", "Container was OOM killed by the kernel")
+                        self._log_sink.append(
+                            logging_pb2.LogEntry(
+                                timestamp=Timestamp.now().to_proto(),
+                                source="error",
+                                data="Container was OOM killed by the kernel",
+                                attempt_id=self.attempt_id,
+                            )
+                        )
                     self.transition_to(
                         cluster_pb2.TASK_STATE_FAILED,
                         error=error,
@@ -673,7 +702,7 @@ class TaskAttempt:
             time.sleep(self._poll_interval_seconds)
 
     def _stream_logs(self, since: Timestamp | None) -> Timestamp | None:
-        """Fetch new logs from container and append to task.logs.
+        """Fetch new logs from container and append to log sink.
 
         Args:
             since: Timestamp to fetch logs after (None for all logs)
@@ -689,9 +718,6 @@ class TaskAttempt:
             new_logs = self._container_handle.logs(since=since)
             for log_line in new_logs:
                 ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
-                self.logs.add(log_line.source, log_line.data, timestamp=ts)
-
-                # Also append to log sink
                 log_entry = logging_pb2.LogEntry(
                     timestamp=ts.to_proto(),
                     source=log_line.source,

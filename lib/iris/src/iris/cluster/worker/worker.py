@@ -283,7 +283,7 @@ class Worker:
             # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
             logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
 
-    def _create_log_syncer(self, task_id_wire: str, attempt_id: int) -> LogSink:
+    def create_log_sink(self, task_id_wire: str, attempt_id: int) -> LogSink:
         """Create log sink for task logs.
 
         Uses FsspecLogSink if IRIS_WORKER_PREFIX is configured, otherwise LocalLogSink.
@@ -415,7 +415,7 @@ class Worker:
         )
 
         # Create log sink for task logs
-        log_sink = self._create_log_syncer(task_id.to_wire(), attempt_id)
+        log_sink = self.create_log_sink(task_id.to_wire(), attempt_id)
 
         attempt = TaskAttempt(
             config=config,
@@ -552,6 +552,7 @@ class Worker:
                             error=task_proto.error,
                             finished_at=task_proto.finished_at,
                             attempt_id=task_proto.current_attempt_id,
+                            log_directory=task.log_directory,
                         )
                     )
                 else:
@@ -561,6 +562,7 @@ class Worker:
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
                             state=task.status,
+                            log_directory=task.log_directory,
                         )
                     )
 

@@ -42,6 +42,17 @@ class LogSink(Protocol):
         """Write task metadata on completion."""
         ...
 
+    def query_recent(self, max_entries: int = 1000) -> list[logging_pb2.LogEntry]:
+        """Query recent log entries from the sink.
+
+        Args:
+            max_entries: Maximum number of entries to return
+
+        Returns:
+            List of recent log entries (most recent last)
+        """
+        ...
+
     @property
     def log_path(self) -> str:
         """Get storage path for this task attempt's logs."""
@@ -167,6 +178,20 @@ class FsspecLogSink:
         except Exception as e:
             logger.error(f"Failed to write metadata to {path}: {e}")
 
+    def query_recent(self, max_entries: int = 1000) -> list[logging_pb2.LogEntry]:
+        """Query recent log entries from buffered logs.
+
+        Args:
+            max_entries: Maximum number of entries to return
+
+        Returns:
+            List of recent log entries (most recent last)
+        """
+        with self._lock:
+            if max_entries <= 0:
+                return list(self._logs)
+            return list(self._logs[-max_entries:])
+
     @property
     def log_path(self) -> str:
         """Get path for this task attempt's logs (without scheme)."""
@@ -240,6 +265,21 @@ class LocalLogSink:
         """Store metadata in memory."""
         with self._lock:
             self._metadata = metadata
+
+    def query_recent(self, max_entries: int = 1000) -> list[logging_pb2.LogEntry]:
+        """Query recent log entries from memory.
+
+        Args:
+            max_entries: Maximum number of entries to return
+
+        Returns:
+            List of recent log entries (most recent last)
+        """
+        with self._lock:
+            if max_entries <= 0:
+                return list(self._logs)
+            # Get last max_entries items from deque
+            return list(self._logs)[-max_entries:] if len(self._logs) > max_entries else list(self._logs)
 
     @property
     def log_path(self) -> str:

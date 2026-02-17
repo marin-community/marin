@@ -242,6 +242,7 @@ class ControllerServiceImpl:
                 error=task.error or "",
                 current_attempt_id=task.current_attempt_id,
                 attempts=attempts,
+                log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
             )
             if current_attempt and current_attempt.started_at:
                 proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
@@ -511,6 +512,7 @@ class ControllerServiceImpl:
             exit_code=task.exit_code or 0,
             error=task.error or "",
             current_attempt_id=task.current_attempt_id,
+            log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
         )
         if current_attempt and current_attempt.started_at:
             proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
@@ -581,6 +583,7 @@ class ControllerServiceImpl:
                 pending_reason=pending_reason,
                 can_be_scheduled=can_be_scheduled,
                 attempts=attempts,
+                log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
             )
             if current_attempt and current_attempt.started_at:
                 proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
@@ -850,21 +853,6 @@ class ControllerServiceImpl:
             else:
                 tasks.extend(self._state.get_job_tasks(job_name))
 
-        # Get storage prefix for log reading
-        log_prefix = task_logging.get_log_prefix()
-        if not log_prefix:
-            # No storage configured - return error
-            return cluster_pb2.Controller.GetTaskLogsResponse(
-                task_logs=[
-                    cluster_pb2.Controller.TaskLogBatch(
-                        task_id=request.id,
-                        error="Log storage not configured (IRIS_WORKER_PREFIX not set)",
-                    )
-                ],
-                last_timestamp_ms=0,
-                truncated=False,
-            )
-
         # Fetch logs from storage for each task/attempt
         task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
         total_lines = 0
@@ -902,7 +890,28 @@ class ControllerServiceImpl:
                     )
                     continue
 
+                if not attempt.log_directory:
+                    task_logs.append(
+                        cluster_pb2.Controller.TaskLogBatch(
+                            task_id=task_id_wire,
+                            worker_id=str(attempt.worker_id),
+                            error=(
+                                f"Attempt {attempt.attempt_id} has no log directory "
+                                "(worker may not have reported it yet)"
+                            ),
+                        )
+                    )
+                    continue
+
                 try:
+                    # Parse log_directory to extract prefix
+                    # Format: {prefix}/{worker_id}/{task_id}/{attempt_id}
+                    # We need to extract the prefix part
+                    log_dir_parts = attempt.log_directory.rsplit("/", 3)
+                    if len(log_dir_parts) != 4:
+                        raise ValueError(f"Invalid log_directory format: {attempt.log_directory}")
+                    log_prefix = log_dir_parts[0]
+
                     # Read logs from storage
                     log_entries = task_logging.fetch_logs_for_task(
                         task_id_wire=task_id_wire,
