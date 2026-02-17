@@ -26,6 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
     BundleCreator,
@@ -133,6 +136,14 @@ class JobFailedError(Exception):
         if status.error:
             msg += f": {status.error}"
         super().__init__(msg)
+
+
+class JobAlreadyExists(Exception):
+    """Raised when a job with the same name is already running."""
+
+    def __init__(self, job: "Job", message: str):
+        self.job = job
+        super().__init__(message)
 
 
 class Task:
@@ -684,21 +695,26 @@ class IrisClient:
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
 
-        self._cluster_client.submit_job(
-            job_id=job_id,
-            entrypoint=entrypoint,
-            resources=resources_proto,
-            environment=environment_proto,
-            ports=ports,
-            scheduling_timeout=scheduling_timeout,
-            constraints=constraints_proto,
-            coscheduling=coscheduling_proto,
-            replicas=replicas,
-            max_retries_failure=max_retries_failure,
-            max_retries_preemption=max_retries_preemption,
-            timeout=timeout,
-            fail_if_exists=fail_if_exists,
-        )
+        try:
+            self._cluster_client.submit_job(
+                job_id=job_id,
+                entrypoint=entrypoint,
+                resources=resources_proto,
+                environment=environment_proto,
+                ports=ports,
+                scheduling_timeout=scheduling_timeout,
+                constraints=constraints_proto,
+                coscheduling=coscheduling_proto,
+                replicas=replicas,
+                max_retries_failure=max_retries_failure,
+                max_retries_preemption=max_retries_preemption,
+                timeout=timeout,
+                fail_if_exists=fail_if_exists,
+            )
+        except ConnectError as e:
+            if e.code == Code.ALREADY_EXISTS:
+                raise JobAlreadyExists(Job(self, job_id), str(e)) from e
+            raise
 
         return Job(self, job_id)
 

@@ -16,6 +16,7 @@ from fray.v2 import (
     LocalClient,
     wait_all,
 )
+from fray.v2.client import JobAlreadyExists
 
 
 @pytest.fixture
@@ -128,3 +129,34 @@ def test_wait_all_timeout():
     handle.terminate()
     stop.set()
     c.shutdown(wait=True)
+
+
+def test_job_already_exists_carries_handle():
+    """JobAlreadyExists can carry a handle for the caller to adopt."""
+
+    class FakeHandle:
+        @property
+        def job_id(self) -> str:
+            return "existing-job"
+
+        def wait(self, timeout=None, *, raise_on_failure=True):
+            return JobStatus.SUCCEEDED
+
+        def status(self):
+            return JobStatus.RUNNING
+
+        def terminate(self):
+            pass
+
+    handle = FakeHandle()
+    exc = JobAlreadyExists("my-job", handle=handle)
+    assert exc.job_name == "my-job"
+    assert exc.handle is handle
+    assert "my-job" in str(exc)
+
+
+def test_job_already_exists_without_handle():
+    """JobAlreadyExists without a handle should still be raisable."""
+    exc = JobAlreadyExists("orphan-job")
+    assert exc.handle is None
+    assert exc.job_name == "orphan-job"

@@ -99,7 +99,7 @@ import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 from fray.v2 import client as fray_client
-from fray.v2.client import JobHandle, JobStatus
+from fray.v2.client import JobAlreadyExists, JobHandle, JobStatus
 from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.execution.executor_step_status import (
@@ -177,7 +177,13 @@ class StepRunner:
     def launch(self, job_request: JobRequest) -> None:
         """Launch job and start heartbeat thread."""
         self._status_file.write_status(STATUS_RUNNING)
-        self._job = self.client.submit(job_request)
+        try:
+            self._job = self.client.submit(job_request)
+        except JobAlreadyExists as e:
+            if e.handle is None:
+                raise
+            logger.warning("Job %s already running, adopting existing job", e.job_name)
+            self._job = e.handle
         self._start_heartbeat()
 
     def wait(self) -> None:

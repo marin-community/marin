@@ -73,6 +73,19 @@ class JobFailed(RuntimeError):
         super().__init__(f"Job {job_id} finished with status {status}")
 
 
+class JobAlreadyExists(RuntimeError):
+    """Raised when submitting a job whose name is already in use.
+
+    When ``handle`` is set the caller can adopt the running job instead of
+    failing.
+    """
+
+    def __init__(self, job_name: str, handle: JobHandle | None = None):
+        self.job_name = job_name
+        self.handle = handle
+        super().__init__(f"Job {job_name} already exists")
+
+
 def wait_all(
     jobs: Sequence[JobHandle],
     *,

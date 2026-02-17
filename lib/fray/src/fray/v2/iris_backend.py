@@ -21,6 +21,7 @@ from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
+from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import Constraint, EnvironmentSpec, ResourceSpec
@@ -28,6 +29,7 @@ from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
     CpuConfig,
     DeviceConfig,
@@ -437,15 +439,18 @@ class FrayIrisClient:
         if isinstance(request.resources.device, TpuConfig) and replicas > 1:
             coscheduling = CoschedulingConfig(group_by="tpu-name")
 
-        job = self._iris.submit(
-            entrypoint=iris_entrypoint,
-            name=request.name,
-            resources=iris_resources,
-            environment=iris_environment,
-            constraints=iris_constraints if iris_constraints else None,
-            coscheduling=coscheduling,
-            replicas=replicas,
-        )
+        try:
+            job = self._iris.submit(
+                entrypoint=iris_entrypoint,
+                name=request.name,
+                resources=iris_resources,
+                environment=iris_environment,
+                constraints=iris_constraints if iris_constraints else None,
+                coscheduling=coscheduling,
+                replicas=replicas,
+            )
+        except IrisJobAlreadyExists as e:
+            raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
         return IrisJobHandle(job)
 
     def create_actor(
