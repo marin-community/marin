@@ -23,12 +23,12 @@ from iris.cluster.types import DEFAULT_BASE_IMAGE, JobName, is_task_finished
 from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.task_logging import LogSyncer
+from iris.cluster.task_logging import LogSink
 from iris.cluster.worker.worker_types import TaskLogs
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_utils import Deadline, Duration, RateLimiter, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +198,8 @@ class TaskAttempt:
         controller_address: str | None,
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
+        log_sink: LogSink,
         poll_interval_seconds: float = 5.0,
-        log_syncer: LogSyncer | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -223,7 +223,7 @@ class TaskAttempt:
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
-        self._log_syncer = log_syncer
+        self._log_sink = log_sink
 
         # Task identity (from config)
         self.task_id: JobName = config.task_id
@@ -567,9 +567,8 @@ class TaskAttempt:
         # Track last log timestamp for incremental fetching
         last_log_time: Timestamp | None = None
 
-        # Track last GCS sync time for periodic syncing
-        last_gcs_sync = time.monotonic()
-        gcs_sync_interval = 30.0  # Sync every 30 seconds
+        # Rate limit GCS log syncing to every 30 seconds
+        log_sync_limiter = RateLimiter(interval_seconds=30.0)
 
         while True:
             if rule := chaos("worker.task_monitor"):
@@ -649,10 +648,9 @@ class TaskAttempt:
             last_log_time = self._stream_logs(last_log_time)
 
             # Periodically sync logs to storage
-            if self._log_syncer and time.monotonic() - last_gcs_sync >= gcs_sync_interval:
+            if log_sync_limiter.should_run():
                 try:
-                    self._log_syncer.sync()
-                    last_gcs_sync = time.monotonic()
+                    self._log_sink.sync()
                 except Exception as e:
                     logger.warning(f"Log sync failed: {e}")
 
@@ -693,15 +691,14 @@ class TaskAttempt:
                 ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
                 self.logs.add(log_line.source, log_line.data, timestamp=ts)
 
-                # Also append to log syncer if configured
-                if self._log_syncer:
-                    log_entry = logging_pb2.LogEntry(
-                        timestamp=ts.to_proto(),
-                        source=log_line.source,
-                        data=log_line.data,
-                        attempt_id=self.attempt_id,
-                    )
-                    self._log_syncer.append(log_entry)
+                # Also append to log sink
+                log_entry = logging_pb2.LogEntry(
+                    timestamp=ts.to_proto(),
+                    source=log_line.source,
+                    data=log_line.data,
+                    attempt_id=self.attempt_id,
+                )
+                self._log_sink.append(log_entry)
 
             if new_logs:
                 last_ts = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
@@ -725,10 +722,10 @@ class TaskAttempt:
         self.cleanup_done = True
 
         # Final log sync and metadata write
-        if self._log_syncer and is_task_finished(self.status):
+        if is_task_finished(self.status):
             try:
                 # Sync any remaining logs
-                self._log_syncer.sync()
+                self._log_sink.sync()
 
                 # Write metadata
                 metadata = logging_pb2.TaskAttemptMetadata(
@@ -757,7 +754,7 @@ class TaskAttempt:
                         )
                     )
 
-                self._log_syncer.write_metadata(metadata)
+                self._log_sink.write_metadata(metadata)
             except Exception as e:
                 logger.error(f"Failed to write final logs/metadata: {e}")
 

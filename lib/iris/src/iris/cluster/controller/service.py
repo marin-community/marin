@@ -31,9 +31,10 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
 )
+from iris.cluster import task_logging
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
-from iris.rpc import cluster_pb2, vm_pb2
+from iris.rpc import cluster_pb2, logging_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import task_state_name
@@ -830,8 +831,6 @@ class ControllerServiceImpl:
 
         When attempt_id is specified (>= 0), fetches logs only from that specific attempt.
         """
-        from iris.cluster.worker import task_logging
-
         job_name = JobName.from_wire(request.id)
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
@@ -923,7 +922,7 @@ class ControllerServiceImpl:
                             continue
 
                         worker_logs.append(
-                            cluster_pb2.Worker.LogEntry(
+                            logging_pb2.LogEntry(
                                 timestamp=entry.timestamp,
                                 source=entry.source,
                                 data=entry.data,

@@ -7,9 +7,9 @@ import logging
 import time
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.task_logging import fetch_logs_for_task, get_log_prefix
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
-from iris.cluster.worker.task_logging import fetch_logs_for_task, get_log_prefix
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
@@ -328,7 +328,7 @@ class RemoteClusterClient:
                 # Convert logging_pb2.LogEntry to cluster_pb2.Worker.LogEntry for compatibility
                 worker_logs = []
                 for entry in filtered_logs:
-                    worker_log = cluster_pb2.Worker.LogEntry(
+                    worker_log = logging_pb2.LogEntry(
                         timestamp=entry.timestamp,
                         source=entry.source,
                         data=entry.data,

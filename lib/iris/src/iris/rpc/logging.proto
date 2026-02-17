@@ -17,10 +17,9 @@ edition = "2023";
 package iris.logging;
 
 import "time.proto";
-import "cluster.proto";
 
 // Log entry for task execution.
-// Matches Worker.LogEntry but lives in a separate package for GCS persistence.
+// Used for both RPC responses and GCS persistence.
 message LogEntry {
   iris.time.Timestamp timestamp = 1;
   string source = 2;  // "stdout", "stderr", or "build"
@@ -46,7 +45,7 @@ message TaskAttemptMetadata {
 
   int32 exit_code = 6;
   bool oom_killed = 7;
-  iris.cluster.TaskState status = 8;
+  int32 status = 8;  // TaskState enum value from cluster.proto
   string error_message = 9;
 
   // Resource usage (if available)

@@ -19,13 +19,13 @@ from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.task_logging import LogSyncer, LogSyncerConfig, get_log_prefix
+from iris.cluster.task_logging import FsspecLogSink, LocalLogSink, LogSink, LogSyncerConfig, get_log_prefix
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -283,27 +283,34 @@ class Worker:
             # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
             logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
 
-    def _create_log_syncer(self, task_id_wire: str, attempt_id: int) -> LogSyncer | None:
-        """Create log syncer if IRIS_WORKER_PREFIX is configured.
+    def _create_log_syncer(self, task_id_wire: str, attempt_id: int) -> LogSink:
+        """Create log sink for task logs.
+
+        Uses FsspecLogSink if IRIS_WORKER_PREFIX is configured, otherwise LocalLogSink.
 
         Args:
             task_id_wire: Full task ID in wire format
             attempt_id: Attempt ID for this execution
 
         Returns:
-            LogSyncer instance or None if logging is not configured
+            LogSink instance (FsspecLogSink or LocalLogSink)
         """
-        prefix = get_log_prefix()
-        if not prefix:
-            return None
-
         config = LogSyncerConfig(
-            prefix=prefix,
+            prefix="",  # Will be set below
             worker_id=self._worker_id or "unknown",
             task_id_wire=task_id_wire,
             attempt_id=attempt_id,
         )
-        return LogSyncer(config)
+
+        prefix = get_log_prefix()
+        if prefix:
+            config.prefix = prefix
+            return FsspecLogSink(config)
+        else:
+            # Fallback to in-memory sink if no storage configured
+            logger.info(f"No IRIS_WORKER_PREFIX configured, using in-memory log sink for {task_id_wire}")
+            config.prefix = "memory://"
+            return LocalLogSink(config)
 
     # Task management methods
 
@@ -407,8 +414,8 @@ class Worker:
             cache_dir=self._cache_dir,
         )
 
-        # Create log syncer if IRIS_WORKER_PREFIX is configured
-        log_syncer = self._create_log_syncer(task_id.to_wire(), attempt_id)
+        # Create log sink for task logs
+        log_sink = self._create_log_syncer(task_id.to_wire(), attempt_id)
 
         attempt = TaskAttempt(
             config=config,
@@ -419,8 +426,8 @@ class Worker:
             controller_address=self._config.controller_address,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
+            log_sink=log_sink,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
-            log_syncer=log_syncer,
         )
 
         with self._lock:
@@ -640,7 +647,7 @@ class Worker:
         task_id: str,
         start_line: int = 0,
         attempt_id: int = -1,
-    ) -> list[cluster_pb2.Worker.LogEntry]:
+    ) -> list[logging_pb2.LogEntry]:
         """Get logs for a task.
 
         Logs are streamed into task.logs during execution (single source of truth).
@@ -666,7 +673,7 @@ class Worker:
             return logs[start_line:]
 
         # All attempts for this task
-        all_logs: list[cluster_pb2.Worker.LogEntry] = []
+        all_logs: list[logging_pb2.LogEntry] = []
         for (tid, aid), task in self._tasks.items():
             if tid != task_id:
                 continue

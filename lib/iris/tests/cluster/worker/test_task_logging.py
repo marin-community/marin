@@ -8,7 +8,7 @@ from pathlib import Path
 
 from google.protobuf import json_format
 
-from iris.cluster.worker.task_logging import (
+from iris.cluster.task_logging import (
     LogLocation,
     LogSyncer,
     LogSyncerConfig,

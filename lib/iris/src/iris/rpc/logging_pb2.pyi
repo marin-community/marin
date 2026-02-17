@@ -1,5 +1,4 @@
 from . import time_pb2 as _time_pb2
-from . import cluster_pb2 as _cluster_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -45,10 +44,10 @@ class TaskAttemptMetadata(_message.Message):
     end_time: _time_pb2.Timestamp
     exit_code: int
     oom_killed: bool
-    status: _cluster_pb2.TaskState
+    status: int
     error_message: str
     resource_usage: ResourceUsage
-    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., start_time: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., exit_code: _Optional[int] = ..., oom_killed: _Optional[bool] = ..., status: _Optional[_Union[_cluster_pb2.TaskState, str]] = ..., error_message: _Optional[str] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ...) -> None: ...
+    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., start_time: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., exit_code: _Optional[int] = ..., oom_killed: _Optional[bool] = ..., status: _Optional[int] = ..., error_message: _Optional[str] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
     __slots__ = ("peak_memory_bytes", "cpu_seconds", "gpu_memory_bytes")
