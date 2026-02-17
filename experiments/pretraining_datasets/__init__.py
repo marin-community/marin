@@ -27,6 +27,7 @@ from experiments.pretraining_datasets.dolma import (
 from experiments.pretraining_datasets.dolmino import (
     DOLMINO_DATASETS,
     DOLMINO_LLAMA3_OVERRIDES,
+    _dolmino_base,
     downloads as dolmino_downloads,
     tokenize_dolmino,
     tokenize_dolmino_math,
@@ -40,7 +41,11 @@ from experiments.pretraining_datasets.nemotron import (
     tokenize_nemotron,
     tokenize_nemotron_subset,
 )
-from experiments.pretraining_datasets.simple import downloads as simple_downloads, tokenized as simple_tokenized
+from experiments.pretraining_datasets.simple import (
+    download_base_steps as simple_download_base_steps,
+    downloads as simple_downloads,
+    tokenized as simple_tokenized,
+)
 
 # Re-export constants
 __all__ = [
@@ -70,39 +75,39 @@ DATASETS = {
     # Simple datasets (single "all" subset)
     "dclm_baseline": {
         "subsets": ["all"],
-        "download": simple_downloads["dclm_baseline"],
+        "download": simple_download_base_steps["dclm_baseline"],
         "tokenize_fn": lambda: {"dclm_baseline/all": simple_tokenized["dclm_baseline"]},
     },
     "starcoderdata": {
         "subsets": ["all"],
-        "download": simple_downloads["starcoderdata"],
+        "download": simple_download_base_steps["starcoderdata"],
         "tokenize_fn": lambda: {"starcoderdata/all": simple_tokenized["starcoderdata"]},
     },
     "proofpile_2": {
         "subsets": ["all"],
-        "download": simple_downloads["proofpile_2"],
+        "download": simple_download_base_steps["proofpile_2"],
         "tokenize_fn": lambda: {"proofpile_2/all": simple_tokenized["proofpile_2"]},
     },
     "slimpajama_6b": {
         "subsets": ["all"],
-        "download": simple_downloads["slimpajama_6b"],
+        "download": simple_download_base_steps["slimpajama_6b"],
         "tokenize_fn": lambda: {"slimpajama_6b/all": simple_tokenized["slimpajama_6b"]},
     },
     "fineweb_edu": {
         "subsets": ["all"],
-        "download": simple_downloads["fineweb_edu"],
+        "download": simple_download_base_steps["fineweb_edu"],
         "tokenize_fn": lambda: {"fineweb_edu/all": simple_tokenized["fineweb_edu"]},
     },
     # Special combined dataset
     "dolmino_math": {
         "subsets": ["all"],
-        "download": dolmino_downloads["dolmino"],
+        "download": _dolmino_base,
         "tokenize_fn": lambda: {"dolmino_math/all": tokenize_dolmino_math()},
     },
     # Multi-subset datasets
     "dolmino": {
         "subsets": list(DOLMINO_DATASETS.keys()),
-        "download": dolmino_downloads["dolmino"],
+        "download": _dolmino_base,
         "tokenize_fn": tokenize_dolmino,
     },
     "nemotron_cc": {

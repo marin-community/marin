@@ -21,7 +21,7 @@ from experiments.evals.task_configs import (
 )
 from experiments.models import qwen3_32b
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 from experiments.tootsie.exp1529_32b_mantis_cooldown import tootsie_32b_cooldown_mantis as marin_32b
 
@@ -58,4 +58,4 @@ if __name__ == "__main__":
                 discover_latest_checkpoint=False,
             )
         )
-    executor_main(steps=eval_steps)
+    StepRunner().run(eval_steps)

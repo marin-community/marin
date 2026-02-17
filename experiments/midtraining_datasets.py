@@ -1,12 +1,14 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+import os
+
 from experiments.common_pile.tokenize_common_pile import stackv2_edu_filtered
 from experiments.defaults import default_download, default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution import versioned
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.step_model import StepSpec
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
@@ -15,35 +17,46 @@ from marin.transform.common_pile.filter_by_extension import (
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
 
 finemath_commit_hash = "8f233cf"
-finemath = ExecutorStep(
+finemath = StepSpec(
     name="raw/finemath",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="HuggingFaceTB/finemath",
-        revision=finemath_commit_hash,
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
+    hash_attrs={"hf_dataset_id": "HuggingFaceTB/finemath", "revision": finemath_commit_hash},
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="HuggingFaceTB/finemath",
+            revision=finemath_commit_hash,
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+        )
     ),
 )
 
 
-finemath_3_plus = finemath.cd("finemath-3plus")
-finemath_3_plus_tokenized = default_tokenize(
-    name="finemath_3_plus",
-    dataset=finemath_3_plus,
-    tokenizer=llama3_tokenizer,
-).with_output_path("tokenized/finemath_3_plus-a26b0f/")
+finemath_3_plus = os.path.join(finemath.output_path, "finemath-3plus")
+finemath_3_plus_tokenized = dataclasses.replace(
+    default_tokenize(
+        name="finemath_3_plus",
+        dataset=finemath_3_plus,
+        tokenizer=llama3_tokenizer,
+    ),
+    override_output_path="tokenized/finemath_3_plus-a26b0f/",
+)
 
 STACKV2_EDU_PYTHON_EXTENSIONS = (".py", ".pyw", ".pyi")
 
-stackv2_edu_filtered_python = ExecutorStep(
+stackv2_edu_filtered_python = StepSpec(
     name="documents/common_pile/stackv2_edu_filtered_python",
-    fn=filter_dataset_by_metadata_extension,
-    config=FilterByMetadataExtensionConfig(
-        input_path=stackv2_edu_filtered,
-        output_path=this_output_path(),
-        allowed_extensions=STACKV2_EDU_PYTHON_EXTENSIONS,
-        input_glob="stack-edu-*.json.gz",
+    hash_attrs={
+        "input_path": stackv2_edu_filtered.output_path,
+        "allowed_extensions": list(STACKV2_EDU_PYTHON_EXTENSIONS),
+    },
+    deps=[stackv2_edu_filtered],
+    fn=lambda output_path: filter_dataset_by_metadata_extension(
+        FilterByMetadataExtensionConfig(
+            input_path=stackv2_edu_filtered.output_path,
+            output_path=output_path,
+            allowed_extensions=STACKV2_EDU_PYTHON_EXTENSIONS,
+            input_glob="stack-edu-*.json.gz",
+        )
     ),
 )
 
@@ -57,7 +70,7 @@ stackv2_edu_filtered_python_tokenized = default_tokenize(
 megamath_source = default_download(
     name="raw/llm360/megamath",
     hf_dataset_id="llm360/MegaMath",
-    revision=versioned("3cbc64616594d6bc8759abaa0b2a71858f880f0d"),
+    revision="3cbc64616594d6bc8759abaa0b2a71858f880f0d",
     override_output_path="raw/llm360/megamath",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
@@ -65,12 +78,12 @@ megamath_source = default_download(
 # Megamath is partitioned into 6 sources. We expose each of them as a separate step.
 megamath_split_paths = {
     # Code just seems to be metadata, not actual code files.
-    # "megamath/code": megamath_source / "megamath-code/*.parquet",
-    "megamath/qa": megamath_source / "megamath-qa/**/*.parquet",
-    "megamath/text_code_block": megamath_source / "megamath-text-code-block/*.parquet",
-    "megamath/translated_code": megamath_source / "megamath-translated-code/*.parquet",
-    "megamath/web_pro": megamath_source / "megamath-web-pro/*.parquet",
-    "megamath/web": megamath_source / "megamath-web/*/*.parquet",
+    # "megamath/code": os.path.join(megamath_source.output_path, "megamath-code/*.parquet"),
+    "megamath/qa": os.path.join(megamath_source.output_path, "megamath-qa/**/*.parquet"),
+    "megamath/text_code_block": os.path.join(megamath_source.output_path, "megamath-text-code-block/*.parquet"),
+    "megamath/translated_code": os.path.join(megamath_source.output_path, "megamath-translated-code/*.parquet"),
+    "megamath/web_pro": os.path.join(megamath_source.output_path, "megamath-web-pro/*.parquet"),
+    "megamath/web": os.path.join(megamath_source.output_path, "megamath-web/*/*.parquet"),
 }
 
 megamath_tokenized = {
@@ -150,46 +163,67 @@ lavita_medical_qa_datasets = default_download(
     override_output_path="raw/lavita_medical_qa",
 )
 
-lavita_pubmed = ExecutorStep(
+lavita_pubmed = StepSpec(
     name="documents/lavita_pubmed",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="pubmed-qa", split="train"
+    hash_attrs={"subset": "pubmed-qa", "split": "train"},
+    deps=[lavita_medical_qa_datasets],
+    fn=lambda output_path: convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets.output_path, output_path=output_path, subset="pubmed-qa", split="train"
+        )
     ),
 )
 
-lavita_medmcqa = ExecutorStep(
+lavita_medmcqa = StepSpec(
     name="documents/lavita_medmcqa",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="medmcqa", split="train"
+    hash_attrs={"subset": "medmcqa", "split": "train"},
+    deps=[lavita_medical_qa_datasets],
+    fn=lambda output_path: convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets.output_path, output_path=output_path, subset="medmcqa", split="train"
+        )
     ),
 )
 
-lavita_allprocessed = ExecutorStep(
+lavita_allprocessed = StepSpec(
     name="documents/lavita_allprocessed",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets,
-        output_path=this_output_path(),
-        subset="all-processed",
-        split="train",
+    hash_attrs={"subset": "all-processed", "split": "train"},
+    deps=[lavita_medical_qa_datasets],
+    fn=lambda output_path: convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets.output_path,
+            output_path=output_path,
+            subset="all-processed",
+            split="train",
+        )
     ),
 )
 
-lavita_pubmed_validation = ExecutorStep(
+lavita_pubmed_validation = StepSpec(
     name="documents/lavita_pubmed_validation",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="pubmed-qa", split="validation"
+    hash_attrs={"subset": "pubmed-qa", "split": "validation"},
+    deps=[lavita_medical_qa_datasets],
+    fn=lambda output_path: convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets.output_path,
+            output_path=output_path,
+            subset="pubmed-qa",
+            split="validation",
+        )
     ),
 )
 
-lavita_medmcqa_validation = ExecutorStep(
+lavita_medmcqa_validation = StepSpec(
     name="documents/lavita_medmcqa_validation",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="medmcqa", split="validation"
+    hash_attrs={"subset": "medmcqa", "split": "validation"},
+    deps=[lavita_medical_qa_datasets],
+    fn=lambda output_path: convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets.output_path,
+            output_path=output_path,
+            subset="medmcqa",
+            split="validation",
+        )
     ),
 )
 

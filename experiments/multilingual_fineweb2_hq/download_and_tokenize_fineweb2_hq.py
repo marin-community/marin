@@ -10,29 +10,29 @@ Fineweb2 dataset.
 
 import os.path
 
+import dataclasses
 
+from experiments.defaults import default_download
 from experiments.llama import llama3_tokenizer
 from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-fineweb2_raw = ExecutorStep(
-    name="raw/fineweb2_hq",
-    fn=download_hf,
-    config=DownloadConfig(
+fineweb2_raw = dataclasses.replace(
+    default_download(
+        name="raw/fineweb2_hq",
         hf_dataset_id="epfml/FineWeb2-HQ",
-        gcs_output_path=this_output_path(),
         revision="c0c06e94fd3a44ae9e802b2b0fc533817601eb5e",
-        wait_for_completion=True,
     ),
-).with_output_path("raw/fineweb2-hq")
+    override_output_path="raw/fineweb2-hq",
+)
 
 
 def _get_fineweb2_split_paths(split):
     patterns = FINEWEB2_DATASETS[split]
-    fineweb2_split_paths = [output_path_of(fineweb2_raw, pattern) for pattern in patterns]
+    fineweb2_split_paths = [os.path.join(fineweb2_raw.output_path, pattern) for pattern in patterns]
     return fineweb2_split_paths
 
 
@@ -42,18 +42,25 @@ def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokeni
     Keys follow the pattern "fineweb2_hq/<split>", aligning with mixture naming conventions
     in other datasets (e.g., "dolma/...", "nemotron_cc/...").
     """
-    steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
+    steps: dict[str, StepSpec] = {}
     for split in FINEWEB2_DATASETS.keys():
         fineweb2_split_output_path = os.path.join(base_path, "fineweb2_hq", split)
         fineweb2_split_paths = _get_fineweb2_split_paths(split)
-        step = ExecutorStep(
+        step = StepSpec(
             name=fineweb2_split_output_path,
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=fineweb2_split_paths,
-                validation_paths=versioned([]),
-                cache_path=this_output_path(),
-                tokenizer=versioned(tokenizer),
+            hash_attrs={
+                "train_paths": fineweb2_split_paths,
+                "validation_paths": [],
+                "tokenizer": tokenizer,
+            },
+            deps=[fineweb2_raw],
+            fn=lambda output_path, _paths=fineweb2_split_paths, _tok=tokenizer: tokenize(
+                TokenizeConfig(
+                    train_paths=_paths,
+                    validation_paths=[],
+                    cache_path=output_path,
+                    tokenizer=_tok,
+                )
             ),
         )
         steps[f"fineweb2_hq/{split}"] = step
@@ -61,4 +68,4 @@ def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokeni
 
 
 if __name__ == "__main__":
-    executor_main(steps=list(tokenize_fineweb2hq_steps().values()), description="Tokenize Fineweb2-HQ dataset")
+    StepRunner().run(list(tokenize_fineweb2hq_steps().values()))

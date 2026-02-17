@@ -18,7 +18,7 @@ from experiments.tootsie.exp1529_32b_mantis_cooldown import (
     tootsie_32b_cooldown_mantis,
 )
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 TRAIN_BATCH_SIZE = 2048
 # Matches the 3-epoch budget from exp1880_sft_baseline (computed against that mixture).
@@ -27,7 +27,7 @@ LEARNING_RATE = 1e-5
 WARMSTART_STEP = 191_999
 
 qwen3_32b_remat_8k = dataclasses.replace(qwen3_32b_remat, max_seq_len=8192)
-mantis_checkpoint = tootsie_32b_cooldown_mantis.cd(f"checkpoints/step-{WARMSTART_STEP}/").nonblocking()
+mantis_checkpoint = tootsie_32b_cooldown_mantis.cd(f"checkpoints/step-{WARMSTART_STEP}/")
 
 mantis_sft_config = SimpleSFTConfig(
     resources=ResourceConfig.with_tpu("v4-2048"),
@@ -55,4 +55,4 @@ tootsie_32b_mantis_sft_evals = default_sft_eval(
 )
 
 if __name__ == "__main__":
-    executor_main([tootsie_32b_mantis_sft, *tootsie_32b_mantis_sft_evals])
+    StepRunner().run([tootsie_32b_mantis_sft, *tootsie_32b_mantis_sft_evals])

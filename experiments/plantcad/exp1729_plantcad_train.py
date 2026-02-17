@@ -9,7 +9,7 @@ import jax
 import logging
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution.step_runner import StepRunner
 from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_train, default_tokenize
 from experiments.simple_train_config import SimpleTrainConfig
@@ -57,7 +57,7 @@ model_config = LlamaConfig(
 # https://huggingface.co/datasets/kuleshov-group/Angiosperm_16_genomes
 data_tokenized = default_tokenize(
     name="angiosperm_16_genomes",
-    dataset=versioned(dataset_path),
+    dataset=dataset_path,
     tokenizer=tokenizer_path,
     # DNA sequences are in `seq`, not `text`
     format=TextLmDatasetFormat(text_key="seq"),
@@ -109,4 +109,4 @@ if __name__ == "__main__":
     logger.info(f"Steps per eval:     {steps_per_eval:,}")
     logger.info("=" * 64)
 
-    executor_main(steps=[training_step])
+    StepRunner().run([training_step])

@@ -14,7 +14,7 @@ For GPU training, see train_tiny_model_gpu.py
 
 from fray.v2 import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution.step_runner import StepRunner
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
@@ -53,7 +53,7 @@ nano_tinystories_model = default_train(
     name="marin-nano-tinystories",
     # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
     tokenized=tinystories_tokenized,
-    model_config=versioned(llama_nano),
+    model_config=llama_nano,
     train_config=nano_train_config,
     # wandb tags
     tags=["llama", "nano", "tinystories", "tutorial"],
@@ -65,8 +65,4 @@ nano_tinystories_model = default_train(
 )
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            nano_tinystories_model,
-        ]
-    )
+    StepRunner().run([nano_tinystories_model])

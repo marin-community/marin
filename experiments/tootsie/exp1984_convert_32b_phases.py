@@ -14,40 +14,47 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 
-from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie
-from experiments.tootsie.exp1380_muon32b import llama_32b_muon
-from experiments.tootsie.exp1390_32b_necro import marin_32b_necro
-from experiments.tootsie.exp1395_qwen3_32b import marin_32b_qwen, qwen3_32b_remat
+from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_train_config
+from experiments.tootsie.exp1380_muon32b import llama_32b_warmstart_train as muon_train_config
+from experiments.tootsie.exp1390_32b_necro import llama_32b_warmstart_train as necro_train_config
+from experiments.tootsie.exp1395_qwen3_32b import qwen3_32b_remat, qwen_32b_warmstart_train
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main
-from marin.export import convert_checkpoint_to_hf_step
+from haliax.partitioning import ResourceAxis
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
+from marin.export import convert_checkpoint_to_hf, ConvertCheckpointStepConfig
 
 BASE_CHECKPOINT_PREFIX = "gs://marin-us-central2/checkpoints"
 CONVERSION_RESOURCES = ResourceConfig.with_tpu("v4-8")
 
 
-def _trainer_from_training_step(step: ExecutorStep) -> TrainerConfig:
-    config = getattr(step, "config", None)
-    train_config = getattr(config, "train_config", None)
-    trainer = getattr(train_config, "trainer", None)
-    if not isinstance(trainer, TrainerConfig):
-        raise ValueError(
-            f"Training step '{step.name}' does not expose a TrainLmOnPodConfig with a TrainerConfig; "
-            "update exp1803 to reference the correct training experiment."
-        )
-    return deepcopy(trainer)
+def _trainer_from_simple_config(config: SimpleTrainConfig) -> TrainerConfig:
+    """Build a minimal TrainerConfig from a SimpleTrainConfig for checkpoint export."""
+    return TrainerConfig(
+        train_batch_size=config.train_batch_size,
+        per_device_parallelism=config.per_device_parallelism,
+        num_train_steps=config.num_train_steps,
+        mesh=MeshConfig(
+            compute_mapping={
+                "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+            }
+        ),
+    )
 
 
 DEFAULT_TRAINER_CONFIGS: dict[str, TrainerConfig] = {
     # Phase 1 baseline (llama-32b-tootsie-2)
-    "llama-32b-tootsie-2": _trainer_from_training_step(llama_32b_tootsie),
+    "llama-32b-tootsie-2": _trainer_from_simple_config(llama_32b_train_config),
     # Phase 2a necromancy restart
-    "marin-32b-necro-2": _trainer_from_training_step(marin_32b_necro),
+    "marin-32b-necro-2": _trainer_from_simple_config(necro_train_config),
     # Phase 2b optimizer swap (Muon)
-    "marin-32b-muon-4": _trainer_from_training_step(llama_32b_muon),
+    "marin-32b-muon-4": _trainer_from_simple_config(muon_train_config),
     # Phase 3 Qwen switch
-    "marin-32b-qwen": _trainer_from_training_step(marin_32b_qwen),
+    "marin-32b-qwen": _trainer_from_simple_config(qwen_32b_warmstart_train),
 }
 
 
@@ -131,26 +138,35 @@ PHASE_EXPORT_SPECS: tuple[PhaseExportSpec, ...] = (
 )
 
 
-def create_phase_export_steps(trainer: TrainerConfig | None = None) -> Sequence[ExecutorStep]:
+def create_phase_export_steps(trainer: TrainerConfig | None = None) -> Sequence[StepSpec]:
     """Instantiate conversion steps for each retrospective phase."""
-    steps: list[ExecutorStep] = []
+    steps: list[StepSpec] = []
     for spec in PHASE_EXPORT_SPECS:
         trainer_config = spec.resolve_trainer_config(trainer)
-        step = convert_checkpoint_to_hf_step(
+        _spec = spec
+        _trainer_config = trainer_config
+        step = StepSpec(
             name=f"tootsie-32b-{spec.slug}",
-            checkpoint_path=spec.checkpoint_path,
-            model=spec.model_config,
-            trainer=trainer_config,
+            hash_attrs={
+                "checkpoint_path": spec.checkpoint_path,
+                "model_name": spec.model_name,
+                "discover_latest": spec.discover_latest,
+            },
+            fn=lambda output_path, _s=_spec, _t=_trainer_config: convert_checkpoint_to_hf(
+                ConvertCheckpointStepConfig(
+                    checkpoint_path=_s.checkpoint_path,
+                    trainer=_t,
+                    model=_s.model_config,
+                    resources=CONVERSION_RESOURCES,
+                    tokenizer="marin-community/marin-tokenizer",
+                    discover_latest=_s.discover_latest,
+                )
+            ),
             resources=CONVERSION_RESOURCES,
-            tokenizer="marin-community/marin-tokenizer",
-            discover_latest=spec.discover_latest,
         )
         steps.append(step)
     return steps
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=create_phase_export_steps(),
-        description="Convert every Marin 32B Tootsie phase into Hugging Face checkpoints.",
-    )
+    StepRunner().run(create_phase_export_steps())

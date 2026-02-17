@@ -6,7 +6,7 @@
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(name="Pranshu Chaturvedi", affiliation="Stanford University", url="https://stanford.edu/~pranshu")
@@ -46,8 +46,8 @@ def build_config(*, use_gmm: bool, name: str) -> SpeedrunConfig:
 def main():
     ragged = build_config(use_gmm=False, name="ragged-dot")
     gmm = build_config(use_gmm=True, name="grouped-matmul")
-    executor_main(steps=default_speedrun("pranshu_mixtral_moe_compare_ragged", ragged))
-    executor_main(steps=default_speedrun("pranshu_mixtral_moe_compare_gmm", gmm))
+    StepRunner().run(default_speedrun("pranshu_mixtral_moe_compare_ragged", ragged))
+    StepRunner().run(default_speedrun("pranshu_mixtral_moe_compare_gmm", gmm))
 
 
 if __name__ == "__main__":

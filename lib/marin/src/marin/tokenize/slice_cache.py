@@ -29,7 +29,7 @@ from levanter.store import SerialCacheWriter, TreeCache
 from tqdm_loggable.auto import tqdm
 from transformers import AutoTokenizer
 
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
+from marin.execution.step_model import StepSpec
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)
@@ -41,12 +41,12 @@ class SliceCacheConfig(TokenizeConfigBase):
 
     input_config: LmDatasetSourceConfigBase
     num_tokens: int
-    cache_path: str = THIS_OUTPUT_PATH
+    cache_path: str = ""
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     seed: int = 42
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         humanfriendly_tokens = humanfriendly.format_size(self.num_tokens)[0:-1].replace(" ", "").replace("byte", "")
         out = _patch_source_config(
@@ -212,28 +212,31 @@ def slice_cache(
     num_tokens: int,
     seed: int = 42,
     tokenizer_spec: str = "stanford-crfm/marin-tokenizer",
-) -> ExecutorStep[SliceCacheConfig]:
+) -> StepSpec:
     """High-level function to slice a Levanter cache.
 
     This is the main entry point for slicing a cache.
 
     Args:
+        output_path: Name for the step.
         input_config: The input cache configuration.
         tokenizer_spec: The tokenizer specification.
         num_tokens: The number of tokens to slice.
         seed: The random seed for shuffling the dataset.
 
     Returns:
-        The configuration for the sliced cache
+        A StepSpec for slicing the cache.
     """
-
-    return ExecutorStep(
+    return StepSpec(
         name=output_path,
-        fn=_slice_cache_in_ray,
-        config=SliceCacheConfig(
-            input_config=input_config,
-            num_tokens=num_tokens,
-            seed=seed,
-            tokenizer=tokenizer_spec,
+        hash_attrs={"num_tokens": num_tokens, "seed": seed, "tokenizer": tokenizer_spec},
+        fn=lambda out: _slice_cache_in_ray(
+            SliceCacheConfig(
+                input_config=input_config,
+                num_tokens=num_tokens,
+                seed=seed,
+                tokenizer=tokenizer_spec,
+                cache_path=out,
+            )
         ),
     )

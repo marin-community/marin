@@ -55,7 +55,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.types import BlockFoldable
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -559,4 +559,4 @@ if __name__ == "__main__":
         name, cfg = build_run(s, use_tpu=use_tpu)
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
-    executor_main(steps=steps, description=SUBMISSION_DESCRIPTION)
+    StepRunner().run(steps)

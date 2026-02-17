@@ -9,7 +9,7 @@ For evals that need to be run on GPUs (e.g. LM Evaluation Harness).
 from experiments.dclm.exp433_dclm_run import dclm_baseline_only_model
 from experiments.evals.evals import default_eval, evaluate_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 # example of how to eval a specific checkpoint
 quickstart_eval_step = evaluate_lm_evaluation_harness(
@@ -28,4 +28,4 @@ steps = [
 ]
 
 if __name__ == "__main__":
-    executor_main(steps=steps)
+    StepRunner().run(steps)

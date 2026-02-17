@@ -20,7 +20,7 @@ from experiments.midtraining_datasets import (
 )
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 SEQ_LEN = 4096
@@ -194,7 +194,4 @@ ferry_model_8b = default_train(
 
 # Main execution block
 if __name__ == "__main__":
-    executor_main(
-        steps=[ferry_model_1b, ferry_model_8b],
-        description=("Ferry: PT on Nemotron+Code then cooldown to HQ mix, scaled from Tootsie schedules"),
-    )
+    StepRunner().run([ferry_model_1b, ferry_model_8b])

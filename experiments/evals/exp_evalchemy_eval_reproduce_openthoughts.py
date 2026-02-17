@@ -95,8 +95,8 @@ ENGINE_KWARGS = {
 # Parallel Job Limit
 # =============================================================================
 # Maximum number of eval jobs to run in parallel. Eval steps are split into
-# batches of this size, with each batch submitted as a separate executor_main
-# call. Set to None to run all eval steps in a single executor_main call.
+# batches of this size, with each batch submitted as a separate StepRunner().run()
+# call. Set to None to run all eval steps in a single StepRunner().run() call.
 # WARNING: Setting this value higher will cause many jobs to be launched in parallel.
 #          Please be mindful of other users sharing the cluster.
 MAX_PARALLEL_JOBS = 30

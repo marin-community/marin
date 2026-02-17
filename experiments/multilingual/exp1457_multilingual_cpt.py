@@ -30,7 +30,7 @@ from experiments.tootsie.exp600_tootsie import (
     phase_4_warmup_weights,
     starling_hq_cooldown_weights,
 )
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 ##############################################################
@@ -47,7 +47,7 @@ COOLDOWN_LEN = 80_000
 
 # for these long runs we don't usually actually **finish** the run in the Executor's eyes,
 # so we use `nonblocking`
-phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").nonblocking()
+phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000")
 
 cooldown_train_config = dataclasses.replace(
     llama_8b_train_config_phase4,
@@ -136,9 +136,8 @@ assert 0.29 < sum(v for k, v in normalized.items() if not k.startswith("fineweb"
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
+    StepRunner().run(
+        [
             multilingual_cpt_8b_fineweb2_hq,
-        ],
-        description="Continually Pretrain on Fineweb2 HQ from Phoenix Phase",
+        ]
     )

@@ -14,7 +14,7 @@ from experiments.defaults import default_tokenize
 from experiments.llama import llama3_instruct_chat_format, llama3_instruct_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
-from marin.processing.tokenize import lm_data_config
+from marin.processing.tokenize import lm_mixture_data_config
 
 # Get instruction dataset
 tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")
@@ -30,13 +30,16 @@ NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (128 * 4096) * 3  # 2 epochs
 # Create tokenization step for Tulu-3 dataset
 tulu3_llama_tokenize_step = default_tokenize(
     name="tulu_sft_v3_llama3_instruct_tokenizer",
-    dataset=tulu_3_dataset / "**/*.jsonl.gz",
+    dataset=tulu_3_dataset.cd("**/*.jsonl.gz"),
     tokenizer=llama3_instruct_tokenizer,
     format=llama3_instruct_chat_format,
 )
 
 # This dataset should only by used for older runs. Don't use this in new experiments.
-tulu3_llama_data_old = lm_data_config(tulu3_llama_tokenize_step)
+tulu3_llama_data_old = lm_mixture_data_config(
+    components={"tulu_sft_v3_llama3_instruct_tokenizer": tulu3_llama_tokenize_step},
+    weights={"tulu_sft_v3_llama3_instruct_tokenizer": 1.0},
+)
 
 tulu_sft_config = SimpleSFTConfig(
     train_batch_size=128,

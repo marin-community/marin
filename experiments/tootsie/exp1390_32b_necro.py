@@ -13,11 +13,11 @@ from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from experiments.defaults import default_train
 from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie, llama_32b_train_config, nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution import executor_main
+from marin.execution.step_runner import StepRunner
 
 # We have doctored the opt state to include update history from
 # gs://marin-us-central2/checkpoints/llama-32b-tootsie-2/checkpoints/step-77096 for clipping
-warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-80000/").nonblocking()
+warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-80000/")
 
 
 llama_32b_warmstart_train = dataclasses.replace(
@@ -59,7 +59,4 @@ marin_32b_necro = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(
-        [marin_32b_necro],
-        description="Attempt to revive the 32B with doctored opt state to clip the updates",
-    )
+    StepRunner().run([marin_32b_necro])

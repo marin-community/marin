@@ -10,26 +10,29 @@ https://huggingface.co/datasets/allenai/paloma
 from experiments.paloma import paloma_tokenized
 from marin.download import HfDownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
-paloma_speedrun = ExecutorStep(
+paloma_speedrun = StepSpec(
     name="raw/paloma-speedrun",
-    fn=download_hf,
-    config=HfDownloadConfig(
-        hf_dataset_id=versioned("allenai/paloma"),
-        revision=versioned("65cd6fc"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        append_sha_to_path=True,
+    hash_attrs={"hf_dataset_id": "allenai/paloma", "revision": "65cd6fc"},
+    fn=lambda output_path: download_hf(
+        HfDownloadConfig(
+            hf_dataset_id="allenai/paloma",
+            revision="65cd6fc",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            append_sha_to_path=True,
+        )
     ),
-).cd("65cd6fc")
+)
 
 
 def speedrun_paloma_tokenized(tokenizer: str = llama3_tokenizer):
-    return paloma_tokenized(base_path="raw/paloma-speedrun", tokenizer=tokenizer, paloma_raw=paloma_speedrun)
+    return paloma_tokenized(tokenizer=tokenizer)
 
 
 if __name__ == "__main__":
-    executor_main(steps=[paloma_speedrun, *speedrun_paloma_tokenized().values()])
+    StepRunner().run([paloma_speedrun, *speedrun_paloma_tokenized().values()])

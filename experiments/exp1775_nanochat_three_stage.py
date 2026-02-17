@@ -24,7 +24,9 @@ from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_com
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main, output_path_of
+import os
+
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # ------------------------------------------------------------------------------------
@@ -126,7 +128,7 @@ sft_config = SimpleSFTConfig(
     learning_rate=SFT_LEARNING_RATE,
     weight_decay=WEIGHT_DECAY,
     tokenizer=TOKENIZER_NAME,
-    initialize_from_hf=output_path_of(nanochat_pre_mid_step, "hf/step-24999/"),
+    initialize_from_hf=os.path.join(nanochat_pre_mid_step.output_path, "hf/step-24999/"),
     steps_per_eval=100,
     steps_per_checkpoint=200,
     steps_per_hf_export=200,
@@ -145,11 +147,4 @@ nanochat_sft_step = default_sft(
 # ------------------------------------------------------------------------------------
 # Pipeline entry point
 if __name__ == "__main__":
-    executor_main(
-        steps=[nanochat_sft_step],
-        description=(
-            "Single-run NanoChat-style pipeline: warm up on DCLM, blend into the "
-            "reasoning-focused midtraining mixture (W/S/D = 0.05/0.75/0.20), then run SFT "
-            "with the instruction/reasoning mixture from exp808 (incl. SmolTalk)."
-        ),
-    )
+    StepRunner().run([nanochat_sft_step])

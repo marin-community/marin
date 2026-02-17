@@ -35,7 +35,6 @@ from levanter.store.cache import consolidate_shard_caches
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
-from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
@@ -54,7 +53,7 @@ class TokenizeConfigBase(abc.ABC):
 
     @abc.abstractmethod
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         """
         Create a Levanter dataset source config from this config and the actual output path.
@@ -89,14 +88,13 @@ class TokenizeConfig(TokenizeConfigBase):
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         """
         For use in Levanter training runs with mixtures of datasets.
 
         Args:
-            actual_output_path: The actual output path to use for the cache. Since we often pass in an InputName,
-                we need to resolve it to a string.
+            actual_output_path: The actual output path to use for the cache.
 
             include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
                 to run training without the original training data, but hte provenance won't be recorded in wandb.
@@ -114,8 +112,8 @@ class TokenizeConfig(TokenizeConfigBase):
         if not self.train_paths and not self.validation_paths:
             raise ValueError("At least one of train_paths or validation_paths must be specified")
 
-        assert not isinstance(self.train_paths, str | InputName)
-        assert not isinstance(self.validation_paths, str | InputName)
+        assert not isinstance(self.train_paths, str)
+        assert not isinstance(self.validation_paths, str)
 
         if isinstance(self.train_paths, Sequence):
             assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
@@ -149,7 +147,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         return HfDatasetSourceConfig(
             id=self.id,
@@ -160,27 +158,21 @@ class HfTokenizeConfig(TokenizeConfigBase):
         )
 
 
-def _validate_train_urls(train_paths: list[str | InputName], warn):
+def _validate_train_urls(train_paths: list[str], warn):
     """
-    Validates the training data URLs or InputName attributes to ensure they do not contain forbidden patterns.
+    Validates the training data URLs to ensure they do not contain forbidden patterns.
     Raises a ValueError if a forbidden pattern is found.
     """
     for item in train_paths:
-        url_or_name_to_check: str = ""
-        if isinstance(item, str):
-            url_or_name_to_check = item
-        elif isinstance(item, InputName):
-            url_or_name_to_check = item.name or ""
+        url_or_name_to_check: str = item
 
         # \b doesn't work because of underscores
         if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_or_name_to_check) or re.search(r"validation", url_or_name_to_check):
             if warn:
-                logger.warning(
-                    f"Warning: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
-                )
+                logger.warning(f"Warning: Training data URL '{url_or_name_to_check}' contains a forbidden pattern ")
             else:
                 raise ValueError(
-                    f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                    f"Error: Training data URL '{url_or_name_to_check}' contains a forbidden pattern "
                     "('test' or 'validation'). "
                     "Please ensure training data does not include test or validation sets."
                 )
@@ -208,13 +200,8 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
     Get all file paths to tokenize from the input paths.
     Handles json/jsonl.{gz,zst,zstd}, and parquet.
     """
-    if isinstance(input_paths, VersionedValue):
-        input_paths = input_paths.value
-
     if len(input_paths) == 0:
         return []
-    elif any(isinstance(x, InputName | ExecutorStep) for x in input_paths):
-        return input_paths
 
     out = _get_files_by_extensions(input_paths, ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet", "json"])
     out = [x for x in out if "provenance.json" not in x]

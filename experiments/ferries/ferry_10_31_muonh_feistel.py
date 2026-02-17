@@ -11,7 +11,7 @@ from levanter.optim import MuonHConfig
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.qwen3 import qwen3_1_7b, qwen3_8b
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 from experiments.ferries.initial_ferry import (
     BATCH_SIZE_1B,
@@ -98,9 +98,4 @@ ferry_model_8b = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[ferry_model_1b, ferry_model_8b],
-        description=(
-            "Ferry (Feistel + MuonH): PT on Nemotron+Code then cooldown to HQ mix, scaled from Tootsie schedules"
-        ),
-    )
+    StepRunner().run([ferry_model_1b, ferry_model_8b])

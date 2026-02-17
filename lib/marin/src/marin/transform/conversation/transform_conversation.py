@@ -26,7 +26,6 @@ import datasets
 import draccus
 import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
-from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
 from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
@@ -118,7 +117,7 @@ def _normalize_tool_structures(message: dict) -> dict:
 
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
-    source = unwrap_versioned_value(cfg.source)
+    source = cfg.source
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:
@@ -129,7 +128,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
 
     # Create a unique ID for the row based on the text
     row_idx = generate_hash_from_messages(transformed_row_messages)
-    metadata_columns = unwrap_versioned_value(cfg.metadata_columns)
+    metadata_columns = cfg.metadata_columns
     metadata_remap = adapter.metadata_remap or {}
     replacements = adapter.replacements if adapter.replacements is not None else DEFAULT_TEXT_REPLACEMENTS
 
@@ -195,7 +194,7 @@ def create_shard_output_directory(output_filename: str) -> str:
 
 
 def _get_available_subsets(cfg: TransformSFTDatasetConfig) -> Sequence[str | None]:
-    configured_subsets = unwrap_versioned_value(cfg.subsets)
+    configured_subsets = cfg.subsets
     if configured_subsets:
         return configured_subsets
 
@@ -210,7 +209,7 @@ def _get_available_subsets(cfg: TransformSFTDatasetConfig) -> Sequence[str | Non
 
 
 def _get_available_splits(cfg: TransformSFTDatasetConfig, subset: str | None) -> list[str]:
-    configured_splits = unwrap_versioned_value(cfg.splits)
+    configured_splits = cfg.splits
     if configured_splits:
         return list(configured_splits)
     try:
@@ -241,11 +240,11 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 
     Yields ShardTask objects for each shard of each subset/split combination.
     """
-    source = unwrap_versioned_value(cfg.source)
+    source = cfg.source
     if not source:
         raise ValueError("Transform configuration must include `source` pointing to the HF dataset id.")
-    revision = unwrap_versioned_value(cfg.revision)
-    configured_splits = unwrap_versioned_value(cfg.splits)
+    revision = cfg.revision
+    configured_splits = cfg.splits
 
     # 1. Get available subsets
     subsets = _get_available_subsets(cfg)
@@ -308,7 +307,7 @@ def process_shard_task(task: ShardTask) -> dict:
 
     Loads a specific shard from HuggingFace Hub, transforms records, and writes to output file.
     """
-    adapter = unwrap_versioned_value(task.cfg.adapter).copy()
+    adapter = (task.cfg.adapter).copy()
     if adapter is None:
         raise ValueError("Transform configuration requires an adapter.")
 
@@ -379,7 +378,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     Skips processing for shards with existing metrics files.
     """
     # Get max_parallelism from config
-    max_parallelism = unwrap_versioned_value(cfg.max_parallelism)
+    max_parallelism = cfg.max_parallelism
 
     # Configure backend with concurrency limit if specified
     if max_parallelism is not None:

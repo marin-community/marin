@@ -33,7 +33,8 @@ from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
 
 from marin.scaling_laws import (
@@ -565,14 +566,14 @@ def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> FitScalingLawsRe
 
 
 def create_isoflop_sweep_steps(
-    tokenized: InputName | str | LMMixtureDatasetConfig,
+    tokenized: StepSpec | str | LMMixtureDatasetConfig,
     experiment_name: str,
     recipe: ScalingRecipe,
     budgets: tuple[float, ...] = DEFAULT_BUDGETS,
     eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
     seq_len: int = 4096,
-) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
-    """Create ExecutorSteps for an ISOFlop sweep.
+) -> tuple[list[StepSpec], list[CandidateConfig]]:
+    """Create StepSpecs for an ISOFlop sweep.
 
     Args:
         tokenized: Tokenized dataset to train on.
@@ -584,7 +585,7 @@ def create_isoflop_sweep_steps(
 
     Returns:
         A tuple of:
-        - steps: Training and evaluation ExecutorSteps for the sweep.
+        - steps: Training and evaluation StepSpecs for the sweep.
         - candidates: CandidateConfig for each training run with full config details.
     """
     candidates = [c for budget in budgets for c in recipe.candidates_for_budget(budget, seq_len)]
@@ -597,10 +598,10 @@ def create_isoflop_sweep_steps(
         learning_rate=1.0,  # Overridden via optimizer_config
     )
 
-    train_steps: list[ExecutorStep] = []
-    eval_steps: list[ExecutorStep] = []
+    train_steps: list[StepSpec] = []
+    eval_steps: list[StepSpec] = []
 
-    # Create ExecutorSteps for each candidate configuration
+    # Create StepSpecs for each candidate configuration
     for candidate in candidates:
         model_config = candidate.model_config
         estimated_memory = recipe.estimate_memory_bytes(candidate)
@@ -646,7 +647,7 @@ def create_isoflop_sweep_steps(
         )
 
         # Pin to static output path for checkpoint reuse
-        train_step = train_step.with_output_path(output_path)
+        train_step = replace(train_step, override_output_path=output_path)
         train_steps.append(train_step)
 
         # Create evaluation step if eval tasks specified
@@ -658,17 +659,20 @@ def create_isoflop_sweep_steps(
             )
             eval_steps.append(eval_step)
 
-    all_steps: list[ExecutorStep] = [*train_steps, *eval_steps]
+    all_steps: list[StepSpec] = [*train_steps, *eval_steps]
     return all_steps, candidates
 
 
 # --- Tokenized Datasets ---
 
-dclm_tokenized = default_tokenize(
-    name="dclm_baseline",
-    dataset=downloads["dclm_baseline"],
-    tokenizer=llama3_tokenizer,
-).with_output_path("tokenized/dclm_baseline-0206f1/")
+dclm_tokenized = replace(
+    default_tokenize(
+        name="dclm_baseline",
+        dataset=downloads["dclm_baseline"],
+        tokenizer=llama3_tokenizer,
+    ),
+    override_output_path="tokenized/dclm_baseline-0206f1/",
+)
 
 dclm_mix = lm_mixture_data_config(
     components={"dclm": dclm_tokenized},
@@ -676,11 +680,14 @@ dclm_mix = lm_mixture_data_config(
     num_validation_sequences={"dclm": 1024},
 )
 
-dolma3_mix_tokenized = default_tokenize(
-    name="dolma3_mix-150B-1025",
-    dataset=downloads["dolma3_mix_150b_1025"],
-    tokenizer=llama3_tokenizer,
-).with_output_path("tokenized/dolma3_mix-150B-1025-15d04ee/")
+dolma3_mix_tokenized = replace(
+    default_tokenize(
+        name="dolma3_mix-150B-1025",
+        dataset=downloads["dolma3_mix_150b_1025"],
+        tokenizer=llama3_tokenizer,
+    ),
+    override_output_path="tokenized/dolma3_mix-150B-1025-15d04ee/",
+)
 
 dolma3_mix = lm_mixture_data_config(
     components={"dolma3_mix-150B-1025": dolma3_mix_tokenized},
@@ -724,4 +731,4 @@ MARIN_SCALING_SUITES = {
 
 if __name__ == "__main__":
     steps, _ = MARIN_SCALING_SUITES["dolma3_mix_150b"]
-    executor_main(steps=steps)
+    StepRunner().run(steps)

@@ -17,7 +17,6 @@ import draccus
 import fsspec
 from huggingface_hub import HfFileSystem
 from huggingface_hub.errors import HfHubHTTPError
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
@@ -36,7 +35,7 @@ class DownloadConfig:
     hf_urls_glob: list[str] = field(default_factory=list)
     # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
 
-    gcs_output_path: str = THIS_OUTPUT_PATH
+    gcs_output_path: str = ""
     """
     Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
     This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.

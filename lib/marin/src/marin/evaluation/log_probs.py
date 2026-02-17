@@ -5,7 +5,6 @@
 This file uses Levanter to compute validation losses and entropies.
 """
 
-import dataclasses
 import os
 from dataclasses import dataclass
 
@@ -20,7 +19,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.execution.step_model import StepSpec
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 
@@ -36,7 +35,7 @@ class EvalLmConfig:
     datasets: LMMixtureDatasetConfig
     resource_config: ResourceConfig
     per_device_batch_size: int = 4
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+    output_path: str = ""
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
 
@@ -50,7 +49,7 @@ class EvalLmConfig:
 
 
 def default_lm_log_probs(
-    checkpoint: str | InputName,
+    checkpoint: str,
     model: LmConfig,
     data: LMMixtureDatasetConfig,
     resource_config: ResourceConfig,
@@ -59,7 +58,7 @@ def default_lm_log_probs(
     max_samples_per_dataset: int | None = None,
     name: str | None = None,
     wandb_tags: list[str] | None = None,
-) -> ExecutorStep:
+):
     """
     Creates a step to evaluate log probabilities of a language model.
     Args:
@@ -71,21 +70,27 @@ def default_lm_log_probs(
     """
     if not name:
         name = ckpt_path_to_step_name(checkpoint)
-    executor_name = f"analysis/log_probs/{name}"
-    return ExecutorStep(
-        name=executor_name,
-        fn=evaluate_lm_log_probs,
-        config=EvalLmConfig(
-            name=name,
-            checkpoint_path=checkpoint,  # type: ignore
-            model=model,
-            datasets=data,
-            log_entropy=True,
-            resource_config=resource_config,
-            checkpoint_is_hf=checkpoint_is_hf,
-            per_device_batch_size=per_device_batch_size,
-            max_samples_per_dataset=max_samples_per_dataset,
-            wandb_tags=wandb_tags,
+    step_name = f"analysis/log_probs/{name}"
+    return StepSpec(
+        name=step_name,
+        hash_attrs={
+            "checkpoint": checkpoint,
+            "checkpoint_is_hf": checkpoint_is_hf,
+        },
+        fn=lambda output_path: evaluate_lm_log_probs(
+            EvalLmConfig(
+                name=name,
+                checkpoint_path=checkpoint,
+                model=model,
+                datasets=data,
+                log_entropy=True,
+                resource_config=resource_config,
+                checkpoint_is_hf=checkpoint_is_hf,
+                per_device_batch_size=per_device_batch_size,
+                max_samples_per_dataset=max_samples_per_dataset,
+                output_path=output_path,
+                wandb_tags=wandb_tags,
+            )
         ),
     )
 

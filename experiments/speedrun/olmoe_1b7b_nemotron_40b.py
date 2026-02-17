@@ -18,8 +18,9 @@ from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from levanter.infra.cli_helpers import load_config
-from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
-from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
+from marin.processing.tokenize import lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
@@ -119,7 +120,7 @@ def nemotron_only_speedrun(
     *,
     append_ici_ag_pipelining_flags: bool = False,
     append_async_collective_permute_flag: bool = False,
-) -> Sequence[ExecutorStep]:
+) -> Sequence[StepSpec]:
     """Clone of default_speedrun that skips Paloma validation datasets."""
 
     logger.info(f"Running nemotron-only speedrun {name}")
@@ -128,10 +129,10 @@ def nemotron_only_speedrun(
     run_tags = ["speedrun"] + (tags or [])
     train_config = dataclasses.replace(config.train_config, data_seed=42)
 
-    if isinstance(config.tokenized_dataset, (InputName, ExecutorStep)):
-        pretraining_data = lm_data_config(
-            training_set=config.tokenized_dataset,
-            validation_sets=[],
+    if isinstance(config.tokenized_dataset, StepSpec):
+        pretraining_data = lm_mixture_data_config(
+            components={config.tokenized_dataset.name: config.tokenized_dataset},
+            weights={config.tokenized_dataset.name: 1.0},
         )
     else:
         pretraining_data = config.tokenized_dataset
@@ -168,36 +169,36 @@ def nemotron_only_speedrun(
             if flag not in combined:
                 combined = f"{combined} {flag}".strip() if combined else flag
 
-        env_vars = dict(getattr(train_step.config, "env_vars", None) or {})
-        env_vars["LIBTPU_INIT_ARGS"] = combined
-        train_step = dataclasses.replace(train_step, config=dataclasses.replace(train_step.config, env_vars=env_vars))
+        step_env_vars = dict(train_step.env_vars)
+        step_env_vars["LIBTPU_INIT_ARGS"] = combined
+        train_step = dataclasses.replace(train_step, env_vars=step_env_vars)
 
     wandb_entity = WANDB_ENTITY
     wandb_project = WANDB_PROJECT
-    wandb_run_id = None
-
-    trainer_cfg = getattr(train_step.config, "train_config", None)
-    trainer = getattr(trainer_cfg, "trainer", None) if trainer_cfg else None
-    tracker = getattr(trainer, "tracker", None) if trainer else None
-    if tracker:
-        wandb_entity = tracker.entity or WANDB_ENTITY
-        wandb_project = tracker.project or WANDB_PROJECT
 
     if override_output_path:
         wandb_run_id = override_output_path.split("/")[-1]
     else:
-        wandb_run_id = train_step  # resolved to the actual output path by the executor
+        wandb_run_id = train_step.output_path
 
-    results_step = ExecutorStep(
+    results_step = StepSpec(
         name=f"speedrun/{name}-speedrun_results",
-        description=f"compute and store metrics and stats for the speedrun {name}.",
-        fn=speedrun_results,
-        config=SpeedrunResultsConfig(
-            wandb_run_id=wandb_run_id,
-            wandb_entity=wandb_entity,
-            wandb_project=wandb_project,
-            speedrun_config=config,
-            output_path=output_path_of(train_step, "speedrun_results.json"),
+        hash_attrs={
+            "wandb_run_id": wandb_run_id,
+            "wandb_entity": wandb_entity,
+            "wandb_project": wandb_project,
+        },
+        deps=[train_step],
+        fn=lambda output_path, _run_id=wandb_run_id, _entity=wandb_entity, _project=wandb_project, _cfg=config, _ts=train_step: (  # noqa: E501
+            speedrun_results(
+                SpeedrunResultsConfig(
+                    wandb_run_id=_run_id,
+                    wandb_entity=_entity,
+                    wandb_project=_project,
+                    speedrun_config=_cfg,
+                    output_path=os.path.join(_ts.output_path, "speedrun_results.json"),
+                )
+            )
         ),
     )
 
@@ -380,8 +381,8 @@ if __name__ == "__main__":
     if args.profile:
         run_suffix += f"_profile_s{args.profile_start_step}_n{args.profile_num_steps}"
     logger.info("LIBTPU_INIT_ARGS=%s", os.environ.get("LIBTPU_INIT_ARGS", "<unset>"))
-    executor_main(
-        steps=nemotron_only_speedrun(
+    StepRunner().run(
+        nemotron_only_speedrun(
             run_suffix,
             run_config,
             append_ici_ag_pipelining_flags=args.append_ici_ag_pipelining_flags,

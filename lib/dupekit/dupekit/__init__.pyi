@@ -25,7 +25,8 @@
 
 import os
 from enum import Enum
-from typing import Any, BinaryIO, Iterable, Optional, Union, final
+from typing import Any, BinaryIO, final
+from collections.abc import Iterable
 
 import pyarrow as pa
 
@@ -46,14 +47,14 @@ class Bloom:
 
     # load from file path or file-like object, see section "Persistence"
     @classmethod
-    def load(cls, source: Union[str, bytes, os.PathLike, BinaryIO]) -> Bloom: ...
+    def load(cls, source: str | bytes | os.PathLike | BinaryIO) -> Bloom: ...
 
     # load from bytes(), see section "Persistence"
     @classmethod
     def load_bytes(cls, data: bytes) -> Bloom: ...
 
     # save to file path or file-like object, see section "Persistence"
-    def save(self, dest: Union[str, bytes, os.PathLike, BinaryIO]) -> None: ...
+    def save(self, dest: str | bytes | os.PathLike | BinaryIO) -> None: ...
 
     # save to a bytes(), see section "Persistence"
     def save_bytes(self) -> bytes: ...
@@ -75,16 +76,16 @@ class Bloom:
     def __iand__(self, other: Bloom) -> None: ...  # self &= other
 
     # extension of __or__
-    def union(self, *others: Union[Iterable[int], Bloom]) -> Bloom: ...
+    def union(self, *others: Iterable[int] | Bloom) -> Bloom: ...
 
     # extension of __ior__
-    def update(self, *others: Union[Iterable[int], Bloom]) -> None: ...
+    def update(self, *others: Iterable[int] | Bloom) -> None: ...
 
     # extension of __and__
-    def intersection(self, *others: Union[Iterable[int], Bloom]) -> Bloom: ...
+    def intersection(self, *others: Iterable[int] | Bloom) -> Bloom: ...
 
     # extension of __iand__
-    def intersection_update(self, *others: Union[Iterable[int], Bloom]) -> None: ...
+    def intersection_update(self, *others: Iterable[int] | Bloom) -> None: ...
 
     # these implement <, >, <=, >=, ==, !=
     def __lt__(self, other: Bloom) -> bool: ...
@@ -115,7 +116,7 @@ class Transformation:
     """
 
     @staticmethod
-    def ResolveIds(text_col: str, id_col: str, output_col: str) -> "Transformation":
+    def ResolveIds(text_col: str, id_col: str, output_col: str) -> Transformation:
         """Creates a new column `output_col` containing resolved document IDs.
 
         If `id_col` exists and is not null, it is used. Otherwise, a stable hash
@@ -124,7 +125,7 @@ class Transformation:
         ...
 
     @staticmethod
-    def SplitParagraphs(text_col: str, id_col: str) -> "Transformation":
+    def SplitParagraphs(text_col: str, id_col: str) -> Transformation:
         """Explodes the batch by splitting `text_col` into paragraphs (by newline).
 
         The resulting batch will have columns: `doc_id`, `paragraph_text`, and `paragraph_span`.
@@ -132,22 +133,22 @@ class Transformation:
         ...
 
     @staticmethod
-    def Hash(input_col: str, output_col: str, algo: HashAlgorithm) -> "Transformation":
+    def Hash(input_col: str, output_col: str, algo: HashAlgorithm) -> Transformation:
         """Computes the hash of `input_col` using the specified `algo` and stores it in `output_col`."""
         ...
 
     @staticmethod
-    def SelectColumns(columns: list[str]) -> "Transformation":
+    def SelectColumns(columns: list[str]) -> Transformation:
         """Projects the batch to keep only the specified columns."""
         ...
 
     @staticmethod
-    def CleanText(input_col: str, output_col: str) -> "Transformation":
+    def CleanText(input_col: str, output_col: str) -> Transformation:
         """Normalizes text (lowercase, remove punctuation, normalize whitespace)."""
         ...
 
     @staticmethod
-    def MinHash(input_col: str, output_col: str, num_perms: int, ngram_size: int, seed: int) -> "Transformation":
+    def MinHash(input_col: str, output_col: str, num_perms: int, ngram_size: int, seed: int) -> Transformation:
         """Computes MinHash signatures for the input text using fused shingling/hashing.
 
         Args:
@@ -160,7 +161,7 @@ class Transformation:
         ...
 
     @staticmethod
-    def MinHashLSH(input_col: str, output_col: str, num_bands: int) -> "Transformation":
+    def MinHashLSH(input_col: str, output_col: str, num_bands: int) -> Transformation:
         """Computes LSH buckets from a MinHash signature.
 
         Args:
@@ -175,14 +176,14 @@ def mark_paragraph_duplicates(
     batch: pa.RecordBatch,
     dup_map: dict[str, dict[str, str]],
     attribute_name: str,
-    algorithm: Optional[HashAlgorithm] = None,
+    algorithm: HashAlgorithm | None = None,
 ) -> pa.RecordBatch: ...
 def mark_document_duplicates(
     batch: pa.RecordBatch,
     dup_map: dict[str, dict[str, str]],
     attribute_name: str,
-    hash_col: Optional[str] = None,
-    algorithm: Optional[HashAlgorithm] = None,
+    hash_col: str | None = None,
+    algorithm: HashAlgorithm | None = None,
 ) -> pa.RecordBatch: ...
 def hash_blake2(text: bytes) -> list[int]: ...
 def hash_blake3(text: bytes) -> list[int]: ...

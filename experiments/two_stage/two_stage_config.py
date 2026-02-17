@@ -19,7 +19,7 @@ from experiments.evals.task_configs import convert_to_levanter_task_config
 from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.step_model import StepSpec
 from levanter.data.text import LMMixtureDatasetConfig
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
@@ -337,11 +337,11 @@ class TwoStageConfig:
             data_seed=self.data_seed,
         )
 
-    def build_train_lm_on_pod_config(self) -> TrainLmOnPodConfig:
+    def build_train_lm_on_pod_config(self, output_path: str) -> TrainLmOnPodConfig:
         return TrainLmOnPodConfig(
             train_config=self.build_train_lm_config(),
             resources=self.build_pod_config(),
-            output_path=this_output_path(),
+            output_path=output_path,
         )
 
     def __hash__(self):
@@ -354,19 +354,20 @@ class TwoStageConfig:
         return hash(self) == hash(other)
 
 
-def two_stage_train_step(two_stage_config: TwoStageConfig) -> ExecutorStep:
-    train_lm_on_pod_config = two_stage_config.build_train_lm_on_pod_config()
-
+def two_stage_train_step(two_stage_config: TwoStageConfig) -> StepSpec:
     executor_step_name = os.path.join("checkpoints", "two_stage", two_stage_config.build_name())
 
-    return ExecutorStep(
+    return StepSpec(
         name=executor_step_name,
         override_output_path=executor_step_name,
-        fn=run_levanter_train_lm,
-        description=f"Train a model for "
-        f"{two_stage_config.num_train_steps} (steps) * "
-        f"{two_stage_config.train_batch_size} (batch_size) * "
-        f"{two_stage_config.model_config.max_seq_len} (seq_len) "
-        f"= {two_stage_config.total_tokens:,} tokens.",
-        config=train_lm_on_pod_config,
+        hash_attrs={
+            "model_name": two_stage_config.model_name,
+            "rare_data_name": two_stage_config.rare_data_name,
+            "common_data_name": two_stage_config.common_data_name,
+            "num_train_steps": two_stage_config.num_train_steps,
+            "train_batch_size": two_stage_config.train_batch_size,
+            "replay_ratio": two_stage_config.replay_ratio,
+            "rare_stage2_allocation": two_stage_config.rare_stage2_allocation,
+        },
+        fn=lambda output_path: run_levanter_train_lm(two_stage_config.build_train_lm_on_pod_config(output_path)),
     )

@@ -9,7 +9,6 @@ import pytest
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
-from marin.execution import InputName
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, tokenize
 
 # Dummy values for other required TokenizeConfig fields
@@ -60,57 +59,6 @@ def test_train_paths_variants(train_paths, should_error, expected_error_path):
         except ValueError as e:
             if "contains a forbidden pattern" in str(e):
                 pytest.fail("Unexpected ValueError for valid path")
-
-
-@pytest.mark.parametrize(
-    "input_name, should_error",
-    [
-        (InputName.hardcoded("gs://bucket/data/train/file.jsonl"), False),
-        (InputName.hardcoded("gs://bucket/data/test/file.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/validation/file.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/latest_updates/file.jsonl"), False),
-        (InputName.hardcoded("gs://bucket/data/train/file_test.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/train/file_validation.jsonl"), True),
-    ],
-)
-def test_inputname_variants(input_name, should_error):
-    if should_error:
-        with pytest.raises(ValueError) as excinfo:
-            TokenizeConfig(
-                train_paths=[input_name],
-                validation_paths=DUMMY_VALIDATION_PATHS,
-                cache_path=DUMMY_CACHE_PATH,
-                tokenizer=DUMMY_TOKENIZER,
-            )
-        assert "contains a forbidden pattern ('test' or 'validation')" in str(excinfo.value)
-        assert input_name.name in str(excinfo.value)
-    else:
-        try:
-            TokenizeConfig(
-                train_paths=[input_name],
-                validation_paths=DUMMY_VALIDATION_PATHS,
-                cache_path=DUMMY_CACHE_PATH,
-                tokenizer=DUMMY_TOKENIZER,
-            )
-        except ValueError as e:
-            if "contains a forbidden pattern" in str(e):
-                pytest.fail("Unexpected ValueError for valid InputName")
-
-
-def test_mixed_paths_one_invalid_inputname():
-    with pytest.raises(ValueError) as excinfo:
-        TokenizeConfig(
-            train_paths=[
-                "gs://bucket/data/train/file1.jsonl",
-                InputName.hardcoded("gs://bucket/data/test/file2.jsonl"),
-                "gs://bucket/data/train/file3.jsonl",
-            ],
-            validation_paths=DUMMY_VALIDATION_PATHS,
-            cache_path=DUMMY_CACHE_PATH,
-            tokenizer=DUMMY_TOKENIZER,
-        )
-    assert "contains a forbidden pattern ('test' or 'validation')" in str(excinfo.value)
-    assert "gs://bucket/data/test/file2.jsonl" in str(excinfo.value)
 
 
 @pytest.mark.slow

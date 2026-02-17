@@ -29,7 +29,7 @@ from levanter.grug.model import GrugModelConfig
 from levanter.models.grug_wrapper import GrugWrapper
 from levanter.models.lm_model import LmConfig
 from levanter.utils.flop_utils import lm_flops_per_token
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -196,7 +196,7 @@ def main() -> None:
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
 
-    executor_main(steps=steps, description="Grugformer starter")
+    StepRunner().run(steps)
 
 
 if __name__ == "__main__":

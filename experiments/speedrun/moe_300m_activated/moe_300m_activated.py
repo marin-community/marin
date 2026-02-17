@@ -11,7 +11,7 @@ import logging
 from levanter.models.mixtral import MixtralConfig
 
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -52,4 +52,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("moe_mixtral_300m_activated", speedrun_config))
+    StepRunner().run(default_speedrun("moe_mixtral_300m_activated", speedrun_config))

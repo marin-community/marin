@@ -31,8 +31,8 @@ from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution import ExecutorStep
-from marin.execution.executor import executor_main
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.rl.environments.base import EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import create_inference_context
@@ -270,8 +270,8 @@ def evaluate_environment(
     output_path: str,
     model_config: LmConfig | None = None,
     tpu_type: str | None = None,  # "v5litepod-128"
-) -> ExecutorStep:
-    """Create an executor step for evaluating a model on an environment.
+) -> StepSpec:
+    """Create a step for evaluating a model on an environment.
 
     Args:
         checkpoint: Path to model checkpoint (HuggingFace repo or local path)
@@ -281,7 +281,7 @@ def evaluate_environment(
         tpu_type: TPU type to use for evaluation
 
     Returns:
-        ExecutorStep that runs the evaluation
+        StepSpec that runs the evaluation
     """
     env_name = env_config.env_class.split(".")[-1]
     env_id = env_config.env_args.get("env_id", "unknown")
@@ -289,20 +289,20 @@ def evaluate_environment(
     # Get model identifier from checkpoint path for naming
     model_identifier = checkpoint.split("/")[-1] if "/" in checkpoint else checkpoint
 
-    config = EnvironmentEvalConfig(
-        checkpoint=checkpoint,
-        env_config=env_config,
-        model_config=model_config,
-        output_path=output_path,
-        tpu_type=tpu_type,
-    )
-
-    return ExecutorStep(
+    return StepSpec(
         name=f"evaluate-{env_name}-{model_identifier}-{env_id}",
-        fn=_run_evaluation,
-        config=config,
-        description=f"Evaluate model on {env_name}",
+        hash_attrs={"checkpoint": checkpoint, "env_class": env_config.env_class, "env_id": env_id},
+        override_output_path=output_path,
         pip_dependency_groups=["rl"],
+        fn=lambda out: _run_evaluation(
+            EnvironmentEvalConfig(
+                checkpoint=checkpoint,
+                env_config=env_config,
+                model_config=model_config,
+                output_path=out,
+                tpu_type=tpu_type,
+            )
+        ),
     )
 
 
@@ -315,4 +315,4 @@ if __name__ == "__main__":
         ),
         output_path="/tmp/evals",
     )
-    executor_main([step])
+    StepRunner().run([step])

@@ -16,7 +16,6 @@ from fsspec.implementations.local import LocalFileSystem
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
-from marin.execution import ExecutorStep, InputName
 from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class UploadToHfConfig:
-    input_path: str | InputName
+    input_path: str
     repo_id: str
     repo_type: str = "dataset"
     token: str | None = None
@@ -42,7 +41,7 @@ class UploadToHfConfig:
 
 
 def upload_dir_to_hf(
-    input_path: str | InputName | ExecutorStep,
+    input_path: str,
     repo_id: str,
     repo_type: str = "dataset",
     token: str | None = None,
@@ -51,7 +50,7 @@ def upload_dir_to_hf(
     revision: str | None = None,
     commit_batch_size: str = "1GiB",
     **upload_kwargs: str,
-) -> ExecutorStep:
+):
     """
     Uploads a path (possibly a GCS path) to a Hugging Face repo.
     For local paths, it will use the huggingface_hub.upload_folder function. For GCS (or other fsspec paths),
@@ -65,22 +64,15 @@ def upload_dir_to_hf(
         revision: the branch to upload to (if not provided, it will use the default branch)
         certificate_path: where to store the certificate that we uploaded to HF (needed for executor idempotency).
              If not provided, a reasonable default will be used. Should be a path relative to the executor prefix.
-    Returns:
-        ExecutorStep
     """
     if not certificate_path:
-        if isinstance(input_path, InputName) or isinstance(input_path, ExecutorStep):
-            certificate_path = f"metadata/hf_uploads/{input_path.name}"
-        else:
-            # This will drop the scheme (e.g., 'gs') and keep the path
-            parsed = urlparse(input_path)
-            path = parsed.path.lstrip("/")
-            certificate_path = f"metadata/hf_uploads/{path}"
+        # This will drop the scheme (e.g., 'gs') and keep the path
+        parsed = urlparse(input_path)
+        path = parsed.path.lstrip("/")
+        certificate_path = f"metadata/hf_uploads/{path}"
 
-    return ExecutorStep(
-        name=certificate_path,
-        fn=_actually_upload_to_hf,
-        config=UploadToHfConfig(
+    _actually_upload_to_hf(
+        UploadToHfConfig(
             input_path=input_path,
             repo_id=repo_id,
             repo_type=repo_type,

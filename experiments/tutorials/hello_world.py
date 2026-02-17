@@ -10,47 +10,29 @@ Simple example of an experiment, which has two steps:
 import json
 import logging
 import os
-from dataclasses import dataclass
 
 import fsspec
 
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 
 logger = logging.getLogger("ray")
 
 
-@dataclass(frozen=True)
-class GenerateDataConfig:
-    n: int
-    """Number of data points to generate."""
-
-    output_path: str
-    """Where to write the numbers."""
-
-
-def generate_data(config: GenerateDataConfig):
+def generate_data(n: int, output_path: str):
     """Generate numbers from 0 to `n` - 1 and write them to `output_path`."""
-    numbers = list(range(config.n))
+    numbers = list(range(n))
 
     # Write to file
-    numbers_path = os.path.join(config.output_path, "numbers.json")
+    numbers_path = os.path.join(output_path, "numbers.json")
     with fsspec.open(numbers_path, "w") as f:
         json.dump(numbers, f)
 
 
-@dataclass(frozen=True)
-class ComputeStatsConfig:
-    input_path: str
-    """Path to the file with numbers."""
-
-    output_path: str
-    """Where to write the stats."""
-
-
-def compute_stats(config: ComputeStatsConfig):
+def compute_stats(input_path: str, output_path: str):
     """Compute the sum of numbers in the input file and write it to the output file."""
     # Read from file
-    numbers_path = os.path.join(config.input_path, "numbers.json")
+    numbers_path = os.path.join(input_path, "numbers.json")
     with fsspec.open(numbers_path) as f:
         numbers = json.load(f)
 
@@ -60,35 +42,26 @@ def compute_stats(config: ComputeStatsConfig):
         "min": min(numbers),
         "max": max(numbers),
     }
-    stats_path = os.path.join(config.output_path, "stats.json")
+    stats_path = os.path.join(output_path, "stats.json")
     with fsspec.open(stats_path, "w") as f:
         json.dump(stats, f)
 
 
 n = 100
 
-data = ExecutorStep(
+data = StepSpec(
     name="hello_world/data",
-    description=f"Generate data from 0 to {n}-1.",
-    fn=generate_data,
-    config=GenerateDataConfig(
-        n=n,
-        output_path=this_output_path(),
-    ),
+    hash_attrs={"n": n},
+    fn=lambda output_path: generate_data(n=n, output_path=output_path),
 )
 
-stats = ExecutorStep(
+stats = StepSpec(
     name="hello_world/stats",
-    description="Compute stats of the generated data.",
-    fn=compute_stats,
-    config=ComputeStatsConfig(
-        input_path=output_path_of(data),
-        output_path=this_output_path(),
-    ),
+    deps=[data],
+    fn=lambda output_path: compute_stats(input_path=data.output_path, output_path=output_path),
 )
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[data, stats],
-        description="Simple experiment to compute stats of some numbers.",
+    StepRunner().run(
+        [data, stats],
     )

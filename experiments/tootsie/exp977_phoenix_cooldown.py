@@ -13,10 +13,7 @@ We also add z-loss, since in spoonbill we found that to be very helpful
 """
 
 from experiments.tootsie.exp600_tootsie import tootsie_8b_sensible_starling
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 if __name__ == "__main__":
-    executor_main(
-        [tootsie_8b_sensible_starling],
-        description="Train Tootsie 8b with cooldown from 1.7e-4 to 1.7e-5 over 125B tokens",
-    )
+    StepRunner().run([tootsie_8b_sensible_starling])

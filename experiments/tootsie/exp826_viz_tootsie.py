@@ -20,7 +20,8 @@ from experiments.defaults import default_validation_sets
 from experiments.llama import llama_8b_old_rotary
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, versioned
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 COMPARISON_MODEL = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-730000/"
@@ -40,7 +41,7 @@ def path_to_step_name(path):
     return f"analysis/viz/{name}-{step}"
 
 
-eval_sets = default_validation_sets(tokenizer=versioned(llama3_tokenizer))
+eval_sets = default_validation_sets(tokenizer=llama3_tokenizer)
 eval_set_mixture = mixture_for_evaluation(eval_sets)
 
 
@@ -48,16 +49,20 @@ all_steps = []
 
 for checkpoint in CHECKPOINTS:
     name = path_to_step_name(checkpoint)
+    _ckpt = checkpoint
+    _comparison = COMPARISON_MODEL if checkpoint != COMPARISON_MODEL else None
     all_steps.append(
-        ExecutorStep(
+        StepSpec(
             name=name,
-            fn=visualize_lm_log_probs,
-            config=VizLmConfig(
-                checkpoint_path=checkpoint,
-                model=llama_8b,
-                datasets=eval_set_mixture,
-                num_docs_per_dataset=32,
-                comparison_model_path=COMPARISON_MODEL if checkpoint != COMPARISON_MODEL else None,
+            hash_attrs={"checkpoint_path": _ckpt, "comparison_model_path": _comparison},
+            fn=lambda output_path, _c=_ckpt, _cmp=_comparison: visualize_lm_log_probs(
+                VizLmConfig(
+                    checkpoint_path=_c,
+                    model=llama_8b,
+                    datasets=eval_set_mixture,
+                    num_docs_per_dataset=32,
+                    comparison_model_path=_cmp,
+                )
             ),
         )
     )
@@ -74,23 +79,24 @@ PHASE_1_CHECKPOINTS = [
 
 for checkpoint in PHASE_1_CHECKPOINTS:
     name = path_to_step_name(checkpoint)
+    _ckpt = checkpoint
+    _comparison = PHASE_1_BASE if checkpoint != PHASE_1_BASE else None
     all_steps.append(
-        ExecutorStep(
+        StepSpec(
             name=name,
-            fn=visualize_lm_log_probs,
-            config=VizLmConfig(
-                checkpoint_path=checkpoint,
-                model=PHASE_1_CONFIG,
-                datasets=eval_set_mixture,
-                num_docs_per_dataset=32,
-                comparison_model_path=PHASE_1_BASE if checkpoint != PHASE_1_BASE else None,
+            hash_attrs={"checkpoint_path": _ckpt, "comparison_model_path": _comparison},
+            fn=lambda output_path, _c=_ckpt, _cmp=_comparison: visualize_lm_log_probs(
+                VizLmConfig(
+                    checkpoint_path=_c,
+                    model=PHASE_1_CONFIG,
+                    datasets=eval_set_mixture,
+                    num_docs_per_dataset=32,
+                    comparison_model_path=_cmp,
+                )
             ),
         )
     )
 
 
 if __name__ == "__main__":
-    executor_main(
-        all_steps,
-        description="Visualize log probabilities of Tootsie 8b at various stages of training",
-    )
+    StepRunner().run(all_steps)

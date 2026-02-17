@@ -14,7 +14,7 @@ For CPU training, see train_tiny_model_cpu.py
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution.step_runner import StepRunner
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
@@ -30,7 +30,7 @@ wikitext_tokenized = default_tokenize(
     dataset=wikitext_hf_id,
     tokenizer=marin_tokenizer,
     format=TextLmDatasetFormat(),
-    sample_count=versioned(1000),
+    sample_count=1000,
 )
 
 
@@ -57,8 +57,8 @@ nano_wikitext_model = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
+    StepRunner().run(
+        [
             wikitext_tokenized,
             nano_wikitext_model,
         ]

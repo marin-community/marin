@@ -32,7 +32,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_56b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import lm_mixture_data_config
 
 # data
@@ -238,12 +238,11 @@ llama_56b_tootsie = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
+    StepRunner().run(
+        [
             llama_13b_tootsie_phase1,
             llama_22b_tootsie_phase1,
             llama_13b_tootsie_ema_warmstart,
             llama_22b_tootsie_ema_warmstart,
-        ],
-        description="Train some models on DCLM using WSD-S, switching to EMA.",
+        ]
     )

@@ -9,7 +9,7 @@ from experiments.pretraining_datasets.dclm import DCLM_BASELINE_ONLY_MIXTURE, DC
 from experiments.pretraining_datasets.simple import downloads
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
@@ -117,8 +117,8 @@ dclm_mixture_eval = default_eval(step=dclm_mixture_model, evals=CORE_TASKS_PLUS_
 dclm_baseline_only_eval = default_eval(step=dclm_baseline_only_model)
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
+    StepRunner().run(
+        [
             dclm_baseline_tokenized_neox_wrong,
             starcoderdata_neox_tokenized,
             proofpile_2_neox_tokenized,

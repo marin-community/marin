@@ -11,14 +11,14 @@ as dedicated MMLU 0-shot and 5-shot configurations.
 
 from experiments.evals.evals import default_base_eval
 from experiments.models import amber_base_7b, llama_3_1_8b, map_neo_7b, olmo_2_base_8b
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 if __name__ == "__main__":
     # Model path for deeper starling
     deeper_starling_path = "gs://marin-us-central2/checkpoints/tootsie-8b-deeper-starling/hf/step-1419999"
     # Run all evaluations on all models
-    executor_main(
-        steps=[
+    StepRunner().run(
+        [
             *default_base_eval(deeper_starling_path),
             *default_base_eval(llama_3_1_8b),
             *default_base_eval(olmo_2_base_8b),

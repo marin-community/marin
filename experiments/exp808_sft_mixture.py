@@ -18,11 +18,12 @@ from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import lm_mixture_data_config
 
 
-def create_tokenization_step(dataset_name: str) -> ExecutorStep:
+def create_tokenization_step(dataset_name: str) -> StepSpec:
     """
     Creates a tokenization ExecutorStep for a given dataset.
 
@@ -39,7 +40,7 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
     short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
     return default_tokenize(
         name=f"{short_name}_marin_tokenizer",
-        dataset=dataset / "**/*.jsonl.gz",
+        dataset=dataset.cd("**/*.jsonl.gz"),
         tokenizer=marin_tokenizer,
         format=ChatLmDatasetFormat(),
     )
@@ -110,4 +111,4 @@ training_step = default_sft(
 
 if __name__ == "__main__":
     # Run all steps
-    executor_main(steps=[*list(tokenized_datasets.values()), training_step])
+    StepRunner().run([*list(tokenized_datasets.values()), training_step])

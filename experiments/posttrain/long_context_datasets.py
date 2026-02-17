@@ -27,7 +27,7 @@ dolma3_longmino_pool_raw = default_download(
 
 
 longmino_by_bucket = {
-    name: dolma3_longmino_pool_raw / f"data/*-{desc}/*.jsonl.zst"
+    name: dolma3_longmino_pool_raw.cd(f"data/*-{desc}/*.jsonl.zst")
     for name, desc in {
         # they use 2eX notation but seem to mean powers of two
         "8k-16k": "2e13",
@@ -67,7 +67,7 @@ finepdfs_eng_raw = default_download(
     override_output_path="finepdfs_eng_Latn",
 )
 
-finepdfs_by_language = {"eng_Latn": finepdfs_eng_raw / "data/eng_Latn/train/*.parquet"}
+finepdfs_by_language = {"eng_Latn": finepdfs_eng_raw.cd("data/eng_Latn/train/*.parquet")}
 finepdfs_validation_by_language = {"eng_Latn": finepdfs_eng_raw.cd("data/eng_Latn/test/*.parquet")}
 
 # Approx tokens: 206,917,202 rows * ~400 tokens/page ≈ 83B (rough, from schema sample).
@@ -85,6 +85,6 @@ finepdfs_edu_eng_raw = default_download(
     override_output_path="finepdfs_edu_eng_Latn",
 )
 
-finepdfs_edu_by_language = {"eng_Latn": finepdfs_edu_eng_raw / "data/eng_Latn/train/*.parquet"}
+finepdfs_edu_by_language = {"eng_Latn": finepdfs_edu_eng_raw.cd("data/eng_Latn/train/*.parquet")}
 # ~140B tokens for English
 finepdfs_edu_token_counts = {"eng_Latn": 140e9}

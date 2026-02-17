@@ -5,7 +5,7 @@ from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Iterable as _Iterable, Mapping as _Mapping
-from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
+from typing import ClassVar as _ClassVar
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -44,7 +44,7 @@ SCALING_ACTION_SCALE_DOWN: ScalingAction
 SCALING_ACTION_NONE: ScalingAction
 
 class ResourceSpec(_message.Message):
-    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")
+    __slots__ = ("cpu", "disk_bytes", "gpu_count", "memory_bytes", "tpu_count")
     CPU_FIELD_NUMBER: _ClassVar[int]
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
     DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
@@ -55,17 +55,17 @@ class ResourceSpec(_message.Message):
     disk_bytes: int
     gpu_count: int
     tpu_count: int
-    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., gpu_count: _Optional[int] = ..., tpu_count: _Optional[int] = ...) -> None: ...
+    def __init__(self, cpu: int | None = ..., memory_bytes: int | None = ..., disk_bytes: int | None = ..., gpu_count: int | None = ..., tpu_count: int | None = ...) -> None: ...
 
 class VmInfo(_message.Message):
-    __slots__ = ("vm_id", "slice_id", "scale_group", "state", "address", "zone", "created_at", "state_changed_at", "worker_id", "worker_healthy", "init_phase", "init_log_tail", "init_error", "labels")
+    __slots__ = ("address", "created_at", "init_error", "init_log_tail", "init_phase", "labels", "scale_group", "slice_id", "state", "state_changed_at", "vm_id", "worker_healthy", "worker_id", "zone")
     class LabelsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+        def __init__(self, key: str | None = ..., value: str | None = ...) -> None: ...
     VM_ID_FIELD_NUMBER: _ClassVar[int]
     SLICE_ID_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
@@ -94,10 +94,10 @@ class VmInfo(_message.Message):
     init_log_tail: str
     init_error: str
     labels: _containers.ScalarMap[str, str]
-    def __init__(self, vm_id: _Optional[str] = ..., slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., state: _Optional[_Union[VmState, str]] = ..., address: _Optional[str] = ..., zone: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., state_changed_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., worker_id: _Optional[str] = ..., worker_healthy: _Optional[bool] = ..., init_phase: _Optional[str] = ..., init_log_tail: _Optional[str] = ..., init_error: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(self, vm_id: str | None = ..., slice_id: str | None = ..., scale_group: str | None = ..., state: VmState | str | None = ..., address: str | None = ..., zone: str | None = ..., created_at: _time_pb2.Timestamp | _Mapping | None = ..., state_changed_at: _time_pb2.Timestamp | _Mapping | None = ..., worker_id: str | None = ..., worker_healthy: bool | None = ..., init_phase: str | None = ..., init_log_tail: str | None = ..., init_error: str | None = ..., labels: _Mapping[str, str] | None = ...) -> None: ...
 
 class SliceInfo(_message.Message):
-    __slots__ = ("slice_id", "scale_group", "created_at", "vms")
+    __slots__ = ("created_at", "scale_group", "slice_id", "vms")
     SLICE_ID_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
@@ -106,10 +106,10 @@ class SliceInfo(_message.Message):
     scale_group: str
     created_at: _time_pb2.Timestamp
     vms: _containers.RepeatedCompositeFieldContainer[VmInfo]
-    def __init__(self, slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., vms: _Optional[_Iterable[_Union[VmInfo, _Mapping]]] = ...) -> None: ...
+    def __init__(self, slice_id: str | None = ..., scale_group: str | None = ..., created_at: _time_pb2.Timestamp | _Mapping | None = ..., vms: _Iterable[VmInfo | _Mapping] | None = ...) -> None: ...
 
 class ScalingDecision(_message.Message):
-    __slots__ = ("scale_group", "action", "slice_delta", "reason")
+    __slots__ = ("action", "reason", "scale_group", "slice_delta")
     SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
     ACTION_FIELD_NUMBER: _ClassVar[int]
     SLICE_DELTA_FIELD_NUMBER: _ClassVar[int]
@@ -118,17 +118,17 @@ class ScalingDecision(_message.Message):
     action: ScalingAction
     slice_delta: int
     reason: str
-    def __init__(self, scale_group: _Optional[str] = ..., action: _Optional[_Union[ScalingAction, str]] = ..., slice_delta: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
+    def __init__(self, scale_group: str | None = ..., action: ScalingAction | str | None = ..., slice_delta: int | None = ..., reason: str | None = ...) -> None: ...
 
 class ScaleGroupStatus(_message.Message):
-    __slots__ = ("name", "config", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices", "slice_state_counts")
+    __slots__ = ("backoff_until", "config", "consecutive_failures", "current_demand", "last_scale_down", "last_scale_up", "name", "peak_demand", "slice_state_counts", "slices")
     class SliceStateCountsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: int
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        def __init__(self, key: str | None = ..., value: int | None = ...) -> None: ...
     NAME_FIELD_NUMBER: _ClassVar[int]
     CONFIG_FIELD_NUMBER: _ClassVar[int]
     CURRENT_DEMAND_FIELD_NUMBER: _ClassVar[int]
@@ -149,10 +149,10 @@ class ScaleGroupStatus(_message.Message):
     last_scale_down: _time_pb2.Timestamp
     slices: _containers.RepeatedCompositeFieldContainer[SliceInfo]
     slice_state_counts: _containers.ScalarMap[str, int]
-    def __init__(self, name: _Optional[str] = ..., config: _Optional[_Union[_config_pb2.ScaleGroupConfig, _Mapping]] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ..., slice_state_counts: _Optional[_Mapping[str, int]] = ...) -> None: ...
+    def __init__(self, name: str | None = ..., config: _config_pb2.ScaleGroupConfig | _Mapping | None = ..., current_demand: int | None = ..., peak_demand: int | None = ..., backoff_until: _time_pb2.Timestamp | _Mapping | None = ..., consecutive_failures: int | None = ..., last_scale_up: _time_pb2.Timestamp | _Mapping | None = ..., last_scale_down: _time_pb2.Timestamp | _Mapping | None = ..., slices: _Iterable[SliceInfo | _Mapping] | None = ..., slice_state_counts: _Mapping[str, int] | None = ...) -> None: ...
 
 class AutoscalerAction(_message.Message):
-    __slots__ = ("timestamp", "action_type", "scale_group", "slice_id", "reason", "status")
+    __slots__ = ("action_type", "reason", "scale_group", "slice_id", "status", "timestamp")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     ACTION_TYPE_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
@@ -165,10 +165,10 @@ class AutoscalerAction(_message.Message):
     slice_id: str
     reason: str
     status: str
-    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., action_type: _Optional[str] = ..., scale_group: _Optional[str] = ..., slice_id: _Optional[str] = ..., reason: _Optional[str] = ..., status: _Optional[str] = ...) -> None: ...
+    def __init__(self, timestamp: _time_pb2.Timestamp | _Mapping | None = ..., action_type: str | None = ..., scale_group: str | None = ..., slice_id: str | None = ..., reason: str | None = ..., status: str | None = ...) -> None: ...
 
 class DemandEntryStatus(_message.Message):
-    __slots__ = ("task_ids", "coschedule_group_id", "accelerator_type", "accelerator_variant", "preemptible", "resources")
+    __slots__ = ("accelerator_type", "accelerator_variant", "coschedule_group_id", "preemptible", "resources", "task_ids")
     TASK_IDS_FIELD_NUMBER: _ClassVar[int]
     COSCHEDULE_GROUP_ID_FIELD_NUMBER: _ClassVar[int]
     ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -181,7 +181,7 @@ class DemandEntryStatus(_message.Message):
     accelerator_variant: str
     preemptible: bool
     resources: ResourceSpec
-    def __init__(self, task_ids: _Optional[_Iterable[str]] = ..., coschedule_group_id: _Optional[str] = ..., accelerator_type: _Optional[_Union[_config_pb2.AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., preemptible: _Optional[bool] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ...) -> None: ...
+    def __init__(self, task_ids: _Iterable[str] | None = ..., coschedule_group_id: str | None = ..., accelerator_type: _config_pb2.AcceleratorType | str | None = ..., accelerator_variant: str | None = ..., preemptible: bool | None = ..., resources: ResourceSpec | _Mapping | None = ...) -> None: ...
 
 class UnmetDemand(_message.Message):
     __slots__ = ("entry", "reason")
@@ -189,31 +189,31 @@ class UnmetDemand(_message.Message):
     REASON_FIELD_NUMBER: _ClassVar[int]
     entry: DemandEntryStatus
     reason: str
-    def __init__(self, entry: _Optional[_Union[DemandEntryStatus, _Mapping]] = ..., reason: _Optional[str] = ...) -> None: ...
+    def __init__(self, entry: DemandEntryStatus | _Mapping | None = ..., reason: str | None = ...) -> None: ...
 
 class RoutingDecision(_message.Message):
-    __slots__ = ("group_to_launch", "group_reasons", "routed_entries", "unmet_entries")
+    __slots__ = ("group_reasons", "group_to_launch", "routed_entries", "unmet_entries")
     class GroupToLaunchEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: int
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        def __init__(self, key: str | None = ..., value: int | None = ...) -> None: ...
     class GroupReasonsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+        def __init__(self, key: str | None = ..., value: str | None = ...) -> None: ...
     class RoutedEntriesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: DemandEntryStatusList
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[DemandEntryStatusList, _Mapping]] = ...) -> None: ...
+        def __init__(self, key: str | None = ..., value: DemandEntryStatusList | _Mapping | None = ...) -> None: ...
     GROUP_TO_LAUNCH_FIELD_NUMBER: _ClassVar[int]
     GROUP_REASONS_FIELD_NUMBER: _ClassVar[int]
     ROUTED_ENTRIES_FIELD_NUMBER: _ClassVar[int]
@@ -222,23 +222,23 @@ class RoutingDecision(_message.Message):
     group_reasons: _containers.ScalarMap[str, str]
     routed_entries: _containers.MessageMap[str, DemandEntryStatusList]
     unmet_entries: _containers.RepeatedCompositeFieldContainer[UnmetDemand]
-    def __init__(self, group_to_launch: _Optional[_Mapping[str, int]] = ..., group_reasons: _Optional[_Mapping[str, str]] = ..., routed_entries: _Optional[_Mapping[str, DemandEntryStatusList]] = ..., unmet_entries: _Optional[_Iterable[_Union[UnmetDemand, _Mapping]]] = ...) -> None: ...
+    def __init__(self, group_to_launch: _Mapping[str, int] | None = ..., group_reasons: _Mapping[str, str] | None = ..., routed_entries: _Mapping[str, DemandEntryStatusList] | None = ..., unmet_entries: _Iterable[UnmetDemand | _Mapping] | None = ...) -> None: ...
 
 class DemandEntryStatusList(_message.Message):
     __slots__ = ("entries",)
     ENTRIES_FIELD_NUMBER: _ClassVar[int]
     entries: _containers.RepeatedCompositeFieldContainer[DemandEntryStatus]
-    def __init__(self, entries: _Optional[_Iterable[_Union[DemandEntryStatus, _Mapping]]] = ...) -> None: ...
+    def __init__(self, entries: _Iterable[DemandEntryStatus | _Mapping] | None = ...) -> None: ...
 
 class AutoscalerStatus(_message.Message):
-    __slots__ = ("groups", "current_demand", "last_evaluation", "recent_actions", "last_routing_decision")
+    __slots__ = ("current_demand", "groups", "last_evaluation", "last_routing_decision", "recent_actions")
     class CurrentDemandEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: int
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        def __init__(self, key: str | None = ..., value: int | None = ...) -> None: ...
     GROUPS_FIELD_NUMBER: _ClassVar[int]
     CURRENT_DEMAND_FIELD_NUMBER: _ClassVar[int]
     LAST_EVALUATION_FIELD_NUMBER: _ClassVar[int]
@@ -249,4 +249,4 @@ class AutoscalerStatus(_message.Message):
     last_evaluation: _time_pb2.Timestamp
     recent_actions: _containers.RepeatedCompositeFieldContainer[AutoscalerAction]
     last_routing_decision: RoutingDecision
-    def __init__(self, groups: _Optional[_Iterable[_Union[ScaleGroupStatus, _Mapping]]] = ..., current_demand: _Optional[_Mapping[str, int]] = ..., last_evaluation: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., recent_actions: _Optional[_Iterable[_Union[AutoscalerAction, _Mapping]]] = ..., last_routing_decision: _Optional[_Union[RoutingDecision, _Mapping]] = ...) -> None: ...
+    def __init__(self, groups: _Iterable[ScaleGroupStatus | _Mapping] | None = ..., current_demand: _Mapping[str, int] | None = ..., last_evaluation: _time_pb2.Timestamp | _Mapping | None = ..., recent_actions: _Iterable[AutoscalerAction | _Mapping] | None = ..., last_routing_decision: RoutingDecision | _Mapping | None = ...) -> None: ...

@@ -12,9 +12,9 @@ from levanter.optim import MuonConfig
 from experiments.defaults import default_train
 from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie, llama_32b_train_config, nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution import executor_main
+from marin.execution.step_runner import StepRunner
 
-warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-77096/").nonblocking()
+warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-77096/")
 
 
 muon_config = MuonConfig(
@@ -47,9 +47,4 @@ llama_32b_muon = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(
-        [
-            llama_32b_muon,
-        ],
-        description="Give muon a shot on 32B with Nemotron and Starcoderdata",
-    )
+    StepRunner().run([llama_32b_muon])

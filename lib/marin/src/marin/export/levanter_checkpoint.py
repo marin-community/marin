@@ -23,13 +23,6 @@ from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    VersionedValue,
-    ensure_versioned,
-    this_output_path,
-)
 from marin.training.training import _add_default_env_variables, _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 
@@ -42,11 +35,11 @@ class ConvertCheckpointStepConfig:
     Configuration for converting a single Levanter checkpoint into HuggingFace format.
     """
 
-    checkpoint_path: str | InputName | VersionedValue[str]
+    checkpoint_path: str
     trainer: TrainerConfig
     model: LmConfig
     resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
+    output_path: str = ""
     upload_to_hf: bool | str | RepoRef = False
     tokenizer: str | None = None
     override_vocab_size: int | None = None
@@ -115,7 +108,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
 
 def convert_checkpoint_to_hf_step(
     name: str,
-    checkpoint_path: InputName | str,
+    checkpoint_path: str,
     *,
     trainer: TrainerConfig,
     model: LmConfig,
@@ -129,14 +122,13 @@ def convert_checkpoint_to_hf_step(
     override_output_path: str | None = None,
     pip_dependency_groups: list[str] | None = None,
     discover_latest: bool = False,
-) -> ExecutorStep:
+):
     """
-    Creates an ExecutorStep that materializes a HuggingFace checkpoint from a saved Levanter checkpoint.
+    Converts a Levanter checkpoint to HuggingFace format.
 
     Args:
         name: Step name. Commonly prefixed with ``hf/`` to keep outputs organized.
-        checkpoint_path: Path (or InputName) pointing to a Levanter checkpoint directory, e.g.
-            ``train_step.cd("checkpoints/ckpt-210388")``.
+        checkpoint_path: Path pointing to a Levanter checkpoint directory.
         trainer: TrainerConfig that matches the topology the checkpoint was saved with.
         model: Model configuration that produced the checkpoint.
         resources: Hardware resources to use when running the conversion. Defaults to CPU-only execution.
@@ -152,14 +144,8 @@ def convert_checkpoint_to_hf_step(
         discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
     """
 
-    checkpoint_value: InputName | VersionedValue[str]
-    if isinstance(checkpoint_path, InputName):
-        checkpoint_value = checkpoint_path
-    else:
-        checkpoint_value = ensure_versioned(checkpoint_path)
-
     config = ConvertCheckpointStepConfig(
-        checkpoint_path=checkpoint_value,
+        checkpoint_path=checkpoint_path,
         trainer=trainer,
         model=model,
         resources=resources or ResourceConfig.with_cpu(),
@@ -172,10 +158,4 @@ def convert_checkpoint_to_hf_step(
         discover_latest=discover_latest,
     )
 
-    return ExecutorStep(
-        name=name,
-        fn=convert_checkpoint_to_hf,
-        config=config,
-        override_output_path=override_output_path,
-        pip_dependency_groups=pip_dependency_groups,
-    )
+    convert_checkpoint_to_hf(config)

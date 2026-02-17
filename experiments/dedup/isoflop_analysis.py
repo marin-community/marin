@@ -12,7 +12,7 @@ import humanfriendly
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
 from marin.processing.tokenize import tokenize
-from marin.processing.tokenize.data_configs import lm_data_config
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from experiments.pretraining_datasets.simple import downloads
@@ -22,7 +22,10 @@ from experiments.isoflop_sweep import (
     create_isoflop_sweep_steps,
     run_isoflop_analysis_step,
 )
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+import os
+
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 
 logger = logging.getLogger(__name__)
 
@@ -35,36 +38,47 @@ TOKENIZER = "stanford-crfm/marin-tokenizer"
 
 def _get_vanilla_data_mixture(*, variant: str) -> LMMixtureDatasetConfig:
     """Vanilla fineweb-edu mixture"""
-    tokenize_config = TokenizeConfig(
-        train_paths=[downloads[variant]],
-        validation_paths=versioned([]),
-        cache_path=this_output_path(),
-        tokenizer=versioned(TOKENIZER),
-        window_size_bytes=humanfriendly.parse_size("512MB", binary=True),
-    )
-
-    tokenize_step = ExecutorStep(
+    tokenize_step = StepSpec(
         name=f"tokenized/{variant}",
-        fn=tokenize,
-        config=tokenize_config,
+        hash_attrs={
+            "train_paths": [downloads[variant]],
+            "validation_paths": [],
+            "tokenizer": TOKENIZER,
+        },
+        fn=lambda output_path, _v=variant: tokenize(
+            TokenizeConfig(
+                train_paths=[downloads[_v]],
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer=TOKENIZER,
+                window_size_bytes=humanfriendly.parse_size("512MB", binary=True),
+            )
+        ),
     )
 
-    vanilla_fineweb_edu_mixture_config = lm_data_config(tokenize_step)
+    vanilla_fineweb_edu_mixture_config = lm_mixture_data_config(
+        components={variant: tokenize_step},
+        weights={variant: 1.0},
+    )
     return vanilla_fineweb_edu_mixture_config
 
 
 def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism: int = 1024) -> LMMixtureDatasetConfig:
     """Dedup fineweb-edu mixture"""
-    dedup_config = DedupConfig(
-        input_paths=downloads[variant],
-        mode=mode,
-        processes=max_parallelism,
-    )
-
-    dedup_step = ExecutorStep(
+    dedup_step = StepSpec(
         name=f"dedup/{variant}_{mode.lower()}",
-        fn=deduplicate,
-        config=dedup_config,
+        hash_attrs={
+            "input_paths": downloads[variant],
+            "mode": mode,
+            "processes": max_parallelism,
+        },
+        fn=lambda output_path, _v=variant, _m=mode: deduplicate(
+            DedupConfig(
+                input_paths=downloads[_v],
+                mode=_m,
+                processes=max_parallelism,
+            )
+        ),
     )
 
     dedup_mode_to_filter_type = {
@@ -73,40 +87,54 @@ def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism:
         DedupMode.FUZZY_DOCUMENT: FilterType.REMOVE_DOC,
     }
 
-    consolidate_step = ExecutorStep(
+    consolidate_step = StepSpec(
         name=f"clean/{variant}_{mode.lower()}",
-        fn=consolidate,
-        config=ConsolidateConfig(
-            input_path=downloads[variant],
-            output_path=this_output_path(),
-            # TODO (rav): can we infer this?
-            filetype="parquet",
-            filters=[
-                FilterConfig(
-                    type=dedup_mode_to_filter_type[mode],
-                    # TODO (rav): it's not cool that we need to cd to data!
-                    attribute_path=dedup_step.cd("data"),
-                    name=str(mode),
-                ),
-            ],
+        hash_attrs={
+            "input_path": downloads[variant],
+            "filetype": "parquet",
+            "mode": str(mode),
+        },
+        deps=[dedup_step],
+        fn=lambda output_path, _v=variant, _m=mode, _ds=dedup_step: consolidate(
+            ConsolidateConfig(
+                input_path=downloads[_v],
+                output_path=output_path,
+                filetype="parquet",
+                filters=[
+                    FilterConfig(
+                        type=dedup_mode_to_filter_type[_m],
+                        attribute_path=os.path.join(_ds.output_path, "data"),
+                        name=str(_m),
+                    ),
+                ],
+            )
         ),
     )
 
-    tokenize_config = TokenizeConfig(
-        train_paths=[consolidate_step],
-        validation_paths=versioned([]),
-        cache_path=this_output_path(),
-        tokenizer=versioned(TOKENIZER),
-        window_size_bytes=humanfriendly.parse_size("512MB", binary=True),
-    )
-
-    tokenize_step = ExecutorStep(
+    tokenize_step = StepSpec(
         name=f"tokenized/dedup_{variant}_{mode.lower()}",
-        fn=tokenize,
-        config=tokenize_config,
+        hash_attrs={
+            "train_paths": [consolidate_step.output_path],
+            "validation_paths": [],
+            "tokenizer": TOKENIZER,
+        },
+        deps=[consolidate_step],
+        fn=lambda output_path, _cs=consolidate_step: tokenize(
+            TokenizeConfig(
+                train_paths=[_cs.output_path],
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer=TOKENIZER,
+                window_size_bytes=humanfriendly.parse_size("512MB", binary=True),
+            )
+        ),
     )
 
-    deduped_fineweb_edu_mixture_config = lm_data_config(tokenize_step)
+    dedup_name = f"dedup_{variant}_{mode.lower()}"
+    deduped_fineweb_edu_mixture_config = lm_mixture_data_config(
+        components={dedup_name: tokenize_step},
+        weights={dedup_name: 1.0},
+    )
     return deduped_fineweb_edu_mixture_config
 
 
@@ -128,13 +156,18 @@ for mode in DedupMode:
     )
 
 
-analysis_step = ExecutorStep(
+analysis_step = StepSpec(
     name=f"{EXPERIMENT_NAME_PREFIX}-analysis",
-    fn=run_isoflop_analysis_step,
-    config=IsoFlopAnalysisConfig(
-        training_runs=[r.as_input_name() for r in training_steps],
-        output_path=this_output_path(),
-        recipe=MARIN_2025_RECIPE,
+    hash_attrs={
+        "training_runs": [r.output_path for r in training_steps],
+    },
+    deps=training_steps,
+    fn=lambda output_path: run_isoflop_analysis_step(
+        IsoFlopAnalysisConfig(
+            training_runs=[r.output_path for r in training_steps],
+            output_path=output_path,
+            recipe=MARIN_2025_RECIPE,
+        )
     ),
 )
 
@@ -142,4 +175,4 @@ all_steps = [analysis_step]
 
 
 if __name__ == "__main__":
-    executor_main(steps=all_steps)
+    StepRunner().run(all_steps)

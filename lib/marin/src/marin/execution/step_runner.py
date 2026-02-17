@@ -6,9 +6,6 @@
 This module provides the execution layer for ``StepSpec`` objects. The main
 entry point is ``StepRunner``, which eagerly runs steps as they are yielded
 from an iterable, launching each as soon as its dependencies are satisfied.
-
-``ExecutorStep`` objects can be converted to ``StepSpec`` via
-``resolve_executor_step``.
 """
 
 from __future__ import annotations
@@ -19,11 +16,10 @@ import re
 import time
 from collections.abc import Iterable
 from threading import Event, Thread
-from typing import TYPE_CHECKING, Any
 
 from fray.v2 import client as fray_client
 from fray.v2.client import JobHandle, JobStatus
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray.v2.types import Entrypoint, JobRequest, create_environment
 
 from marin.execution.executor_step_status import (
     HEARTBEAT_INTERVAL,
@@ -35,9 +31,6 @@ from marin.execution.executor_step_status import (
 )
 from marin.execution.step_model import StepSpec
 from marin.utilities.time_logger import log_time
-
-if TYPE_CHECKING:
-    from marin.execution.executor import ExecutorStep
 
 logger = logging.getLogger(__name__)
 
@@ -174,54 +167,6 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
 
 
 # ---------------------------------------------------------------------------
-# ExecutorStep → StepSpec conversion
-# ---------------------------------------------------------------------------
-
-
-def resolve_executor_step(
-    step: ExecutorStep,
-    config: Any,
-    output_path: str,
-    deps: list[str] | None = None,
-) -> StepSpec:
-    """Convert an ExecutorStep into a StepSpec.
-
-    ``config`` should already be instantiated (no InputName / OutputName /
-    VersionedValue markers).  The old executor called ``fn(config)``; we wrap
-    that into a ``fn(output_path)`` closure expected by ``StepRunner``.
-    """
-    import ray
-
-    step_fn = step.fn
-    if isinstance(step_fn, ray.remote_function.RemoteFunction):
-        remote_fn = step_fn
-
-        def step_fn(*args, **kw):
-            return ray.get(remote_fn.remote(*args, **kw))
-
-    assert step_fn is not None, f"Step {step.name} has no callable"
-
-    # Old-style ExecutorStep functions accept the resolved config as their only
-    # argument. The config already contains the output path, so we ignore the
-    # output_path parameter that StepRunner passes.
-    captured_fn = step_fn
-    captured_config = config
-
-    def resolved_fn(output_path):
-        return captured_fn(captured_config)
-
-    return StepSpec(
-        name=step.name,
-        deps=deps or [],
-        override_output_path=output_path,
-        fn=resolved_fn,
-        resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
-        env_vars=step.env_vars or {},
-        pip_dependency_groups=step.pip_dependency_groups or [],
-    )
-
-
-# ---------------------------------------------------------------------------
 # Step runner
 # ---------------------------------------------------------------------------
 
@@ -336,6 +281,16 @@ class StepRunner:
                 # One more flush in case deps failed and we can mark dependents
                 _flush_waiting()
                 if not running and waiting:
+                    if dry_run:
+                        # In dry-run mode, treat unsatisfied deps as completed
+                        # (they may be external steps not in this list)
+                        for s in waiting:
+                            unmet = [d for d in s.deps if d not in completed and d not in failed]
+                            for d in unmet:
+                                logger.info("[DRY RUN] Assuming dep %s is satisfied", _display_name(d))
+                                completed.add(d)
+                        _flush_waiting()
+                        continue
                     missing = []
                     for s in waiting:
                         unmet = [_display_name(d) for d in s.deps if d not in completed and d not in failed]

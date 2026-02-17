@@ -15,6 +15,7 @@ that point the loss started to increase again. I still don't know why.
 # Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
 
 import dataclasses
+import os
 
 from levanter.callbacks.watch import WatchConfig
 
@@ -36,7 +37,7 @@ from experiments.tootsie.exp600_tootsie import (
     phase_3_tokenized,
 )
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # 3072 * 4096 * 10000 is 125B tokens
@@ -51,7 +52,7 @@ tootsie_8b_hypnotic_spoonbill_train = dataclasses.replace(
     num_train_steps=COOLDOWN_END,
     min_lr_ratio=2.75e-5 / 1.7e-4,
     decay=COOLDOWN_LEN,
-    initialize_from_checkpoint_path=output_path_of(llama_8b_tootsie_phase3, "checkpoints/step-819924"),
+    initialize_from_checkpoint_path=os.path.join(llama_8b_tootsie_phase3.output_path, "checkpoints/step-819924"),
     reset_data_loader_on_init=False,
     per_device_eval_parallelism=16,
     allow_partial_checkpoint=False,
@@ -189,7 +190,9 @@ DEEPER_END = COOLDOWN_END + EXTRA_STEPS
 
 tootsie_8b_deeper_spoonbill_train = dataclasses.replace(
     norm_tracking_spoonbill_train,
-    initialize_from_checkpoint_path=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "checkpoints/step-829947"),
+    initialize_from_checkpoint_path=os.path.join(
+        norm_tootsie_8b_focused_spoonbill_zloss.output_path, "checkpoints/step-829947"
+    ),
     watch=WatchConfig(
         interval=10,
         # fp32 pushes the ram too high here
@@ -225,7 +228,7 @@ tootsie_8b_deeper_spoonbill = dataclasses.replace(
 
 spoonbill_zloss_tulu3_sft_config = dataclasses.replace(
     tulu_sft_config,
-    initialize_from_hf=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "hf/step-829999/"),
+    initialize_from_hf=os.path.join(norm_tootsie_8b_focused_spoonbill_zloss.output_path, "hf/step-829999/"),
 )
 
 
@@ -244,14 +247,14 @@ sft_tulu3_deeper_spoonbill = default_sft(
     model_config=llama_8b_fp32_attn,
     sft_config=dataclasses.replace(
         spoonbill_zloss_tulu3_sft_config,
-        initialize_from_hf=output_path_of(tootsie_8b_deeper_spoonbill, "hf/step-839999/"),
+        initialize_from_hf=os.path.join(tootsie_8b_deeper_spoonbill.output_path, "hf/step-839999/"),
     ),
     tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
 ).with_output_path("checkpoints/sft/tulu3_tootsie_sft_deeper_spoonbill_zloss")
 
 
 if __name__ == "__main__":
-    executor_main(
+    StepRunner().run(
         [
             tootsie_8b_hypnotic_spoonbill,
             norm_tootsie_8b_hypnotic_spoonbill,
@@ -260,6 +263,5 @@ if __name__ == "__main__":
             tootsie_8b_deeper_spoonbill,
             sft_tulu3_spoonbill_zloss,
             sft_tulu3_deeper_spoonbill,
-        ],
-        description="Cooldown run for tootsie-8b model with some flan and tulu",
+        ]
     )

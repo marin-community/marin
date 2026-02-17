@@ -8,7 +8,7 @@ import logging
 import os
 
 from levanter.models.llama import LlamaConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.rl_losses import RLOOLoss
@@ -114,10 +114,7 @@ def main():
             ),
         )
 
-    executor_main(
-        steps=experiments,
-        description="Async RL math training experiments",
-    )
+    StepRunner().run(experiments)
 
 
 if __name__ == "__main__":

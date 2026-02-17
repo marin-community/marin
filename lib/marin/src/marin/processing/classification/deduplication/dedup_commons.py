@@ -15,7 +15,6 @@ import pyarrow.json as pa_json
 
 from fray.v2.local_backend import LocalClient
 from marin.utilities.wandb_utils import init_wandb
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utils import fsspec_glob
 from zephyr import ZephyrContext
 from zephyr.dataset import Dataset
@@ -72,7 +71,7 @@ class DedupConfig:
 
     input_paths: str | list[str]
     filetypes: list[str] = field(default_factory=lambda: ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"])
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str = ""
     processes: int = 1
     mode: DedupMode = DedupMode.EXACT_PARAGRAPH
     # field to use for text content in Parquet files

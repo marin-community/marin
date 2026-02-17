@@ -19,7 +19,7 @@ from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 # Define the LlamaConfig for a 1.4B parameter model
 # This follows the 1B-1x competition scale in the DCLM benchmark
@@ -68,7 +68,4 @@ dclm_mixture_model = default_train(
 
 # Main execution block
 if __name__ == "__main__":
-    executor_main(
-        steps=[dclm_mixture_model],
-        description="A How-To Which Reproduces the DCLM 1B/1X Baseline for the competition pool.",
-    )
+    StepRunner().run([dclm_mixture_model])

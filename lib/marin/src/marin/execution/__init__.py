@@ -19,7 +19,7 @@ from .executor import (
     versioned,
 )
 from .step_model import StepSpec
-from .step_runner import StepRunner, resolve_executor_step
+from .step_runner import StepRunner
 from .executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,

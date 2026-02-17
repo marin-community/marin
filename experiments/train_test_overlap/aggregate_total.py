@@ -22,7 +22,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import fsspec
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.utils import fsspec_glob
 from zephyr import Dataset, ZephyrContext, load_file, load_jsonl
 
@@ -57,7 +58,7 @@ def extract_shard_metadata(shard_path: str, training_root: str, ngram_size: int)
     }
 
 
-def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
+def _compute_dataset_sizes(dataset_steps: list[StepSpec]) -> dict[str, int]:
     """Return mapping dataset_name -> total example count using Zephyr."""
 
     def count_dir(path: str) -> int:
@@ -148,7 +149,7 @@ class AggregateConfig:
     attribute_name: str = "ngram_overlap"
     """Attribute name in the JSON files"""
 
-    eval_dataset_steps: list[ExecutorStep] = field(default_factory=lambda: EVAL_DATASET_STEPS)
+    eval_dataset_steps: list[StepSpec] = field(default_factory=lambda: EVAL_DATASET_STEPS)
     """Evaluation dataset steps to compute sizes for"""
 
 
@@ -391,40 +392,39 @@ def run_aggregate_total(config: AggregateConfig) -> str:
 
 def build_aggregate_total_step(
     attributes_base_path: str = "gs://marin-us-central2/train_test_overlap/",
-    output_path: str | None = None,
     ngram_size: int = 15,
-    eval_dataset_steps: list[ExecutorStep] | None = None,
-) -> ExecutorStep:
-    """Create an ExecutorStep for aggregating train-test overlap.
+    eval_dataset_steps: list[StepSpec] | None = None,
+) -> StepSpec:
+    """Create a StepSpec for aggregating train-test overlap.
 
     Args:
         attributes_base_path: Base path containing attribute files
-        output_path: Where to write results. If None, uses this_output_path()
         ngram_size: N-gram size to process
         eval_dataset_steps: Evaluation dataset steps. If None, uses EVAL_DATASET_STEPS
 
     Returns:
-        ExecutorStep that can be integrated into a pipeline
+        StepSpec that can be integrated into a pipeline
     """
-    cfg = AggregateConfig(
-        attributes_base_path=attributes_base_path,
-        output_path=output_path or this_output_path(),
-        ngram_size=ngram_size,
-        eval_dataset_steps=eval_dataset_steps or EVAL_DATASET_STEPS,
-    )
+    _eval_dataset_steps = eval_dataset_steps or EVAL_DATASET_STEPS
 
-    return ExecutorStep(
+    return StepSpec(
         name="train_test_overlap/aggregate_total",
-        fn=run_aggregate_total,
-        config=cfg,
-        description="Aggregate overlap across all training datasets with individual and union views",
+        hash_attrs={
+            "attributes_base_path": attributes_base_path,
+            "ngram_size": ngram_size,
+        },
+        fn=lambda output_path: run_aggregate_total(
+            AggregateConfig(
+                attributes_base_path=attributes_base_path,
+                output_path=output_path,
+                ngram_size=ngram_size,
+                eval_dataset_steps=_eval_dataset_steps,
+            )
+        ),
     )
 
 
 STEPS = [build_aggregate_total_step()]
 
 if __name__ == "__main__":
-    executor_main(
-        steps=STEPS,
-        description="Aggregate train-test overlap across all training datasets",
-    )
+    StepRunner().run(STEPS)

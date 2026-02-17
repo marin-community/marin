@@ -25,7 +25,7 @@ from experiments.tootsie.exp600_tootsie import (
     phase_3_data_mixture,
 )
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 # 3072 * 4096 * 10000 is 125B tokens
@@ -39,7 +39,7 @@ tootsie_8b_soft_raccoon_train = dataclasses.replace(
     num_train_steps=COOLDOWN_END,
     min_lr_ratio=0.1,  # 1.7e-5
     decay=COOLDOWN_LEN,
-    initialize_from_checkpoint_path=output_path_of(llama_8b_tootsie_phase3, "checkpoints/step-819924"),
+    initialize_from_checkpoint_path=llama_8b_tootsie_phase3.output_path + "/checkpoints/step-819924",
     reset_data_loader_on_init=False,
     per_device_eval_parallelism=16,
 )
@@ -76,7 +76,7 @@ tootsie_8b_softer_raccoon_train = dataclasses.replace(
     num_train_steps=COOLER_DOWN_END,
     min_lr_ratio=1e-6 / 1.7e-5,  # 1e-6
     decay=COOLER_DOWN_LEN,
-    initialize_from_checkpoint_path=output_path_of(tootsie_8b_soft_raccoon, "checkpoints/step-829992"),
+    initialize_from_checkpoint_path=tootsie_8b_soft_raccoon.output_path + "/checkpoints/step-829992",
     reset_data_loader_on_init=False,
     per_device_eval_parallelism=16,
 )
@@ -106,7 +106,7 @@ tootsie_8b_softer_raccoon_train_no_decay = dataclasses.replace(
     num_train_steps=COOLER_DOWN_END,
     min_lr_ratio=1e-6 / 1.7e-5,  # 1e-6
     decay=COOLER_DOWN_LEN,
-    initialize_from_checkpoint_path=output_path_of(tootsie_8b_soft_raccoon, "checkpoints/step-829992"),
+    initialize_from_checkpoint_path=tootsie_8b_soft_raccoon.output_path + "/checkpoints/step-829992",
     reset_data_loader_on_init=False,
     per_device_eval_parallelism=16,
     weight_decay=0.0,
@@ -160,7 +160,4 @@ tootsie_8b_softer_raccoon_reset_adamw = dataclasses.replace(
 
 
 if __name__ == "__main__":
-    executor_main(
-        [tootsie_8b_soft_raccoon, tootsie_8b_softer_raccoon_reset_adamw],
-        description="Train Tootsie 8b with cooldown from 1.7e-4 to 1.7e-5 over 125B tokens",
-    )
+    StepRunner().run([tootsie_8b_soft_raccoon, tootsie_8b_softer_raccoon_reset_adamw])

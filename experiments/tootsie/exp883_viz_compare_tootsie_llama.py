@@ -12,7 +12,8 @@ from experiments.defaults import default_validation_sets
 from experiments.posttrain.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, versioned
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 # We compare the models in CHECKPOINTS to Meta's Llama 3.1 8B  base model.
@@ -34,7 +35,7 @@ def _path_to_step_name(path: str) -> str:
     return f"analysis/viz-compare/{name}-{step}"
 
 
-eval_sets = default_validation_sets(tokenizer=versioned(llama3_tokenizer))
+eval_sets = default_validation_sets(tokenizer=llama3_tokenizer)
 eval_sets = {
     **eval_sets,
     # TODO: this should really be a step.
@@ -47,23 +48,23 @@ all_steps = []
 
 for checkpoint in CHECKPOINTS:
     name = _path_to_step_name(checkpoint)
+    _ckpt = checkpoint
     all_steps.append(
-        ExecutorStep(
+        StepSpec(
             name=name,
-            fn=visualize_lm_log_probs,
-            config=VizLmConfig(
-                checkpoint_path=checkpoint,
-                model=llama_8b,
-                datasets=tulu_3_in_dolma,
-                num_docs_per_dataset=32,
-                comparison_model_path=COMPARISON_MODEL,
-                comparison_is_hf=True,
+            hash_attrs={"checkpoint_path": _ckpt, "comparison_model_path": COMPARISON_MODEL},
+            fn=lambda output_path, _c=_ckpt: visualize_lm_log_probs(
+                VizLmConfig(
+                    checkpoint_path=_c,
+                    model=llama_8b,
+                    datasets=tulu_3_in_dolma,
+                    num_docs_per_dataset=32,
+                    comparison_model_path=COMPARISON_MODEL,
+                    comparison_is_hf=True,
+                )
             ),
         )
     )
 
 if __name__ == "__main__":
-    executor_main(
-        all_steps,
-        description="Visualize log probabilities of Tootsie 8b and compare to Meta-Llama-3.1-8B",
-    )
+    StepRunner().run(all_steps)

@@ -12,7 +12,7 @@ from experiments.pretraining_datasets import DOLMA_OLMO_MIXTURE_WEIGHTS, tokeniz
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 EXPERIMENT_TAG = ["442_dolma"]
@@ -70,4 +70,4 @@ olmoish_1b = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[olmoish_1b, dolma_1_4b])
+    StepRunner().run([olmoish_1b, dolma_1_4b])

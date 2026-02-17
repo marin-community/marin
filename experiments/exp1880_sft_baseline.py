@@ -27,7 +27,8 @@ from experiments.posttrain.instruction_datasets import (
 from experiments.simple_sft_config import SimpleSFTConfig
 from fray.cluster import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import lm_mixture_data_config
 
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
@@ -104,12 +105,12 @@ def build_dataset_specs() -> tuple[dict[str, str], dict[str, int]]:
     return datasets, weights
 
 
-def create_tokenization_step(dataset_identifier: str, short_name: str) -> ExecutorStep:
+def create_tokenization_step(dataset_identifier: str, short_name: str) -> StepSpec:
     dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_identifier]
     dataset = get_instruction_dataset(dataset_identifier, splits=dataset_config.splits)
     return default_tokenize(
         name=f"{short_name}_marin_tokenizer",
-        dataset=dataset / "**/*.jsonl.gz",
+        dataset=dataset.cd("**/*.jsonl.gz"),
         tokenizer=marin_tokenizer,
         format=ChatLmDatasetFormat(),
     )
@@ -166,4 +167,4 @@ marin_8b_sft_smoltalk2_nemotron_v2_evals = default_sft_eval(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[marin_8b_sft_smoltalk2_nemotron_v2, *marin_8b_sft_smoltalk2_nemotron_v2_evals])
+    StepRunner().run([marin_8b_sft_smoltalk2_nemotron_v2, *marin_8b_sft_smoltalk2_nemotron_v2_evals])

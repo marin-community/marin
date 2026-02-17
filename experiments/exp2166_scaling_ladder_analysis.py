@@ -38,7 +38,8 @@ from experiments.isoflop_sweep import (
     run_isoflop_analysis_step,
 )
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
 from marin.scaling_laws.tpu_utils import pick_v5p_type, HBM_PER_CHIP_GIB
@@ -222,13 +223,18 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
 
 # --- Step 1: IsoFLOP Analysis ---
 # Creates scaling law fits from the training runs
-analysis_step = ExecutorStep(
+analysis_step = StepSpec(
     name=f"{EXPERIMENT_NAME}-analysis",
-    fn=run_isoflop_analysis_step,
-    config=IsoFlopAnalysisConfig(
-        training_runs=[r.as_input_name() for r in nemotron_training],
-        output_path=this_output_path(),
-        recipe=MARIN_2025_RECIPE,
+    hash_attrs={
+        "training_runs": [r.output_path for r in nemotron_training],
+    },
+    deps=list(nemotron_training),
+    fn=lambda output_path: run_isoflop_analysis_step(
+        IsoFlopAnalysisConfig(
+            training_runs=[r.output_path for r in nemotron_training],
+            output_path=output_path,
+            recipe=MARIN_2025_RECIPE,
+        )
     ),
 )
 
@@ -242,18 +248,25 @@ validation_configs = {
 
 # --- Step 2: Optimal Training Runs ---
 # Train compute-optimal models at each target budget
-optimal_runs: list[ExecutorStep] = []
+optimal_runs: list[StepSpec] = []
 for budget in TARGET_BUDGETS:
-    step = ExecutorStep(
+    _budget = budget
+    step = StepSpec(
         name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}",
-        fn=run_optimal_training,
-        config=OptimalTrainingConfig(
-            analysis_output_path=analysis_step.as_input_name(),
-            target_budget=budget,
-            label=LABEL,
-            output_path=this_output_path(),
-            tokenized=nemotron_mix,
-            validation_configs=validation_configs,
+        hash_attrs={
+            "target_budget": budget,
+            "label": LABEL,
+        },
+        deps=[analysis_step],
+        fn=lambda output_path, _b=_budget: run_optimal_training(
+            OptimalTrainingConfig(
+                analysis_output_path=analysis_step.output_path,
+                target_budget=_b,
+                label=LABEL,
+                output_path=output_path,
+                tokenized=nemotron_mix,
+                validation_configs=validation_configs,
+            )
         ),
     )
     optimal_runs.append(step)
@@ -262,4 +275,4 @@ for budget in TARGET_BUDGETS:
 all_steps = [analysis_step, *optimal_runs]
 
 if __name__ == "__main__":
-    executor_main(steps=all_steps)
+    StepRunner().run(all_steps)

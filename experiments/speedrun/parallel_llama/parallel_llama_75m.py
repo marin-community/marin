@@ -10,7 +10,7 @@ import logging
 
 from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelLlamaConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -64,7 +64,7 @@ speedrun_config.print_run_info()
 def main():
     """Main function to run the parallel Llama 75M speedrun."""
     steps = default_speedrun("parallel_llama_75m", speedrun_config)
-    executor_main(steps=steps)
+    StepRunner().run(steps)
 
 
 if __name__ == "__main__":

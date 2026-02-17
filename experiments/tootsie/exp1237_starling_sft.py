@@ -18,7 +18,7 @@ from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
 from experiments.llama import llama_8b
 from experiments.tootsie.exp600_tootsie import tootsie_8b_deeper_starling
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import spoonbill_zloss_tulu3_sft_config
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 sft_experiments = []
 deeper_sft_config = dataclasses.replace(
@@ -47,10 +47,9 @@ mixture_sft_deeper_starling = default_sft(
 
 
 if __name__ == "__main__":
-    executor_main(
+    StepRunner().run(
         [
             mixture_sft_deeper_starling,
             *default_sft_eval(mixture_sft_deeper_starling),
-        ],
-        description="SFT for Deeper Starling Model",
+        ]
     )

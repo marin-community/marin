@@ -19,14 +19,15 @@ upload_config = ModelUploadConfig(
     gcs_directories=["gs://bucket/checkpoints/model-name/hf/"]
 )
 upload_step = upload_model_to_hf_step(upload_config)
-executor_main([upload_step])
+StepRunner().run([upload_step])
 ```
 """
 
 from dataclasses import dataclass, field
 
 from marin.download.huggingface.upload_gcs_to_hf import UploadConfig, upload_gcs_to_hf
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 
 
 @dataclass(frozen=True)
@@ -38,20 +39,24 @@ class ModelUploadConfig:
     dry_run: bool = False
 
 
-def upload_model_to_hf_step(model_config: ModelUploadConfig) -> ExecutorStep:
-    """Create an ExecutorStep to upload model checkpoints to Hugging Face."""
-    upload_step = ExecutorStep(
+def upload_model_to_hf_step(model_config: ModelUploadConfig) -> StepSpec:
+    """Create a StepSpec to upload model checkpoints to Hugging Face."""
+    return StepSpec(
         name=f"upload_to_hf_{model_config.hf_repo_id.replace('/', '_')}",
-        fn=upload_gcs_to_hf,
-        config=UploadConfig(
-            hf_repo_id=model_config.hf_repo_id,
-            gcs_directories=model_config.gcs_directories,
-            dry_run=model_config.dry_run,
-            wait_for_completion=True,
+        hash_attrs={
+            "hf_repo_id": model_config.hf_repo_id,
+            "gcs_directories": model_config.gcs_directories,
+            "dry_run": model_config.dry_run,
+        },
+        fn=lambda output_path: upload_gcs_to_hf(
+            UploadConfig(
+                hf_repo_id=model_config.hf_repo_id,
+                gcs_directories=model_config.gcs_directories,
+                dry_run=model_config.dry_run,
+                wait_for_completion=True,
+            )
         ),
     )
-
-    return upload_step
 
 
 # Predefined upload steps organized by region
@@ -92,7 +97,4 @@ us_central1_uploads = upload_model_to_hf_step(
 
 if __name__ == "__main__":
     # Default to running region-based upload steps when script is executed directly
-    executor_main(
-        [eu_west4_uploads, us_central2_uploads, us_central1_uploads],
-        description="Upload model checkpoints to Hugging Face by region",
-    )
+    StepRunner().run([eu_west4_uploads, us_central2_uploads, us_central1_uploads])

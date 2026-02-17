@@ -25,7 +25,7 @@ from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 llama_70b_train_config_mk6 = SimpleTrainConfig(
     num_train_steps=1_000_000,  # we won't actually go this long. will adjust as needed
@@ -94,10 +94,9 @@ llama_real_70b_tootsie = dataclasses.replace(
 
 
 if __name__ == "__main__":
-    executor_main(
+    StepRunner().run(
         [
             # llama_70b_tootsie_1536,
             llama_real_70b_tootsie,
-        ],
-        description="Train 70B model on DCLM using WSD with EMA.",
+        ]
     )

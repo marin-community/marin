@@ -14,19 +14,20 @@ from experiments.multilingual.exp1457_multilingual_cpt import multilingual_cpt_8
 from experiments.models import apertus_8b, llama_3_1_8b, olmo_2_base_8b, olmo_3_1025_7b, qwen2_5_7b
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 
 SINGLE_TPU_V5p_8 = ResourceConfig.with_tpu("v5p-8")
 
 
 def _create_per_task_eval_steps(
-    model_step: ExecutorStep,
+    model_step: StepSpec,
     tasks: Iterable[EvalTaskConfig],
     apply_chat_template: bool | None = None,
     discover_latest_checkpoint: bool | None = None,
-) -> list[ExecutorStep]:
+) -> list[StepSpec]:
     """Return one evaluation step per LM Eval Harness task for the given model."""
-    steps: list[ExecutorStep] = []
+    steps: list[StepSpec] = []
     for task in tasks:
         kwargs: dict = dict(
             step=model_step,
@@ -58,4 +59,4 @@ multilingual_eval_steps = [
 if __name__ == "__main__":
     for i in range(0, len(multilingual_eval_steps), 4):
         batch = multilingual_eval_steps[i : i + 4]
-        executor_main(steps=batch)
+        StepRunner().run(batch)

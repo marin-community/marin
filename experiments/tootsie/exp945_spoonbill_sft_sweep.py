@@ -13,7 +13,7 @@ import dataclasses
 from experiments.defaults import default_sft
 from experiments.exp606_sft import tulu3_llama_data_old
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import llama_8b_fp32_attn, spoonbill_zloss_tulu3_sft_config
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 # Define the learning rates to sweep through
 LEARNING_RATES = [1e-5, 2e-5, 3e-5, 5e-5, 1e-4]
@@ -40,7 +40,4 @@ for lr, sft_config in zip(LEARNING_RATES, sft_configs, strict=True):
     sft_experiments.append(experiment)
 
 if __name__ == "__main__":
-    executor_main(
-        sft_experiments,
-        description="SFT learning rate sweep for spoonbill zloss model",
-    )
+    StepRunner().run(sft_experiments)

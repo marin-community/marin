@@ -21,15 +21,13 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
-from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
-from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
+from marin.execution.step_model import StepSpec
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from marin.utils import asdict_excluding
 
 import wandb
-from experiments.defaults import _get_tokenizer_for_train, default_train
+from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
@@ -67,7 +65,10 @@ class SpeedrunConfig:
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
 
     # by default, this is fineweb_edu_subcache_10B
-    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_subcache_10B
+    tokenized_dataset: StepSpec | LMMixtureDatasetConfig = fineweb_edu_subcache_10B
+
+    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    """Tokenizer name. Required when tokenized_dataset is a StepSpec."""
 
     @property
     def vocab_size(self) -> int:
@@ -343,7 +344,7 @@ def default_speedrun(
     config: SpeedrunConfig,
     tags: list[str] | None = None,
     override_output_path: str | None = None,
-) -> Sequence[ExecutorStep]:
+) -> Sequence[StepSpec]:
     """
     Speedrun is a mechanism for submitting a PoC run for a new model/optimizer configuration. It consists of both a
     training step and a step that computes and stores metrics/metadata for the speedrun. See `experiments/speedrun/`
@@ -368,61 +369,44 @@ def default_speedrun(
     run_tags = ["speedrun"] + (tags or [])
 
     train_config = dataclasses.replace(config.train_config, data_seed=42)
-    if isinstance(config.tokenized_dataset, InputName | ExecutorStep):
-        pretraining_data = lm_data_config(
-            training_set=config.tokenized_dataset,
-            validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
-            # TODO: when should we update this
-        )
-    else:
-        pretraining_data = add_validation_sets_to_mixture(
-            config.tokenized_dataset,
-            speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
-        )
+    tokenizer = config.tokenizer
 
     train_step = default_train(
         name=f"speedrun/{name}",
-        tokenized=pretraining_data,
+        tokenized=config.tokenized_dataset,
         model_config=config.model_config,
         train_config=train_config,
         tags=run_tags,
         eval_harness_tasks=None,
         override_output_path=override_output_path,
-        use_default_validation=False,
+        use_default_validation=True,
+        tokenizer=tokenizer,
     )
 
-    # Extract wandb info from train step
-    wandb_run_id = None  # None by default
+    # Wandb entity/project — these are set at step definition time (not runtime)
+    wandb_entity = _default_wandb_entity()
+    wandb_project = WANDB_PROJECT
 
-    if (
-        train_step.config
-        and train_step.config.train_config
-        and train_step.config.train_config.trainer
-        and train_step.config.train_config.trainer.tracker
-    ):
-        wandb_entity = train_step.config.train_config.trainer.tracker.entity or _default_wandb_entity()
-        wandb_project = train_step.config.train_config.trainer.tracker.project or WANDB_PROJECT
+    # The wandb run ID is the last path component of the train step's output path
+    if override_output_path:
+        wandb_run_id = override_output_path.split("/")[-1]
+    else:
+        wandb_run_id = train_step.output_path
 
-        # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when
-        # we do an override or if it is None for some reason, but after some investigation found that in those cases we
-        # can fall back to the fact that we set the wandb run ID as the last part of the path anyway, so can use that)
-        if override_output_path:
-            wandb_run_id = override_output_path.split("/")[-1]
-        else:
-            wandb_run_id = train_step  # gets converted to output path when passing it into the results step
+    results_output = os.path.join(train_step.output_path, "speedrun_results.json")
 
-    assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
-
-    results_step = ExecutorStep(
+    results_step = StepSpec(
         name=f"speedrun/{name}-speedrun_results",
-        description=f"compute and store metrics and stats for the speedrun {name}.",
-        fn=speedrun_results,
-        config=SpeedrunResultsConfig(
-            wandb_run_id=wandb_run_id,
-            wandb_entity=wandb_entity,
-            wandb_project=wandb_project,
-            speedrun_config=config,
-            output_path=output_path_of(train_step, "speedrun_results.json"),
+        hash_attrs={"train_step": train_step.output_path},
+        deps=[train_step],
+        fn=lambda output_path: speedrun_results(
+            SpeedrunResultsConfig(
+                wandb_run_id=wandb_run_id,
+                wandb_entity=wandb_entity,
+                wandb_project=wandb_project,
+                speedrun_config=config,
+                output_path=results_output,
+            )
         ),
     )
 

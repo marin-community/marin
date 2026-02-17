@@ -37,7 +37,7 @@ from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
 
@@ -98,7 +98,7 @@ llama_8b_tootsie_phase1 = dataclasses.replace(
 
 PHASE_1_END = 660_000
 
-kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd(f"checkpoints/step-{PHASE_1_END}").nonblocking()
+kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd(f"checkpoints/step-{PHASE_1_END}")
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
     resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
@@ -146,7 +146,7 @@ llama_8b_tootsie_phase2 = dataclasses.replace(
 # At this time, some of us had prior experience with FLAN
 # that suggested it was not great and we were a bit
 # leery of the very specific synth math data, so we left those parts out.
-ocelot_phase_2_checkpoint_for_phase3 = llama_8b_tootsie_phase1.cd("checkpoints/step-738376").nonblocking()
+ocelot_phase_2_checkpoint_for_phase3 = llama_8b_tootsie_phase1.cd("checkpoints/step-738376")
 
 
 # main phase: base mix for 740,500 steps
@@ -488,7 +488,7 @@ llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
 ## Phase 4: Phoenix from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
 ###############################################################
 
-jellyfish_phase_3_checkpoint_for_phase4 = llama_8b_tootsie_phase3.cd("checkpoints/step-819924").nonblocking()
+jellyfish_phase_3_checkpoint_for_phase4 = llama_8b_tootsie_phase3.cd("checkpoints/step-819924")
 
 # We're going to try to keep moving by rewarming the model with a mix of nemotron_cc and starcoder.
 
@@ -583,7 +583,7 @@ STARLING_END = PHASE_4_END + COOLDOWN_LEN
 
 # for these long runs we don't usually actually **finish** the run in the Executor's eyes,
 # so we use `wait_for_completion`
-phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").nonblocking()
+phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000")
 
 cooldown_train_config = dataclasses.replace(
     llama_8b_train_config_phase4,
@@ -672,7 +672,7 @@ assert 0.29 < sum(v for k, v in normalized.items() if k not in NEMOTRON_WEIGHTS)
 # things kept getting better, so we'll do a constant LR run for a bit longer
 
 # starling_checkpoint = "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923/"
-starling_checkpoint = tootsie_8b_sensible_starling.cd("checkpoints/step-1399923").nonblocking()
+starling_checkpoint = tootsie_8b_sensible_starling.cd("checkpoints/step-1399923")
 
 EXTRA_COOLDOWN_LEN = 20000
 
@@ -697,8 +697,8 @@ tootsie_8b_deeper_starling = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
+    StepRunner().run(
+        [
             llama_8b_tootsie_phase1,
             llama_8b_tootsie_phase3,
             llama_8b_tootsie_dessert_BAD,
@@ -708,6 +708,5 @@ if __name__ == "__main__":
             tootsie_8b_sensible_starling,
             tootsie_8b_deeper_starling,
             *default_base_eval(tootsie_8b_deeper_starling),
-        ],
-        description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
+        ]
     )

@@ -7,11 +7,14 @@ from .data_configs import (
     get_vocab_size_for_tokenizer,
     lm_data_config,
     lm_mixture_data_config,
+    lm_varying_mixture_data_config,
     mixture_for_evaluation,
     step_to_lm_mixture_component,
 )
 from .tokenize import (
     HfDatasetSpec,
     TokenizeConfig,
+    TokenizedMetadata,
     tokenize,
+    tokenize_fn,
 )

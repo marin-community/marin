@@ -10,7 +10,7 @@ from typing import Any
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(name="Pranshu Chaturvedi", affiliation="Stanford University", url="https://stanford.edu/~pranshu")
@@ -74,7 +74,7 @@ def main():
     for name in MODEL_ORDER:
         cfg = configs[name]
         LOGGER.info("Launching %s", name)
-        executor_main(steps=default_speedrun(f"pranshu_mixtral_moe_gmm_sweep_{name}", cfg))
+        StepRunner().run(default_speedrun(f"pranshu_mixtral_moe_gmm_sweep_{name}", cfg))
 
 
 if __name__ == "__main__":

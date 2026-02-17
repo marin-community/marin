@@ -16,7 +16,8 @@ You probably don't need to run this script unless you're adding a new dataset or
 from experiments.defaults import default_tokenize
 from experiments.pretraining_datasets.simple import downloads
 from experiments.speedrun.prebuilt_caches import fineweb_edu_10B_repo_id, fineweb_edu_10M_repo_id
-from marin.execution import executor_main
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.export import upload_dir_to_hf
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.tokenize.slice_cache import slice_cache
@@ -33,7 +34,14 @@ fineweb_edu_subcache_10B_created = slice_cache(
     input_config=step_to_lm_mixture_component(fineweb_edu_llama3_tokenized, include_raw_paths=True),
     num_tokens=10_000_000_000,
 )
-uploaded_cert_10B = upload_dir_to_hf(fineweb_edu_subcache_10B_created, repo_id=fineweb_edu_10B_repo_id)
+uploaded_cert_10B = StepSpec(
+    name="hf_upload/fineweb-edu-10B",
+    hash_attrs={"repo_id": fineweb_edu_10B_repo_id},
+    deps=[fineweb_edu_subcache_10B_created],
+    fn=lambda output_path: upload_dir_to_hf(
+        fineweb_edu_subcache_10B_created.output_path, repo_id=fineweb_edu_10B_repo_id
+    ),
+)
 
 fineweb_edu_subcache_10M_created = slice_cache(
     output_path="tokenized/subcache/fineweb-edu-10M",
@@ -41,11 +49,17 @@ fineweb_edu_subcache_10M_created = slice_cache(
     num_tokens=10_000_000,
 )
 
-uploaded_cert_10M = upload_dir_to_hf(fineweb_edu_subcache_10M_created, repo_id=fineweb_edu_10M_repo_id)
+uploaded_cert_10M = StepSpec(
+    name="hf_upload/fineweb-edu-10M",
+    hash_attrs={"repo_id": fineweb_edu_10M_repo_id},
+    deps=[fineweb_edu_subcache_10M_created],
+    fn=lambda output_path: upload_dir_to_hf(
+        fineweb_edu_subcache_10M_created.output_path, repo_id=fineweb_edu_10M_repo_id
+    ),
+)
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[fineweb_edu_subcache_10B_created, uploaded_cert_10B, fineweb_edu_subcache_10M_created, uploaded_cert_10M],
-        description="Create subcaches of the fineweb-edu dataset.",
+    StepRunner().run(
+        [fineweb_edu_subcache_10B_created, uploaded_cert_10B, fineweb_edu_subcache_10M_created, uploaded_cert_10M]
     )

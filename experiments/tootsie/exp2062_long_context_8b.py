@@ -53,7 +53,7 @@ from marin.processing.tokenize.data_configs import (
     lm_varying_mixture_data_config,
 )
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 # ---------------------------
 # Phases
@@ -132,7 +132,7 @@ REASONING_DATASETS = [
 reasoning_tokenized = {
     ds.split("/")[-1]: default_tokenize(
         name=ds.replace("/", "_") + "_llama3",
-        dataset=get_instruction_dataset(ds) / "**/*.jsonl.gz",
+        dataset=get_instruction_dataset(ds).cd("**/*.jsonl.gz"),
         tokenizer=marin_tokenizer,
         format=ChatLmDatasetFormat(),
     )
@@ -255,9 +255,7 @@ def _train_config(
 
 STARLING_WARMSTART_STEP = "1399923"
 # needed to move step-1399923-patched/opt_state/inner_state/1 to opt_state/inner_state/0 for some reason
-starling_checkpoint = tootsie_8b_sensible_starling.cd(
-    f"checkpoints/step-{STARLING_WARMSTART_STEP}-patched"
-).nonblocking()
+starling_checkpoint = tootsie_8b_sensible_starling.cd(f"checkpoints/step-{STARLING_WARMSTART_STEP}-patched")
 
 # Phase 1: 4k -> ~100B tokens
 PHASE1_STEPS = GIRAFFE_4K_STEPS
@@ -338,7 +336,7 @@ phase3_final_checkpoint = tootsie_8b_giraffe_phase3.cd(f"hf/step-{PHASE3_STEPS -
 
 
 if __name__ == "__main__":
-    executor_main(
+    StepRunner().run(
         [
             *long_context_tokenized.values(),
             *finepdfs_edu_tokenized.values(),

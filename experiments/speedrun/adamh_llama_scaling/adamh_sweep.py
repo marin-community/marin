@@ -8,7 +8,7 @@ import logging
 import os
 
 from levanter.optim import AdamHConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -181,7 +181,7 @@ def main():
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
 
-    executor_main(steps=steps, description="AdamH speedruns (Chinchilla optimal)")
+    StepRunner().run(steps)
 
 
 if __name__ == "__main__":

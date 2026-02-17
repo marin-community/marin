@@ -31,7 +31,8 @@ Notes
 import logging
 from dataclasses import dataclass
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.midtraining_datasets import finemath_3_plus
@@ -85,31 +86,32 @@ DATASET_CONFIGS = [
 ]
 
 
-def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    dedupe_config = DeconConfig(
-        input_path=dataset_config.path,
-        output_path=this_output_path(),
-        decontaminate_source=EVAL_DATASET_STEPS,
-        attribute_name="ngram_overlap",
-        false_positive_rate=1e-20,
-        ngram=DEFAULT_NGRAM_CONFIG,
-        processes=1024,
-        mode=DeconMode.TRAIN_TEST_OVERLAP,
-        text_field=dataset_config.text_field,
-    )
-
-    return ExecutorStep(
+def build_step(dataset_config: DatasetConfig) -> StepSpec:
+    return StepSpec(
         name=f"train_test_overlap/dolma/total/{dataset_config.name}",
-        fn=run_train_test_overlap,
-        config=dedupe_config,
-        description=f"Run dedupe train-test overlap on {dataset_config.name}",
+        hash_attrs={
+            "input_path": dataset_config.path,
+            "text_field": dataset_config.text_field,
+            "mode": DeconMode.TRAIN_TEST_OVERLAP,
+        },
+        deps=EVAL_DATASET_STEPS,
+        fn=lambda output_path, _dc=dataset_config: run_train_test_overlap(
+            DeconConfig(
+                input_path=_dc.path,
+                output_path=output_path,
+                decontaminate_source=EVAL_DATASET_STEPS,
+                attribute_name="ngram_overlap",
+                false_positive_rate=1e-20,
+                ngram=DEFAULT_NGRAM_CONFIG,
+                processes=1024,
+                mode=DeconMode.TRAIN_TEST_OVERLAP,
+                text_field=_dc.text_field,
+            )
+        ),
     )
 
 
 STEPS = [build_step(config) for config in DATASET_CONFIGS]
 
 if __name__ == "__main__":
-    executor_main(
-        steps=STEPS,
-        description="Run train-test-overlap dedupe across all pretraining and midtraining datasets",
-    )
+    StepRunner().run(STEPS)

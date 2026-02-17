@@ -6,21 +6,15 @@ Canonical set of evals.
 """
 
 import logging
+import os
 import re
 from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    OutputName,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn
@@ -51,31 +45,33 @@ def evaluate_lm_evaluation_harness(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
-) -> ExecutorStep:
+) -> StepSpec:
     """
-    Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
+    Create a StepSpec to evaluate the model using LM Evaluation Harness.
 
     Args:
         model_name (str): Name of the model.
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
     """
-    return ExecutorStep(
+    return StepSpec(
         name=f"evaluation/lm_evaluation_harness/{model_name}",
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="lm_evaluation_harness",
-            model_name=model_name,
-            model_path=model_path,
-            evaluation_path=this_output_path(),
-            evals=evals,
-            max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
-            wandb_tags=wandb_tags,
+        hash_attrs={},
+        fn=lambda output_path: evaluate(
+            EvaluationConfig(
+                evaluator="lm_evaluation_harness",
+                model_name=model_name,
+                model_path=model_path,
+                evaluation_path=output_path,
+                evals=evals,
+                max_eval_instances=max_eval_instances,
+                launch_with_ray=True,
+                discover_latest_checkpoint=discover_latest_checkpoint,
+                engine_kwargs=engine_kwargs,
+                resource_config=resource_config,
+                apply_chat_template=apply_chat_template,
+                wandb_tags=wandb_tags,
+            )
         ),
     )
 
@@ -92,28 +88,16 @@ def _infer_model_name_for_path(model_path: str) -> str:
     return "_".join(model_path.split("/")[-2:])
 
 
-def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, InputName | str]:
+def extract_model_name_and_path(step: StepSpec | str) -> tuple[str, str]:
     """
     Extract the model name and path from a step.
 
-    Always appends /hf for ExecutorSteps; run.py's _normalize_model_path handles
+    Always appends /hf for StepSpecs; run.py's _normalize_model_path handles
     detecting whether the HF files are at root or in /hf at evaluation time.
     """
-    if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step, "hf")
+    if isinstance(step, StepSpec):
+        model_step_path = os.path.join(step.output_path, "hf")
         name = step.name
-    elif isinstance(step, InputName):
-        # `InputName.hardcoded(...)` has `step.step is None`; treat it as a direct path.
-        if step.step is None:
-            if step.name is None:
-                raise ValueError("Invalid InputName: both `step` and `name` are None.")
-            model_step_path = step.name
-            name = _infer_model_name_for_path(step.name)
-        else:
-            # If `name` is already set, the InputName refers to a specific subpath under the step's output.
-            # Otherwise default to the HF export directory.
-            model_step_path = step if step.name is not None else output_path_of(step.step, "hf")
-            name = step.step.name
     elif isinstance(step, str):
         model_step_path = step
         name = _infer_model_name_for_path(step)
@@ -131,46 +115,48 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
-) -> ExecutorStep:
+) -> StepSpec:
     """
-    Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
+    Create a StepSpec to evaluate the model using Levanter LM Evaluation Harness.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
-    return ExecutorStep(
+    return StepSpec(
         name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="levanter_lm_evaluation_harness",
-            model_name=None,  # imputed automatically
-            model_path=model_path,  # type: ignore
-            evaluation_path=this_output_path(),
-            evals=versioned(evals),
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            max_eval_instances=versioned(max_eval_instances),
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
+        hash_attrs={"evals": [e.name for e in evals], "max_eval_instances": max_eval_instances},
+        fn=lambda output_path: evaluate(
+            EvaluationConfig(
+                evaluator="levanter_lm_evaluation_harness",
+                model_name=None,  # imputed automatically
+                model_path=model_path,
+                evaluation_path=output_path,
+                evals=evals,
+                discover_latest_checkpoint=discover_latest_checkpoint,
+                max_eval_instances=max_eval_instances,
+                resource_config=resource_config,
+                apply_chat_template=apply_chat_template,
+            )
         ),
     )
 
 
 def default_eval(
-    step: ExecutorStep | InputName | str,
+    step: StepSpec | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v4-8"),
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
-) -> ExecutorStep:
+) -> StepSpec:
     """
-    Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
+    Create a StepSpec to evaluate the model using LM Evaluation Harness on a step.
 
     Args:
-        step (ExecutorStep | InputName): step to evaluate.
+        step (StepSpec | str): step to evaluate.
         evals (list[EvalTaskConfig]): List of evals to run- defaults to a set of CORE_TASKS defined in task_configs.py
         max_eval_instances (int): Maximum number of evaluation instances to run.
     """
 
-    # this logic extracts the `ExecutorStep` corresponding to the training step, and get the model path
+    # this logic extracts the step name and model path
     name, model_step_path = extract_model_name_and_path(step)
 
     logger.info(f"Creating default evaluation step for {name}")
@@ -193,7 +179,7 @@ def default_eval(
 
 
 def default_base_eval(
-    step: ExecutorStep | InputName | str,
+    step: StepSpec | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
@@ -253,7 +239,7 @@ def default_base_eval(
 
 
 def default_sft_eval(
-    step: ExecutorStep | InputName | str,
+    step: StepSpec | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
@@ -332,14 +318,14 @@ def default_sft_eval(
 
 
 def default_key_evals(
-    step: ExecutorStep | InputName | str,
+    step: StepSpec | str,
     resource_config: ResourceConfig,
     model_name: str | None = None,
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
-) -> list[ExecutorStep]:
+) -> list[StepSpec]:
     """
-    Create a list of ExecutorSteps to evaluate the model using LM Evaluation Harness on a step.
+    Create a list of StepSpecs to evaluate the model using LM Evaluation Harness on a step.
     """
     name, model_step_path = extract_model_name_and_path(step)
 
@@ -383,9 +369,9 @@ def evaluate_evalchemy(
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
     base_eval_run_name: str | None = None,
-) -> ExecutorStep:
+) -> StepSpec:
     """
-    Create an ExecutorStep to evaluate the model using Evalchemy.
+    Create a StepSpec to evaluate the model using Evalchemy.
 
     Args:
         model_name (str): Name of the model.
@@ -407,30 +393,32 @@ def evaluate_evalchemy(
     task_names = "_".join(sorted(e.name for e in evals))
     seed = generation_params.get("seed") if generation_params else None
     seed_suffix = f"_seed{seed}" if seed is not None else ""
-    return ExecutorStep(
+    return StepSpec(
         name=f"evaluation/evalchemy/{model_name}/{task_names}{seed_suffix}",
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="evalchemy",
-            model_name=model_name,
-            model_path=model_path,
-            evaluation_path=this_output_path(),
-            evals=evals,
-            max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            engine_kwargs=engine_kwargs,
-            generation_params=generation_params,
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
-            wandb_tags=wandb_tags,
-            base_eval_run_name=base_eval_run_name,
+        hash_attrs={},
+        fn=lambda output_path: evaluate(
+            EvaluationConfig(
+                evaluator="evalchemy",
+                model_name=model_name,
+                model_path=model_path,
+                evaluation_path=output_path,
+                evals=evals,
+                max_eval_instances=max_eval_instances,
+                launch_with_ray=True,
+                discover_latest_checkpoint=discover_latest_checkpoint,
+                engine_kwargs=engine_kwargs,
+                generation_params=generation_params,
+                resource_config=resource_config,
+                apply_chat_template=apply_chat_template,
+                wandb_tags=wandb_tags,
+                base_eval_run_name=base_eval_run_name,
+            )
         ),
     )
 
 
 def default_evalchemy_eval(
-    step: ExecutorStep | InputName | str,
+    step: StepSpec | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
     evals: Sequence[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
@@ -439,12 +427,12 @@ def default_evalchemy_eval(
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
     base_eval_run_name: str | None = None,
-) -> ExecutorStep:
+) -> StepSpec:
     """
-    Create an ExecutorStep to evaluate the model using Evalchemy reasoning benchmarks.
+    Create a StepSpec to evaluate the model using Evalchemy reasoning benchmarks.
 
     Args:
-        step (ExecutorStep | InputName | str): Step to evaluate.
+        step (StepSpec | str): Step to evaluate.
         resource_config (ResourceConfig): Resource configuration (defaults to v5p-8 TPU).
         evals (list[EvalTaskConfig] | None): List of evals to run. Defaults to EVALCHEMY_CORE_TASKS.
         max_eval_instances (int | None): Maximum number of evaluation instances to run.
@@ -490,28 +478,27 @@ def default_evalchemy_eval(
 
 
 def compile_evalchemy_results(
-    steps: list[ExecutorStep],
+    steps: list[StepSpec],
     seeds: list[int] | None = None,
     base_eval_run_name: str | None = None,
     model_path: str | None = None,
     task_name: str | None = None,
-) -> ExecutorStep:
+) -> StepSpec:
     """
     Compile results from multiple Evalchemy evaluation steps into aggregated metrics.
 
-    Takes a list of ExecutorSteps for evalchemy tasks and compiles the results into a
+    Takes a list of StepSpecs for evalchemy tasks and compiles the results into a
     single DataFrame, then logs averaged results to wandb.
 
     Args:
-        steps: List of ExecutorSteps from evalchemy evaluations (one per seed).
+        steps: List of StepSpecs from evalchemy evaluations (one per seed).
         seeds: List of seeds used for the evaluations (for wandb config).
 
     Returns:
-        ExecutorStep that compiles and logs aggregated results.
+        StepSpec that compiles and logs aggregated results.
     """
     # Create input paths from steps
-    input_paths = [step.cd("results.json") for step in steps]
-    output_path = OutputName("compiled_results")
+    input_paths = [os.path.join(step.output_path, "results.json") for step in steps]
 
     # Build compile step name matching the individual run hierarchy:
     #   individual: evaluation/evalchemy/{model_id}/AIME24_seed42
@@ -529,18 +516,23 @@ def compile_evalchemy_results(
     task_suffix = f"_{task_name}" if task_name else ""
     compile_step_name = f"evaluation/evalchemy/{model_id}/compile{task_suffix}_avg{num_seeds}seeds"
 
-    return ExecutorStep(
+    _input_paths = input_paths
+    _seeds = seeds
+
+    return StepSpec(
         name=compile_step_name,
-        fn=compile_evalchemy_results_fn,
-        config={
-            "input_paths": input_paths,
-            "output_path": output_path,
-            "seeds": seeds or [],
-            "base_eval_run_name": base_eval_run_name,
-            "model_path": model_path,
-            "task_name": task_name,
-        },
-        description="Compile results from multiple evalchemy evaluation steps",
+        hash_attrs={},
+        deps=steps,
+        fn=lambda output_path: compile_evalchemy_results_fn(
+            {
+                "input_paths": _input_paths,
+                "output_path": os.path.join(output_path, "compiled_results"),
+                "seeds": _seeds or [],
+                "base_eval_run_name": base_eval_run_name,
+                "model_path": model_path,
+                "task_name": task_name,
+            }
+        ),
     )
 
 
@@ -552,7 +544,7 @@ def build_evalchemy_eval_steps(
     engine_kwargs: dict | None = None,
     apply_chat_template: bool = True,
     discover_latest_checkpoint: bool = False,
-) -> tuple[list[ExecutorStep], list[ExecutorStep]]:
+) -> tuple[list[StepSpec], list[StepSpec]]:
     """Build evaluation and compilation steps for an evalchemy experiment.
 
     Creates one evaluation step per (checkpoint, task, seed) combination, plus
@@ -573,8 +565,8 @@ def build_evalchemy_eval_steps(
     Returns:
         Tuple of (eval_steps, compile_steps).
     """
-    eval_steps: list[ExecutorStep] = []
-    compile_steps: list[ExecutorStep] = []
+    eval_steps: list[StepSpec] = []
+    compile_steps: list[StepSpec] = []
 
     for base_eval_run_name, checkpoint_paths in checkpoints.items():
         for checkpoint in checkpoint_paths:
@@ -583,7 +575,7 @@ def build_evalchemy_eval_steps(
                 task_seed_pairs += [(t, seeds) for t in tasks]
 
             for task, seeds in task_seed_pairs:
-                task_steps: list[ExecutorStep] = []
+                task_steps: list[StepSpec] = []
                 for seed in seeds:
                     generation_params = {**base_generation_params, "seed": seed}
                     step = default_evalchemy_eval(
@@ -624,7 +616,7 @@ def run_evalchemy_experiment(
 ) -> None:
     """Run a complete evalchemy evaluation experiment.
 
-    Builds eval and compile steps, then executes them via executor_main
+    Builds eval and compile steps, then executes them via StepRunner
     with optional batching for parallel job limits.
 
     Args:
@@ -648,16 +640,17 @@ def run_evalchemy_experiment(
     )
 
     # Run eval steps in batches to limit parallelism.
-    # Each executor_main call runs up to max_parallel_jobs eval steps concurrently.
+    # Each StepRunner.run call runs up to max_parallel_jobs eval steps concurrently.
     # Already-completed steps are automatically skipped via status files on disk.
+    runner = StepRunner()
     if max_parallel_jobs is not None:
         for i in range(0, len(eval_steps), max_parallel_jobs):
             batch = eval_steps[i : i + max_parallel_jobs]
-            executor_main(steps=batch)
+            runner.run(batch)
     else:
-        executor_main(steps=eval_steps)
+        runner.run(eval_steps)
 
     # Run compile steps separately. Their eval-step dependencies have already
-    # succeeded, so the executor skips them and only runs the compile steps.
+    # succeeded, so the runner skips them and only runs the compile steps.
     if compile_steps:
-        executor_main(steps=compile_steps)
+        runner.run(compile_steps)

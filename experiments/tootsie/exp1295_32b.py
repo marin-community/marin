@@ -22,7 +22,7 @@ from experiments.llama import llama_32b
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import lm_mixture_data_config
 
 ## 32b experiments
@@ -100,9 +100,4 @@ llama_32b_tootsie = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(
-        [
-            llama_32b_tootsie,
-        ],
-        description="Train 32B on Nemotron with Starcoderdata and Proofpile 2",
-    )
+    StepRunner().run([llama_32b_tootsie])

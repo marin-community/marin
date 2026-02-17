@@ -22,14 +22,9 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import (
-    ExecutorStep,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
+from experiments.defaults import default_download
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.transform.conversation.transform_preference_data import (
     TransformPreferenceDatasetConfig,
     transform_hf_preference_dataset,
@@ -89,26 +84,19 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def download_preference_dataset_step(dataset: PreferenceDatasetConfig) -> ExecutorStep:
-    """ExecutorStep for downloading preference data from external source to GCP"""
+def download_preference_dataset_step(dataset: PreferenceDatasetConfig) -> StepSpec:
+    """StepSpec for downloading preference data from external source to GCP."""
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
-    download_step = ExecutorStep(
+    return default_download(
         name=f"raw/{dataset_name}",
-        fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id=dataset.hf_dataset_id,
-            revision=versioned(dataset.revision),
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-        ),
+        hf_dataset_id=dataset.hf_dataset_id,
+        revision=dataset.revision,
         override_output_path=f"raw/{dataset_name}-{dataset.revision}",
     )
 
-    return download_step
 
-
-def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
-    """ExecutorStep that preprocesses and shards the preference dataset.
+def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, download_step: StepSpec) -> StepSpec:
+    """StepSpec that preprocesses and shards the preference dataset.
 
     ===========================================================================
     dataset_cfg: {
@@ -118,7 +106,7 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
         "splits": ['train'],
         ...
     }
-    output_path_of(download_step) --> gs://.../raw/HuggingFaceH4--ultrafeedback_binarized-[revision_number]
+    download_step.output_path --> gs://.../raw/HuggingFaceH4--ultrafeedback_binarized-[revision_number]
 
     Expected files written: [
         gs://.../HuggingFaceH4--ultrafeedback_binarized__[revision_number]_[hash]/train/shard_00001.jsonl.gz,
@@ -129,7 +117,7 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
     """
     adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(adapter_name)
-    download_data_path = output_path_of(download_step)
+    download_data_path = download_step.output_path
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
@@ -137,19 +125,31 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
         -{sorted(dataset_cfg.splits)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    transform_step = ExecutorStep(
+    transform_step = StepSpec(
         name=f"preference/{dataset_name}",
-        fn=transform_hf_preference_dataset,
-        config=TransformPreferenceDatasetConfig(
-            input_path=download_data_path,
-            output_path=this_output_path(),
-            shard_size=versioned(5000),
-            metadata_columns=versioned(dataset_cfg.metadata_columns),
-            filetype=dataset_cfg.filetype,
-            source=dataset_cfg.hf_dataset_id,
-            subsets=dataset_cfg.subsets,
-            splits=dataset_cfg.splits,
-            adapter_name=adapter_name,
+        hash_attrs={
+            "shard_size": 5000,
+            "metadata_columns": dataset_cfg.metadata_columns,
+            "source": dataset_cfg.hf_dataset_id,
+            "revision": dataset_cfg.revision,
+            "subsets": dataset_cfg.subsets,
+            "splits": dataset_cfg.splits,
+        },
+        deps=[download_step],
+        fn=lambda output_path, _path=download_data_path, _cfg=dataset_cfg, _adapter=adapter_name: (
+            transform_hf_preference_dataset(
+                TransformPreferenceDatasetConfig(
+                    input_path=_path,
+                    output_path=output_path,
+                    shard_size=5000,
+                    metadata_columns=_cfg.metadata_columns,
+                    filetype=_cfg.filetype,
+                    source=_cfg.hf_dataset_id,
+                    subsets=_cfg.subsets,
+                    splits=_cfg.splits,
+                    adapter_name=_adapter,
+                )
+            )
         ),
         override_output_path=f"preference/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
@@ -157,7 +157,7 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
     return transform_step
 
 
-def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
+def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> StepSpec:
     """Get a preference dataset by creating download and transform steps."""
     # Check that config exists
     assert hf_dataset_id in PREFERENCE_DATASET_NAME_TO_CONFIG, f"Unknown preference dataset: {hf_dataset_id}"
@@ -181,4 +181,4 @@ if __name__ == "__main__":
         transformed_dataset = transform_preference_dataset_step(config, downloaded_dataset)
         all_steps.append(transformed_dataset)
 
-    executor_main(steps=all_steps)
+    StepRunner().run(all_steps)

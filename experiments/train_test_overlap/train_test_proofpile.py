@@ -14,7 +14,8 @@ Usage:
 
 import logging
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.pretraining_datasets.simple import tokenized
@@ -39,31 +40,32 @@ def run_train_test_overlap(config: DeconConfig) -> str:
     return config.output_path
 
 
-def build_proofpile_step() -> ExecutorStep:
-    dedupe_config = DeconConfig(
-        input_path=tokenized["proofpile_2"],
-        output_path=this_output_path(),
-        decontaminate_source=EVAL_DATASET_STEPS,
-        attribute_name="ngram_overlap",
-        false_positive_rate=1e-20,
-        ngram=DEFAULT_NGRAM_CONFIG,
-        processes=1024,
-        mode=DeconMode.TRAIN_TEST_OVERLAP,
-        text_field="text",
-    )
-
-    return ExecutorStep(
+def build_proofpile_step() -> StepSpec:
+    return StepSpec(
         name="tmp/train_test_overlap/proofpile",
-        fn=run_train_test_overlap,
-        config=dedupe_config,
-        description="Run dedupe train-test overlap on Proofpile",
+        hash_attrs={
+            "input_path": tokenized["proofpile_2"],
+            "ngram_length": [5, 10, 15],
+            "mode": DeconMode.TRAIN_TEST_OVERLAP,
+        },
+        deps=EVAL_DATASET_STEPS,
+        fn=lambda output_path: run_train_test_overlap(
+            DeconConfig(
+                input_path=tokenized["proofpile_2"],
+                output_path=output_path,
+                decontaminate_source=EVAL_DATASET_STEPS,
+                attribute_name="ngram_overlap",
+                false_positive_rate=1e-20,
+                ngram=DEFAULT_NGRAM_CONFIG,
+                processes=1024,
+                mode=DeconMode.TRAIN_TEST_OVERLAP,
+                text_field="text",
+            )
+        ),
     )
 
 
 STEPS = [build_proofpile_step()]
 
 if __name__ == "__main__":
-    executor_main(
-        steps=STEPS,
-        description="Run train-test-overlap dedupe for Proofpile against evaluation datasets",
-    )
+    StepRunner().run(STEPS)

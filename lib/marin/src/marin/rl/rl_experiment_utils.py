@@ -15,7 +15,7 @@ from levanter.trainer import TrainerConfig
 from transformers import AutoConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.execution.executor import ExecutorStep, OutputName
+from marin.execution.step_model import StepSpec
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -113,7 +113,7 @@ def get_stop_tokens(model_type: str) -> list[str]:
         raise ValueError(f"Unknown model_type: {model_type}")
 
 
-def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
+def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> StepSpec:
     hf_config = AutoConfig.from_pretrained(config.model_config.name)
     model_config_cls = config.model_config.config_class.from_hf_config(hf_config)
 
@@ -140,7 +140,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
         num_train_steps=config.num_train_steps,
         steps_per_eval=config.steps_per_eval,
         checkpointer=CheckpointerConfig(
-            base_path=OutputName("checkpoints"),
+            base_path="checkpoints",
             save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
         ),
         mesh=MeshConfig(
@@ -160,7 +160,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
 
     rollout_storage = RolloutStorageConfig(
         storage_type=StorageType.FILE,
-        path=OutputName("rollouts"),
+        path="rollouts",
     )
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
@@ -225,10 +225,10 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
         ),
     )
 
-    return ExecutorStep(
+    step_fn = RLJob.make_step_fn()
+    return StepSpec(
         name=f"rl_testing/{name}",
-        description=f"Async RL training: {name}",
-        fn=RLJob.make_step_fn(),
-        config=job_config,
+        hash_attrs={"name": name, "model": config.model_config.name},
         pip_dependency_groups=["vllm", "math"],
+        fn=lambda output_path: step_fn(job_config),
     )

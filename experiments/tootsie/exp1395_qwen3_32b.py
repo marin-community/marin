@@ -14,12 +14,12 @@ from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from experiments.defaults import default_train
 from experiments.qwen3 import qwen3_32b
 from experiments.tootsie.exp1295_32b import llama_32b_tootsie, llama_32b_train_config, nemotron_mix
-from marin.execution import executor_main
+from marin.execution.step_runner import StepRunner
 from fray.cluster import ResourceConfig
 
 # We have doctored the opt state to include update history from
 # gs://marin-us-central2/checkpoints/llama-32b-tootsie-2/checkpoints/step-77096 for clipping
-warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-80000/").nonblocking()
+warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-80000/")
 
 qwen3_32b_remat = dataclasses.replace(
     qwen3_32b, gradient_checkpointing=haliax.ScanCheckpointPolicy(save_carries="offload")
@@ -87,7 +87,4 @@ marin_32b_qwen_v5p = default_train(
 
 
 if __name__ == "__main__":
-    executor_main(
-        [marin_32b_qwen, marin_32b_qwen_v5p],
-        description="Warmstart 32B Qwen3 from Llama 32B Tootsie checkpoint and train on Nemotron etc",
-    )
+    StepRunner().run([marin_32b_qwen, marin_32b_qwen_v5p])

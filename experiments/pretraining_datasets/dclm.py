@@ -8,7 +8,8 @@ from levanter.data.text import TextLmDatasetFormat
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads, tokenized
-from marin.execution.executor import executor_main
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import lm_mixture_data_config
 
 DCLM_MIXTURE_WEIGHTS = {
@@ -37,24 +38,34 @@ dclm_mixture_config_llama3 = lm_mixture_data_config(components=dclm_components_l
 ## NOTE: on 20250211, we discovered that the DCLM baseline data in us-central2 was corrupted/partial.
 # These are preserved for reproducibility, but future runs should use the correct data.
 # YOU SHOULD NOT USE THESE TOKENIZED DATASETS FOR TRAINING
+_dclm_wrong_path = downloads["dclm_baseline_wrong"]
+_dclm_wrong_path_str = _dclm_wrong_path.output_path if isinstance(_dclm_wrong_path, StepSpec) else _dclm_wrong_path
 dclm_components_llama3_wrong = {
     "dclm_baseline": dataclasses.replace(
         default_tokenize(
             name="dclm_baseline",
-            dataset=downloads["dclm_baseline_wrong"],
+            dataset=_dclm_wrong_path_str,
             tokenizer=llama3_tokenizer,
         ),
         override_output_path="gs://marin-us-central2/tokenized/dclm_baseline-0206f1_WRONG_20250211/",
     ),
     "starcoderdata": default_tokenize(
         name="starcoderdata",
-        dataset=downloads["starcoderdata"],
+        dataset=(
+            downloads["starcoderdata"].output_path
+            if isinstance(downloads["starcoderdata"], StepSpec)
+            else downloads["starcoderdata"]
+        ),
         tokenizer=llama3_tokenizer,
         format=TextLmDatasetFormat(text_key="content"),
     ),
     "proofpile_2": default_tokenize(
         name="proofpile_2",
-        dataset=downloads["proofpile_2"],
+        dataset=(
+            downloads["proofpile_2"]
+            if isinstance(downloads["proofpile_2"], str)
+            else downloads["proofpile_2"].output_path
+        ),
         tokenizer=llama3_tokenizer,
     ),
 }
@@ -65,4 +76,4 @@ dclm_mixture_config_llama3_wrong = lm_mixture_data_config(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=list(dclm_components_llama3.values()))
+    StepRunner().run(list(dclm_components_llama3.values()))

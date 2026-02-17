@@ -8,14 +8,13 @@ from functools import lru_cache
 import numpy
 
 import transformers
-from levanter.data.text import DatasetComponent, LmDataConfig
+from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
 
-from marin.execution import unwrap_versioned_value
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.execution.step_model import StepSpec
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedMetadata
 from marin.utils import load_tokenizer_with_backoff
 
-TokenizerStep = ExecutorStep[TokenizeConfig]
+TokenizerStep = StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +28,20 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
 
 
 def step_to_lm_mixture_component(
-    step: TokenizerStep | TokenizeConfig | TokenizedMetadata, include_raw_paths: bool
+    step: TokenizeConfig | TokenizedMetadata | StepSpec, include_raw_paths: bool
 ) -> DatasetComponent:
     """
-    Converts a tokenizer step to a Levanter dataset component. This is useful for creating
-    data mixture configs.
+    Converts a tokenize config, metadata, or StepSpec to a Levanter dataset component.
+    This is useful for creating data mixture configs.
     """
 
-    if isinstance(step, TokenizeConfig):
+    if isinstance(step, StepSpec):
+        source = UrlDatasetSourceConfig(
+            cache_dir=step.output_path,
+            format=TextLmDatasetFormat(),
+        )
+    elif isinstance(step, TokenizeConfig):
         source = step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
-    elif isinstance(step, ExecutorStep):
-        source = step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
     else:
         source = step.get_source_config()
 
@@ -52,51 +54,35 @@ def step_to_lm_mixture_component(
 
 
 def lm_data_config(
-    # TODO (rav): why does the training set need a name?
-    training_set: TokenizerStep | InputName | tuple[str, TokenizedMetadata],
+    training_set: tuple[str, TokenizedMetadata],
     *,
-    validation_sets: dict[str, TokenizerStep | TokenizedMetadata] | None = None,
+    validation_sets: dict[str, TokenizedMetadata] | None = None,
     shuffle: bool | int = True,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
     block_cross_document_attention: bool = True,
 ) -> LmDataConfig:
     """
-    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
-
-    Notes:
+    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set.
 
     Args:
-        training_set: The training set to use
-        validation_sets: A sequence of validation sets to use
+        training_set: A tuple of (name, TokenizedMetadata) for the training set.
+        validation_sets: A dict of validation sets mapping name to TokenizedMetadata.
         shuffle: Whether to shuffle the data. If int, uses era shuffling.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
         block_cross_document_attention: Whether to mask attention across document boundaries.
     """
-    if isinstance(training_set, InputName):
-        raise ValueError("training_set cannot be an InputName, must be a TokenizerStep or StepSpec")
-
-    if isinstance(training_set, ExecutorStep):
-        train_set_name = training_set.name
-        training_component = {train_set_name: training_set}
-        tokenizer = training_set.config.tokenizer
-    else:
-        train_set_name, metadata = training_set
-        tokenizer = metadata.tokenizer
-        training_component = {train_set_name: metadata}
+    train_set_name, metadata = training_set
+    tokenizer = metadata.tokenizer
+    training_component: dict[str, TokenizedMetadata] = {train_set_name: metadata}
 
     if validation_sets is not None:
-        for name, val_step_or_meta in validation_sets.items():
-            if isinstance(val_step_or_meta, ExecutorStep):
-                val_tokenizer = val_step_or_meta.config.tokenizer
-            else:
-                val_tokenizer = val_step_or_meta.tokenizer
-
-            if val_tokenizer != tokenizer:
+        for name, val_meta in validation_sets.items():
+            if val_meta.tokenizer != tokenizer:
                 raise ValueError(
                     f"Validation set {name} must have same tokenizer as training set's,"
-                    f" but got: {val_tokenizer} vs {tokenizer}"
+                    f" but got: {val_meta.tokenizer} vs {tokenizer}"
                 )
 
     return lm_mixture_data_config(
@@ -111,7 +97,7 @@ def lm_data_config(
 
 
 def lm_mixture_data_config(
-    components: dict[str, TokenizerStep | TokenizeConfig | TokenizedMetadata],
+    components: dict[str, TokenizeConfig | TokenizedMetadata | StepSpec],
     weights: dict[str, float],
     *,
     shuffle: bool | int = True,
@@ -205,7 +191,7 @@ def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights
 
 
 def lm_varying_mixture_data_config(
-    components: dict[str, TokenizerStep],
+    components: dict[str, TokenizeConfig | TokenizedMetadata | StepSpec],
     weights_list: list[tuple[int, dict[str, float]]],
     *,
     shuffle: bool | int = True,
@@ -271,7 +257,9 @@ def lm_varying_mixture_data_config(
     )
 
 
-def add_validation_sets_to_mixture(config: LmDataConfig, validation_sets: dict[str, TokenizerStep]) -> LmDataConfig:
+def add_validation_sets_to_mixture(
+    config: LmDataConfig, validation_sets: dict[str, TokenizeConfig | TokenizedMetadata | StepSpec]
+) -> LmDataConfig:
     """
     Adds validation sets to a mixture config. Works with both fixed and varying mixture weights.
     """
@@ -316,12 +304,12 @@ def add_validation_sets_to_mixture(config: LmDataConfig, validation_sets: dict[s
     return dataclasses.replace(config, components=new_components, train_weights=new_weights)
 
 
-def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LmDataConfig:
+def mixture_for_evaluation(inputs: dict[str, TokenizeConfig | TokenizedMetadata | StepSpec]) -> LmDataConfig:
     """
     Creates a mixture of datasets purely for evaluation purposes. Used mostly for visualizing log probabilities.
 
     Args:
-        inputs (dict[str, ExecutorStep]): The inputs to the mixture.
+        inputs: Dict mapping names to tokenize configs or metadata.
 
     Returns:
         LmDataConfig: The mixture of datasets.
@@ -350,19 +338,15 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
     Returns:
         Vocabulary size for the tokenizer.
     """
-    resolved_name = unwrap_versioned_value(tokenizer_name)
-    if resolved_name in _KNOWN_VOCAB_SIZES:
-        return _KNOWN_VOCAB_SIZES[resolved_name]
+    if tokenizer_name in _KNOWN_VOCAB_SIZES:
+        return _KNOWN_VOCAB_SIZES[tokenizer_name]
 
-    tokenizer = _load_tokenizer(resolved_name)
+    tokenizer = _load_tokenizer(tokenizer_name)
     return len(tokenizer)
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     """Compare two tokenizers by loading them and comparing their vocabularies and token IDs"""
-    tokenizer1 = unwrap_versioned_value(tokenizer1)
-    tokenizer2 = unwrap_versioned_value(tokenizer2)
-
     from experiments.llama import llama3_tokenizer
     from experiments.marin_models import marin_tokenizer
 
@@ -395,11 +379,21 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     return True
 
 
-def _verify_tokenizers_same(components: dict[str, TokenizerStep | TokenizeConfig | TokenizedMetadata]) -> str:
+def _get_tokenizer_from_component(step: TokenizeConfig | TokenizedMetadata | StepSpec) -> str:
+    """Extract the tokenizer name from a tokenize config, metadata, or StepSpec."""
+    if isinstance(step, StepSpec):
+        tokenizer = step.hash_attrs.get("tokenizer")
+        if tokenizer is None:
+            raise ValueError(f"StepSpec {step.name} does not have a 'tokenizer' in hash_attrs")
+        return tokenizer
+    return step.tokenizer
+
+
+def _verify_tokenizers_same(components: dict[str, TokenizeConfig | TokenizedMetadata | StepSpec]) -> str:
     first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer if isinstance(first_step, ExecutorStep) else first_step.tokenizer
+    tokenizer = _get_tokenizer_from_component(first_step)
     for name, step in components.items():
-        step_tokenizer = step.config.tokenizer if isinstance(step, ExecutorStep) else step.tokenizer
+        step_tokenizer = _get_tokenizer_from_component(step)
         if step_tokenizer != tokenizer:
             if not _are_tokenizers_equivalent(step_tokenizer, tokenizer):
                 raise ValueError(

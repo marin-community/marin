@@ -7,10 +7,22 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from functools import cached_property
 from typing import Any
 
 from fray.v2.types import ResourceConfig
+
+
+class _HashEncoder(json.JSONEncoder):
+    """JSON encoder for hash_attrs that gracefully handles non-serializable types."""
+
+    def default(self, o):
+        if isinstance(o, Enum):
+            return o.name
+        if dataclasses.is_dataclass(o) and not isinstance(o, type):
+            return dataclasses.asdict(o)
+        return str(o)
 
 
 @dataclass(frozen=True)
@@ -55,6 +67,7 @@ class StepSpec:
         content = json.dumps(
             {"name": self.name, "attrs": self.hash_attrs, "deps": sorted(self.deps)},
             sort_keys=True,
+            cls=_HashEncoder,
         )
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
 
@@ -81,3 +94,11 @@ class StepSpec:
 
     pip_dependency_groups: list[str] = dataclasses.field(default_factory=list)
     """Pip deps (defaults resolved)."""
+
+    def with_output_path(self, path: str) -> "StepSpec":
+        """Return a copy of this step with a fixed output path."""
+        return dataclasses.replace(self, override_output_path=path)
+
+    def cd(self, subpath: str) -> str:
+        """Return a path under this step's output directory."""
+        return os.path.join(self.output_path, subpath)

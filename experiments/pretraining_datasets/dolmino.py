@@ -3,32 +3,34 @@
 
 """DOLMINO dataset definitions and tokenization."""
 
+import os
 import os.path
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.step_model import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
-downloads = {
-    "dolmino": (
-        ExecutorStep(
-            name="raw/dolmino-mix-1124",
-            fn=download_hf,
-            config=DownloadConfig(
-                hf_dataset_id="allenai/dolmino-mix-1124",
-                revision="bb54cab",
-                gcs_output_path=this_output_path(),
-                wait_for_completion=True,
-            ),
+_dolmino_base = StepSpec(
+    name="raw/dolmino-mix-1124",
+    hash_attrs={"hf_dataset_id": "allenai/dolmino-mix-1124", "revision": "bb54cab"},
+    override_output_path="raw/dolmino-mix-1124-157960",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="allenai/dolmino-mix-1124",
+            revision="bb54cab",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
         )
-        .with_output_path("raw/dolmino-mix-1124-157960")
-        .cd("bb54cab")
-    )
+    ),
+)
+
+downloads = {
+    "dolmino": os.path.join(_dolmino_base.output_path, "bb54cab"),
 }
 
-_dolmino_base_dir = downloads["dolmino"].cd("data")
+_dolmino_data_dir = os.path.join(downloads["dolmino"], "data")
 
 # The following dataset splits define file patterns for each split.
 DOLMINO_DATASETS = {
@@ -64,11 +66,11 @@ DOLMINO_LLAMA3_OVERRIDES = {
 }
 
 
-def _get_dolmino_split_paths(split: str):
+def _get_dolmino_split_paths(split: str) -> list[str]:
     """Helper to get file paths for a dolmino split."""
     patterns = DOLMINO_DATASETS[split]
-    dolmino_split_input_base_path = _dolmino_base_dir / split
-    return [dolmino_split_input_base_path / pattern for pattern in patterns]
+    dolmino_split_input_base_path = os.path.join(_dolmino_data_dir, split)
+    return [os.path.join(dolmino_split_input_base_path, pattern) for pattern in patterns]
 
 
 def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
@@ -78,32 +80,41 @@ def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep
 
         tokenizer = llama3_tokenizer
 
-    dolmino_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
+    dolmino_steps: dict[str, StepSpec] = {}
     for split in DOLMINO_DATASETS:
         dolmino_split_output_path = os.path.join("tokenized", "dolmino", split)
         dolmino_split_paths = _get_dolmino_split_paths(split)
-        step = ExecutorStep(
-            name=dolmino_split_output_path,
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=dolmino_split_paths,
-                validation_paths=versioned([]),
-                cache_path=this_output_path(),
-                tokenizer=versioned(tokenizer),
-            ),
-        )
 
-        # Check if we need to use override path for llama3
+        override = None
         from experiments.llama import llama3_tokenizer as _llama3_tokenizer
 
         if tokenizer == _llama3_tokenizer and split in DOLMINO_LLAMA3_OVERRIDES:
-            step = step.with_output_path(DOLMINO_LLAMA3_OVERRIDES[split])
+            override = DOLMINO_LLAMA3_OVERRIDES[split]
+
+        # Capture loop variables for the closure
+        _paths = dolmino_split_paths
+        _tokenizer = tokenizer
+
+        step = StepSpec(
+            name=dolmino_split_output_path,
+            hash_attrs={"tokenizer": tokenizer, "validation_paths": []},
+            override_output_path=override,
+            fn=lambda output_path, _p=_paths, _tk=_tokenizer: tokenize(
+                TokenizeConfig(
+                    train_paths=_p,
+                    validation_paths=[],
+                    cache_path=output_path,
+                    tokenizer=_tk,
+                )
+            ),
+        )
+
         dolmino_steps[os.path.join("dolmino", split)] = step
 
     return dolmino_steps
 
 
-def tokenize_dolmino_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
+def tokenize_dolmino_subset(name: str, tokenizer: str | None = None) -> StepSpec:
     """Get a specific dolmino split tokenization step."""
     assert name in DOLMINO_DATASETS, f"Split {name} not found in DOLMINO_DATASETS"
     return tokenize_dolmino(tokenizer=tokenizer)[f"dolmino/{name}"]
@@ -115,20 +126,26 @@ _all_dolmino_math_files = [
 ]
 
 
-def tokenize_dolmino_math(tokenizer: str | None = None):
+def tokenize_dolmino_math(tokenizer: str | None = None) -> StepSpec:
     """Create the combined math dataset tokenization step."""
     if tokenizer is None:
         from experiments.llama import llama3_tokenizer
 
         tokenizer = llama3_tokenizer
 
-    return ExecutorStep(
+    _tokenizer = tokenizer
+    _paths = _all_dolmino_math_files
+
+    return StepSpec(
         name="tokenized/dolmino/all_math",
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=_all_dolmino_math_files,
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
+        hash_attrs={"tokenizer": tokenizer, "validation_paths": []},
+        override_output_path="tokenized/dolmino/all_math-9d507c",
+        fn=lambda output_path: tokenize(
+            TokenizeConfig(
+                train_paths=_paths,
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer=_tokenizer,
+            )
         ),
-    ).with_output_path("tokenized/dolmino/all_math-9d507c")
+    )

@@ -11,7 +11,7 @@ from fray.cluster import ResourceConfig
 
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
-from marin.execution.executor import executor_main, versioned
+from marin.execution.step_runner import StepRunner
 
 from experiments.defaults import default_train
 from experiments.llama import llama_30m
@@ -51,7 +51,7 @@ for config in sweep_configs:
         # however, we can give each run a unique name for easier identification
         name=f"tutorial-dclm-30m-sweep-lr{lr}-wd{wd}",
         tokenized=dclm_mixture_config_llama3,
-        model_config=versioned(llama_30m),
+        model_config=llama_30m,
         train_config=config,
         # wandb tags
         tags=["llama", "30m", "dclm", "tutorial", "sweep", "test20251117"],
@@ -60,4 +60,4 @@ for config in sweep_configs:
     runs.append(run)
 
 if __name__ == "__main__":
-    executor_main(steps=runs)
+    StepRunner().run(runs)

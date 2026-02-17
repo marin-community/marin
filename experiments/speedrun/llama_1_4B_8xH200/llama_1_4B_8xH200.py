@@ -10,7 +10,7 @@ import logging
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from experiments.tutorials.exp1077_reproduce_dclm_1b1x import BATCH_SIZE, SEQ_LEN, llama_1_4b_dclm
-from marin.execution.executor import executor_main, versioned
+from marin.execution.step_runner import StepRunner
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -33,7 +33,7 @@ speedrun_config = SpeedrunConfig(
         train_batch_size=BATCH_SIZE,
         num_train_steps=NUM_TRAIN_STEPS,
         learning_rate=3e-3,
-        warmup=versioned(5000),
+        warmup=5000,
         z_loss_weight=1e-4,
         weight_decay=0.033,
         steps_per_eval=1000,
@@ -44,4 +44,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_1_4B_8xH200", config=speedrun_config))
+    StepRunner().run(default_speedrun("llama_1_4B_8xH200", config=speedrun_config))

@@ -8,7 +8,7 @@ import logging
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -33,4 +33,4 @@ speedrun_config = SpeedrunConfig(
 
 if __name__ == "__main__":
     logger.info("Launching Llama 75M speedrun on TPU v4-8.")
-    executor_main(steps=default_speedrun("pranshu_llama_75m_speedrun_v4_8", speedrun_config))
+    StepRunner().run(default_speedrun("pranshu_llama_75m_speedrun_v4_8", speedrun_config))

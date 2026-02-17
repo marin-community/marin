@@ -8,7 +8,7 @@
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 TRAIN_BATCH_SIZE = 256
@@ -48,4 +48,4 @@ speedrun_config = SpeedrunConfig(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("pranshu_mixtral_moe_gmm2_v4_8", speedrun_config))
+    StepRunner().run(default_speedrun("pranshu_mixtral_moe_gmm2_v4_8", speedrun_config))

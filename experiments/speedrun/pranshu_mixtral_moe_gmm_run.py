@@ -24,7 +24,7 @@ from levanter.models.mixtral import (
     MixtralTransformer,
 )
 from levanter.utils.activation import ActivationFunctionEnum
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -205,4 +205,4 @@ speedrun_config = SpeedrunConfig(
 if __name__ == "__main__":
     # Add logging to confirm GMM is being used
     logger.info("Running Mixtral with GMM-enabled MoE layers")
-    executor_main(steps=default_speedrun("pranshu_mixtral_moe_gmm_v4_8", speedrun_config))
+    StepRunner().run(default_speedrun("pranshu_mixtral_moe_gmm_v4_8", speedrun_config))

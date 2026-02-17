@@ -32,17 +32,36 @@ def test_run_dry_runs(config_file, monkeypatch):
     with open(script, "r") as file:
         content = file.read()
 
-        # Hack: Skip files that don't seem to call executor_main
-        if "executor_main(" not in content:
-            pytest.skip(f"Skipping {script} (no executor_main)")
+        has_step_runner = "StepRunner().run(" in content or "StepRunner().run(" in content
+        has_executor_main = "executor_main(" in content
+
+        if not has_step_runner and not has_executor_main:
+            pytest.skip(f"Skipping {script} (no StepRunner or executor_main)")
 
         if "nodryrun" in content:
             pytest.skip(f"Skipping {script} (contains nodryrun marker)")
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-        monkeypatch.setattr(
-            sys, "argv", [script, "--dry_run", "True", "--executor_info_base_path", temp_dir, "--prefix", temp_dir]
-        )
+        if has_executor_main:
+            # Legacy scripts that still use executor_main with draccus CLI args
+            monkeypatch.setattr(
+                sys, "argv", [script, "--dry_run", "True", "--executor_info_base_path", temp_dir, "--prefix", temp_dir]
+            )
+        else:
+            # New-style scripts using StepRunner().run() directly.
+            # Set MARIN_PREFIX and monkeypatch StepRunner.run to be a dry run.
+            monkeypatch.setenv("MARIN_PREFIX", temp_dir)
+            monkeypatch.setattr(sys, "argv", [script])
+
+            from marin.execution.step_runner import StepRunner
+
+            original_run = StepRunner.run
+
+            def dry_run_wrapper(self, steps, **kwargs):
+                return original_run(self, steps, dry_run=True, **{k: v for k, v in kwargs.items() if k != "dry_run"})
+
+            monkeypatch.setattr(StepRunner, "run", dry_run_wrapper)
+
         try:
             runpy.run_path(script, run_name="__main__")
         except HttpError as e:

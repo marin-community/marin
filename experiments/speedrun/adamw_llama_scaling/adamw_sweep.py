@@ -13,7 +13,7 @@ from levanter.optim import AdamConfig
 
 from experiments.llama import llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -170,4 +170,4 @@ if __name__ == "__main__":
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
 
-    executor_main(steps=steps, description="AdamW speedruns (Chinchilla optimal)")
+    StepRunner().run(steps)

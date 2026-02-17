@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 from enum import StrEnum, auto
 import dupekit
 
-from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
 import fsspec
 import msgspec
@@ -73,7 +72,7 @@ class DeconConfig:
     """
 
     input_path: str | list[str]
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str = ""
     attribute_name: str = "duplicate_text"
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001

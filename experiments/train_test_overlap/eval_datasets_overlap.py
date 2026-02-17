@@ -1,8 +1,9 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from experiments.defaults import default_download
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
 from experiments.eval_datasets import (
@@ -46,354 +47,403 @@ The script follows the pattern from eval_datasets.py but focuses only on the dec
 
 # the one in eval_datasets.py is the wrong flattened version
 # for some reason that doesn't have test splits
-mmlu_raw = ExecutorStep(
+mmlu_raw = default_download(
     name="raw/cais/mmlu_raw",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="cais/mmlu",
-        revision=versioned("c30699e"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+    hf_dataset_id="cais/mmlu",
+    revision="c30699e",
     override_output_path="raw/cais/mmlu_raw",
+    hf_urls_glob=["**/*.parquet", "*.md"],
 )
 # Convert gsm8k to dolma format
-gsm8k_convert_dolma = ExecutorStep(
+gsm8k_convert_dolma = StepSpec(
     name="decontamination/gsm8k-dolma",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="gsm8k/main",
-        subsets=["*"],
-        splits=["test"],
-        input_path=gsm8k_raw,
-        hf_path="gsm8k/main",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
-        answer_text_key="answer",
+    hash_attrs={"dataset_name": "gsm8k/main", "splits": ["test"]},
+    deps=[gsm8k_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="gsm8k/main",
+            subsets=["*"],
+            splits=["test"],
+            input_path=gsm8k_raw,
+            hf_path="gsm8k/main",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question",
+            answer_text_key="answer",
+        )
     ),
 )
 
 # Convert math dataset to dolma format
-math_convert_dolma = ExecutorStep(
+math_convert_dolma = StepSpec(
     name="decontamination/math-dolma",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="hendrycks/math",
-        subsets=["*"],
-        splits=["test"],
-        input_path=math_raw,
-        hf_path="hendrycks/math",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="problem",
-        answer_text_key="solution",
+    hash_attrs={"dataset_name": "hendrycks/math", "splits": ["test"]},
+    deps=[math_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="hendrycks/math",
+            subsets=["*"],
+            splits=["test"],
+            input_path=math_raw,
+            hf_path="hendrycks/math",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="problem",
+            answer_text_key="solution",
+        )
     ),
 )
 
 # Convert truthful_qa to dolma format
 # columns are: question (string), best_answer (string), correct_answers (List[string])
-truthful_qa_convert_dolma = ExecutorStep(
+truthful_qa_convert_dolma = StepSpec(
     name="decontamination/truthful_qa-dolma",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="truthful_qa/truthful_qa",
-        subsets=["generation"],
-        splits=["validation"],
-        input_path=truthful_qa_raw,
-        hf_path="truthful_qa/truthful_qa",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
-        answer_text_key="best_answer",
-        options_key="correct_answers",
+    hash_attrs={"dataset_name": "truthful_qa/truthful_qa", "splits": ["validation"]},
+    deps=[truthful_qa_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="truthful_qa/truthful_qa",
+            subsets=["generation"],
+            splits=["validation"],
+            input_path=truthful_qa_raw,
+            hf_path="truthful_qa/truthful_qa",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question",
+            answer_text_key="best_answer",
+            options_key="correct_answers",
+        )
     ),
 )
 
 # Convert bbh to dolma format
-bbh_convert_dolma = ExecutorStep(
+bbh_convert_dolma = StepSpec(
     name="decontamination/bbh-dolma",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="SaylorTwift/bbh",
-        subsets=["*"],
-        splits=["test"],
-        input_path=bbh_raw,
-        hf_path="SaylorTwift/bbh",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="input",
-        answer_text_key="target",
+    hash_attrs={"dataset_name": "SaylorTwift/bbh", "splits": ["test"]},
+    deps=[bbh_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="SaylorTwift/bbh",
+            subsets=["*"],
+            splits=["test"],
+            input_path=bbh_raw,
+            hf_path="SaylorTwift/bbh",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="input",
+            answer_text_key="target",
+        )
     ),
 )
 
 
-mmlu_convert_dolma = ExecutorStep(
+mmlu_convert_dolma = StepSpec(
     name="decontamination/mmlu",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="cais/mmlu",
-        subsets=["*"],
-        splits=["test"],
-        input_path=mmlu_raw,
-        hf_path="cais/mmlu",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
-        options_key="choices",
-        answer_idx_key="answer",
-        answer_labels=["A", "B", "C", "D"],
-        exclude_subsets=["auxiliary_train"],
+    hash_attrs={"dataset_name": "cais/mmlu", "splits": ["test"]},
+    deps=[mmlu_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="cais/mmlu",
+            subsets=["*"],
+            splits=["test"],
+            input_path=mmlu_raw,
+            hf_path="cais/mmlu",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question",
+            options_key="choices",
+            answer_idx_key="answer",
+            answer_labels=["A", "B", "C", "D"],
+            exclude_subsets=["auxiliary_train"],
+        )
     ),
 )
 
 # Convert humaneval to dolma format
-humaneval_convert_dolma = ExecutorStep(
+humaneval_convert_dolma = StepSpec(
     name="decontamination/humaneval",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="openai/openai_humaneval",
-        subsets=["*"],
-        splits=["test"],
-        input_path=humaneval_raw,
-        hf_path="openai/openai_humaneval",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="prompt",
-        answer_text_key="canonical_solution",
+    hash_attrs={"dataset_name": "openai/openai_humaneval", "splits": ["test"]},
+    deps=[humaneval_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="openai/openai_humaneval",
+            subsets=["*"],
+            splits=["test"],
+            input_path=humaneval_raw,
+            hf_path="openai/openai_humaneval",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="prompt",
+            answer_text_key="canonical_solution",
+        )
     ),
 )
 
 # Convert instruction_following to dolma format (load remotely, no answers)
-instruction_following_convert_dolma = ExecutorStep(
+instruction_following_convert_dolma = StepSpec(
     name="decontamination/instruction_following",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="wis-k/instruction-following-eval",
-        subsets=["*"],
-        splits=["train"],
-        input_path="wis-k/instruction-following-eval",
-        hf_path="wis-k/instruction-following-eval",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="prompt",
-        options_key="instruction_id_list",
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "wis-k/instruction-following-eval", "splits": ["train"]},
+    deps=[instruction_following_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="wis-k/instruction-following-eval",
+            subsets=["*"],
+            splits=["train"],
+            input_path="wis-k/instruction-following-eval",
+            hf_path="wis-k/instruction-following-eval",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="prompt",
+            options_key="instruction_id_list",
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # Convert gpqa to dolma format (load from HF hub, single split)
-gpqa_convert_dolma = ExecutorStep(
+gpqa_convert_dolma = StepSpec(
     name="decontamination/gpqa",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="Idavidrein/gpqa",
-        subsets=["gpqa_main", "gpqa_extended", "gpqa_diamond"],
-        splits=["train"],
-        input_path="Idavidrein/gpqa",
-        hf_path="Idavidrein/gpqa",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="Question",
-        answer_text_key="Correct Answer",
-        options_keys=["Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3"],
+    hash_attrs={"dataset_name": "Idavidrein/gpqa", "splits": ["train"]},
+    deps=[gpqa_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="Idavidrein/gpqa",
+            subsets=["gpqa_main", "gpqa_extended", "gpqa_diamond"],
+            splits=["train"],
+            input_path="Idavidrein/gpqa",
+            hf_path="Idavidrein/gpqa",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="Question",
+            answer_text_key="Correct Answer",
+            options_keys=["Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3"],
+        )
     ),
 )
 
 
-mmlu_pro_convert_dolma = ExecutorStep(
+mmlu_pro_convert_dolma = StepSpec(
     name="decontamination/mmlu_pro",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="TIGER-Lab/MMLU-Pro",
-        subsets=["*"],
-        splits=["test"],
-        input_path=mmlu_pro_raw,
-        hf_path="TIGER-Lab/MMLU-Pro",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
-        options_key="options",
-        answer_idx_key="answer_index",
-        answer_labels=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
+    hash_attrs={"dataset_name": "TIGER-Lab/MMLU-Pro", "splits": ["test"]},
+    deps=[mmlu_pro_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="TIGER-Lab/MMLU-Pro",
+            subsets=["*"],
+            splits=["test"],
+            input_path=mmlu_pro_raw,
+            hf_path="TIGER-Lab/MMLU-Pro",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question",
+            options_key="options",
+            answer_idx_key="answer_index",
+            answer_labels=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
+        )
     ),
 )
 
 # Convert musr to dolma format
-musr_convert_dolma = ExecutorStep(
+musr_convert_dolma = StepSpec(
     name="decontamination/musr",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="WillHeld/MuSRDecontam",
-        subsets=[""],
-        splits=["test"],
-        input_path=musr_raw,
-        hf_path="WillHeld/MuSRDecontam",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="narrative",
-        options_key="choices",
-        answer_idx_key="answer_index",
-        answer_text_key="answer_choice",
+    hash_attrs={"dataset_name": "WillHeld/MuSRDecontam", "splits": ["test"]},
+    deps=[musr_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="WillHeld/MuSRDecontam",
+            subsets=[""],
+            splits=["test"],
+            input_path=musr_raw,
+            hf_path="WillHeld/MuSRDecontam",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="narrative",
+            options_key="choices",
+            answer_idx_key="answer_index",
+            answer_text_key="answer_choice",
+        )
     ),
 )
 
 # Convert HellaSwag to dolma format
-hellaswag_convert_dolma = ExecutorStep(
+hellaswag_convert_dolma = StepSpec(
     name="decontamination/hellaswag",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="Rowan/hellaswag",
-        subsets=["*"],
-        splits=["test"],
-        input_path=hellaswag_raw,
-        hf_path="Rowan/hellaswag",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="ctx",
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "Rowan/hellaswag", "splits": ["test"]},
+    deps=[hellaswag_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="Rowan/hellaswag",
+            subsets=["*"],
+            splits=["test"],
+            input_path=hellaswag_raw,
+            hf_path="Rowan/hellaswag",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="ctx",
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # Convert AI2-ARC to dolma format
-ai2_arc_convert_dolma = ExecutorStep(
+ai2_arc_convert_dolma = StepSpec(
     name="decontamination/ai2_arc",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="allenai/ai2_arc",
-        subsets=["*"],
-        splits=["test"],
-        input_path=ai2_arc_raw,
-        hf_path="allenai/ai2_arc",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
-        options_key="choices.text",
-        answer_label_key="answerKey",
-        answer_labels=["A", "B", "C", "D"],
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "allenai/ai2_arc", "splits": ["test"]},
+    deps=[ai2_arc_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="allenai/ai2_arc",
+            subsets=["*"],
+            splits=["test"],
+            input_path=ai2_arc_raw,
+            hf_path="allenai/ai2_arc",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question",
+            options_key="choices.text",
+            answer_label_key="answerKey",
+            answer_labels=["A", "B", "C", "D"],
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # Convert BoolQ to dolma format
-boolq_convert_dolma = ExecutorStep(
+boolq_convert_dolma = StepSpec(
     name="decontamination/boolq",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="google/boolq",
-        subsets=["*"],
-        splits=["validation"],
-        input_path=boolq_raw,
-        hf_path="google/boolq",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "google/boolq", "splits": ["validation"]},
+    deps=[boolq_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="google/boolq",
+            subsets=["*"],
+            splits=["validation"],
+            input_path=boolq_raw,
+            hf_path="google/boolq",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question",
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # Insert Tau Commonsense QA conversion step
-commonsense_qa_convert_dolma = ExecutorStep(
+commonsense_qa_convert_dolma = StepSpec(
     name="decontamination/commonsense_qa",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="tau/commonsense_qa",
-        subsets=["*"],
-        splits=["validation"],
-        input_path=commonsense_qa_raw,
-        hf_path="tau/commonsense_qa",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
-        options_key="choices.text",
-        answer_label_key="answerKey",
-        answer_labels=["A", "B", "C", "D", "E"],
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "tau/commonsense_qa", "splits": ["validation"]},
+    deps=[commonsense_qa_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="tau/commonsense_qa",
+            subsets=["*"],
+            splits=["validation"],
+            input_path=commonsense_qa_raw,
+            hf_path="tau/commonsense_qa",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question",
+            options_key="choices.text",
+            answer_label_key="answerKey",
+            answer_labels=["A", "B", "C", "D", "E"],
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # Convert Lambada OpenAI to dolma format
-lambada_openai_convert_dolma = ExecutorStep(
+lambada_openai_convert_dolma = StepSpec(
     name="decontamination/lambada_openai",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="EleutherAI/lambada_openai",
-        subsets=["*"],
-        splits=["test"],
-        input_path=lambada_openai_raw,
-        hf_path="EleutherAI/lambada_openai",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="text",
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "EleutherAI/lambada_openai", "splits": ["test"]},
+    deps=[lambada_openai_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="EleutherAI/lambada_openai",
+            subsets=["*"],
+            splits=["test"],
+            input_path=lambada_openai_raw,
+            hf_path="EleutherAI/lambada_openai",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="text",
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # Convert AllenAI OpenBookQA to dolma format
-openbookqa_convert_dolma = ExecutorStep(
+openbookqa_convert_dolma = StepSpec(
     name="decontamination/openbookqa",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="allenai/openbookqa",
-        subsets=["*"],
-        splits=["test"],
-        input_path=openbookqa_raw,
-        hf_path="allenai/openbookqa",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question_stem",
-        options_key="choices.text",
-        answer_label_key="answerKey",
-        answer_labels=["A", "B", "C", "D"],
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "allenai/openbookqa", "splits": ["test"]},
+    deps=[openbookqa_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="allenai/openbookqa",
+            subsets=["*"],
+            splits=["test"],
+            input_path=openbookqa_raw,
+            hf_path="allenai/openbookqa",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question_stem",
+            options_key="choices.text",
+            answer_label_key="answerKey",
+            answer_labels=["A", "B", "C", "D"],
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # Convert PIQA to dolma format
-piqa_convert_dolma = ExecutorStep(
+piqa_convert_dolma = StepSpec(
     name="decontamination/piqa",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="baber/piqa",
-        subsets=["*"],
-        splits=["test"],
-        input_path=piqa_raw,
-        hf_path="baber/piqa",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="goal",
-        options_keys=["sol1", "sol2"],
-        answer_label_key="label",
-        answer_labels=["0", "1"],
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "baber/piqa", "splits": ["test"]},
+    deps=[piqa_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="baber/piqa",
+            subsets=["*"],
+            splits=["test"],
+            input_path=piqa_raw,
+            hf_path="baber/piqa",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="goal",
+            options_keys=["sol1", "sol2"],
+            answer_label_key="label",
+            answer_labels=["0", "1"],
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # Convert Winograd WSC to dolma format
-winograd_wsc_convert_dolma = ExecutorStep(
+winograd_wsc_convert_dolma = StepSpec(
     name="decontamination/winograd_wsc",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="marcov/winograd_wsc_wsc273_promptsource",
-        subsets=["*"],
-        splits=["test"],
-        input_path=winograd_wsc_raw,
-        hf_path="marcov/winograd_wsc_wsc273_promptsource",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="rendered_input",
-        options_key="options",
-        answer_label_key="label",
-        answer_labels=["0", "1"],
-        answer_text_ignore=True,
+    hash_attrs={"dataset_name": "marcov/winograd_wsc_wsc273_promptsource", "splits": ["test"]},
+    deps=[winograd_wsc_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="marcov/winograd_wsc_wsc273_promptsource",
+            subsets=["*"],
+            splits=["test"],
+            input_path=winograd_wsc_raw,
+            hf_path="marcov/winograd_wsc_wsc273_promptsource",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="rendered_input",
+            options_key="options",
+            answer_label_key="label",
+            answer_labels=["0", "1"],
+            answer_text_ignore=True,
+        )
     ),
 )
 
 ############################################################
 
 # List of evaluation dataset conversion steps for train-test overlap detection
-EVAL_DATASET_STEPS: list[ExecutorStep] = [
+EVAL_DATASET_STEPS: list[StepSpec] = [
     gsm8k_convert_dolma,
     math_convert_dolma,
     truthful_qa_convert_dolma,
@@ -415,8 +465,8 @@ EVAL_DATASET_STEPS: list[ExecutorStep] = [
 ]
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
+    StepRunner().run(
+        [
             mmlu_raw,
             mmlu_convert_dolma,
             gsm8k_raw,

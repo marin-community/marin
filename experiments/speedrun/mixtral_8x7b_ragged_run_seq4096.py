@@ -9,7 +9,7 @@ from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -68,4 +68,4 @@ if __name__ == "__main__":
         mixtral_8x7b_ragged.seq_len,
         speedrun_config.train_config.num_train_steps,
     )
-    executor_main(steps=default_speedrun("mixtral_8x7b_ragged_speedrun_bs32_seq4096_v5p-64", speedrun_config))
+    StepRunner().run(default_speedrun("mixtral_8x7b_ragged_speedrun_bs32_seq4096_v5p-64", speedrun_config))

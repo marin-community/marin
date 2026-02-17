@@ -24,7 +24,7 @@ from levanter.grug.model import GrugModelConfig
 from levanter.models.grug_wrapper import GrugWrapper
 from levanter.models.lm_model import LmConfig
 from levanter.utils.flop_utils import lm_flops_per_token
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -208,7 +208,7 @@ def main() -> None:
     steps = []
     steps.extend(default_speedrun(f"hackable_compare_125m_{max_seq_len}-profile4", hack_speedrun))
     steps.extend(default_speedrun(f"grug_compare_125m_{max_seq_len}-profile4", grug_speedrun))
-    executor_main(steps=steps, description="Head-to-head: hackable transformer vs grugformer (~125M, no sinks)")
+    StepRunner().run(steps)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
+from dataclasses import dataclass
 import logging
 import os
 import sys
@@ -12,75 +12,45 @@ import humanfriendly
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import (
-    ExecutorMainConfig,
-    ExecutorStep,
-    executor_main,
-    this_output_path,
-    versioned,
-)
-from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate, ConsolidateConfig
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
+from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, FilterType, consolidate
 from marin.processing.classification.dataset_utils import DatasetConfig
 from marin.processing.classification.deduplication.dedup_commons import DedupConfig, DedupMode, deduplicate
-from marin.processing.classification.fasttext.train_fasttext import (
-    TrainFasttextClassifierConfig,
-    train,
-)
+from marin.processing.classification.fasttext.train_fasttext import train
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
+from marin.transform.simple_html_to_md.process import html_to_md
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def _html_to_md_with_config(cfg: SimpleHtmlToMdConfig):
-    """Wrapper: unpack SimpleHtmlToMdConfig into the individual-arg html_to_md."""
-    return html_to_md(
-        input_path=cfg.input_path,
-        output_path=cfg.output_path,
-        extract_method=cfg.extract_method,
-        config=cfg.config,
-    )
-
-
-def _train_with_config(cfg: TrainFasttextClassifierConfig):
-    """Wrapper: unpack TrainFasttextClassifierConfig into the individual-arg train."""
-    return train(
-        datasets=cfg.datasets,
-        output_path=cfg.output_path,
-        fasttext_args=cfg.fasttext_args,
-        seed=cfg.seed,
-        val_frac=cfg.val_frac,
-        memory=cfg.memory,
-    )
-
-
-def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
+def create_steps(prefix: str, synth_data: str) -> list[StepSpec]:
     # ############################################################
     # Transform HTML to text
 
-    transform_hq_data_step = ExecutorStep(
+    transform_hq_data_step = StepSpec(
         name=os.path.join(prefix, "hq-transformed"),
-        fn=_html_to_md_with_config,
-        config=SimpleHtmlToMdConfig(
+        hash_attrs={"extract_method": "resiliparse"},
+        fn=lambda output_path: html_to_md(
             input_path=os.path.join(synth_data, "pos"),
-            output_path=this_output_path(),
-            extract_method=versioned("resiliparse"),
+            output_path=output_path,
+            extract_method="resiliparse",
             config=ResiliparseConfig(),
         ),
     )
 
-    transform_lq_data_step = ExecutorStep(
+    transform_lq_data_step = StepSpec(
         name=os.path.join(prefix, "lq-transformed"),
-        fn=_html_to_md_with_config,
-        config=SimpleHtmlToMdConfig(
+        hash_attrs={"extract_method": "resiliparse"},
+        fn=lambda output_path: html_to_md(
             input_path=os.path.join(synth_data, "neg"),
-            output_path=this_output_path(),
-            extract_method=versioned("resiliparse"),
+            output_path=output_path,
+            extract_method="resiliparse",
             config=ResiliparseConfig(),
         ),
     )
@@ -88,23 +58,23 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Train quality classifier
 
-    train_quality_step = ExecutorStep(
+    train_quality_step = StepSpec(
         name=os.path.join(prefix, "quality-classifier"),
-        fn=_train_with_config,
-        config=TrainFasttextClassifierConfig(
+        deps=[transform_hq_data_step, transform_lq_data_step],
+        fn=lambda output_path: train(
             datasets=[
                 DatasetConfig(
-                    input_doc_path=transform_hq_data_step,
+                    input_doc_path=transform_hq_data_step.output_path,
                     label="hq",
                     sampling_rate=1.0,
                 ),
                 DatasetConfig(
-                    input_doc_path=transform_lq_data_step,
+                    input_doc_path=transform_lq_data_step.output_path,
                     label="lq",
                     sampling_rate=1.0,
                 ),
             ],
-            output_path=this_output_path(),
+            output_path=output_path,
             fasttext_args={
                 "lr": 0.001,
                 "minCount": 1,
@@ -119,78 +89,87 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     ############################################################
     # Run inference with quality classifier
 
-    inference_hq_step = ExecutorStep(
+    inference_hq_step = StepSpec(
         name=os.path.join(prefix, "hq-inference"),
-        fn=run_inference,
-        config=InferenceConfig(
-            input_path=transform_hq_data_step,
-            output_path=this_output_path(),
-            model_name=train_quality_step,
-            model_type="fasttext",
-            attribute_name="quickstart-fasttext-quality-hq",
+        deps=[transform_hq_data_step, train_quality_step],
+        fn=lambda output_path: run_inference(
+            InferenceConfig(
+                input_path=transform_hq_data_step.output_path,
+                output_path=output_path,
+                model_name=train_quality_step.output_path,
+                model_type="fasttext",
+                attribute_name="quickstart-fasttext-quality-hq",
+            )
         ),
     )
 
-    inference_lq_step = ExecutorStep(
+    inference_lq_step = StepSpec(
         name=os.path.join(prefix, "lq-inference"),
-        fn=run_inference,
-        config=InferenceConfig(
-            input_path=transform_lq_data_step,
-            output_path=this_output_path(),
-            model_name=train_quality_step,
-            model_type="fasttext",
-            attribute_name="quickstart-fasttext-quality-lq",
+        deps=[transform_lq_data_step, train_quality_step],
+        fn=lambda output_path: run_inference(
+            InferenceConfig(
+                input_path=transform_lq_data_step.output_path,
+                output_path=output_path,
+                model_name=train_quality_step.output_path,
+                model_type="fasttext",
+                attribute_name="quickstart-fasttext-quality-lq",
+            )
         ),
     )
 
     ############################################################
     # Deduplicate
 
-    dedup_exact_paragraph_step = ExecutorStep(
+    dedup_exact_paragraph_step = StepSpec(
         name=os.path.join(prefix, "dedup_exact_paragraph"),
-        fn=deduplicate,
-        config=DedupConfig(
-            input_paths=transform_hq_data_step,
-            output_path=this_output_path(),
-            mode=DedupMode.EXACT_PARAGRAPH,
-            ray_memory=humanfriendly.parse_size("1GB", binary=True),
-            ray_num_cpus=1,
+        deps=[transform_hq_data_step],
+        fn=lambda output_path: deduplicate(
+            DedupConfig(
+                input_paths=transform_hq_data_step.output_path,
+                output_path=output_path,
+                mode=DedupMode.EXACT_PARAGRAPH,
+                ray_memory=humanfriendly.parse_size("1GB", binary=True),
+                ray_num_cpus=1,
+            )
         ),
     )
-    dedup_fuzzy_document_step = ExecutorStep(
+    dedup_fuzzy_document_step = StepSpec(
         name=os.path.join(prefix, "dedup_fuzzy_document"),
-        fn=deduplicate,
-        config=DedupConfig(
-            input_paths=transform_hq_data_step,
-            output_path=this_output_path(),
-            mode=DedupMode.FUZZY_DOCUMENT,
-            ray_memory=humanfriendly.parse_size("1GB", binary=True),
-            ray_num_cpus=1,
+        deps=[transform_hq_data_step],
+        fn=lambda output_path: deduplicate(
+            DedupConfig(
+                input_paths=transform_hq_data_step.output_path,
+                output_path=output_path,
+                mode=DedupMode.FUZZY_DOCUMENT,
+                ray_memory=humanfriendly.parse_size("1GB", binary=True),
+                ray_num_cpus=1,
+            )
         ),
     )
 
     ############################################################
     # Consolidate
 
-    consolidate_step = ExecutorStep(
+    consolidate_step = StepSpec(
         name=os.path.join(prefix, "cleaned"),
-        fn=consolidate,
-        config=ConsolidateConfig(
-            input_path=transform_hq_data_step,
-            output_path=this_output_path(),
-            # TODO (rav): add quality filters
-            filters=[
-                FilterConfig(
-                    type=FilterType.REMOVE_SPANS,
-                    attribute_path=dedup_exact_paragraph_step.cd("data"),
-                    name=str(DedupMode.EXACT_PARAGRAPH),
-                ),
-                FilterConfig(
-                    type=FilterType.REMOVE_DOC,
-                    attribute_path=dedup_fuzzy_document_step.cd("data"),
-                    name=str(DedupMode.FUZZY_DOCUMENT),
-                ),
-            ],
+        deps=[transform_hq_data_step, dedup_exact_paragraph_step, dedup_fuzzy_document_step],
+        fn=lambda output_path: consolidate(
+            ConsolidateConfig(
+                input_path=transform_hq_data_step.output_path,
+                output_path=output_path,
+                filters=[
+                    FilterConfig(
+                        type=FilterType.REMOVE_SPANS,
+                        attribute_path=os.path.join(dedup_exact_paragraph_step.output_path, "data"),
+                        name=str(DedupMode.EXACT_PARAGRAPH),
+                    ),
+                    FilterConfig(
+                        type=FilterType.REMOVE_DOC,
+                        attribute_path=os.path.join(dedup_fuzzy_document_step.output_path, "data"),
+                        name=str(DedupMode.FUZZY_DOCUMENT),
+                    ),
+                ],
+            )
         ),
     )
 
@@ -198,20 +177,20 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # Tokenize
     tokenizer = "gpt2"
 
-    tokenize_config = TokenizeConfig(
-        train_paths=[consolidate_step],
-        validation_paths=[],
-        cache_path=this_output_path(),
-        tokenizer=tokenizer,
-        zephyr_num_cpus=1,
-        zephyr_memory=humanfriendly.parse_size("1MB", binary=True),
-    )
-
-    tokenize_step = ExecutorStep(
+    tokenize_step = StepSpec(
         name=os.path.join(prefix, "tokenized"),
-        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=tokenize,
-        config=tokenize_config,
+        deps=[consolidate_step],
+        hash_attrs={"tokenizer": tokenizer},
+        fn=lambda output_path: tokenize(
+            TokenizeConfig(
+                train_paths=[consolidate_step.output_path],
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer=tokenizer,
+                zephyr_num_cpus=1,
+                zephyr_memory=humanfriendly.parse_size("1MB", binary=True),
+            )
+        ),
     )
 
     # ############################################################
@@ -224,26 +203,28 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     pod_config = ResourceConfig.with_cpu()
 
-    train_step = ExecutorStep(
+    train_step = StepSpec(
         name=os.path.join(prefix, "train"),
-        fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
-            resources=pod_config,
-            env_vars=train_env_vars,
-            train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step),
-                hf_save_steps=1,
-                model=Gpt2Config(
-                    num_layers=2,
-                    num_heads=2,
-                    max_seq_len=64,
-                    hidden_dim=32,
+        deps=[tokenize_step],
+        fn=lambda output_path: run_levanter_train_lm(
+            TrainLmOnPodConfig(
+                output_path=output_path,
+                resources=pod_config,
+                env_vars=train_env_vars,
+                train_config=TrainLmConfig(
+                    data=lm_data_config(tokenize_step),
+                    hf_save_steps=1,
+                    model=Gpt2Config(
+                        num_layers=2,
+                        num_heads=2,
+                        max_seq_len=64,
+                        hidden_dim=32,
+                    ),
+                    trainer=TrainerConfig(
+                        train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
+                    ),
                 ),
-                trainer=TrainerConfig(
-                    train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
-                ),
-            ),
+            )
         ),
     )
 
@@ -266,18 +247,24 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     ]
 
 
+@dataclass
+class IntegrationTestConfig:
+    prefix: str | None = None
+    """Attached to every output path that's constructed (e.g., the GCS bucket)."""
+
+    dry_run: bool = False
+    force_run_failed: bool = True
+
+
 @draccus.wrap()
-def main(config: ExecutorMainConfig):
+def main(config: IntegrationTestConfig):
     try:
-        if config.prefix is not None:
-            bucket_prefix = config.prefix
-        else:
-            bucket_prefix = "/tmp"  # Default to a temporary directory
+        bucket_prefix = config.prefix if config.prefix is not None else "/tmp"
 
         experiment_prefix = "quickstart-tests"
-        config = dataclasses.replace(
-            config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
-        )
+
+        # Set MARIN_PREFIX so StepSpec can resolve output paths
+        os.environ["MARIN_PREFIX"] = bucket_prefix
 
         # start Ray explicitly and set it as the current cluster
         # N.B. This script must not be launched via `uv run`, or Ray will prefer to use `uv` for all execution
@@ -300,8 +287,7 @@ def main(config: ExecutorMainConfig):
         if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
             os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
         steps = create_steps(experiment_prefix, synth_data)
-        config = dataclasses.replace(config)
-        executor_main(config, steps=steps)
+        StepRunner().run(steps, dry_run=config.dry_run, force_run_failed=config.force_run_failed)
         logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
     except Exception as e:
         logger.error(f"Error in main execution: {e}")

@@ -8,9 +8,8 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import ExecutorStep
 from marin.execution.step_model import StepSpec
-from marin.execution.step_runner import StepRunner, resolve_executor_step
+from marin.execution.step_runner import StepRunner
 
 # ---------------------------------------------------------------------------
 # Artifact types
@@ -135,29 +134,6 @@ def test_artifact_roundtrip_through_pipeline(tmp_path: Path):
     assert Artifact.load(step2_out, TokenizeMetadata) == tokenized
 
 
-# ---------------------------------------------------------------------------
-# resolve_executor_step tests
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_executor_step_binds_config():
-    """resolve_executor_step should produce a zero-arg callable with config bound."""
-    received = {}
-
-    def my_fn(config):
-        received["config"] = config
-
-    step = ExecutorStep(name="download", fn=my_fn, config=None)
-    resolved = resolve_executor_step(step, config={"url": "http://example.com"}, output_path="/out/download-abc123")
-
-    assert resolved.output_path == "/out/download-abc123"
-    assert resolved.deps == []
-
-    # Call the resolved fn — it should invoke my_fn with the config
-    resolved.fn("/tmp/foobar")
-    assert received["config"] == {"url": "http://example.com"}
-
-
 def test_runner_saves_artifact_automatically(tmp_path):
     """The runner should auto-save BaseModel results to output_path."""
     out = tmp_path.as_posix()
@@ -173,17 +149,6 @@ def test_runner_saves_artifact_automatically(tmp_path):
 
     loaded = Artifact.load(out, PathMetadata)
     assert loaded.path == out
-
-
-def test_resolve_executor_step_preserves_deps():
-    step = ExecutorStep(name="train", fn=lambda c: None, config=None)
-    resolved = resolve_executor_step(
-        step,
-        config={},
-        output_path="/out/train-abc123",
-        deps=["/out/download-abc123", "/out/tokenize-def456"],
-    )
-    assert resolved.deps == ["/out/download-abc123", "/out/tokenize-def456"]
 
 
 # ---------------------------------------------------------------------------
@@ -308,3 +273,111 @@ def test_runner_max_concurrent(tmp_path: Path):
 
     train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
+
+
+# ---------------------------------------------------------------------------
+# StepSpec hash/versioning tests
+# ---------------------------------------------------------------------------
+
+
+def test_hash_attrs_affect_output_path(tmp_path: Path):
+    """Changing hash_attrs should change the output_path hash."""
+    prefix = tmp_path.as_posix()
+
+    step_a = StepSpec(
+        name="step",
+        output_path_prefix=prefix,
+        hash_attrs={"value": 1},
+        fn=lambda output_path: None,
+    )
+    step_b = StepSpec(
+        name="step",
+        output_path_prefix=prefix,
+        hash_attrs={"value": 2},
+        fn=lambda output_path: None,
+    )
+
+    assert step_a.output_path != step_b.output_path
+    # But both should start with the same prefix and name
+    assert step_a.output_path.startswith(f"{prefix}/step_")
+    assert step_b.output_path.startswith(f"{prefix}/step_")
+
+
+def test_same_hash_attrs_give_same_output_path(tmp_path: Path):
+    """Identical hash_attrs should produce the same output_path."""
+    prefix = tmp_path.as_posix()
+
+    step_a = StepSpec(
+        name="step",
+        output_path_prefix=prefix,
+        hash_attrs={"value": 42},
+        fn=lambda output_path: None,
+    )
+    step_b = StepSpec(
+        name="step",
+        output_path_prefix=prefix,
+        hash_attrs={"value": 42},
+        fn=lambda output_path: None,
+    )
+
+    assert step_a.output_path == step_b.output_path
+
+
+def test_dep_hash_affects_output_path(tmp_path: Path):
+    """Changing a dependency's hash_attrs should change the dependent step's output_path."""
+    prefix = tmp_path.as_posix()
+
+    parent_a = StepSpec(
+        name="parent",
+        output_path_prefix=prefix,
+        hash_attrs={"data": "v1"},
+        fn=lambda output_path: None,
+    )
+    parent_b = StepSpec(
+        name="parent",
+        output_path_prefix=prefix,
+        hash_attrs={"data": "v2"},
+        fn=lambda output_path: None,
+    )
+
+    child_a = StepSpec(
+        name="child",
+        output_path_prefix=prefix,
+        deps=[parent_a],
+        fn=lambda output_path: None,
+    )
+    child_b = StepSpec(
+        name="child",
+        output_path_prefix=prefix,
+        deps=[parent_b],
+        fn=lambda output_path: None,
+    )
+
+    # Parent output paths should differ
+    assert parent_a.output_path != parent_b.output_path
+    # Child output paths should also differ because deps changed
+    assert child_a.output_path != child_b.output_path
+
+
+def test_override_output_path_ignores_hash(tmp_path: Path):
+    """override_output_path should bypass hash computation."""
+    prefix = tmp_path.as_posix()
+    override = f"{prefix}/my-custom-path"
+
+    step_a = StepSpec(
+        name="step",
+        output_path_prefix=prefix,
+        hash_attrs={"value": 1},
+        override_output_path=override,
+        fn=lambda output_path: None,
+    )
+    step_b = StepSpec(
+        name="step",
+        output_path_prefix=prefix,
+        hash_attrs={"value": 2},
+        override_output_path=override,
+        fn=lambda output_path: None,
+    )
+
+    assert step_a.output_path == override
+    assert step_b.output_path == override

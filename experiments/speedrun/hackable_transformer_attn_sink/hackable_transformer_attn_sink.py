@@ -58,7 +58,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from fray.cluster import ResourceConfig
 from experiments.simple_train_config import SimpleTrainConfig
 
@@ -555,4 +555,4 @@ if __name__ == "__main__":
         for m in lr_mults:
             name, cfg = build_run(s, sink, use_gpu=use_gpu, lr_multiplier=m)
             steps.extend(default_speedrun(name, cfg))
-    executor_main(steps=steps, description="Hackable transformer attention-sink sweep")
+    StepRunner().run(steps)

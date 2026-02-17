@@ -22,7 +22,8 @@ from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
@@ -506,12 +507,14 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
 # Experiment setup
 # -----------------------------------------------------------------------------
 checkpoint_path = "hf://plantcad/marin_exp1729__pcv1_600m_c512__checkpoints/local_store/checkpoints/plantcad-train-600m-r16-a1bc43/hf/step-26782"
-evaluation_step = ExecutorStep(
+evaluation_step = StepSpec(
     name="plantcad-eval",
-    fn=run_plantcad_evaluation,
-    config=DnaEvalConfig(
-        checkpoint_path=versioned(checkpoint_path),
-        output_path=this_output_path(),
+    hash_attrs={"checkpoint_path": checkpoint_path},
+    fn=lambda output_path: run_plantcad_evaluation(
+        DnaEvalConfig(
+            checkpoint_path=checkpoint_path,
+            output_path=output_path,
+        )
     ),
 )
 
@@ -520,4 +523,4 @@ evaluation_step = ExecutorStep(
 # Main
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    executor_main(steps=[evaluation_step])
+    StepRunner().run([evaluation_step])

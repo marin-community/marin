@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 if __name__ == "__main__":
     train_steps = [
@@ -28,7 +28,4 @@ if __name__ == "__main__":
         ]
     ]
 
-    executor_main(
-        steps=train_steps,
-        description="Debugging two-stage training",
-    )
+    StepRunner().run(train_steps)

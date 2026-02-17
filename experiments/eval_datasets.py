@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import os
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.step_model import StepSpec
+from marin.execution.step_runner import StepRunner
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
 from experiments.defaults import default_download
@@ -40,17 +42,19 @@ Downloads the following datasets
 # download mmlu dataset
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
 #   Migrate the dataset and cd can be removed.
-mmlu_raw = ExecutorStep(
+mmlu_raw = StepSpec(
     name="raw/cais/mmlu",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="cais/mmlu",
-        revision=versioned("c30699e"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+    hash_attrs={"hf_dataset_id": "cais/mmlu", "revision": "c30699e", "hf_urls_glob": ["**/*.parquet", "*.md"]},
     override_output_path="raw/cais/mmluhf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="cais/mmlu",
+            revision="c30699e",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.md"],
+        )
+    ),
 )
 
 # download boolq dataset
@@ -59,7 +63,7 @@ mmlu_raw = ExecutorStep(
 boolq_raw = default_download(
     name="raw/google/boolq",
     hf_dataset_id="google/boolq",
-    revision=versioned("35b264d"),
+    revision="35b264d",
     override_output_path="raw/google/boolqhf",
     hf_urls_glob=["**/*.parquet"],
 )
@@ -70,7 +74,7 @@ boolq_raw = default_download(
 hellaswag_raw = default_download(
     name="raw/Rowan/hellaswag",
     hf_dataset_id="Rowan/hellaswag",
-    revision=versioned("50441ce"),
+    revision="50441ce",
     override_output_path="raw/Rowan/hellaswaghf",
     hf_urls_glob=["**/*.parquet"],
 )
@@ -81,7 +85,7 @@ hellaswag_raw = default_download(
 piqa_raw = default_download(
     name="raw/ybisk/piqa",
     hf_dataset_id="ybisk/piqa",
-    revision=versioned("142c512"),
+    revision="142c512",
     override_output_path="raw/ybisk/piqahf",
     hf_urls_glob=["**/*.parquet"],
 )
@@ -92,7 +96,7 @@ piqa_raw = default_download(
 winogrande_raw = default_download(
     name="raw/allenai/winogrande",
     hf_dataset_id="allenai/winogrande",
-    revision=versioned("ebf71e3"),
+    revision="ebf71e3",
     override_output_path="raw/allenai/winograndehf",
     hf_urls_glob=["winogrande_xl/**/*.parquet"],
 )
@@ -103,7 +107,7 @@ winogrande_raw = default_download(
 arc_raw = default_download(
     name="raw/allenai/ai2_arc",
     hf_dataset_id="allenai/ai2_arc",
-    revision=versioned("210d026"),
+    revision="210d026",
     override_output_path="raw/allenai/ai2_archf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
@@ -114,7 +118,7 @@ arc_raw = default_download(
 openbookqa_raw = default_download(
     name="raw/allenai/openbookqa",
     hf_dataset_id="allenai/openbookqa",
-    revision=versioned("388097e"),
+    revision="388097e",
     override_output_path="raw/allenai/openbookqahf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
@@ -125,7 +129,7 @@ openbookqa_raw = default_download(
 mmlu_pro_raw = default_download(
     name="raw/TIGER-Lab/MMLU-Pro",
     hf_dataset_id="TIGER-Lab/MMLU-Pro",
-    revision=versioned("3373e0b"),
+    revision="3373e0b",
     override_output_path="raw/TIGER-Lab/MMLU-Prohf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
@@ -136,7 +140,7 @@ mmlu_pro_raw = default_download(
 humaneval_raw = default_download(
     name="raw/openai/openai_humaneval",
     hf_dataset_id="openai/openai_humaneval",
-    revision=versioned("7dce605"),
+    revision="7dce605",
     override_output_path="gs://marin-us-central2/raw/openai/openai_humanevalhf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
@@ -144,18 +148,25 @@ humaneval_raw = default_download(
 # download mbpp
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
 #   Migrate the dataset and cd can be removed.
-mbpp_raw = ExecutorStep(
+_mbpp_base = StepSpec(
     name="raw/google-research-datasets/mbpp",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="google-research-datasets/mbpp",
-        revision=versioned("4bb6404"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+    hash_attrs={
+        "hf_dataset_id": "google-research-datasets/mbpp",
+        "revision": "4bb6404",
+        "hf_urls_glob": ["**/*.parquet", "*.md"],
+    },
     override_output_path="raw/google-research-datasets/mbpphf",
-).cd("4bb6404/full")
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="google-research-datasets/mbpp",
+            revision="4bb6404",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.md"],
+        )
+    ),
+)
+mbpp_raw_path = os.path.join(_mbpp_base.output_path, "4bb6404/full")
 
 """
 Converts raw to JSON for:
@@ -184,232 +195,268 @@ class EvalDataset:
 
     org: str
     name: str
-    steps: list[ExecutorStep]
+    steps: list[StepSpec]
     tags: list[str] = dataclasses.field(default_factory=list)
 
 
 # This creates a JSON file representing the auxiliary training data subset of MMLU
-mmlu_aux_eval = ExecutorStep(
+mmlu_aux_eval = StepSpec(
     name="evaluation/mmlu-eval-aux",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="cais/mmlu",
-        subsets=["all"],
-        splits=["auxiliary_train"],
-        input_path=mmlu_raw,
-        hf_path="cais/mmlu",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="question",
-        options_key="choices",
-        answer_idx_key="answer",
-        answer_labels=["A", "B", "C", "D"],
+    hash_attrs={},
+    deps=[mmlu_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="cais/mmlu",
+            subsets=["all"],
+            splits=["auxiliary_train"],
+            input_path=mmlu_raw.output_path,
+            hf_path="cais/mmlu",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="question",
+            options_key="choices",
+            answer_idx_key="answer",
+            answer_labels=["A", "B", "C", "D"],
+        )
     ),
 )
 
 # This creates one file per subject from MMLU, excluding the all and auxiliary training subsets
-mmlu_subject_eval = ExecutorStep(
+mmlu_subject_eval = StepSpec(
     name="evaluation/mmlu-eval-subject",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="cais/mmlu",
-        subsets=["*"],
-        splits=["dev", "validation"],
-        input_path=mmlu_raw,
-        hf_path="cais/mmlu",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="question",
-        options_key="choices",
-        answer_idx_key="answer",
-        answer_labels=["A", "B", "C", "D"],
-        exclude_subsets=["all", "auxiliary_train"],
+    hash_attrs={},
+    deps=[mmlu_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="cais/mmlu",
+            subsets=["*"],
+            splits=["dev", "validation"],
+            input_path=mmlu_raw.output_path,
+            hf_path="cais/mmlu",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="question",
+            options_key="choices",
+            answer_idx_key="answer",
+            answer_labels=["A", "B", "C", "D"],
+            exclude_subsets=["all", "auxiliary_train"],
+        )
     ),
 )
 
 # This creates a JSON file representing the train and validation data subset of boolq
-boolq_eval = ExecutorStep(
+boolq_eval = StepSpec(
     name="evaluation/boolq-eval",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="google/boolq",
-        subsets=["*"],
-        splits=["train", "validation"],
-        input_path=boolq_raw,
-        hf_path="google/boolq",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="question",
-        answer_label_key="answer",
-        answer_labels=[True, False],
-        answer_text_ignore=True,
+    hash_attrs={},
+    deps=[boolq_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="google/boolq",
+            subsets=["*"],
+            splits=["train", "validation"],
+            input_path=boolq_raw.output_path,
+            hf_path="google/boolq",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="question",
+            answer_label_key="answer",
+            answer_labels=[True, False],
+            answer_text_ignore=True,
+        )
     ),
 )
 
 # This creates a JSON file representing the training and validation data subset of piqa
-piqa_eval = ExecutorStep(
+piqa_eval = StepSpec(
     name="evaluation/piqa",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="ybisk/piqa",
-        subsets=["*"],
-        splits=["train", "validation"],
-        input_path=piqa_raw,
-        hf_path="ybisk/piqa",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="goal",
-        options_keys=["sol1", "sol2"],
-        answer_idx_key="label",
-        answer_labels=["1", "2"],
+    hash_attrs={},
+    deps=[piqa_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="ybisk/piqa",
+            subsets=["*"],
+            splits=["train", "validation"],
+            input_path=piqa_raw.output_path,
+            hf_path="ybisk/piqa",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="goal",
+            options_keys=["sol1", "sol2"],
+            answer_idx_key="label",
+            answer_labels=["1", "2"],
+        )
     ),
 )
 
 # This creates a JSON file representing the training and validation data subset of winogrande_xl
-winogrande_eval = ExecutorStep(
+winogrande_eval = StepSpec(
     name="evaluation/winogrande",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="allenai/winogrande",
-        subsets=["default"],
-        splits=["train", "validation"],
-        input_path=winogrande_raw,
-        hf_path="allenai/winogrande",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="sentence",
-        options_keys=["option1", "option2"],
-        answer_label_key="answer",
-        answer_labels=["1", "2"],
+    hash_attrs={},
+    deps=[winogrande_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="allenai/winogrande",
+            subsets=["default"],
+            splits=["train", "validation"],
+            input_path=winogrande_raw.output_path,
+            hf_path="allenai/winogrande",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="sentence",
+            options_keys=["option1", "option2"],
+            answer_label_key="answer",
+            answer_labels=["1", "2"],
+        )
     ),
 )
 
 # This creates a JSON file representing the train and validation splits of ARC-Easy
-arc_easy_eval = ExecutorStep(
+arc_easy_eval = StepSpec(
     name="evaluation/arc-easy",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="allenai/ai2_arc",
-        subsets=["ARC-Easy"],
-        splits=["train", "validation"],
-        input_path=arc_raw,
-        hf_path="allenai/ai2_arc",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="question",
-        options_key="choices.text",
-        answer_labels_key="choices.label",
-        answer_label_key="answerKey",
+    hash_attrs={},
+    deps=[arc_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="allenai/ai2_arc",
+            subsets=["ARC-Easy"],
+            splits=["train", "validation"],
+            input_path=arc_raw.output_path,
+            hf_path="allenai/ai2_arc",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="question",
+            options_key="choices.text",
+            answer_labels_key="choices.label",
+            answer_label_key="answerKey",
+        )
     ),
 )
 
 # This creates a JSON file representing the train and validation splits of ARC-Challenge
-arc_challenge_eval = ExecutorStep(
+arc_challenge_eval = StepSpec(
     name="evaluation/arc-challenge",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="allenai/ai2_arc",
-        subsets=["ARC-Challenge"],
-        splits=["train", "validation"],
-        input_path=arc_raw,
-        hf_path="allenai/ai2_arc",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="question",
-        options_key="choices.text",
-        answer_labels_key="choices.label",
-        answer_label_key="answerKey",
+    hash_attrs={},
+    deps=[arc_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="allenai/ai2_arc",
+            subsets=["ARC-Challenge"],
+            splits=["train", "validation"],
+            input_path=arc_raw.output_path,
+            hf_path="allenai/ai2_arc",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="question",
+            options_key="choices.text",
+            answer_labels_key="choices.label",
+            answer_label_key="answerKey",
+        )
     ),
 )
 
 # This creates a JSON file for the train and validation subsets of OpenBookQA
-openbookqa_eval = ExecutorStep(
+openbookqa_eval = StepSpec(
     name="evaluation/openbookqa-eval",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="allenai/openbookqa",
-        subsets=["main"],
-        splits=["train", "validation"],
-        input_path=openbookqa_raw,
-        hf_path="allenai/openbookqa",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="question_stem",
-        options_key="choices.text",
-        answer_label_key="answerKey",
-        answer_labels_key="choices.label",
+    hash_attrs={},
+    deps=[openbookqa_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="allenai/openbookqa",
+            subsets=["main"],
+            splits=["train", "validation"],
+            input_path=openbookqa_raw.output_path,
+            hf_path="allenai/openbookqa",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="question_stem",
+            options_key="choices.text",
+            answer_label_key="answerKey",
+            answer_labels_key="choices.label",
+        )
     ),
 )
 
 # This creates a JSON file representing the training and validation splits for hellaswag
-hellaswag_eval = ExecutorStep(
+hellaswag_eval = StepSpec(
     name="evaluation/hellaswag-eval",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="Rowan/hellaswag",
-        subsets=["*"],
-        splits=["train", "validation"],
-        input_path=hellaswag_raw,
-        hf_path="Rowan/hellaswag",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="ctx",
-        options_key="endings",
-        answer_labels=["A", "B", "C", "D"],
-        answer_idx_key="label",
+    hash_attrs={},
+    deps=[hellaswag_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="Rowan/hellaswag",
+            subsets=["*"],
+            splits=["train", "validation"],
+            input_path=hellaswag_raw.output_path,
+            hf_path="Rowan/hellaswag",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="ctx",
+            options_key="endings",
+            answer_labels=["A", "B", "C", "D"],
+            answer_idx_key="label",
+        )
     ),
 )
 
 # This creates a JSON file representing the test and validation splits for MMLU-Pro
-mmlu_pro_eval = ExecutorStep(
+mmlu_pro_eval = StepSpec(
     name="evaluation/MMLU-Pro-eval",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="TIGER-Lab/MMLU-Pro",
-        subsets=["*"],
-        splits=["test", "validation"],
-        input_path=mmlu_pro_raw,
-        hf_path="TIGER-Lab/MMLU-Pro",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="question",
-        options_key="options",
-        answer_labels=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"],
-        answer_idx_key="answer_index",
+    hash_attrs={},
+    deps=[mmlu_pro_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="TIGER-Lab/MMLU-Pro",
+            subsets=["*"],
+            splits=["test", "validation"],
+            input_path=mmlu_pro_raw.output_path,
+            hf_path="TIGER-Lab/MMLU-Pro",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="question",
+            options_key="options",
+            answer_labels=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"],
+            answer_idx_key="answer_index",
+        )
     ),
 )
 
 # This creates a JSON file representing the test and validation splits for openai_humaneval
-humaneval_eval = ExecutorStep(
+humaneval_eval = StepSpec(
     name="evaluation/humaneval-eval",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="openai/openai_humaneval",
-        subsets=["*"],
-        splits=["test"],
-        input_path=humaneval_raw,
-        hf_path="openai/openai_humaneval",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="prompt",
-        answer_text_key="canonical_solution",
+    hash_attrs={},
+    deps=[humaneval_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="openai/openai_humaneval",
+            subsets=["*"],
+            splits=["test"],
+            input_path=humaneval_raw.output_path,
+            hf_path="openai/openai_humaneval",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="prompt",
+            answer_text_key="canonical_solution",
+        )
     ),
 )
 
 # This creates a JSON file representing the train, test, and validation splits for mbpp
-mbpp_eval = ExecutorStep(
+mbpp_eval = StepSpec(
     name="evaluation/mbpp-eval",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="google-research-datasets/mbpp",
-        subsets=["*"],
-        splits=["train", "test", "validation"],
-        input_path=mbpp_raw,
-        hf_path="google-research-datasets/mbpp",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="text",
-        answer_text_key="code",
+    hash_attrs={},
+    deps=[_mbpp_base],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="google-research-datasets/mbpp",
+            subsets=["*"],
+            splits=["train", "test", "validation"],
+            input_path=mbpp_raw_path,
+            hf_path="google-research-datasets/mbpp",
+            output_path=output_path,
+            output_format=OutputFormatOptions("evaluation"),
+            prompt_key="text",
+            answer_text_key="code",
+        )
     ),
 )
 
@@ -431,194 +478,249 @@ eval_datasets = [
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
-mmlu_convert_dolma = ExecutorStep(
+mmlu_convert_dolma = StepSpec(
     name="decontamination/mmlu-dolma",
-    fn=hf_dataset_to_jsonl,
-    config=DatasetConversionConfig(
-        dataset_name="cais/mmlu",
-        subsets=["all"],
-        splits=["dev", "test", "validation"],
-        input_path=mmlu_raw,
-        hf_path="cais/mmlu",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
-        options_key="choices",
-        answer_idx_key="answer",
-        answer_labels=["A", "B", "C", "D"],
+    hash_attrs={},
+    deps=[mmlu_raw],
+    fn=lambda output_path: hf_dataset_to_jsonl(
+        DatasetConversionConfig(
+            dataset_name="cais/mmlu",
+            subsets=["all"],
+            splits=["dev", "test", "validation"],
+            input_path=mmlu_raw.output_path,
+            hf_path="cais/mmlu",
+            output_path=output_path,
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="question",
+            options_key="choices",
+            answer_idx_key="answer",
+            answer_labels=["A", "B", "C", "D"],
+        )
     ),
 )
 
-lingoly = ExecutorStep(
+lingoly = StepSpec(
     name="raw/ambean/lingOly",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="ambean/lingOly",
-        revision=versioned("6aff4c2"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
+    hash_attrs={"hf_dataset_id": "ambean/lingOly", "revision": "6aff4c2"},
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="ambean/lingOly",
+            revision="6aff4c2",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+        )
     ),
 )
 
 # gsm8k raw
-gsm8k_raw = ExecutorStep(
+gsm8k_raw = StepSpec(
     name="raw/gsm8k",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="openai/gsm8k",
-        revision=versioned("e53f048"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+    hash_attrs={"hf_dataset_id": "openai/gsm8k", "revision": "e53f048", "hf_urls_glob": ["**/*.parquet", "*.md"]},
     override_output_path="raw/gsm8k/mainhf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="openai/gsm8k",
+            revision="e53f048",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.md"],
+        )
+    ),
 )
 
 # math dataset raw
-math_raw = ExecutorStep(
+math_raw = StepSpec(
     name="raw/hendrycks_math",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="EleutherAI/hendrycks_math",
-        revision=versioned("21a5633"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+    hash_attrs={
+        "hf_dataset_id": "EleutherAI/hendrycks_math",
+        "revision": "21a5633",
+        "hf_urls_glob": ["**/*.parquet", "*.md"],
+    },
     override_output_path="raw/hendrycks/mathhf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="EleutherAI/hendrycks_math",
+            revision="21a5633",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.md"],
+        )
+    ),
 )
 
 # truthful_qa raw
-truthful_qa_raw = ExecutorStep(
+truthful_qa_raw = StepSpec(
     name="raw/truthful_qa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="truthfulqa/truthful_qa",
-        revision=versioned("741b827"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+    hash_attrs={
+        "hf_dataset_id": "truthfulqa/truthful_qa",
+        "revision": "741b827",
+        "hf_urls_glob": ["**/*.parquet", "*.md"],
+    },
     override_output_path="raw/truthful_qa/multiple_choicehf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="truthfulqa/truthful_qa",
+            revision="741b827",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.md"],
+        )
+    ),
 )
 
 # bbh raw
-bbh_raw = ExecutorStep(
+bbh_raw = StepSpec(
     name="raw/bbh",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="SaylorTwift/bbh",
-        revision=versioned("b5306be"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+    hash_attrs={"hf_dataset_id": "SaylorTwift/bbh", "revision": "b5306be", "hf_urls_glob": ["**/*.parquet", "*.md"]},
     override_output_path="raw/SaylorTwift/bbhhf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="SaylorTwift/bbh",
+            revision="b5306be",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.md"],
+        )
+    ),
 )
 
 # gpqa raw
-gpqa_raw = ExecutorStep(
+gpqa_raw = StepSpec(
     name="raw/gpqa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="Idavidrein/gpqa",
-        revision=versioned("90b8e5b"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.csv", "*.csv"],
-    ),
+    hash_attrs={"hf_dataset_id": "Idavidrein/gpqa", "revision": "90b8e5b", "hf_urls_glob": ["**/*.csv", "*.csv"]},
     override_output_path="raw/Idavidrein/gpqa",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="Idavidrein/gpqa",
+            revision="90b8e5b",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.csv", "*.csv"],
+        )
+    ),
 )
 
 # instruction-following raw
-instruction_following_raw = ExecutorStep(
+instruction_following_raw = StepSpec(
     name="raw/instruction_following_eval",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="wis-k/instruction-following-eval",
-        revision=versioned("5a5661c"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
-    ),
+    hash_attrs={
+        "hf_dataset_id": "wis-k/instruction-following-eval",
+        "revision": "5a5661c",
+        "hf_urls_glob": ["**/*.jsonl", "*.jsonl"],
+    },
     override_output_path="raw/wis-k/instruction-following-evalhf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="wis-k/instruction-following-eval",
+            revision="5a5661c",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.jsonl", "*.jsonl"],
+        )
+    ),
 )
 
 # musr raw
-musr_raw = ExecutorStep(
+musr_raw = StepSpec(
     name="raw/musr",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="WillHeld/MuSRDecontam",
-        revision=versioned("39b4f56"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
+    hash_attrs={
+        "hf_dataset_id": "WillHeld/MuSRDecontam",
+        "revision": "39b4f56",
+        "hf_urls_glob": ["**/*.parquet", "*.parquet"],
+    },
     override_output_path="raw/WillHeld/MuSRDecontamhf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="WillHeld/MuSRDecontam",
+            revision="39b4f56",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.parquet"],
+        )
+    ),
 )
 
 # winograd WSC raw
-winograd_wsc_raw = ExecutorStep(
+winograd_wsc_raw = StepSpec(
     name="raw/winograd_wsc",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="marcov/winograd_wsc_wsc273_promptsource",
-        revision=versioned("63befd8"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
+    hash_attrs={
+        "hf_dataset_id": "marcov/winograd_wsc_wsc273_promptsource",
+        "revision": "63befd8",
+        "hf_urls_glob": ["**/*.parquet", "*.parquet"],
+    },
     override_output_path="raw/marcov/winograd_wsc_wsc273_promptsourcehf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="marcov/winograd_wsc_wsc273_promptsource",
+            revision="63befd8",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.parquet"],
+        )
+    ),
 )
 
 # commonsense_qa raw
-commonsense_qa_raw = ExecutorStep(
+commonsense_qa_raw = StepSpec(
     name="raw/commonsense_qa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="tau/commonsense_qa",
-        revision=versioned("94630fe"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
+    hash_attrs={
+        "hf_dataset_id": "tau/commonsense_qa",
+        "revision": "94630fe",
+        "hf_urls_glob": ["**/*.parquet", "*.parquet"],
+    },
     override_output_path="raw/tau/commonsense_qahf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="tau/commonsense_qa",
+            revision="94630fe",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.parquet"],
+        )
+    ),
 )
 
 # lambada_openai raw
-lambada_openai_raw = ExecutorStep(
+lambada_openai_raw = StepSpec(
     name="raw/lambada_openai",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="EleutherAI/lambada_openai",
-        revision=versioned("879e19a"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
-    ),
+    hash_attrs={
+        "hf_dataset_id": "EleutherAI/lambada_openai",
+        "revision": "879e19a",
+        "hf_urls_glob": ["**/*.jsonl", "*.jsonl"],
+    },
     override_output_path="raw/EleutherAI/lambada_openaihf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="EleutherAI/lambada_openai",
+            revision="879e19a",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.jsonl", "*.jsonl"],
+        )
+    ),
 )
 
 # Alternative PIQA variant used only for contamination analysis
-piqa_baber_raw = ExecutorStep(
+piqa_baber_raw = StepSpec(
     name="raw/baber/piqa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="baber/piqa",
-        revision=versioned("142f6d7"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
+    hash_attrs={"hf_dataset_id": "baber/piqa", "revision": "142f6d7", "hf_urls_glob": ["**/*.parquet", "*.parquet"]},
     override_output_path="raw/baber/piqahf",
+    fn=lambda output_path: download_hf(
+        DownloadConfig(
+            hf_dataset_id="baber/piqa",
+            revision="142f6d7",
+            gcs_output_path=output_path,
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet", "*.parquet"],
+        )
+    ),
 )
 
 ############################################################
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
+    StepRunner().run(
+        [
             mmlu_convert_dolma,
             *[step for ds in eval_datasets for step in ds.steps],
         ]
