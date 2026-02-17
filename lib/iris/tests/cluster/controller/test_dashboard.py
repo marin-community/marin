@@ -14,7 +14,7 @@ from starlette.testclient import TestClient
 
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import JobSubmittedEvent, WorkerRegisteredEvent
-from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
@@ -81,18 +81,45 @@ def state():
 
 
 @pytest.fixture
-def scheduler(state):
-    return Scheduler(state)
+def scheduler():
+    return Scheduler()
+
+
+def _make_controller_mock(state, scheduler, autoscaler=None):
+    """Build a mock that implements the ControllerProtocol for testing.
+
+    The mock delegates create_scheduling_context and get_job_scheduling_diagnostics
+    to the scheduler, mirroring how the real controller converts ControllerWorker
+    and ControllerJob into scheduler-native types at the boundary.
+    """
+
+    def _create_scheduling_context(workers):
+        building_counts = state.snapshot_building_counts()
+        return scheduler.create_scheduling_context(workers, building_counts=building_counts)
+
+    def _get_job_scheduling_diagnostics(job, context):
+        req = JobRequirements(
+            resources=job.request.resources,
+            constraints=list(job.request.constraints),
+            is_coscheduled=job.is_coscheduled,
+            coscheduling_group_by=job.coscheduling_group_by,
+        )
+        tasks = state.get_job_tasks(job.job_id)
+        schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
+        return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
+
+    controller_mock = Mock()
+    controller_mock.wake = Mock()
+    controller_mock.create_scheduling_context = _create_scheduling_context
+    controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
+    controller_mock.autoscaler = autoscaler
+    controller_mock.stub_factory = Mock()
+    return controller_mock
 
 
 @pytest.fixture
 def service(state, scheduler):
-    controller_mock = Mock()
-    controller_mock.wake = Mock()
-    controller_mock.create_scheduling_context = scheduler.create_scheduling_context
-    controller_mock.get_job_scheduling_diagnostics = scheduler.get_job_scheduling_diagnostics
-    controller_mock.autoscaler = None  # No autoscaler by default
-    controller_mock.stub_factory = Mock()
+    controller_mock = _make_controller_mock(state, scheduler)
     return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
@@ -105,12 +132,7 @@ def client(service):
 @pytest.fixture
 def service_with_autoscaler(state, scheduler, mock_autoscaler):
     """Service with autoscaler enabled for tests."""
-    controller_mock = Mock()
-    controller_mock.wake = Mock()
-    controller_mock.create_scheduling_context = scheduler.create_scheduling_context
-    controller_mock.get_job_scheduling_diagnostics = scheduler.get_job_scheduling_diagnostics
-    controller_mock.autoscaler = mock_autoscaler  # Enable autoscaler
-    controller_mock.stub_factory = Mock()
+    controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
     return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 

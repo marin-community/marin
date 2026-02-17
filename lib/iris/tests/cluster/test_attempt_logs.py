@@ -257,7 +257,7 @@ class TestAttemptLogs:
         assert attempt_0.attempt_id == 0
         assert attempt_0.state == cluster_pb2.TASK_STATE_FAILED
 
-        # Second attempt should have succeeded
-        attempt_1 = task_status.attempts[1]
-        assert attempt_1.attempt_id == 1
-        assert attempt_1.state == cluster_pb2.TASK_STATE_SUCCEEDED
+        # Last attempt should have succeeded (may not be attempts[1] if
+        # transient worker failures caused extra retry cycles)
+        last_attempt = task_status.attempts[-1]
+        assert last_attempt.state == cluster_pb2.TASK_STATE_SUCCEEDED

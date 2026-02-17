@@ -955,13 +955,20 @@ class PendingDispatch:
     tasks_to_kill: list[str] = field(default_factory=list)
 
 
+class RunningTaskEntry(NamedTuple):
+    """Task ID and attempt ID pair captured at snapshot time."""
+
+    task_id: JobName
+    attempt_id: int
+
+
 @dataclass
 class HeartbeatSnapshot:
     """Immutable snapshot of worker state for heartbeat dispatch.
 
     Captures all data needed to send a heartbeat RPC without holding locks:
     - Worker identity and address for RPC routing
-    - Running tasks for reconciliation
+    - Running tasks with attempt IDs for reconciliation
     - Buffered dispatches/kills to deliver
 
     Taken atomically under state lock to prevent iteration races.
@@ -970,7 +977,7 @@ class HeartbeatSnapshot:
     worker_id: WorkerId
     worker_address: str
     vm_address: str
-    running_tasks: list[JobName]
+    running_tasks: list[RunningTaskEntry]
     tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest]
     tasks_to_kill: list[str]
 
@@ -1635,6 +1642,12 @@ class ControllerState:
             task_ids = self._tasks_by_job.get(job_id, [])
             return [self._tasks[tid] for tid in task_ids if tid in self._tasks]
 
+    def get_jobs_for_tasks(self, tasks: list[ControllerTask]) -> dict[JobName, ControllerJob]:
+        """Return job lookup dict for all jobs referenced by the given tasks."""
+        with self._lock:
+            job_ids = {t.job_id for t in tasks}
+            return {jid: self._jobs[jid] for jid in job_ids if jid in self._jobs}
+
     def peek_pending_tasks(self) -> list[ControllerTask]:
         """Return all schedulable tasks in priority order without removing them.
 
@@ -1816,6 +1829,28 @@ class ControllerState:
         with self._lock:
             return list(self._workers.values())
 
+    def snapshot_building_counts(self) -> dict[WorkerId, int]:
+        """Atomically count tasks in BUILDING/ASSIGNED state per worker.
+
+        Must be done under the lock because the scheduling thread would otherwise
+        iterate worker.running_tasks while the heartbeat thread mutates it
+        (RuntimeError: Set changed size during iteration).
+        """
+        with self._lock:
+            counts: dict[WorkerId, int] = {}
+            for worker in self._workers.values():
+                count = 0
+                for task_id in worker.running_tasks:
+                    task = self._tasks.get(task_id)
+                    if task and task.state in (
+                        cluster_pb2.TASK_STATE_BUILDING,
+                        cluster_pb2.TASK_STATE_ASSIGNED,
+                    ):
+                        count += 1
+                if count > 0:
+                    counts[worker.worker_id] = count
+            return counts
+
     # =========================================================================
     # Heartbeat Dispatch API
     # =========================================================================
@@ -1851,11 +1886,15 @@ class ControllerState:
             if not worker:
                 return None
             dispatch = self._pending_dispatch.pop(worker_id, PendingDispatch())
+            running = []
+            for tid in worker.running_tasks:
+                task = self._tasks.get(tid)
+                running.append(RunningTaskEntry(tid, task.current_attempt_id if task else 0))
             return HeartbeatSnapshot(
                 worker_id=worker.worker_id,
                 worker_address=worker.address,
                 vm_address=worker.metadata.vm_address or "",
-                running_tasks=list(worker.running_tasks),
+                running_tasks=running,
                 tasks_to_run=dispatch.tasks_to_run,
                 tasks_to_kill=dispatch.tasks_to_kill,
             )

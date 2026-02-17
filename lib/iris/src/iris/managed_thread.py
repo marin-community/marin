@@ -250,15 +250,24 @@ class ThreadContainer:
         return alive
 
     def wait(self) -> None:
-        """Block until all threads have exited."""
-        with self._lock:
-            children = list(self._children)
-            threads = list(self._threads)
+        """Block until all threads have exited.
 
-        for child in children:
-            child.wait()
-        for thread in threads:
-            thread.join()
+        Re-snapshots after each join round to catch threads spawned by
+        threads that were already running (e.g. a scale-up thread that
+        spawns a bootstrap thread).
+        """
+        while True:
+            with self._lock:
+                children = list(self._children)
+                threads = list(self._threads)
+
+            if not children and not threads:
+                break
+
+            for child in children:
+                child.wait()
+            for thread in threads:
+                thread.join()
 
     def stop(self, timeout: Duration = Duration.from_seconds(5.0)) -> None:
         """Stop children first, then own threads, then executors.
