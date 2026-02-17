@@ -25,7 +25,7 @@ https://github.com/Open-Athena/bolinas-dna/issues/57
 
 import dataclasses
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 
 from experiments.dna.defaults import (
     YOLO_RUN_CONFIG_V1,
@@ -43,9 +43,9 @@ from marin.processing.tokenize import lm_mixture_data_config
 # =============================================================================
 
 DATASETS = {
-    "cds": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v5_256_128",
-    "upstream": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v1_256_128",
-    "downstream": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v15_256_128",
+    "cds": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v5_256_128",
+    "upstream": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v1_256_128",
+    "downstream": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v15_256_128",
 }
 
 # =============================================================================
@@ -106,7 +106,7 @@ for model_name, (model_config, learning_rate, resources) in MODEL_CONFIGS.items(
         train_config = dataclasses.replace(train_config, resources=resources)
 
     train_step = dna_train(
-        name=f"exp57-balanced-mixture-{model_name}-r01",
+        name=f"exp57-balanced-mixture-{model_name}-r02",
         tokenized=mixture_config,
         model_config=model_config,
         train_config=train_config,
