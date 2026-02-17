@@ -1,6 +1,6 @@
 # Pre-training under infinite compute
 
-Paper link: TODO
+[Paper link](https://arxiv.org/abs/2509.14786) 
 
 [WandB report](https://wandb.ai/stanford-mercury/suhas-data-efficiency/reports/Pre-training-under-infinite-compute--VmlldzoxNDM5NzUzMQ)
 
@@ -21,18 +21,13 @@ Compute is growing faster than data. We study how to do pre-training if you had 
 
 ### Training code
 
-We release code that captures the configs passed into our pre-training runs for {epoching, parameter scaling, regularization, ensembling, distillation, CPT}.
-
-Standard marin instructions to run all the files, please poke around. You will need a custom branch of levanter with ensembling implemented (you will not need to do this once ensembling is merged into main).
-
-To get this branch, please
-- `mkdir submodules` so that `marin/submodules` exists. Go to this directory
-- `git clone https://github.com/marin-community/levanter.git`
-- `git checkout suhas/eval-ensemble`
+We release code that captures the configs passed into our pre-training runs for {epoching, parameter scaling, regularization, ensembling, distillation, CPT}. All code should work with standard marin instructions.
 
 ### Plotting code
 
-`plotting.py` which is a behemoth that can reproduce all of our plots programatically from our WandB runs. Instructions on usage:
+`simple_plotting.py` which is a behemoth that can reproduce all of our plots programatically from our WandB runs. Instructions on usage:
 
-- The plotting code has multiple "modes" which you specify through the `--mode` flag, take a look at the bottom of the file.
+- The plotting code has multiple "modes" which you specify through the `--mode` flag, take a look at the bottom of the file. It is suggested you start with `infinite-model-scaling`, then `varying-hparams-experiment`, then `post-ensemble-analysis` to recover the main results in the paper.
 - The first time you run the plotting code, it will need to build a cache of the runs from WandB, please run with `--build_cache` (can take up to 15 minutes). After this, plotting should be quite fast.
+
+Please reach out to Konwoo or Suhas if you have any questions, more than happy to help!

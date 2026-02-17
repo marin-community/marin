@@ -717,10 +717,9 @@ def plot_ensemble_scaling(model_name, base_tokens):
     if model_name == "1_4b4k" and base_tokens == 209715200:
         return best_fit, best_single_model_hparams_ensemble
 
-    if not is_hparams_shift(
+    assert is_hparams_shift(
         best_single_model_hparams, best_fit_hparams
-    ):
-        print("\033[91m[WARNING] Best fit hyperparams are not a shift of the single model hyperparams\033[0m")
+    ), "Best fit hyperparams are not a shift of the single model hyperparams"
 
     return best_fit, best_single_model_hparams_ensemble
 
@@ -1573,7 +1572,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law, be
     best_parameter_scaling_losses = require_pickle(
         "experiments/data_efficiency/cache/simple_best_parameter_scaling_losses.pkl", "infinite-model-scaling"
     )
-    import pdb ; pdb.set_trace();
+    # import pdb ; pdb.set_trace();
     epoched_losses = [min(losses) for losses in best_parameter_scaling_losses.values()]
     print("BEST EPOCHED LOSSES", epoched_losses)
     epoched_power_law = PowerScalingLaw(var_name="D")
@@ -2435,6 +2434,7 @@ def cache_parameter_scaling_losses(run_list):
                 and run["data_name"] == "dclm"
                 and run["model_name"] == model_size
                 and run["base_tokens"] == base_token_count
+                and run["weight_decay"] == 0.1
             ]
             curr_run_list = sorted(curr_run_list, key=lambda x: x["final_dclm_loss"])
             print(f"{model_size} {base_token_count} {curr_run_list[0]['run_id']}: {curr_run_list[0]['final_dclm_loss']}")
