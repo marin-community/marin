@@ -13,6 +13,7 @@ from an iterable, launching each as soon as its dependencies are satisfied.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -20,6 +21,9 @@ import time
 from collections.abc import Iterable
 from threading import Event, Thread
 from typing import TYPE_CHECKING, Any
+
+import fsspec
+import levanter.utils.fsspec_utils as fsspec_utils
 
 from fray.v2 import client as fray_client
 from fray.v2.client import JobHandle, JobStatus
@@ -34,6 +38,7 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.execution.step_model import StepSpec
+from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utilities.time_logger import log_time
 
 if TYPE_CHECKING:
@@ -58,6 +63,31 @@ def _sanitize_job_name(name: str) -> str:
     sanitized = re.sub(r"[^a-z0-9_.-]+", "-", name.lower())
     sanitized = sanitized.strip("-.")
     return sanitized or "job"
+
+
+def _get_fn_name(fn: Any) -> str:
+    """Return a human-readable name for a step function."""
+    if fn is None:
+        return "None"
+    return str(fn)
+
+
+def _write_executor_info(step: StepSpec) -> None:
+    """Write a ``.executor_info`` JSON file matching the legacy ExecutorStepInfo schema."""
+    info = {
+        "name": step.name,
+        "fn_name": _get_fn_name(step.fn),
+        "config": step.hash_attrs,
+        "description": None,
+        "override_output_path": step.override_output_path,
+        "version": {},
+        "dependencies": list(step.deps),
+        "output_path": step.output_path,
+    }
+    info_path = os.path.join(step.output_path, ".executor_info")
+    fsspec_utils.mkdirs(step.output_path)
+    with fsspec.open(info_path, "w") as f:
+        f.write(json.dumps(info, indent=2, cls=CustomJsonEncoder))
 
 
 class PreviousTaskFailedError(Exception):
@@ -368,6 +398,8 @@ class StepRunner:
         status_file = StatusFile(output_path, worker_id())
         if not should_run(status_file, step_name_with_hash, force_run_failed):
             return None
+
+        _write_executor_info(step)
 
         if step.fn is None:
             raise ValueError(f"Step {step_name_with_hash} has no callable fn")
