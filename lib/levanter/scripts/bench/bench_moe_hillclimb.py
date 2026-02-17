@@ -32,6 +32,7 @@ RematMode = Literal["none", "expert_mlp", "combine"]
 ParallelMode = Literal["none", "ep"]
 DispatchPermuteMode = Literal["direct_take", "repeat_sort"]
 EpCommPath = Literal["compact_psum", "ring_ag_rs"]
+NullRoutingMode = Literal["independent", "take_until_null"]
 
 
 def _time_fn(fn: Callable, *args, warmup: int = 2, iters: int = 5) -> float:
@@ -444,6 +445,7 @@ def _apply_null_routing(
     null_route_frac: float,
     null_experts: int,
     renormalize_real: bool,
+    null_routing_mode: NullRoutingMode,
 ) -> tuple[jax.Array, jax.Array, float, int]:
     if null_route_frac <= 0.0:
         return topk_idx, topk_weights, 0.0, 0
@@ -451,18 +453,37 @@ def _apply_null_routing(
     if null_route_frac >= 1.0:
         raise ValueError(f"null_route_frac must be in [0, 1), got {null_route_frac}")
 
+    if null_routing_mode not in ("independent", "take_until_null"):
+        raise ValueError(f"Unknown null routing mode: {null_routing_mode}")
+
     if null_experts <= 0:
         # rho = 1 - null_frac -> M = N * (1-rho)/rho = N * null_frac / (1-null_frac)
         null_experts = max(1, int(round(experts * null_route_frac / (1.0 - null_route_frac))))
 
-    null_mask = jax.random.bernoulli(key, p=null_route_frac, shape=topk_idx.shape)
+    null_slots = experts + (jnp.arange(topk_idx.size, dtype=jnp.int32) % null_experts).reshape(topk_idx.shape)
+
+    if null_routing_mode == "independent":
+        null_mask = jax.random.bernoulli(key, p=null_route_frac, shape=topk_idx.shape)
+    else:
+        # "take_until_null": each token samples a retained-prefix length in [0, topk],
+        # then all remaining suffix assignments route to null.
+        topk = topk_idx.shape[1]
+        keep_counts = jax.random.binomial(
+            key,
+            n=topk,
+            p=1.0 - null_route_frac,
+            shape=(topk_idx.shape[0],),
+        ).astype(jnp.int32)
+        keep_mask = jnp.arange(topk, dtype=jnp.int32)[None, :] < keep_counts[:, None]
+        null_mask = ~keep_mask
+
     # Keep at least one routed assignment to avoid degenerate all-null dispatch.
     if bool(jnp.all(null_mask)):
         null_mask = null_mask.at[0, 0].set(False)
 
-    null_slots = experts + (jnp.arange(topk_idx.size, dtype=jnp.int32) % null_experts).reshape(topk_idx.shape)
-    routed_idx = jnp.where(null_mask, null_slots, topk_idx).astype(jnp.int32)
-    routed_weights = jnp.where(null_mask, jnp.zeros_like(topk_weights), topk_weights)
+    keep_mask = ~null_mask
+    routed_idx = jnp.where(keep_mask, topk_idx, null_slots).astype(jnp.int32)
+    routed_weights = jnp.where(keep_mask, topk_weights, jnp.zeros_like(topk_weights))
     if renormalize_real:
         denom = jnp.sum(routed_weights, axis=-1, keepdims=True)
         routed_weights = jnp.where(denom > 0.0, routed_weights / denom, routed_weights)
@@ -541,6 +562,7 @@ def _bench_one_distribution(
     null_experts: int,
     null_route_seed: int,
     renormalize_real_after_null: bool,
+    null_routing_mode: NullRoutingMode,
 ) -> None:
     tokens = x.shape[0]
     hidden = x.shape[1]
@@ -567,6 +589,7 @@ def _bench_one_distribution(
         null_route_frac=null_route_frac,
         null_experts=null_experts,
         renormalize_real=renormalize_real_after_null,
+        null_routing_mode=null_routing_mode,
     )
     null_enabled = realized_null_frac > 0.0
     if null_enabled and capacity_policy != "none":
@@ -1131,7 +1154,7 @@ def _bench_one_distribution(
         )
         print(
             f"[{distribution}] topk={topk} impl={impl} null_route "
-            f"target={null_route_frac:.3f} realized={realized_null_frac:.3f} "
+            f"mode={null_routing_mode} target={null_route_frac:.3f} realized={realized_null_frac:.3f} "
             f"null_experts={active_null_experts} null_assignments={null_assignments} "
             f"real_assignments={real_assignments}"
         )
@@ -1139,7 +1162,8 @@ def _bench_one_distribution(
             "RESULT "
             f"distribution={distribution} mode={mode} pass={bench_pass} impl={impl} "
             f"backend={backend} topk={topk} null_target={null_route_frac:.3f} "
-            f"null_realized={realized_null_frac:.3f} null_assignments={null_assignments} "
+            f"null_realized={realized_null_frac:.3f} null_mode={null_routing_mode} "
+            f"null_assignments={null_assignments} "
             f"real_assignments={real_assignments} tflops={tflops:.6f} tokens_per_s={tokens_per_sec:.6f}"
         )
 
@@ -1313,6 +1337,12 @@ def main() -> None:
         help="Seed offset for sampling which routing assignments are null.",
     )
     parser.add_argument(
+        "--null-routing-mode",
+        choices=["independent", "take_until_null"],
+        default="independent",
+        help="Null-routing semantics: assignment-wise independent mask or per-token take-until-null.",
+    )
+    parser.add_argument(
         "--renormalize-real-after-null",
         action="store_true",
         help="Renormalize per-token top-k weights over remaining real (non-null) assignments.",
@@ -1359,6 +1389,7 @@ def main() -> None:
         f"capacity_policy={args.capacity_policy} capacity_factor={args.capacity_factor} "
         f"null_route_frac={args.null_route_frac} "
         f"null_experts={args.null_experts} "
+        f"null_routing_mode={args.null_routing_mode} "
         f"renormalize_real_after_null={args.renormalize_real_after_null} "
         f"stage_timing={args.stage_timing}"
     )
@@ -1436,6 +1467,7 @@ def main() -> None:
                         null_route_frac=null_frac,
                         null_experts=args.null_experts,
                         null_route_seed=args.null_route_seed,
+                        null_routing_mode=args.null_routing_mode,
                         renormalize_real_after_null=args.renormalize_real_after_null,
                     )
                     if not trace_dir:

@@ -35,6 +35,10 @@ At fixed shape, increasing null-routing fraction should reduce routed expert com
   - `3` shapes x `3` top-k settings x `9` null fractions = `81` measured points
 - Added baseline `null=0.0` matrix for the same shape/top-k grid:
   - `3` shapes x `3` top-k settings = `9` baseline points
+- Added variable experts-per-token null semantics:
+  - New routing mode `take_until_null` in both
+    - `experiments/speedrun/custom_mixtral.py` (`MixtralConfig.take_until_null`)
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py` (`--null-routing-mode`)
 - Raw run artifact:
   - `.agents/logbooks/null_routed_moe_results_20260217_213956.log`
 - Parsed artifact:

@@ -93,6 +93,9 @@ class MixtralConfig(MistralConfig):
     # 1.0 = standard MoE. < 1.0 adds M = N*(1-rho)/rho null (zero-output) experts to the
     # routing pool so the router can drop tokens from compute entirely.
     data_sparsity: float = 1.0
+    # When True, routing keeps experts only up to (but excluding) the first selected null slot.
+    # This allows variable experts-per-token in [0, num_experts_per_tok].
+    take_until_null: bool = False
 
     lbl_coef: float | None = 0.01
     rzl_coef: float | None = 0.001
@@ -397,9 +400,22 @@ class MixtralSparseMoeBlock(eqx.Module):
             selected_weights_, selected_experts_ = jax.lax.top_k(router_probs_, TopExperts.size)
 
             if n_real_experts is not None:
-                # Null expert renormalization: zero null weights, renormalize over real only
                 is_real = selected_experts_ < n_real_experts
-                selected_weights_ = jnp.where(is_real, selected_weights_, 0.0)
+                if self.config.take_until_null:
+                    # Keep real experts only until the first selected null slot per token.
+                    null_seen = jnp.cumsum((~is_real).astype(jnp.int32), axis=-1) > 0
+                    keep_real = is_real & (~null_seen)
+                    # Convert dropped suffix assignments into null slots so dispatch skips them.
+                    n_null = max(int(router_probs_.shape[-1] - n_real_experts), 1)
+                    null_slots = n_real_experts + (jnp.arange(selected_experts_.size, dtype=jnp.int32) % n_null).reshape(
+                        selected_experts_.shape
+                    )
+                    selected_experts_ = jnp.where(keep_real, selected_experts_, null_slots)
+                else:
+                    keep_real = is_real
+
+                # Null expert renormalization: zero null weights, renormalize over real only.
+                selected_weights_ = jnp.where(keep_real, selected_weights_, 0.0)
                 real_sum = jnp.maximum(selected_weights_.sum(-1, keepdims=True), 1e-8)
                 selected_weights_ = selected_weights_ / real_sum
             else:

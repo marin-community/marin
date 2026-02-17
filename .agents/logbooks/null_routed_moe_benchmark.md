@@ -177,3 +177,22 @@ done'
 - Aggregate for `topk=8`:
   - Arithmetic mean gain across shapes: `+7.57%`
   - Geometric mean gain across shapes: `+7.56%`
+
+### 2026-02-17 14:50 - Added variable experts-per-token mode (`take_until_null`)
+- Goal:
+  - Support per-token expert count in `[0, topk]` instead of fixed `topk` with independent null assignment.
+  - Operational semantics: keep routed experts until the first null, then route remaining suffix slots to null.
+- Code changes:
+  - `experiments/speedrun/custom_mixtral.py`
+    - Added `MixtralConfig.take_until_null: bool = False`.
+    - In `MixtralSparseMoeBlock._route`, when null routing is active and `take_until_null=True`, real experts after the first selected null are converted to null slots and zero-weighted before renormalization.
+  - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+    - Added `--null-routing-mode {independent,take_until_null}` (default `independent`).
+    - Added `null_mode=...` to machine-readable `RESULT` line.
+- Smoke validation (CPU, `gmm`, tiny shape):
+  - `--null-routing-mode take_until_null --null-route-frac 0.5`:
+    - `null_realized=0.495`, `null_assignments=507`, `real_assignments=517`
+  - `--null-routing-mode independent --null-route-frac 0.5`:
+    - `null_realized=0.501`, `null_assignments=513`, `real_assignments=511`
+- Next action:
+  - Run TPU matrix comparing `independent` vs `take_until_null` across the same shape/topk/null grid.
