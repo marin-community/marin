@@ -75,6 +75,7 @@ def test_region_mapping_covers_all_configured_buckets():
         "us-central1",
         "us-central2",
         "europe-west4",
+        "eu-west4",
         "us-west4",
         "us-east1",
         "us-east5",
