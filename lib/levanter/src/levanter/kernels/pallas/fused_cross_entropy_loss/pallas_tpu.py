@@ -8,7 +8,6 @@
 
 from functools import lru_cache, partial
 import math
-import os
 from typing import Optional
 
 import jax
@@ -35,19 +34,8 @@ def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) ->
 
 
 def _should_use_emulated_one_hot() -> bool:
-    # Default to emulation for stability; allow opting into native one_hot for experiments.
-    use_native = os.environ.get("LEVANTER_FUSED_CE_NATIVE_ONE_HOT", "0").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if not use_native:
-        return True
-    if jax.default_backend() != "tpu" or not jax.devices():
-        return False
-    device_kind = jax.devices()[0].device_kind.lower()
-    # Native one_hot has historically been problematic on v4 mosaic; keep emulation there.
-    return "tpu v4" in device_kind
+    # Keep kernel behavior deterministic and backend-stable: always use emulated one-hot.
+    return True
 
 
 def _labels_one_hot_emulated(
