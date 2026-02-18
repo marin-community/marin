@@ -186,6 +186,7 @@ class RemoteClusterClient:
                             break
                         attempt = attempts_by_id[att_id]
                         worker_id = attempt.worker_id or task_status.worker_id
+                        task_id = JobName.from_wire(task_status.task_id)
                         if not worker_id:
                             continue
 
@@ -195,6 +196,7 @@ class RemoteClusterClient:
                             try:
                                 reader = LogReader.from_log_directory_for_attempt(
                                     log_directory=task_status.log_directory,
+                                    task_id=task_id,
                                     worker_id=worker_id,
                                     attempt_id=att_id,
                                 )
@@ -376,6 +378,7 @@ class RemoteClusterClient:
                     break
                 worker_id = task_status.worker_id
                 attempt = attempts_by_id.get(att_id)
+                task_id = JobName.from_wire(task_status.task_id)
                 if attempt and attempt.worker_id:
                     worker_id = attempt.worker_id
                 if not worker_id:
@@ -384,6 +387,7 @@ class RemoteClusterClient:
                 try:
                     reader = LogReader.from_log_directory_for_attempt(
                         log_directory=task_status.log_directory,
+                        task_id=task_id,
                         worker_id=worker_id,
                         attempt_id=att_id,
                     )

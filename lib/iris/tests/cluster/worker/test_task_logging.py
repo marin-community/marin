@@ -245,6 +245,128 @@ def test_read_logs_max_lines():
         assert len(logs) == 5
 
 
+def test_read_logs_max_lines_preserves_remaining_lines():
+    """read_logs(max_lines) must not discard unread lines."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = LogSinkConfig(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        log_sink = FsspecLogSink(config)
+        log_sink.append(source="stdout", data="line 0")
+        log_sink.append(source="stdout", data="line 1")
+        log_sink.append(source="stdout", data="line 2")
+        log_sink.sync()
+
+        reader = LogReader.from_attempt(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        first = reader.read_logs(source="stdout", max_lines=1, flush_partial_line=True)
+        second = reader.read_logs(source="stdout", max_lines=10, flush_partial_line=True)
+
+        assert [e.data for e in first] == ["line 0"]
+        assert [e.data for e in second] == ["line 1", "line 2"]
+
+
+def test_log_sink_sync_retries_failed_batch():
+    """Failed sync must not advance the persisted cursor."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = LogSinkConfig(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        log_sink = FsspecLogSink(config)
+        log_sink.append(source="stdout", data="line 1")
+
+        original_append_lines = log_sink._append_lines
+        calls = 0
+
+        def flaky_append(path: str, lines: list[str]) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("simulated write failure")
+            original_append_lines(path, lines)
+
+        log_sink._append_lines = flaky_append  # type: ignore[method-assign]
+        log_sink.sync()
+        log_sink.sync()
+
+        reader = LogReader.from_attempt(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        logs = reader.read_logs(source="stdout", flush_partial_line=True)
+        assert [e.data for e in logs] == ["line 1"]
+
+
+def test_log_sink_falls_back_when_append_not_supported():
+    """sync should fall back to rewrite when append mode is unsupported."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = LogSinkConfig(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        log_sink = FsspecLogSink(config)
+        log_sink.append(source="stdout", data="line 1")
+
+        original_open = log_sink._fs.open
+
+        def fail_append(path: str, mode: str = "rb", *args, **kwargs):
+            if mode == "a":
+                raise OSError("append unsupported")
+            return original_open(path, mode, *args, **kwargs)
+
+        log_sink._fs.open = fail_append  # type: ignore[method-assign]
+        log_sink.sync()
+
+        reader = LogReader.from_attempt(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        logs = reader.read_logs(source="stdout", flush_partial_line=True)
+        assert [e.data for e in logs] == ["line 1"]
+
+
+def test_log_reader_from_log_directory_for_attempt_custom_prefix():
+    """Reader creation from log_directory supports non-iris-logs prefixes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prefix = f"file://{tmpdir}/ttl=30d/custom-prefix"
+        base_config = dict(
+            prefix=prefix,
+            worker_id="worker-1",
+            task_id=TASK_ID,
+        )
+        sink0 = FsspecLogSink(LogSinkConfig(attempt_id=0, **base_config))
+        sink1 = FsspecLogSink(LogSinkConfig(attempt_id=1, **base_config))
+        sink0.append(source="stdout", data="attempt-0")
+        sink1.append(source="stdout", data="attempt-1")
+        sink0.sync()
+        sink1.sync()
+
+        reader = LogReader.from_log_directory_for_attempt(
+            log_directory=sink0.log_path,
+            task_id=TASK_ID,
+            worker_id="worker-1",
+            attempt_id=1,
+        )
+        logs = reader.read_logs(source="stdout", flush_partial_line=True)
+        assert [e.data for e in logs] == ["attempt-1"]
+
+
 def test_read_metadata():
     """Test reading metadata from storage."""
     with tempfile.TemporaryDirectory() as tmpdir:

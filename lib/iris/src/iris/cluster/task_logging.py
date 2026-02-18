@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 import fsspec
 from google.protobuf import json_format
@@ -96,6 +97,7 @@ class FsspecLogSink:
         self._logs: list[logging_pb2.LogEntry] = []
         self._last_sync_index = 0
         self._lock = Lock()
+        self._sync_lock = Lock()
         self._stop_event = Event()
         self._sync_thread = Thread(target=self._sync_loop, name=f"log-sync-{config.worker_id}", daemon=True)
 
@@ -126,21 +128,28 @@ class FsspecLogSink:
         Writes in proto JSON format (one LogEntry per line).
         All log sources (stdout, stderr, build) are written to a single logs.jsonl file.
         """
-        with self._lock:
-            if self._last_sync_index >= len(self._logs):
-                return  # No new logs
+        with self._sync_lock:
+            with self._lock:
+                if self._last_sync_index >= len(self._logs):
+                    return  # No new logs
+                start_index = self._last_sync_index
+                end_index = len(self._logs)
+                new_logs = self._logs[start_index:end_index]
 
-            new_logs = self._logs[self._last_sync_index :]
-            self._last_sync_index = len(self._logs)
+            # Write all logs to single file (logs.jsonl)
+            file_path = f"{self._storage_log_path}/logs.jsonl"
+            try:
+                # Convert proto entries to JSON lines
+                lines = [self._proto_to_json_line(entry) for entry in new_logs]
+                self._append_lines(file_path, lines)
+            except Exception as e:
+                logger.warning("Failed to write logs to %s: %r", file_path, e, exc_info=True)
+                return
 
-        # Write all logs to single file (logs.jsonl)
-        file_path = f"{self._storage_log_path}/logs.jsonl"
-        try:
-            # Convert proto entries to JSON lines
-            lines = [self._proto_to_json_line(entry) for entry in new_logs]
-            self._append_lines(file_path, lines)
-        except Exception as e:
-            logger.warning(f"Failed to write logs to {file_path}: {e}")
+            with self._lock:
+                # Advance cursor only after successful write.
+                if self._last_sync_index == start_index:
+                    self._last_sync_index = end_index
 
     def close(self) -> None:
         """Stop periodic sync and flush final buffered logs."""
@@ -168,7 +177,7 @@ class FsspecLogSink:
 
             self._fs.write_text(path, json_str)
         except Exception as e:
-            logger.error(f"Failed to write metadata to {path}: {e}")
+            logger.error("Failed to write metadata to %s: %r", path, e, exc_info=True)
 
     def query_recent(self, max_entries: int = 1000) -> list[logging_pb2.LogEntry]:
         """Query recent log entries from buffered logs.
@@ -220,8 +229,9 @@ class FsspecLogSink:
             with self._fs.open(path, mode="a") as f:
                 for line in lines:
                     f.write(line + "\n")
-        except (AttributeError, NotImplementedError):
+        except (AttributeError, NotImplementedError, OSError, ValueError) as append_error:
             # Fallback: read existing content and rewrite
+            logger.debug("append mode unavailable for %s (%s), falling back to rewrite", path, append_error)
             try:
                 existing = self._fs.cat_file(path).decode("utf-8")
             except (FileNotFoundError, OSError):
@@ -342,18 +352,33 @@ class LogReader:
 
     @classmethod
     def from_log_directory(cls, *, log_directory: str) -> "LogReader":
-        prefix, worker_id, task_id, attempt_id = _parse_log_directory(log_directory)
-        return cls.from_attempt(prefix=prefix, worker_id=worker_id, task_id=task_id, attempt_id=attempt_id)
+        base = log_directory.rstrip("/")
+        assert "://" in base, f"log_directory must be a URL, got: {log_directory}"
+        return cls(logs_path=f"{base}/logs.jsonl", metadata_path=f"{base}/metadata.json")
 
     @classmethod
     def from_log_directory_for_attempt(
         cls,
         *,
         log_directory: str,
+        task_id: JobName,
         worker_id: str,
         attempt_id: int,
     ) -> "LogReader":
-        prefix, _, task_id, _ = _parse_log_directory(log_directory)
+        parsed = urlsplit(log_directory)
+        if not parsed.scheme:
+            raise ValueError(f"log_directory must be a URL: {log_directory}")
+        task_wire = task_id.to_wire().lstrip("/")
+        task_marker = f"/{task_wire}/"
+        marker_index = parsed.path.rfind(task_marker)
+        if marker_index < 0:
+            raise ValueError(f"log_directory missing task path {task_id}: {log_directory}")
+        prefix_with_worker = parsed.path[:marker_index]
+        worker_sep = prefix_with_worker.rfind("/")
+        if worker_sep < 0:
+            raise ValueError(f"Invalid log_directory format: {log_directory}")
+        prefix_path = prefix_with_worker[:worker_sep]
+        prefix = urlunsplit((parsed.scheme, parsed.netloc, prefix_path, "", ""))
         return cls.from_attempt(prefix=prefix, worker_id=worker_id, task_id=task_id, attempt_id=attempt_id)
 
     def read_logs(
@@ -377,10 +402,11 @@ class LogReader:
         except OSError:
             return []
 
-        if not chunk:
+        if not chunk and not self._tail:
             return []
 
         text = self._tail + chunk.decode("utf-8", errors="replace")
+        self._tail = ""
         lines = text.split("\n")
         if text.endswith("\n"):
             self._tail = ""
@@ -391,7 +417,9 @@ class LogReader:
                 self._tail = ""
 
         entries: list[logging_pb2.LogEntry] = []
+        consumed_count = 0
         for line in lines:
+            consumed_count += 1
             if not line:
                 continue
             entry = logging_pb2.LogEntry()
@@ -409,6 +437,10 @@ class LogReader:
             entries.append(entry)
             if max_lines > 0 and len(entries) >= max_lines:
                 break
+        remaining_lines = lines[consumed_count:]
+        if remaining_lines:
+            remainder = "\n".join(remaining_lines) + "\n" + self._tail
+            self._tail = remainder
         return entries
 
     def seek_to(self, since_ms: int) -> None:
@@ -458,22 +490,3 @@ class LogReader:
         except Exception as e:
             logger.warning(f"Failed to read metadata from {metadata_path}: {e}")
             return None
-
-
-def _parse_log_directory(log_directory: str) -> tuple[str, str, JobName, int]:
-    if not log_directory:
-        raise ValueError("log_directory is required")
-    marker = "/iris-logs/"
-    marker_index = log_directory.find(marker)
-    if marker_index < 0:
-        raise ValueError(f"log_directory missing '/iris-logs/' marker: {log_directory}")
-    prefix = log_directory[: marker_index + len(marker) - 1]
-    suffix = log_directory[marker_index + len(marker) :]
-    parts = suffix.split("/")
-    if len(parts) < 3:
-        raise ValueError(f"Invalid log_directory format: {log_directory}")
-    worker_id = parts[0]
-    attempt_id = int(parts[-1])
-    task_id = JobName.from_wire("/" + "/".join(parts[1:-1]))
-    task_id.require_task()
-    return prefix, worker_id, task_id, attempt_id

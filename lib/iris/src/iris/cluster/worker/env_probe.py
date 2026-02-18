@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 
 _GCP_METADATA_ROOT = "http://metadata.google.internal/computeMetadata/v1/instance"
 _GCP_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
+_REGION_TO_TMP_BUCKET = {
+    "asia-northeast1": "marin-tmp-asia-northeast-1",
+    "us-central1": "marin-tmp-us-central1",
+    "us-central2": "marin-tmp-us-central2",
+    "europe-west4": "marin-tmp-eu-west4",
+    "us-west4": "marin-tmp-us-west4",
+    "us-east1": "marin-tmp-us-east1",
+    "us-east5": "marin-tmp-us-east5",
+}
 
 
 @lru_cache(maxsize=1)
@@ -66,7 +75,11 @@ def _infer_worker_log_prefix() -> str | None:
     if "-" not in zone_name:
         return None
     region = zone_name.rsplit("-", 1)[0]
-    return f"gs://marin-tmp-{region}/ttl=30d/iris-logs"
+    bucket = _REGION_TO_TMP_BUCKET.get(region)
+    if not bucket:
+        logger.warning("No tmp bucket mapping for region %s", region)
+        return None
+    return f"gs://{bucket}/ttl=30d/iris-logs"
 
 
 def _extract_tpu_name(instance_name: str) -> str:
