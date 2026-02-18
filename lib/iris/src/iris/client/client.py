@@ -706,7 +706,6 @@ class IrisClient:
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
-                fail_if_exists=False,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:
