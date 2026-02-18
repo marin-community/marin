@@ -329,12 +329,16 @@ class TPUAllocationActor:
     def __del__(self):
         # delete the work directories in the background, use the ls to make sure we don't
         # accidentally run this on our local machine
+        cleanup_cmd = (
+            "ls /dev/accel* && "
+            "(rm -rf $HOME/marin/; "
+            "rm -rf $HOME/.cache/; "
+            "rm -rf $HOME/.claude/; "
+            "rm -rf $HOME/.codex/; "
+            "sudo rm -f /tmp/libtpu_lockfile)"
+        )
         subprocess.Popen(
-            [
-                "bash",
-                "-c",
-                "ls /dev/accel* && (rm -rf $HOME/marin/; rm -rf $HOME/.cache/; sudo rm -f /tmp/libtpu_lockfile)",
-            ],
+            ["bash", "-c", cleanup_cmd],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -503,6 +507,18 @@ fi
 """
     logger.info("Setting up remote environment...")
     run_logged(["ssh", target_host, "bash", "-s"], input=setup_script.encode(), check=True)
+
+    # Sync local dotfiles if they exist
+    home = Path.home()
+    for dotdir in [".claude", ".codex"]:
+        local_path = home / dotdir
+        if local_path.exists():
+            logger.info(f"Syncing {dotdir} to remote...")
+            run_logged(
+                ["rsync", "-az", "--delete", f"{local_path}/", f"{target_host}:~/{dotdir}/"],
+                check=False,
+            )
+
     logger.info("Environment setup completed")
 
 
