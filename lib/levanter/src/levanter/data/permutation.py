@@ -14,35 +14,51 @@ from levanter.utils.jax_utils import local_cpu_mesh
 
 
 class PermutationDataset(AsyncDataset[T_co]):
-    """A permutation dataset that wraps another dataset and applies a permutation to the indices."""
+    """A permutation dataset that wraps another dataset and applies a permutation to the indices.
 
-    # TODO: add epoch reshuffling
+    When ``num_epochs`` > 1 the permutation operates over ``num_epochs * dataset_len``
+    elements and the output is mapped back to the original range via modulo.  This
+    gives a different ordering each epoch while remaining deterministic and resumable.
+    The reported length is ``num_epochs * dataset_len`` so callers iterate over every
+    epoch worth of data.
+    """
 
-    def __init__(self, dataset: AsyncDataset[T_co], key: PRNGKeyArray, perm_type: PermType = "feistel"):
+    def __init__(
+        self,
+        dataset: AsyncDataset[T_co],
+        key: PRNGKeyArray,
+        perm_type: PermType = "feistel",
+        num_epochs: int = 1,
+    ):
+        if num_epochs < 1:
+            raise ValueError(f"num_epochs must be >= 1, got {num_epochs}")
         self.dataset = dataset
         self.key = key
-        self._permutation: Optional[Permutation] = None
+        self._permutation: Optional[tuple[Permutation, int]] = None
         self._perm_type = perm_type
+        self.num_epochs = num_epochs
 
     async def async_len(self) -> int:
-        return await self.dataset.async_len()
+        return (await self.dataset.async_len()) * self.num_epochs
 
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
 
     async def getitem_async(self, index: int) -> T_co:
-        permutation = await self._get_permutation()
-        return await self.dataset.getitem_async(permutation(index))
+        permutation, dataset_len = await self._get_permutation()
+        return await self.dataset.getitem_async(permutation(index) % dataset_len)
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
-        permutation = await self._get_permutation()
+        permutation, dataset_len = await self._get_permutation()
         return await self.dataset.get_batch(
-            [int(permutation(i)) for i in indices]
+            [int(permutation(i) % dataset_len) for i in indices]
         )  # cast to int to be sure it's python int
 
-    async def _get_permutation(self):
+    async def _get_permutation(self) -> tuple[Permutation, int]:
         if self._permutation is None:
-            self._permutation = Permutation.make(self._perm_type, await self.async_len(), self.key)
+            dataset_len = await self.dataset.async_len()
+            perm_len = dataset_len * self.num_epochs
+            self._permutation = (Permutation.make(self._perm_type, perm_len, self.key), dataset_len)
         return self._permutation
 
 
@@ -67,10 +83,19 @@ class EraShufflingDataset(AsyncDataset[T_co]):
     """
 
     def __init__(
-        self, dataset: AsyncDataset[T_co], era_length: int, *, key: jax.random.PRNGKey, perm_type: PermType = "feistel"
+        self,
+        dataset: AsyncDataset[T_co],
+        era_length: int,
+        *,
+        key: jax.random.PRNGKey,
+        perm_type: PermType = "feistel",
+        num_epochs: int = 1,
     ):
+        if num_epochs < 1:
+            raise ValueError(f"num_epochs must be >= 1, got {num_epochs}")
         self.dataset = dataset
         self.era_length = era_length
+        self.num_epochs = num_epochs
 
         # Force key to CPU (like MixtureDataset does) to prevent JAX device placement errors
         with local_cpu_mesh():
@@ -84,14 +109,13 @@ class EraShufflingDataset(AsyncDataset[T_co]):
 
         @alru_cache(maxsize=4)  # we're mostly going to be going sequentially
         async def gen_era_permutation(era: int) -> Permutation:
-            # TODO: support epochs
             if self.dataset.is_finite():
-                # edge case: final era may be shorter than era_length
-                dataset_len = await self.dataset.async_len()
-                remaining = dataset_len - era * self.era_length
+                total_len = await self.async_len()
+                remaining = total_len - era * self.era_length
                 if remaining <= 0:
                     raise IndexError(
-                        f"Era {era} is out of bounds for dataset length {dataset_len} with era length {self.era_length}"
+                        f"Era {era} is out of bounds for total length {total_len} "
+                        f"({self.num_epochs} epochs) with era length {self.era_length}"
                     )
                 era_length_val = min(self.era_length, remaining)
             else:
@@ -103,16 +127,25 @@ class EraShufflingDataset(AsyncDataset[T_co]):
         self.gen_era_permutation = gen_era_permutation
 
     async def _get_index(self, idx: int) -> int:
+        """Map a logical index (across all epochs) to a dataset index.
+
+        The logical index space spans ``num_epochs * dataset_len`` elements.
+        Era-local shuffling is applied, and the result is mapped back to the
+        original dataset range via modulo.
+        """
         if idx < 0:
             raise ValueError("Negative indices are not supported")
         era = idx // self.era_length
         permutation = await self.gen_era_permutation(era)
-        out = permutation(idx - era * self.era_length) + era * self.era_length
+        shuffled = permutation(idx - era * self.era_length) + era * self.era_length
 
-        return out
+        if self.num_epochs > 1:
+            dataset_len = await self.dataset.async_len()
+            return shuffled % dataset_len
+        return shuffled
 
     async def async_len(self) -> int:
-        return await self.dataset.async_len()
+        return (await self.dataset.async_len()) * self.num_epochs
 
     def is_finite(self) -> bool:
         return self.dataset.is_finite()

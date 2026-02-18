@@ -86,3 +86,135 @@ async def test_era_shuffling_raises_on_out_of_bounds_index():
     shuffling_dataset = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
     with pytest.raises(IndexError, match="out of bounds"):
         await shuffling_dataset.getitem_async(16)
+
+
+# --- Multi-epoch tests ---
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_multi_epoch_length():
+    """num_epochs multiplies the reported length."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0), num_epochs=3)
+    assert await perm_ds.async_len() == 30
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_multi_epoch_covers_all_items():
+    """Every original item appears exactly num_epochs times across the full index range."""
+    from collections import Counter
+
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    num_epochs = 3
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(42), num_epochs=num_epochs)
+    total_len = await perm_ds.async_len()
+    batch = await perm_ds.get_batch(list(range(total_len)))
+    counts = Counter(batch)
+    assert set(counts.keys()) == set(data)
+    for item, count in counts.items():
+        assert count == num_epochs, f"Item {item} appeared {count} times, expected {num_epochs}"
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_multi_epoch_reshuffles():
+    """Different epochs produce different orderings."""
+    data = list(range(20))
+    dataset = ListAsyncDataset(data)
+    num_epochs = 3
+    n = len(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(7), num_epochs=num_epochs)
+
+    epochs = []
+    for epoch in range(num_epochs):
+        batch = await perm_ds.get_batch(list(range(epoch * n, (epoch + 1) * n)))
+        epochs.append(batch)
+
+    # At least two of the three epochs should differ in ordering
+    num_different = sum(1 for i in range(num_epochs) for j in range(i + 1, num_epochs) if epochs[i] != epochs[j])
+    assert num_different >= 1, "Multi-epoch permutation should produce different orderings across epochs"
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_single_epoch_unchanged():
+    """With num_epochs=1, behavior is identical to the original PermutationDataset."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0), num_epochs=1)
+    assert await perm_ds.async_len() == 10
+    batch = await perm_ds.get_batch(list(range(10)))
+    assert set(batch) == set(data)
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_num_epochs_validation():
+    """num_epochs < 1 raises ValueError."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    with pytest.raises(ValueError, match="num_epochs"):
+        PermutationDataset(dataset, jax.random.PRNGKey(0), num_epochs=0)
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_multi_epoch_length():
+    """num_epochs multiplies the reported length for EraShufflingDataset."""
+    data = list(range(16))
+    dataset = ListAsyncDataset(data)
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), num_epochs=3)
+    assert await era_ds.async_len() == 48
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_multi_epoch_covers_all_items():
+    """Every original item appears num_epochs times across all epochs."""
+    from collections import Counter
+
+    data = list(range(16))
+    dataset = ListAsyncDataset(data)
+    num_epochs = 3
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), num_epochs=num_epochs)
+    total_len = await era_ds.async_len()
+    batch = await era_ds.get_batch(list(range(total_len)))
+    counts = Counter(batch)
+    assert set(counts.keys()) == set(data)
+    for item, count in counts.items():
+        assert count == num_epochs, f"Item {item} appeared {count} times, expected {num_epochs}"
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_multi_epoch_raises_on_out_of_bounds():
+    """Index beyond num_epochs * dataset_len raises IndexError."""
+    data = list(range(16))
+    dataset = ListAsyncDataset(data)
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), num_epochs=2)
+    # Total length is 32; index 32 is out of bounds
+    with pytest.raises(IndexError, match="out of bounds"):
+        await era_ds.getitem_async(32)
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_num_epochs_validation():
+    """num_epochs < 1 raises ValueError."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    with pytest.raises(ValueError, match="num_epochs"):
+        EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), num_epochs=0)
+
+
+@pytest.mark.asyncio
+async def test_shuffle_method_passes_num_epochs():
+    """The .shuffle() convenience method forwards num_epochs."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = dataset.shuffle(jax.random.PRNGKey(0), num_epochs=3)
+    assert await perm_ds.async_len() == 30
+
+
+@pytest.mark.asyncio
+async def test_era_shuffle_method_passes_num_epochs():
+    """The .era_shuffle() convenience method forwards num_epochs."""
+    data = list(range(16))
+    dataset = ListAsyncDataset(data)
+    era_ds = dataset.era_shuffle(5, jax.random.PRNGKey(0), num_epochs=2)
+    assert await era_ds.async_len() == 32
