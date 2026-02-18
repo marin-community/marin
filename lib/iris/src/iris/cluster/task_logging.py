@@ -20,6 +20,7 @@ from iris.rpc import logging_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+MAX_LINE_LENGTH = 64 * 1024
 
 
 class LogSink(Protocol):
@@ -107,6 +108,8 @@ class FsspecLogSink:
 
     def append(self, *, source: str, data: str) -> None:
         """Append a log entry with current timestamp."""
+        if len(data) > MAX_LINE_LENGTH:
+            data = data[:MAX_LINE_LENGTH]
         log_entry = logging_pb2.LogEntry(
             timestamp=Timestamp.now().to_proto(),
             source=source,
@@ -251,6 +254,8 @@ class LocalLogSink:
 
     def append(self, *, source: str, data: str) -> None:
         """Append a log entry to in-memory buffer."""
+        if len(data) > MAX_LINE_LENGTH:
+            data = data[:MAX_LINE_LENGTH]
         log_entry = logging_pb2.LogEntry(
             timestamp=Timestamp.now().to_proto(),
             source=source,
@@ -358,7 +363,7 @@ class LogReader:
         regex_filter: str | None = None,
         since_ms: int = 0,
         max_lines: int = 0,
-        include_incomplete_tail: bool = False,
+        flush_partial_line: bool = False,
     ) -> list[logging_pb2.LogEntry]:
         """Read entries appended since the last call."""
         log_path = self._logs_path
@@ -381,7 +386,7 @@ class LogReader:
             self._tail = ""
         else:
             self._tail = lines.pop()
-            if include_incomplete_tail and self._tail:
+            if flush_partial_line and self._tail:
                 lines.append(self._tail)
                 self._tail = ""
 
@@ -405,6 +410,41 @@ class LogReader:
             if max_lines > 0 and len(entries) >= max_lines:
                 break
         return entries
+
+    def seek_to(self, since_ms: int) -> None:
+        """Seek to the first log entry strictly newer than since_ms."""
+        if since_ms <= 0:
+            self._offset = 0
+            self._tail = ""
+            return
+
+        try:
+            with self._fs.open(self._logs_path, mode="rb") as f:
+                self._offset = 0
+                self._tail = ""
+                while True:
+                    line_start = f.tell()
+                    raw = f.readline()
+                    if not raw:
+                        self._offset = f.tell()
+                        return
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    entry = logging_pb2.LogEntry()
+                    try:
+                        json_format.Parse(line, entry)
+                    except Exception:
+                        continue
+                    if entry.timestamp.epoch_ms > since_ms:
+                        self._offset = line_start
+                        return
+        except FileNotFoundError:
+            self._offset = 0
+            self._tail = ""
+        except OSError:
+            self._offset = 0
+            self._tail = ""
 
     def read_metadata(self) -> logging_pb2.TaskAttemptMetadata | None:
         metadata_path = self._metadata_path

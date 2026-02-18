@@ -9,7 +9,7 @@ import time
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.task_logging import LogReader
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
@@ -300,25 +300,26 @@ class RemoteClusterClient:
                         task_status.log_directory,
                     )
                     continue
-                log_entries = reader.read_logs(source=None, regex_filter=regex, max_lines=max_lines - total_lines)
+                log_entries = reader.read_logs(
+                    source=None,
+                    regex_filter=regex,
+                    since_ms=since_ms,
+                    max_lines=max_lines - total_lines,
+                    flush_partial_line=True,
+                )
 
-                filtered: list[logging_pb2.LogEntry] = []
-                for entry in log_entries:
-                    if since_ms > 0 and entry.timestamp.epoch_ms <= since_ms:
-                        continue
-                    filtered.append(entry)
-                    if entry.timestamp.epoch_ms > last_timestamp_ms:
-                        last_timestamp_ms = entry.timestamp.epoch_ms
-
-                if filtered:
+                if log_entries:
+                    for entry in log_entries:
+                        if entry.timestamp.epoch_ms > last_timestamp_ms:
+                            last_timestamp_ms = entry.timestamp.epoch_ms
                     task_logs.append(
                         cluster_pb2.Controller.TaskLogBatch(
                             task_id=task_status.task_id,
                             worker_id=worker_id,
-                            logs=filtered,
+                            logs=log_entries,
                         )
                     )
-                    total_lines += len(filtered)
+                    total_lines += len(log_entries)
 
         return cluster_pb2.Controller.GetTaskLogsResponse(
             task_logs=task_logs,
@@ -376,12 +377,13 @@ class RemoteClusterClient:
                             "Invalid log_directory format for %s: %s", task_status.task_id, task_status.log_directory
                         )
                         continue
+                    reader.seek_to(since_ms)
                     self._attempt_readers[reader_key] = reader
 
                 entries = reader.read_logs(
                     source=None,
                     regex_filter=regex,
-                    since_ms=since_ms,
+                    since_ms=0,
                     max_lines=max_lines - total_lines,
                 )
                 if not entries:

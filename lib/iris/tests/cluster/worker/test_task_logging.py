@@ -12,6 +12,7 @@ from iris.cluster.task_logging import (
     FsspecLogSink,
     LogReader,
     LogSinkConfig,
+    MAX_LINE_LENGTH,
 )
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
@@ -162,7 +163,7 @@ def test_read_logs():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        all_logs = reader.read_logs(include_incomplete_tail=True)
+        all_logs = reader.read_logs(flush_partial_line=True)
         assert len(all_logs) == 3
 
         # Read only stdout logs
@@ -172,7 +173,7 @@ def test_read_logs():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        stdout_logs = reader.read_logs(source="stdout", include_incomplete_tail=True)
+        stdout_logs = reader.read_logs(source="stdout", flush_partial_line=True)
         assert len(stdout_logs) == 2
         assert stdout_logs[0].data == "line 1"
         assert stdout_logs[1].data == "line 2"
@@ -184,7 +185,7 @@ def test_read_logs():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        stderr_logs = reader.read_logs(source="stderr", include_incomplete_tail=True)
+        stderr_logs = reader.read_logs(source="stderr", flush_partial_line=True)
         assert len(stderr_logs) == 1
         assert stderr_logs[0].data == "error 1"
 
@@ -211,7 +212,7 @@ def test_read_logs_with_regex_filter():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        logs = reader.read_logs(source="stdout", regex_filter="ERROR", include_incomplete_tail=True)
+        logs = reader.read_logs(source="stdout", regex_filter="ERROR", flush_partial_line=True)
 
         assert len(logs) == 1
         assert logs[0].data == "ERROR: line 2"
@@ -239,7 +240,7 @@ def test_read_logs_max_lines():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        logs = reader.read_logs(source="stdout", max_lines=5, include_incomplete_tail=True)
+        logs = reader.read_logs(source="stdout", max_lines=5, flush_partial_line=True)
 
         assert len(logs) == 5
 
@@ -290,7 +291,7 @@ def test_read_logs_not_found():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        logs = reader.read_logs(source="stdout", include_incomplete_tail=True)
+        logs = reader.read_logs(source="stdout", flush_partial_line=True)
         assert logs == []
 
 
@@ -305,3 +306,67 @@ def test_read_metadata_not_found():
         )
         metadata = reader.read_metadata()
         assert metadata is None
+
+
+def test_log_sink_clips_line_to_max_length():
+    """Long log lines are clipped at MAX_LINE_LENGTH."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_sink = FsspecLogSink(
+            LogSinkConfig(
+                prefix=f"file://{tmpdir}",
+                worker_id="worker-1",
+                task_id=TASK_ID,
+                attempt_id=0,
+            )
+        )
+        log_sink.append(source="stdout", data="x" * (MAX_LINE_LENGTH + 100))
+        log_sink.sync()
+
+        reader = LogReader.from_attempt(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        logs = reader.read_logs(source="stdout", flush_partial_line=True)
+        assert len(logs) == 1
+        assert len(logs[0].data) == MAX_LINE_LENGTH
+
+
+def test_log_reader_seek_to_timestamp():
+    """seek_to positions reader at first entry newer than the cursor."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_sink = FsspecLogSink(
+            LogSinkConfig(
+                prefix=f"file://{tmpdir}",
+                worker_id="worker-1",
+                task_id=TASK_ID,
+                attempt_id=0,
+            )
+        )
+
+        log_sink._logs = [
+            logging_pb2.LogEntry(
+                timestamp=Timestamp.from_seconds(1).to_proto(),
+                source="stdout",
+                data="old",
+                attempt_id=0,
+            ),
+            logging_pb2.LogEntry(
+                timestamp=Timestamp.from_seconds(2).to_proto(),
+                source="stdout",
+                data="new",
+                attempt_id=0,
+            ),
+        ]
+        log_sink.sync()
+
+        reader = LogReader.from_attempt(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        reader.seek_to(Timestamp.from_seconds(1).epoch_ms())
+        logs = reader.read_logs(source="stdout", flush_partial_line=True)
+        assert [e.data for e in logs] == ["new"]
