@@ -181,29 +181,30 @@ def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     assert coord._completed_shards == 1
 
 
-def test_disk_chunk_write_uses_unique_temp_paths(tmp_path):
-    """Each DiskChunk.write() writes to a unique temp location, avoiding collisions."""
+def test_disk_chunk_write_uses_unique_paths(tmp_path):
+    """Each DiskChunk.write() writes to a unique location, avoiding collisions."""
     from zephyr.execution import DiskChunk
 
     base_path = str(tmp_path / "chunk.pkl")
     refs = [DiskChunk.write(base_path, [i]) for i in range(3)]
 
-    # All share the same canonical path
-    assert all(r.path == base_path for r in refs)
+    # Each written to a distinct UUID path (no rename needed)
+    paths = [r.path for r in refs]
+    assert len(set(paths)) == 3
+    for p in paths:
+        assert ".tmp." in p
+        assert Path(p).exists()
 
-    # Each written to a distinct UUID temp path
-    temps = [r.temp_path for r in refs]
-    assert len(set(temps)) == 3
-    for tp in temps:
-        assert ".tmp." in tp
-        assert Path(tp).exists()
-
-    # Canonical path is NOT written yet (coordinator does that)
-    assert not Path(base_path).exists()
+    # Each chunk is directly readable
+    for i, ref in enumerate(refs):
+        assert ref.read() == [i]
 
 
-def test_coordinator_finalizes_and_cleans_up_chunks(tmp_path):
-    """Coordinator renames winning chunks to canonical paths and deletes stale ones."""
+def test_coordinator_accepts_winner_ignores_stale(tmp_path):
+    """Coordinator accepts the winning result and ignores stale ones.
+
+    Stale chunk files are left for context-dir cleanup (no per-chunk deletion).
+    """
     from zephyr.execution import DiskChunk, ResultChunk, Shard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
@@ -226,8 +227,7 @@ def test_coordinator_finalizes_and_cleans_up_chunks(tmp_path):
 
     # Worker A writes a chunk (simulating slow completion)
     stale_ref = DiskChunk.write(str(tmp_path / "stale-chunk.pkl"), [1, 2, 3])
-    assert Path(stale_ref.temp_path).exists()
-    assert not Path(stale_ref.path).exists()
+    assert Path(stale_ref.path).exists()
 
     # Heartbeat timeout re-queues the task
     coord._last_seen["worker-A"] = 0.0
@@ -246,7 +246,7 @@ def test_coordinator_finalizes_and_cleans_up_chunks(tmp_path):
         TaskResult(chunks=[ResultChunk(source_shard=0, target_shard=0, data=winner_ref)]),
     )
 
-    # Worker A's stale result is rejected — its temp file should be cleaned up
+    # Worker A's stale result is rejected
     coord.report_result(
         "worker-A",
         0,
@@ -254,12 +254,12 @@ def test_coordinator_finalizes_and_cleans_up_chunks(tmp_path):
         TaskResult(chunks=[ResultChunk(source_shard=0, target_shard=0, data=stale_ref)]),
     )
 
-    # Winner's data was renamed to canonical path and is readable
+    # Winner's data is directly readable (no rename needed)
     assert Path(winner_ref.path).exists()
     assert winner_ref.read() == [4, 5, 6]
 
-    # Stale worker's temp file was cleaned up
-    assert not Path(stale_ref.temp_path).exists()
+    # Stale file still exists (cleaned up by context-dir cleanup, not coordinator)
+    assert Path(stale_ref.path).exists()
     assert coord._completed_shards == 1
 
 
@@ -270,12 +270,11 @@ def test_chunk_streaming_low_memory(tmp_path):
     """
     from zephyr.execution import DiskChunk, Shard
 
-    # Write 3 chunks to disk
+    # Write 3 chunks to disk (directly readable, no finalize needed)
     refs = []
     for i in range(3):
         path = str(tmp_path / f"chunk-{i}.pkl")
         chunk = DiskChunk.write(path, [i * 10 + j for j in range(5)])
-        chunk.finalize_write()
         refs.append(chunk)
 
     shard = Shard(chunks=refs)

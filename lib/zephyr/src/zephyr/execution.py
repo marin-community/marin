@@ -54,24 +54,25 @@ class Chunk(Protocol):
 class DiskChunk:
     """Reference to a chunk stored on disk.
 
-    Data is written to a UUID-unique ``temp_path`` to avoid collisions when
-    multiple workers race on the same shard.  The coordinator renames
-    ``temp_path`` → ``path`` when accepting a result.
+    Each write goes to a UUID-unique path to avoid collisions when multiple
+    workers race on the same shard.  No coordinator-side rename is needed;
+    the winning result's paths are used directly and the entire execution
+    directory is cleaned up after the pipeline completes.
     """
 
     path: str
     count: int
-    temp_path: str | None = None
 
     def __iter__(self) -> Iterator:
         return iter(self.read())
 
     @classmethod
     def write(cls, path: str, data: list) -> DiskChunk:
-        """Write *data* to a UUID-unique temp file derived from *path*.
+        """Write *data* to a UUID-unique path derived from *path*.
 
-        The canonical destination ``path`` is recorded but NOT written to;
-        the coordinator performs the final rename under its lock.
+        The UUID suffix avoids collisions when multiple workers race on
+        the same shard.  The resulting path is used directly for reads —
+        no rename step is required.
         """
         from zephyr.writers import unique_temp_path
 
@@ -79,15 +80,10 @@ class DiskChunk:
         data = list(data)
         count = len(data)
 
-        tp = unique_temp_path(path)
-        with fsspec.open(tp, "wb") as f:
+        unique_path = unique_temp_path(path)
+        with fsspec.open(unique_path, "wb") as f:
             pickle.dump(data, f)
-        return cls(path=path, count=count, temp_path=tp)
-
-    def finalize_write(self) -> None:
-        """Rename temp_path → path"""
-        fs = fsspec.core.url_to_fs(self.temp_path)[0]
-        fs.mv(self.temp_path, self.path, recursive=True)
+        return cls(path=unique_path, count=count)
 
     def read(self) -> list:
         """Load chunk data from disk."""
@@ -405,30 +401,12 @@ class ZephyrCoordinator:
                     f"Ignoring stale result from worker {worker_id} for shard {shard_idx} "
                     f"(attempt {attempt}, current {current_attempt})"
                 )
-                self._cleanup_stale_chunks(result)
                 return
 
-            self._finalize_result_chunks(result)
             self._results[shard_idx] = result
             self._completed_shards += 1
             self._in_flight.pop(worker_id, None)
             self._worker_states[worker_id] = WorkerState.READY
-
-    def _finalize_result_chunks(self, result: TaskResult) -> None:
-        for chunk in result.chunks:
-            if isinstance(chunk.data, DiskChunk):
-                chunk.data.finalize_write()
-
-    def _cleanup_stale_chunks(self, result: TaskResult) -> None:
-        """Remove temp files from rejected (stale) results."""
-        for chunk in result.chunks:
-            if isinstance(chunk.data, DiskChunk) and chunk.data.temp_path:
-                try:
-                    fs = fsspec.core.url_to_fs(chunk.data.temp_path)[0]
-                    if fs.exists(chunk.data.temp_path):
-                        fs.rm(chunk.data.temp_path)
-                except Exception as e:
-                    logger.warning("Failed to cleanup stale chunk %s: %s", chunk.data.temp_path, e)
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. All errors are fatal."""
