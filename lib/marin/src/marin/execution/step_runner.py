@@ -99,13 +99,6 @@ def fray_exec(
     return job
 
 
-def _get_fn_name(fn: Any) -> str:
-    """Return a human-readable name for a step function."""
-    if fn is None:
-        return "None"
-    return str(fn)
-
-
 def _write_executor_info(step: StepSpec) -> None:
     """Write a ``.executor_info`` JSON file matching the legacy ExecutorStepInfo schema.
 
@@ -119,7 +112,7 @@ def _write_executor_info(step: StepSpec) -> None:
     info = {
         "executor_version": "step_runner",
         "name": step.name,
-        "fn_name": _get_fn_name(step.fn),
+        "fn_name": str(step.fn) if step.fn is not None else "None",
         "config": step.hash_attrs,
         "description": None,
         "override_output_path": step.override_output_path,

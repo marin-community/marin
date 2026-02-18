@@ -19,10 +19,6 @@ from .executor import (
     unwrap_versioned_value,
     versioned,
 )
-from .step_spec import StepSpec
-from .step_runner import StepRunner
-from .disk_cache import disk_cached
-from .distributed_lock import StepAlreadyDone, distributed_lock
 from .executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
