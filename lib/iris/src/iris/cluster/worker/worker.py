@@ -103,12 +103,15 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         # Start HTTP server
+        # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
+        # causing TCP resets on idle connections.
         self._server = uvicorn.Server(
             uvicorn.Config(
                 self._dashboard._app,
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
+                timeout_keep_alive=120,
             )
         )
         self._threads.spawn_server(self._server, name="worker-server")

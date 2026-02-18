@@ -289,11 +289,15 @@ class Controller:
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
+        # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
+        # intervals of the same length, causing TCP resets on idle connections. Use 120s
+        # to safely cover long polling gaps during job waits.
         server_config = uvicorn.Config(
             self._dashboard._app,
             host=self._config.host,
             port=self._config.port,
             log_level="error",
+            timeout_keep_alive=120,
         )
         self._server = uvicorn.Server(server_config)
         self._threads.spawn_server(self._server, name="controller-server")
