@@ -1,4 +1,4 @@
-.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit gdn_help gdn_test_ray gdn_test_dev_tpu gdn_profile_ray gdn_wait_job gdn_codex_loop
 .DEFAULT: help
 
 
@@ -15,6 +15,8 @@ help:
 	@echo "    Run all tests"
 	@echo "make init"
 	@echo "    Init the repo for development"
+	@echo "make gdn_help"
+	@echo "    Show Gated DeltaNet TPU optimization helper targets"
 
 init:
 	conda install -c conda-forge pandoc
@@ -207,3 +209,44 @@ setup_pre_commit:
 
 dev_setup: install_uv install_gcloud get_secret_key get_ray_auth_token setup_pre_commit
 	@echo "Dev setup complete."
+
+
+# Gated DeltaNet TPU optimization helpers
+GDN_CLUSTER ?= us-central1
+GDN_TPU ?= auto
+GDN_TPU_VARIANT ?= v5p-8
+GDN_TESTS ?= both
+GDN_JOB ?=
+GDN_ITERATIONS ?= 5
+GDN_TPU_NAME ?= $(USER)-gdn
+GDN_CODEX_MODEL ?= gpt-5.3-codex
+
+gdn_help:
+	@echo "make gdn_test_ray [GDN_CLUSTER=us-central1] [GDN_TPU=auto] [GDN_TESTS=both|kernels|layer]"
+	@echo "make gdn_test_dev_tpu GDN_TPU_NAME=<name> [GDN_CLUSTER=us-central1] [GDN_TESTS=both|kernels|layer]"
+	@echo "make gdn_profile_ray [GDN_CLUSTER=us-central1] [GDN_TPU_VARIANT=v5p-8]"
+	@echo "make gdn_profile_dev_tpu GDN_TPU_NAME=<name> [GDN_CLUSTER=us-central1] [GDN_TPU_VARIANT=v5p-8]"
+	@echo "make gdn_wait_job GDN_JOB=<ray_job_id> [GDN_CLUSTER=us-central1]"
+	@echo "make gdn_codex_loop [GDN_ITERATIONS=5] [GDN_CODEX_MODEL=gpt-5.3-codex]"
+
+gdn_test_ray:
+	uv run python scripts/gdn/gdnctl.py ray-test --cluster $(GDN_CLUSTER) --tpu $(GDN_TPU) --tests $(GDN_TESTS)
+
+gdn_test_dev_tpu:
+	uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster $(GDN_CLUSTER) --tpu-name $(GDN_TPU_NAME) --tests $(GDN_TESTS)
+
+gdn_profile_ray:
+	uv run python scripts/gdn/gdnctl.py ray-profile --cluster $(GDN_CLUSTER) --tpu $(GDN_TPU_VARIANT) --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-wait
+
+gdn_profile_dev_tpu:
+	uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster $(GDN_CLUSTER) --tpu-name $(GDN_TPU_NAME) --tpu $(GDN_TPU_VARIANT) --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-sync
+
+gdn_wait_job:
+	@if [ -z "$(GDN_JOB)" ]; then \
+		echo "Set GDN_JOB=<ray_job_id>"; \
+		exit 1; \
+	fi
+	uv run python scripts/gdn/gdnctl.py ray-wait --cluster $(GDN_CLUSTER) $(GDN_JOB) --show-logs --tail 400
+
+gdn_codex_loop:
+	uv run python scripts/gdn/gdnctl.py codex-loop --iterations $(GDN_ITERATIONS) --model $(GDN_CODEX_MODEL)
