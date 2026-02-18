@@ -321,23 +321,49 @@ class ManualPlatform:
         handle: ManualSliceHandle,
         bootstrap_config: config_pb2.BootstrapConfig,
     ) -> None:
-        """Bootstrap each worker in the slice.
+        """Bootstrap all workers in the slice in parallel.
 
         Manual hosts are already reachable (no cloud provisioning wait), so we
-        run the bootstrap script on each worker immediately via run_command().
+        bootstrap all workers concurrently via wait_for_connection + bootstrap().
         """
         status = handle.describe()
-        for worker in status.workers:
-            if not worker.internal_address:
-                raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
+        workers = status.workers
+        logger.info("Bootstrapping %d workers for slice %s", len(workers), handle.slice_id)
+        errors: list[tuple[str, Exception]] = []
 
-            if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
-                raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
+        def _bootstrap_one(worker: RemoteExecWorkerBase) -> None:
+            try:
+                if not worker.internal_address:
+                    raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
+                if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
+                    raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
+                script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+                worker.bootstrap(script)
+            except Exception as e:
+                errors.append((worker.worker_id, e))
 
-            script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
-            worker.bootstrap(script)
+        threads: list[threading.Thread] = []
+        for worker in workers:
+            t = threading.Thread(
+                target=_bootstrap_one,
+                args=(worker,),
+                name=f"bootstrap-{worker.worker_id}",
+                daemon=True,
+            )
+            threads.append(t)
+            t.start()
 
-        logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(status.workers))
+        for t in threads:
+            t.join()
+
+        if errors:
+            failed_ids = [wid for wid, _ in errors]
+            raise PlatformError(
+                f"Bootstrap failed for {len(errors)}/{len(workers)} workers in slice {handle.slice_id}: "
+                f"{', '.join(failed_ids)}: {errors[0][1]}"
+            )
+
+        logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(workers))
         with handle._bootstrap_lock:
             handle._bootstrap_state = CloudSliceState.READY
 

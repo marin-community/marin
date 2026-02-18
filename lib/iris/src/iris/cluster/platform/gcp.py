@@ -608,42 +608,74 @@ class GcpPlatform:
         poll_interval: float = 10.0,
         cloud_ready_timeout: float = 600.0,
     ) -> None:
-        """Wait for slice to reach cloud READY, then bootstrap each worker.
+        """Wait for slice to reach cloud READY with all workers, then bootstrap in parallel.
 
-        Polls handle._describe_cloud() until the TPU is READY, then runs the
-        bootstrap script on each worker via run_command(). On success, sets
-        handle._bootstrap_state to READY. On failure, sets FAILED (the caller
-        catches exceptions and sets FAILED as well).
+        Phase 1: Polls _describe_cloud() until the TPU is READY and all workers
+        have IP addresses. GCP may report READY before all network endpoints are
+        populated, so we keep polling until every worker has an internal IP.
+
+        Phase 2: Bootstraps all workers in parallel threads. Each thread waits
+        for SSH connectivity then runs the bootstrap script. This mirrors the old
+        bootstrap_slice_vms() discovery-and-parallel-bootstrap pattern.
         """
-        # Phase 1: Wait for cloud to report READY
+        # Phase 1: Wait for cloud READY with all worker IPs populated
         deadline = time.monotonic() + cloud_ready_timeout
         while True:
             cloud_status = handle._describe_cloud()
-            if cloud_status.state == CloudSliceState.READY:
-                break
             if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
                 raise PlatformError(
                     f"Slice {handle.slice_id} entered {cloud_status.state} while waiting for cloud READY"
+                )
+            if cloud_status.state == CloudSliceState.READY:
+                all_have_ips = all(w.internal_address for w in cloud_status.workers)
+                if all_have_ips and len(cloud_status.workers) == cloud_status.worker_count:
+                    break
+                logger.info(
+                    "Slice %s is READY but only %d/%d workers have IPs, waiting...",
+                    handle.slice_id,
+                    sum(1 for w in cloud_status.workers if w.internal_address),
+                    cloud_status.worker_count,
                 )
             if time.monotonic() > deadline:
                 raise PlatformError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
             time.sleep(poll_interval)
 
-        # Phase 2: Wait for SSH connectivity, then bootstrap each worker.
-        # gcloud compute tpus tpu-vm ssh may need to generate SSH keys on the
-        # first call; wait_for_connection() retries until that succeeds.
-        cloud_status = handle._describe_cloud()
-        for worker in cloud_status.workers:
-            if not worker.internal_address:
-                raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
+        # Phase 2: Bootstrap all workers in parallel.
+        workers = cloud_status.workers
+        logger.info("Bootstrapping %d workers for slice %s", len(workers), handle.slice_id)
+        errors: list[tuple[str, Exception]] = []
 
-            if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
-                raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
+        def _bootstrap_one(worker: GcpWorkerHandle) -> None:
+            try:
+                if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
+                    raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
+                script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+                worker.bootstrap(script)
+            except Exception as e:
+                errors.append((worker.worker_id, e))
 
-            script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
-            worker.bootstrap(script)
+        threads: list[threading.Thread] = []
+        for worker in workers:
+            t = threading.Thread(
+                target=_bootstrap_one,
+                args=(worker,),
+                name=f"bootstrap-{worker.worker_id}",
+                daemon=True,
+            )
+            threads.append(t)
+            t.start()
 
-        logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(cloud_status.workers))
+        for t in threads:
+            t.join()
+
+        if errors:
+            failed_ids = [wid for wid, _ in errors]
+            raise PlatformError(
+                f"Bootstrap failed for {len(errors)}/{len(workers)} workers in slice {handle.slice_id}: "
+                f"{', '.join(failed_ids)}: {errors[0][1]}"
+            )
+
+        logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(workers))
         with handle._bootstrap_lock:
             handle._bootstrap_state = CloudSliceState.READY
 
