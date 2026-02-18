@@ -300,7 +300,7 @@ class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
-    def infer_log_prefix(self) -> str | None: ...
+    def log_prefix(self) -> str | None: ...
 
 
 class TPUSimEnvironmentProvider:
@@ -334,7 +334,7 @@ class TPUSimEnvironmentProvider:
         base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
         return base
 
-    def infer_log_prefix(self) -> str | None:
+    def log_prefix(self) -> str | None:
         return None
 
 
@@ -420,5 +420,8 @@ class DefaultEnvironmentProvider:
             vm_address=vm_address,
         )
 
-    def infer_log_prefix(self) -> str | None:
+    def log_prefix(self) -> str | None:
+        explicit = os.environ.get("IRIS_LOG_PREFIX")
+        if explicit:
+            return explicit
         return _infer_worker_log_prefix()

@@ -20,7 +20,7 @@ from iris.time_utils import Timestamp
 TASK_ID = JobName.from_wire("/job/test/task/0")
 
 
-def test_log_syncer_writes_new_logs():
+def test_log_sink_writes_new_logs():
     """Test that FsspecLogSink writes new logs to storage."""
     with tempfile.TemporaryDirectory() as tmpdir:
         config = LogSinkConfig(
@@ -29,14 +29,14 @@ def test_log_syncer_writes_new_logs():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        syncer = FsspecLogSink(config)
+        log_sink = FsspecLogSink(config)
 
         # Append logs
-        syncer.append(source="stdout", data="line 1")
-        syncer.append(source="stdout", data="line 2")
+        log_sink.append(source="stdout", data="line 1")
+        log_sink.append(source="stdout", data="line 2")
 
         # Sync
-        syncer.sync()
+        log_sink.sync()
 
         # Verify file exists and contains logs (single logs.jsonl file)
         log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "logs.jsonl"
@@ -49,7 +49,7 @@ def test_log_syncer_writes_new_logs():
         assert "line 2" in lines[1]
 
 
-def test_log_syncer_skips_when_no_new_logs():
+def test_log_sink_skips_when_no_new_logs():
     """Test that FsspecLogSink skips sync when no new logs exist."""
     with tempfile.TemporaryDirectory() as tmpdir:
         config = LogSinkConfig(
@@ -58,25 +58,25 @@ def test_log_syncer_skips_when_no_new_logs():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        syncer = FsspecLogSink(config)
+        log_sink = FsspecLogSink(config)
 
         # Append and sync
-        syncer.append(source="stdout", data="line 1")
-        syncer.sync()
+        log_sink.append(source="stdout", data="line 1")
+        log_sink.sync()
 
         # Get file mtime
         log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "logs.jsonl"
         mtime1 = log_path.stat().st_mtime
 
         # Sync again without new logs
-        syncer.sync()
+        log_sink.sync()
 
         # File should not be modified
         mtime2 = log_path.stat().st_mtime
         assert mtime1 == mtime2
 
 
-def test_log_syncer_appends_to_existing_files():
+def test_log_sink_appends_to_existing_files():
     """Test that FsspecLogSink appends to existing files."""
     with tempfile.TemporaryDirectory() as tmpdir:
         config = LogSinkConfig(
@@ -85,15 +85,15 @@ def test_log_syncer_appends_to_existing_files():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        syncer = FsspecLogSink(config)
+        log_sink = FsspecLogSink(config)
 
         # First batch
-        syncer.append(source="stdout", data="line 1")
-        syncer.sync()
+        log_sink.append(source="stdout", data="line 1")
+        log_sink.sync()
 
         # Second batch
-        syncer.append(source="stdout", data="line 2")
-        syncer.sync()
+        log_sink.append(source="stdout", data="line 2")
+        log_sink.sync()
 
         # Verify both lines are in file
         log_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "logs.jsonl"
@@ -104,7 +104,7 @@ def test_log_syncer_appends_to_existing_files():
         assert "line 2" in lines[1]
 
 
-def test_log_syncer_writes_metadata():
+def test_log_sink_writes_metadata():
     """Test that FsspecLogSink writes metadata."""
     with tempfile.TemporaryDirectory() as tmpdir:
         config = LogSinkConfig(
@@ -113,7 +113,7 @@ def test_log_syncer_writes_metadata():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        syncer = FsspecLogSink(config)
+        log_sink = FsspecLogSink(config)
 
         # Write metadata
         metadata = logging_pb2.TaskAttemptMetadata(
@@ -125,7 +125,7 @@ def test_log_syncer_writes_metadata():
         metadata.start_time.CopyFrom(Timestamp.now().to_proto())
         metadata.end_time.CopyFrom(Timestamp.now().to_proto())
 
-        syncer.write_metadata(metadata)
+        log_sink.write_metadata(metadata)
 
         # Verify file exists
         metadata_path = Path(tmpdir) / "worker-1" / "job" / "test" / "task" / "0" / "0" / "metadata.json"
@@ -149,11 +149,11 @@ def test_read_logs():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        syncer = FsspecLogSink(config)
-        syncer.append(source="stdout", data="line 1")
-        syncer.append(source="stderr", data="error 1")
-        syncer.append(source="stdout", data="line 2")
-        syncer.sync()
+        log_sink = FsspecLogSink(config)
+        log_sink.append(source="stdout", data="line 1")
+        log_sink.append(source="stderr", data="error 1")
+        log_sink.append(source="stdout", data="line 2")
+        log_sink.sync()
 
         # Read all logs
         reader = LogReader.from_attempt(
@@ -199,10 +199,10 @@ def test_read_logs_with_regex_filter():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        syncer = FsspecLogSink(config)
-        syncer.append(source="stdout", data="INFO: line 1")
-        syncer.append(source="stdout", data="ERROR: line 2")
-        syncer.sync()
+        log_sink = FsspecLogSink(config)
+        log_sink.append(source="stdout", data="INFO: line 1")
+        log_sink.append(source="stdout", data="ERROR: line 2")
+        log_sink.sync()
 
         # Read with filter
         reader = LogReader.from_attempt(
@@ -227,10 +227,10 @@ def test_read_logs_max_lines():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        syncer = FsspecLogSink(config)
+        log_sink = FsspecLogSink(config)
         for i in range(10):
-            syncer.append(source="stdout", data=f"line {i}")
-        syncer.sync()
+            log_sink.append(source="stdout", data=f"line {i}")
+        log_sink.sync()
 
         # Read with limit
         reader = LogReader.from_attempt(
@@ -254,7 +254,7 @@ def test_read_metadata():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        syncer = FsspecLogSink(config)
+        log_sink = FsspecLogSink(config)
         metadata = logging_pb2.TaskAttemptMetadata(
             task_id="/job/test/task/0",
             attempt_id=0,
@@ -264,7 +264,7 @@ def test_read_metadata():
         )
         metadata.start_time.CopyFrom(Timestamp.now().to_proto())
         metadata.end_time.CopyFrom(Timestamp.now().to_proto())
-        syncer.write_metadata(metadata)
+        log_sink.write_metadata(metadata)
 
         # Read metadata
         reader = LogReader.from_attempt(

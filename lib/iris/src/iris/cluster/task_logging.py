@@ -337,41 +337,19 @@ class LogReader:
 
     @classmethod
     def from_log_directory(cls, *, log_directory: str) -> "LogReader":
-        if not log_directory:
-            raise ValueError("log_directory is required")
-        marker = "/iris-logs/"
-        marker_index = log_directory.find(marker)
-        if marker_index < 0:
-            raise ValueError(f"log_directory missing '/iris-logs/' marker: {log_directory}")
-        prefix = log_directory[: marker_index + len(marker) - 1]
-        suffix = log_directory[marker_index + len(marker) :]
-        parts = suffix.split("/")
-        if len(parts) < 3:
-            raise ValueError(f"Invalid log_directory format: {log_directory}")
-        worker_id = parts[0]
-        attempt_id = int(parts[-1])
-        task_id = JobName.from_wire("/" + "/".join(parts[1:-1]))
-        task_id.require_task()
+        prefix, worker_id, task_id, attempt_id = _parse_log_directory(log_directory)
         return cls.from_attempt(prefix=prefix, worker_id=worker_id, task_id=task_id, attempt_id=attempt_id)
 
     @classmethod
-    def parse_log_directory(cls, *, log_directory: str) -> tuple[str, str, JobName, int]:
-        if not log_directory:
-            raise ValueError("log_directory is required")
-        marker = "/iris-logs/"
-        marker_index = log_directory.find(marker)
-        if marker_index < 0:
-            raise ValueError(f"log_directory missing '/iris-logs/' marker: {log_directory}")
-        prefix = log_directory[: marker_index + len(marker) - 1]
-        suffix = log_directory[marker_index + len(marker) :]
-        parts = suffix.split("/")
-        if len(parts) < 3:
-            raise ValueError(f"Invalid log_directory format: {log_directory}")
-        worker_id = parts[0]
-        attempt_id = int(parts[-1])
-        task_id = JobName.from_wire("/" + "/".join(parts[1:-1]))
-        task_id.require_task()
-        return prefix, worker_id, task_id, attempt_id
+    def from_log_directory_for_attempt(
+        cls,
+        *,
+        log_directory: str,
+        worker_id: str,
+        attempt_id: int,
+    ) -> "LogReader":
+        prefix, _, task_id, _ = _parse_log_directory(log_directory)
+        return cls.from_attempt(prefix=prefix, worker_id=worker_id, task_id=task_id, attempt_id=attempt_id)
 
     def read_logs(
         self,
@@ -440,3 +418,22 @@ class LogReader:
         except Exception as e:
             logger.warning(f"Failed to read metadata from {metadata_path}: {e}")
             return None
+
+
+def _parse_log_directory(log_directory: str) -> tuple[str, str, JobName, int]:
+    if not log_directory:
+        raise ValueError("log_directory is required")
+    marker = "/iris-logs/"
+    marker_index = log_directory.find(marker)
+    if marker_index < 0:
+        raise ValueError(f"log_directory missing '/iris-logs/' marker: {log_directory}")
+    prefix = log_directory[: marker_index + len(marker) - 1]
+    suffix = log_directory[marker_index + len(marker) :]
+    parts = suffix.split("/")
+    if len(parts) < 3:
+        raise ValueError(f"Invalid log_directory format: {log_directory}")
+    worker_id = parts[0]
+    attempt_id = int(parts[-1])
+    task_id = JobName.from_wire("/" + "/".join(parts[1:-1]))
+    task_id.require_task()
+    return prefix, worker_id, task_id, attempt_id

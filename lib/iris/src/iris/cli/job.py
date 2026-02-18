@@ -541,23 +541,11 @@ def logs(
     job_name = JobName.from_wire(job_id)
 
     while True:
-        result = client.stream_task_logs(
+        cursor_ms = client.stream_task_logs(
             job_name,
             include_children=include_children,
             since_ms=cursor_ms,
         )
-
-        # Print errors first so user knows why some logs might be missing
-        for error in result.errors:
-            click.echo(f"[ERROR] task={error.task_id} worker={error.worker_id or '?'} | {error.error}", err=True)
-
-        # Print log entries
-        for entry in result.entries:
-            ts = entry.timestamp.as_short_time()
-            click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")
-
-        if result.last_timestamp_ms > cursor_ms:
-            cursor_ms = result.last_timestamp_ms
 
         if not follow:
             break

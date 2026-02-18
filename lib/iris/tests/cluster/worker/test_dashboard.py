@@ -78,6 +78,7 @@ def worker(mock_bundle_cache, mock_runtime, tmp_path):
         port=0,
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
+        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     return Worker(
         config,

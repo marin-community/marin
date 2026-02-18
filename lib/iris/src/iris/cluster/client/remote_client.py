@@ -269,11 +269,6 @@ class RemoteClusterClient:
                 continue
             if not task_status.worker_id:
                 continue
-            try:
-                prefix, _, parsed_task_id, _ = LogReader.parse_log_directory(log_directory=task_status.log_directory)
-            except ValueError:
-                logger.warning("Invalid log_directory format for %s: %s", task_status.task_id, task_status.log_directory)
-                continue
 
             attempts_by_id = {a.attempt_id: a for a in task_status.attempts}
             if attempt_id >= 0:
@@ -292,12 +287,19 @@ class RemoteClusterClient:
                 if not worker_id:
                     continue
 
-                reader = LogReader.from_attempt(
-                    prefix=prefix,
-                    worker_id=worker_id,
-                    task_id=parsed_task_id,
-                    attempt_id=att_id,
-                )
+                try:
+                    reader = LogReader.from_log_directory_for_attempt(
+                        log_directory=task_status.log_directory,
+                        worker_id=worker_id,
+                        attempt_id=att_id,
+                    )
+                except ValueError:
+                    logger.warning(
+                        "Invalid log_directory format for %s: %s",
+                        task_status.task_id,
+                        task_status.log_directory,
+                    )
+                    continue
                 log_entries = reader.read_logs(source=None, regex_filter=regex, max_lines=max_lines - total_lines)
 
                 filtered: list[logging_pb2.LogEntry] = []
@@ -363,13 +365,17 @@ class RemoteClusterClient:
                 reader_key = f"{task_status.log_directory}|{worker_id}|{att_id}"
                 reader = self._attempt_readers.get(reader_key)
                 if reader is None:
-                    prefix, _, task_id, _ = LogReader.parse_log_directory(log_directory=task_status.log_directory)
-                    reader = LogReader.from_attempt(
-                        prefix=prefix,
-                        worker_id=worker_id,
-                        task_id=task_id,
-                        attempt_id=att_id,
-                    )
+                    try:
+                        reader = LogReader.from_log_directory_for_attempt(
+                            log_directory=task_status.log_directory,
+                            worker_id=worker_id,
+                            attempt_id=att_id,
+                        )
+                    except ValueError:
+                        logger.warning(
+                            "Invalid log_directory format for %s: %s", task_status.task_id, task_status.log_directory
+                        )
+                        continue
                     self._attempt_readers[reader_key] = reader
 
                 entries = reader.read_logs(

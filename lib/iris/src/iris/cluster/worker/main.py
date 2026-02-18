@@ -28,12 +28,6 @@ def cli():
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
 @click.option("--worker-id", default=None, help="Worker ID (auto-generated if not provided)")
 @click.option(
-    "--iris-worker-prefix",
-    "iris_worker_prefix",
-    required=True,
-    help="Storage prefix for worker logs (e.g., gs://marin-tmp-us-central2/ttl=30d/iris-logs)",
-)
-@click.option(
     "--config",
     "config_file",
     type=click.Path(exists=True),
@@ -46,7 +40,6 @@ def serve(
     cache_dir: str,
     port_range: str,
     worker_id: str | None,
-    iris_worker_prefix: str,
     config_file: str,
 ):
     """Start the Iris worker service."""
@@ -68,7 +61,6 @@ def serve(
         port_range=(port_start, port_end),
         controller_address=controller_address,
         worker_id=worker_id,
-        log_prefix=iris_worker_prefix,
     )
 
     worker = Worker(config)

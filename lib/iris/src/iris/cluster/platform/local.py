@@ -116,7 +116,7 @@ class LocalEnvironmentProvider:
             attributes=proto_attrs,
         )
 
-    def infer_log_prefix(self) -> str | None:
+    def log_prefix(self) -> str | None:
         return None
 
 
