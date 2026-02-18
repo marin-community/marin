@@ -43,10 +43,10 @@ from pathlib import Path
 
 from iris.cluster.platform.base import (
     CloudSliceState,
-    CloudVmState,
+    CloudWorkerState,
     CommandResult,
     SliceStatus,
-    VmStatus,
+    WorkerStatus,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
@@ -126,8 +126,8 @@ class LocalEnvironmentProvider:
 
 
 @dataclass
-class _LocalVmHandle:
-    """Handle to a local in-process "VM".
+class _LocalWorkerHandle:
+    """Handle to a local in-process worker.
 
     run_command() executes commands locally via subprocess.
     wait_for_connection() returns True immediately (local process).
@@ -136,6 +136,10 @@ class _LocalVmHandle:
     _vm_id: str
     _internal_address: str
     _bootstrap_log_lines: list[str] = field(default_factory=list)
+
+    @property
+    def worker_id(self) -> str:
+        return self._vm_id
 
     @property
     def vm_id(self) -> str:
@@ -149,8 +153,8 @@ class _LocalVmHandle:
     def external_address(self) -> str | None:
         return None
 
-    def status(self) -> VmStatus:
-        return VmStatus(state=CloudVmState.RUNNING)
+    def status(self) -> WorkerStatus:
+        return WorkerStatus(state=CloudWorkerState.RUNNING)
 
     def wait_for_connection(
         self,
@@ -202,10 +206,10 @@ class _LocalVmHandle:
 
 
 @dataclass
-class _LocalStandaloneVmHandle:
-    """Handle to a standalone local "VM" (e.g., controller).
+class _LocalStandaloneWorkerHandle:
+    """Handle to a standalone local worker (e.g., controller).
 
-    Extends _LocalVmHandle with terminate, set_labels, set_metadata — all
+    Extends _LocalWorkerHandle with terminate, set_labels, set_metadata -- all
     operating on in-memory state.
     """
 
@@ -215,6 +219,10 @@ class _LocalStandaloneVmHandle:
     _metadata: dict[str, str] = field(default_factory=dict)
     _terminated: bool = False
     _bootstrap_log_lines: list[str] = field(default_factory=list)
+
+    @property
+    def worker_id(self) -> str:
+        return self._vm_id
 
     @property
     def vm_id(self) -> str:
@@ -236,10 +244,10 @@ class _LocalStandaloneVmHandle:
     def metadata(self) -> dict[str, str]:
         return dict(self._metadata)
 
-    def status(self) -> VmStatus:
+    def status(self) -> WorkerStatus:
         if self._terminated:
-            return VmStatus(state=CloudVmState.TERMINATED)
-        return VmStatus(state=CloudVmState.RUNNING)
+            return WorkerStatus(state=CloudWorkerState.TERMINATED)
+        return WorkerStatus(state=CloudWorkerState.RUNNING)
 
     def wait_for_connection(
         self,
@@ -303,7 +311,7 @@ class _LocalStandaloneVmHandle:
 class LocalSliceHandle:
     """Handle to a local in-process slice.
 
-    list_vms() returns _LocalVmHandle instances for each "worker" in the slice.
+    list_vms() returns _LocalWorkerHandle instances for each "worker" in the slice.
     terminate() marks the slice as terminated and stops any real Worker instances.
     """
 
@@ -338,12 +346,12 @@ class LocalSliceHandle:
 
     def describe(self) -> SliceStatus:
         if self._terminated:
-            return SliceStatus(state=CloudSliceState.DELETING, vm_count=0)
-        vms = [
-            _LocalVmHandle(_vm_id=vm_id, _internal_address=addr)
+            return SliceStatus(state=CloudSliceState.DELETING, worker_count=0)
+        workers = [
+            _LocalWorkerHandle(_vm_id=vm_id, _internal_address=addr)
             for vm_id, addr in zip(self._vm_ids, self._addresses, strict=True)
         ]
-        return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._vm_ids), vms=vms)
+        return SliceStatus(state=CloudSliceState.READY, worker_count=len(self._vm_ids), workers=workers)
 
     def terminate(self) -> None:
         if self._terminated:
@@ -385,15 +393,15 @@ class LocalPlatform:
         self._label_prefix = label_prefix
         self._threads = threads or ThreadContainer(name="local-platform")
         self._slices: dict[str, LocalSliceHandle] = {}
-        self._vms: dict[str, _LocalStandaloneVmHandle] = {}
+        self._vms: dict[str, _LocalStandaloneWorkerHandle] = {}
         self._controller_address = controller_address
         self._cache_path = cache_path
         self._fake_bundle = fake_bundle
         self._port_allocator = port_allocator
 
-    def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneVmHandle:
+    def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneWorkerHandle:
         """Create an in-process "VM". Used by start_controller() for local mode."""
-        handle = _LocalStandaloneVmHandle(
+        handle = _LocalStandaloneWorkerHandle(
             _vm_id=config.name,
             _internal_address="localhost",
             _labels=dict(config.labels),
@@ -402,12 +410,17 @@ class LocalPlatform:
         self._vms[config.name] = handle
         return handle
 
-    def create_slice(self, config: config_pb2.SliceConfig) -> LocalSliceHandle:
+    def create_slice(
+        self,
+        config: config_pb2.SliceConfig,
+        cluster_config: config_pb2.IrisClusterConfig | None = None,
+    ) -> LocalSliceHandle:
         """Create a local slice, optionally spawning real Worker instances.
 
         When controller_address was provided at construction, spawns real Workers
         that register with the controller (E2E mode). Otherwise creates in-memory
-        stubs (unit test mode).
+        stubs (unit test mode). The cluster_config parameter is accepted for
+        interface compatibility but ignored — local workers are already READY.
         """
         slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
         num_vms = config.num_vms or 1
@@ -540,7 +553,7 @@ class LocalPlatform:
         self,
         zones: list[str],
         labels: dict[str, str] | None = None,
-    ) -> list[_LocalStandaloneVmHandle]:
+    ) -> list[_LocalStandaloneWorkerHandle]:
         """List all local standalone VMs, optionally filtered by labels.
 
         The zones parameter is accepted for interface compatibility but ignored —

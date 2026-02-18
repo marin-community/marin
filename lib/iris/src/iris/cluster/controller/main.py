@@ -48,7 +48,6 @@ def serve(
     """
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.config import load_config, create_autoscaler
-    from iris.cluster.platform.bootstrap import WorkerBootstrap
     from iris.cluster.platform.factory import create_platform
 
     configure_logging(level=getattr(logging, log_level))
@@ -79,16 +78,16 @@ def serve(
             )
             logger.info("Platform created")
 
-            worker_bootstrap = (
-                WorkerBootstrap(cluster_config) if cluster_config.defaults.bootstrap.docker_image else None
-            )
+            # Pass cluster_config through to platform.create_slice() for bootstrap.
+            # If no docker_image is configured, pass None to disable bootstrap.
+            bootstrap_cluster_config = cluster_config if cluster_config.defaults.bootstrap.docker_image else None
 
             autoscaler = create_autoscaler(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
-                worker_bootstrap=worker_bootstrap,
+                cluster_config=bootstrap_cluster_config,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:

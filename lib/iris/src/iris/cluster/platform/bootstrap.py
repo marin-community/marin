@@ -16,9 +16,7 @@ import shlex
 
 import yaml
 
-from iris.cluster.platform.base import PlatformError, VmHandle
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -61,34 +59,8 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # ============================================================================
-# Worker Bootstrap
+# Worker Bootstrap Script
 # ============================================================================
-
-
-class WorkerBootstrap:
-    """Bootstraps individual worker VMs with embedded cluster config.
-
-    Workers receive the full cluster config.yaml and use it to discover
-    the controller themselves via platform.discover_controller().
-    The autoscaler calls bootstrap_vm() for each VM in parallel via
-    bootstrap_slice_vms().
-    """
-
-    def __init__(self, cluster_config: config_pb2.IrisClusterConfig):
-        self._cluster_config = cluster_config
-
-    def bootstrap_vm(self, vm: VmHandle) -> str:
-        """Bootstrap a single VM: wait for connection, validate, run script.
-
-        Returns bootstrap log text. Raises PlatformError on failure.
-        """
-        if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
-            raise PlatformError(f"VM {vm.vm_id} failed to become reachable within timeout.")
-        if not vm.internal_address:
-            raise PlatformError(f"VM {vm.vm_id} has no internal address.")
-        script = build_worker_bootstrap_script(self._cluster_config, vm.internal_address)
-        vm.bootstrap(script)
-        return vm.bootstrap_log
 
 
 # Bootstrap script template for worker VMs.
@@ -232,7 +204,7 @@ def build_worker_bootstrap_script(
         cluster_config: Full cluster configuration
         vm_address: VM IP address for autoscaler tracking
     """
-    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
+    # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
 
     bootstrap_config = cluster_config.defaults.bootstrap
@@ -428,7 +400,7 @@ def build_controller_bootstrap_script_from_config(
 
     Serializes the config to YAML and embeds it in the bootstrap script.
     """
-    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
+    # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)

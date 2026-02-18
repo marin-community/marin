@@ -19,10 +19,10 @@
 
 The Platform protocol hierarchy defines the interface that infrastructure providers
 (GCP, CoreWeave, Manual, Local) must implement. The Platform itself handles resource
-allocation (VMs, slices) and infrastructure operations — it does NOT manage lifecycle
+allocation (workers, slices) and infrastructure operations -- it does NOT manage lifecycle
 state machines, which are the controller layer's responsibility.
 
-Status types (CloudSliceState, CloudVmState, etc.) represent the infrastructure
+Status types (CloudSliceState, CloudWorkerState, etc.) represent the infrastructure
 provider's view of resources, distinct from the Iris lifecycle states in vm.proto.
 """
 
@@ -67,14 +67,16 @@ class CloudSliceState(StrEnum):
     """Cloud-level slice states. Provider implementations map to these."""
 
     CREATING = "CREATING"
+    BOOTSTRAPPING = "BOOTSTRAPPING"
     READY = "READY"
+    FAILED = "FAILED"
     REPAIRING = "REPAIRING"
     DELETING = "DELETING"
     UNKNOWN = "UNKNOWN"
 
 
-class CloudVmState(StrEnum):
-    """Cloud-level VM states."""
+class CloudWorkerState(StrEnum):
+    """Cloud-level worker states."""
 
     RUNNING = "RUNNING"
     STOPPED = "STOPPED"
@@ -84,18 +86,18 @@ class CloudVmState(StrEnum):
 
 @dataclass
 class SliceStatus:
-    """Cloud-level slice status, including VM handles from the same query."""
+    """Cloud-level slice status, including worker handles from the same query."""
 
     state: CloudSliceState
-    vm_count: int
-    vms: list[VmHandle] = field(default_factory=list)
+    worker_count: int
+    workers: list[RemoteWorkerHandle] = field(default_factory=list)
 
 
 @dataclass
-class VmStatus:
-    """Cloud-level VM status."""
+class WorkerStatus:
+    """Cloud-level worker status."""
 
-    state: CloudVmState
+    state: CloudWorkerState
 
 
 @dataclass
@@ -110,26 +112,29 @@ class CommandResult:
 # ============================================================================
 
 
-class VmHandle(Protocol):
-    """Handle to a single VM within a slice. Provides raw infrastructure operations.
+class RemoteWorkerHandle(Protocol):
+    """Handle to a single worker within a slice.
 
-    The orchestration layer (WorkerVm) wraps this with lifecycle state machines,
-    retries, and health checking.
+    Represents a remote worker process: a TPU VM on GCP, a Pod on CoreWeave,
+    a thread on LocalPlatform. Provides infrastructure-level operations.
+    Lifecycle state machines, retries, and health checking are the
+    orchestration layer's responsibility.
 
-    No terminate — slices are the atomic unit. Individual slice members cannot
-    be terminated independently (e.g., TPU pod workers). Termination lives on
-    SliceHandle.
+    No terminate -- slices are the atomic unit. Individual slice members
+    cannot be terminated independently.
 
     Thread safety: implementations must be safe for concurrent run_command() calls.
-    For SSH-based handles, this means each run_command() creates a new SSH process.
     """
+
+    @property
+    def worker_id(self) -> str: ...
 
     @property
     def vm_id(self) -> str: ...
 
     @property
     def internal_address(self) -> str:
-        """Internal/private IP address of this VM.
+        """Internal/private IP address of this worker.
 
         This is the primary address used for all intra-cluster communication.
         """
@@ -140,16 +145,8 @@ class VmHandle(Protocol):
         """External/public IP address, if available. Returns None when no external IP."""
         ...
 
-    def status(self) -> VmStatus:
-        """Cloud-level VM status."""
-        ...
-
-    def wait_for_connection(
-        self,
-        timeout: Duration,
-        poll_interval: Duration = Duration.from_seconds(5),
-    ) -> bool:
-        """Poll until SSH/connection is available. Returns False on timeout."""
+    def status(self) -> WorkerStatus:
+        """Cloud-level worker status."""
         ...
 
     def run_command(
@@ -158,49 +155,41 @@ class VmHandle(Protocol):
         timeout: Duration | None = None,
         on_line: Callable[[str], None] | None = None,
     ) -> CommandResult:
-        """Run a command on the VM via SSH. Optionally stream output lines."""
-        ...
-
-    def bootstrap(self, script: str) -> None:
-        """Run a bootstrap script on the VM.
-
-        Equivalent to run_command(f'bash -c {script}') with streaming.
-        Raises on non-zero exit.
-        """
+        """Run a command on the worker. Optionally stream output lines."""
         ...
 
     def reboot(self) -> None:
-        """Reboot the VM."""
+        """Reboot the worker."""
         ...
 
 
-class StandaloneVmHandle(VmHandle, Protocol):
-    """Handle to a standalone VM (e.g., controller). Can be terminated and labeled.
+class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
+    """Handle to a standalone worker (e.g., controller). Can be terminated and labeled.
 
-    Returned by platform.create_vm(). Extends VmHandle with operations that
-    only make sense for independently-managed VMs:
-    - terminate(): Destroy the VM
+    Returned by platform.create_vm(). Extends RemoteWorkerHandle with operations that
+    only make sense for independently-managed workers:
+    - terminate(): Destroy the worker
     - set_labels(): Tag for discovery (controller discovery uses labels)
-    - set_metadata(): Pass data to the VM (controller address)
+    - set_metadata(): Pass data to the worker (controller address)
 
-    Slice member VMs (from SliceHandle.describe().vms) are plain VmHandle —
-    they can't be individually terminated, and their labels/metadata are
-    set on the slice at creation time.
+    Slice member workers (from SliceHandle.describe().workers) are plain
+    RemoteWorkerHandle -- they can't be individually terminated, and their
+    labels/metadata are set on the slice at creation time.
     """
 
     def terminate(self) -> None:
-        """Destroy the VM."""
+        """Destroy the worker."""
         ...
 
     def set_labels(self, labels: dict[str, str]) -> None:
-        """Set labels on the VM (for discovery via list_vms).
+        """Set labels on the worker (for discovery via list_vms).
 
         GCE label values: lowercase alphanumeric + hyphens, max 63 chars.
         """
         ...
 
     def set_metadata(self, metadata: dict[str, str]) -> None:
-        """Set arbitrary key-value metadata on the VM.
+        """Set arbitrary key-value metadata on the worker.
 
         Unlike labels, metadata values have no character restrictions.
         On GCP, accessible via the metadata server from within the VM.
@@ -209,7 +198,7 @@ class StandaloneVmHandle(VmHandle, Protocol):
 
 
 class SliceHandle(Protocol):
-    """Handle to an allocated slice of connected VMs.
+    """Handle to an allocated slice of connected workers.
 
     A slice is the atomic scaling unit. For TPUs, it's a complete pod.
     For GPUs, it could be a set of IB-connected nodes.
@@ -244,7 +233,7 @@ class SliceHandle(Protocol):
         ...
 
     def describe(self) -> SliceStatus:
-        """Query cloud state, returning status and VM handles.
+        """Query cloud state, returning status and worker handles.
 
         Implementations may cache the result for a short TTL to avoid
         redundant cloud API calls within a single autoscaler cycle.
@@ -252,7 +241,7 @@ class SliceHandle(Protocol):
         ...
 
     def terminate(self) -> None:
-        """Destroy the slice and all its VMs."""
+        """Destroy the slice and all its workers."""
         ...
 
 
@@ -264,18 +253,25 @@ class SliceHandle(Protocol):
 class Platform(Protocol):
     """Infrastructure provider abstraction.
 
-    Handles resource allocation (VMs, slices) and infrastructure operations.
-    Does NOT manage lifecycle state machines — that's the controller layer's job.
+    Handles resource allocation (workers, slices) and infrastructure operations.
+    Does NOT manage lifecycle state machines -- that's the controller layer's job.
     """
 
-    def create_vm(self, config: config_pb2.VmConfig) -> StandaloneVmHandle:
+    def create_vm(self, config: config_pb2.VmConfig) -> StandaloneWorkerHandle:
         """Create a single VM (e.g., for the controller)."""
         ...
 
-    def create_slice(self, config: config_pb2.SliceConfig) -> SliceHandle:
-        """Create a slice of connected VMs (e.g., TPU pod, IB GPU cluster).
+    def create_slice(
+        self,
+        config: config_pb2.SliceConfig,
+        cluster_config: config_pb2.IrisClusterConfig | None = None,
+    ) -> SliceHandle:
+        """Create a slice of connected workers (e.g., TPU pod, IB GPU cluster).
 
-        The slice is the atomic scaling unit — it succeeds or fails as a whole.
+        The slice is the atomic scaling unit -- it succeeds or fails as a whole.
+        When cluster_config is provided, the platform handles worker bootstrapping
+        internally (docker setup, worker container startup). describe() returns
+        BOOTSTRAPPING while in progress, then READY or FAILED when complete.
         """
         ...
 
@@ -288,7 +284,7 @@ class Platform(Protocol):
 
         Labels are exact key=value match. Zones are required because GCP TPU
         listing is per-zone. Non-cloud platforms (Manual, Local) return all
-        slices regardless of the zones parameter — their resources exist in
+        slices regardless of the zones parameter -- their resources exist in
         a single synthetic zone ("manual" or "local").
         """
         ...
@@ -307,11 +303,11 @@ class Platform(Protocol):
         self,
         zones: list[str],
         labels: dict[str, str] | None = None,
-    ) -> list[VmHandle]:
+    ) -> list[RemoteWorkerHandle]:
         """List existing VMs, filtered by zone and optionally by labels.
 
         Non-cloud platforms (Manual, Local) return all VMs regardless of the
-        zones parameter — their resources exist in a single synthetic zone.
+        zones parameter -- their resources exist in a single synthetic zone.
         """
         ...
 
@@ -330,7 +326,7 @@ class Platform(Protocol):
     def shutdown(self) -> None:
         """Release platform-owned resources (threads, connections, caches).
 
-        Distinct from terminate() on handles — shutdown() doesn't destroy
+        Distinct from terminate() on handles -- shutdown() doesn't destroy
         cloud resources. It cleans up the Platform object itself.
 
         For LocalPlatform this stops worker threads managed by ThreadContainer.
