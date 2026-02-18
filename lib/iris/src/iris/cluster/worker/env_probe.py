@@ -27,6 +27,7 @@ _REGION_TO_TMP_BUCKET = {
     "us-central1": "marin-tmp-us-central1",
     "us-central2": "marin-tmp-us-central2",
     "europe-west4": "marin-tmp-eu-west4",
+    "eu-west4": "marin-tmp-eu-west4",
     "us-west4": "marin-tmp-us-west4",
     "us-east1": "marin-tmp-us-east1",
     "us-east5": "marin-tmp-us-east5",
