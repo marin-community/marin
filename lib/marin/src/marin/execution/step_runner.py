@@ -14,7 +14,7 @@ heartbeats, artifact saving, and status writes all happen on the worker.
 for completion.
 
 ``ExecutorStep`` objects can be converted to ``StepSpec`` via
-``resolve_executor_step``.
+``resolve_executor_step`` in ``marin.execution.executor``.
 """
 
 from __future__ import annotations
@@ -24,16 +24,17 @@ import logging
 import os
 import re
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fray.v2.types import ResourceConfig
 
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 
 from fray.v2 import client as fray_client
 from fray.v2.client import JobHandle, JobStatus
-from fray.v2.types import ResourceConfig
-
 from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
@@ -46,9 +47,6 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 # Re-export for backward compatibility
 from marin.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id  # noqa: F401
 
-if TYPE_CHECKING:
-    from marin.execution.executor import ExecutorStep
-
 logger = logging.getLogger(__name__)
 
 
@@ -56,12 +54,49 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
+DEFAULT_JOB_NAME = "fray_exec_job"
+
 
 def _sanitize_job_name(name: str) -> str:
     """Ensure job names are compatible with Iris and Docker image tags."""
     sanitized = re.sub(r"[^a-z0-9_.-]+", "-", name.lower())
     sanitized = sanitized.strip("-.")
-    return sanitized or "job"
+    return sanitized or DEFAULT_JOB_NAME
+
+
+def fray_exec(
+    fn: Callable[[], Any],
+    *,
+    name: str | None = None,
+    resources: ResourceConfig | None = None,
+    env_vars: dict[str, str] | None = None,
+    pip_dependency_groups: list[str] | None = None,
+    client: fray_client.Client | None = None,
+) -> JobHandle:
+    """Submit a zero-arg callable to run on a fray worker.
+
+    Returns a ``JobHandle`` for polling/waiting.  *name* defaults to
+    ``fn.__name__`` when not provided.
+    """
+    from fray.v2 import client as fray_client_mod
+    from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+
+    if name is None:
+        name = getattr(fn, "__name__", None) or DEFAULT_JOB_NAME
+
+    c = client or fray_client_mod.current_client()
+    job = c.submit(
+        JobRequest(
+            name=_sanitize_job_name(name),
+            entrypoint=Entrypoint.from_callable(fn),
+            resources=resources or ResourceConfig.with_cpu(),
+            environment=create_environment(
+                extras=pip_dependency_groups or [],
+                env_vars=env_vars or {},
+            ),
+        )
+    )
+    return job
 
 
 def _get_fn_name(fn: Any) -> str:
@@ -211,54 +246,6 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
 
 
 # ---------------------------------------------------------------------------
-# ExecutorStep → StepSpec conversion
-# ---------------------------------------------------------------------------
-
-
-def resolve_executor_step(
-    step: ExecutorStep,
-    config: Any,
-    output_path: str,
-    deps: list[str] | None = None,
-) -> StepSpec:
-    """Convert an ExecutorStep into a StepSpec.
-
-    ``config`` should already be instantiated (no InputName / OutputName /
-    VersionedValue markers).  The old executor called ``fn(config)``; we wrap
-    that into a ``fn(output_path)`` closure expected by ``StepRunner``.
-    """
-    import ray
-
-    step_fn = step.fn
-    if isinstance(step_fn, ray.remote_function.RemoteFunction):
-        remote_fn = step_fn
-
-        def step_fn(*args, **kw):
-            return ray.get(remote_fn.remote(*args, **kw))
-
-    assert step_fn is not None, f"Step {step.name} has no callable"
-
-    # Old-style ExecutorStep functions accept the resolved config as their only
-    # argument. The config already contains the output path, so we ignore the
-    # output_path parameter that StepRunner passes.
-    captured_fn = step_fn
-    captured_config = config
-
-    def resolved_fn(output_path):
-        return captured_fn(captured_config)
-
-    return StepSpec(
-        name=step.name,
-        deps=deps or [],
-        override_output_path=output_path,
-        fn=resolved_fn,
-        resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
-        env_vars=step.env_vars or {},
-        pip_dependency_groups=step.pip_dependency_groups or [],
-    )
-
-
-# ---------------------------------------------------------------------------
 # Step runner
 # ---------------------------------------------------------------------------
 
@@ -397,7 +384,6 @@ class StepRunner:
         from marin.execution.artifact import Artifact
         from marin.execution.disk_cache import disk_cached
         from marin.execution.distributed_lock import distributed_lock
-        from marin.execution.fray_exe import fray_exec
 
         output_path = step.output_path
         step_name = step.name_with_hash

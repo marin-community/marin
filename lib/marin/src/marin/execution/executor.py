@@ -101,7 +101,7 @@ from fray.v2 import client as fray_client
 from fray.v2.types import ResourceConfig
 
 from marin.execution.step_spec import StepSpec
-from marin.execution.step_runner import StepRunner, resolve_executor_step, worker_id
+from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
@@ -172,6 +172,49 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     d.pop("description", None)
     assert isinstance(d, dict)
     return d
+
+
+def resolve_executor_step(
+    step: "ExecutorStep",
+    config: Any,
+    output_path: str,
+    deps: list[str] | None = None,
+) -> StepSpec:
+    """Convert an ExecutorStep into a StepSpec.
+
+    ``config`` should already be instantiated (no InputName / OutputName /
+    VersionedValue markers).  The old executor called ``fn(config)``; we wrap
+    that into a ``fn(output_path)`` closure expected by ``StepRunner``.
+    """
+    import ray
+
+    step_fn = step.fn
+    if isinstance(step_fn, ray.remote_function.RemoteFunction):
+        remote_fn = step_fn
+
+        def step_fn(*args, **kw):
+            return ray.get(remote_fn.remote(*args, **kw))
+
+    assert step_fn is not None, f"Step {step.name} has no callable"
+
+    # Old-style ExecutorStep functions accept the resolved config as their only
+    # argument. The config already contains the output path, so we ignore the
+    # output_path parameter that StepRunner passes.
+    captured_fn = step_fn
+    captured_config = config
+
+    def resolved_fn(output_path):
+        return captured_fn(captured_config)
+
+    return StepSpec(
+        name=step.name,
+        deps=deps or [],
+        override_output_path=output_path,
+        fn=resolved_fn,
+        resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
+        env_vars=step.env_vars or {},
+        pip_dependency_groups=step.pip_dependency_groups or [],
+    )
 
 
 @dataclass(frozen=True)
