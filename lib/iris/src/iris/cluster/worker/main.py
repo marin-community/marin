@@ -72,6 +72,7 @@ def serve(
         port_range=(port_start, port_end),
         controller_address=controller_address,
         worker_id=worker_id,
+        log_prefix=iris_worker_prefix,
     )
 
     worker = Worker(config)

@@ -235,10 +235,6 @@ class FsspecLogSink:
             self._fs.write_text(path, content)
 
 
-# For backward compatibility
-LogSyncer = FsspecLogSink
-
-
 class LocalLogSink:
     """In-memory log sink for testing.
 
@@ -298,6 +294,9 @@ class LocalLogSink:
             return self._metadata
 
 
+LogSyncer = FsspecLogSink
+
+
 @dataclass
 class LogLocation:
     """Location of logs in storage for a specific task attempt."""
@@ -352,6 +351,26 @@ def get_log_location(
         worker_id=worker_id,
         task_id_wire=task_id_wire,
         attempt_id=attempt_id,
+    )
+
+
+def parse_log_directory(log_directory: str) -> LogLocation:
+    """Parse a persisted task log directory into a LogLocation.
+
+    Expected format: ``{prefix}/{worker_id}/{task_id_wire}/{attempt_id}``.
+    ``task_id_wire`` may itself contain multiple path segments.
+    """
+    if not log_directory:
+        raise ValueError("log_directory is required")
+    log_dir_parts = log_directory.rsplit("/", 3)
+    if len(log_dir_parts) != 4:
+        raise ValueError(f"Invalid log_directory format: {log_directory}")
+    parsed_prefix, parsed_worker_id, task_suffix, parsed_attempt_id = log_dir_parts
+    return LogLocation(
+        prefix=parsed_prefix,
+        worker_id=parsed_worker_id,
+        task_id_wire="/" + task_suffix.lstrip("/"),
+        attempt_id=int(parsed_attempt_id),
     )
 
 
@@ -483,4 +502,18 @@ def fetch_logs_for_task(
         return read_logs(location, source=source, regex=regex, max_lines=max_lines)
     except Exception as e:
         logger.warning(f"Failed to fetch logs for {task_id_wire} attempt {attempt_id}: {e}")
+        return []
+
+
+def fetch_logs_for_directory(
+    log_directory: str,
+    source: str | None = None,
+    regex: str | None = None,
+    max_lines: int = 0,
+) -> list[logging_pb2.LogEntry]:
+    """Fetch logs for a task attempt from its persisted log directory."""
+    try:
+        return read_logs(parse_log_directory(log_directory), source=source, regex=regex, max_lines=max_lines)
+    except Exception as e:
+        logger.warning(f"Failed to fetch logs from {log_directory}: {e}")
         return []

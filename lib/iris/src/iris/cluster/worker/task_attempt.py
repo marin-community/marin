@@ -212,7 +212,7 @@ class TaskAttempt:
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
-            log_syncer: Optional log syncer for persistent logs
+            log_sink: Persistent log sink for this task attempt
         """
         self._bundle_provider = bundle_provider
         self._runtime = container_runtime
@@ -274,6 +274,10 @@ class TaskAttempt:
     def log_directory(self) -> str:
         """Return the storage directory for this task's logs."""
         return self._log_sink.log_path
+
+    def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
+        """Return recent logs from the canonical log sink."""
+        return self._log_sink.query_recent(max_entries=max_entries)
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""

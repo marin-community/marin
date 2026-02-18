@@ -904,23 +904,11 @@ class ControllerServiceImpl:
                     continue
 
                 try:
-                    # Parse log_directory to extract prefix
-                    # Format: {prefix}/{worker_id}/{task_id}/{attempt_id}
-                    # We need to extract the prefix part
-                    log_dir_parts = attempt.log_directory.rsplit("/", 3)
-                    if len(log_dir_parts) != 4:
-                        raise ValueError(f"Invalid log_directory format: {attempt.log_directory}")
-                    log_prefix = log_dir_parts[0]
-
-                    # Read logs from storage
-                    log_entries = task_logging.fetch_logs_for_task(
-                        task_id_wire=task_id_wire,
-                        worker_id=str(attempt.worker_id),
-                        attempt_id=attempt.attempt_id,
+                    log_entries = task_logging.fetch_logs_for_directory(
+                        log_directory=attempt.log_directory,
                         source=None,  # All sources
                         regex=request.regex if request.regex else None,
                         max_lines=max(0, max_lines - total_lines) if max_lines > 0 else 0,
-                        prefix=log_prefix,
                     )
 
                     # Convert logging.LogEntry to Worker.LogEntry for response

@@ -42,6 +42,7 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
+    log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
 
@@ -302,7 +303,7 @@ class Worker:
             attempt_id=attempt_id,
         )
 
-        prefix = get_log_prefix()
+        prefix = self._config.log_prefix or get_log_prefix()
         if prefix:
             config.prefix = prefix
             return FsspecLogSink(config)
@@ -668,9 +669,7 @@ class Worker:
             task = self._tasks.get((task_id, attempt_id))
             if not task:
                 return []
-            logs = [log_line.to_proto() for log_line in task.logs.lines]
-            for log in logs:
-                log.attempt_id = attempt_id
+            logs = task.recent_logs(max_entries=0)
             logs.sort(key=lambda x: x.timestamp.epoch_ms)
             return logs[start_line:]
 
@@ -679,10 +678,13 @@ class Worker:
         for (tid, aid), task in self._tasks.items():
             if tid != task_id:
                 continue
-            for log_line in task.logs.lines:
-                proto = log_line.to_proto()
-                proto.attempt_id = aid
-                all_logs.append(proto)
+            logs = task.recent_logs(max_entries=0)
+            for log in logs:
+                entry = logging_pb2.LogEntry()
+                entry.CopyFrom(log)
+                if entry.attempt_id == 0:
+                    entry.attempt_id = aid
+                all_logs.append(entry)
 
         all_logs.sort(key=lambda x: x.timestamp.epoch_ms)
         return all_logs[start_line:]
