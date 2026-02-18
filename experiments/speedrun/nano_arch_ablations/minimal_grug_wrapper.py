@@ -8,7 +8,6 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
-import jax.random as jrandom
 from haliax import Axis, NamedArray
 from haliax.state_dict import ModuleWithStateDictSerialization
 from jaxtyping import Array, Float, Int, PRNGKeyArray

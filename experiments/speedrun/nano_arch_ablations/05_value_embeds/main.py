@@ -242,7 +242,9 @@ class Transformer(eqx.Module):
         ve_end = self.ve_end_embed.at[token_ids].get(out_sharding=Pbatch)
         x0 = x
         num_layers = len(self.blocks)
-        for i, (resid_lambda, x0_lambda, block) in enumerate(zip(self.resid_lambdas, self.x0_lambdas, self.blocks, strict=True)):
+        for i, (resid_lambda, x0_lambda, block) in enumerate(
+            zip(self.resid_lambdas, self.x0_lambdas, self.blocks, strict=True)
+        ):
             x = resid_lambda * x + x0_lambda * x0
             if i == 0:
                 ve = ve_start
