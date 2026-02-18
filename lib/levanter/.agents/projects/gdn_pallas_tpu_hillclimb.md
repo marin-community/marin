@@ -103,3 +103,31 @@ Each iteration should include:
   - `throughput/tokens_per_second`: `134358.54 -> 136165.61` (`+1.35%`).
   - `throughput/duration`: `0.24388s -> 0.24065s` (`-1.33%`).
 - Next hypothesis: reduce remaining GDN custom-call cost at `gated_deltanet.py:2374`/`1316` by increasing useful work per pallas call (fewer shard-map launches per training step).
+
+### Iteration 3 - Increase flash segment scan unroll to 8
+- Date: 2026-02-18T13:54:59Z
+- Commit: (pending)
+- Hypothesis: Increasing segment-level scan unroll from `4` to `8` in flash TPU forward/backward should slightly reduce residual scan overhead and improve MFU without changing kernel memory shape.
+- Change summary:
+  - Changed `_GDN_SEGMENT_SCAN_UNROLL` from `4` to `8` in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
+  - No other kernel or model changes.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+  - Result: Ray job `ray-run-calvinxu-levanter-20260218-133500` succeeded; `49 passed, 40 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_unroll8_i2_ray --no-wait`, then `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260218-134259 --show-logs --tail 600`
+  - Job ID: `ray-run-calvinxu-bash-20260218-134259`
+  - Trace location:
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_unroll8_i2_ray_130m_ch128_seg16_20steps-44ec2b`
+    - W&B profiler artifact: `run-gdn_unroll8_i2_ray_130m_ch128_seg16_20steps-44ec2b-profiler:v0`
+    - Downloaded trace: `.profiles/wandb/gdn_unroll8_i2_ray/plugins/profile/2026_02_18_05_49_17/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops aggregate from downloaded Perfetto trace):
+  - `custom-call`: `183.251 ms` total (dominant category).
+  - Largest GDN sources remain `gated_deltanet.py:2374` (`120.561 ms`) and `gated_deltanet.py:1316` (`71.415 ms`).
+  - `while`: `0.000 ms` (still eliminated after prior unroll work).
+  - Non-GDN top ops remain `conditional.2`, `select_reduce_fusion`, and `fusion.6073`.
+- MFU/throughput delta (vs prior unroll-4 run `gdn_unroll4_i1_130m_ch128_seg16_20steps-12a667`):
+  - `throughput/mfu`: `4.2092 -> 4.2562` (`+1.12%`).
+  - `throughput/tokens_per_second`: `136165.61 -> 137688.28` (`+1.12%`).
+  - `throughput/duration`: `0.24065s -> 0.23799s` (`-1.11%`).
+- Next hypothesis: `custom-call` at `gated_deltanet.py:2374`/`1316` dominates; target fewer shard-map launches or more work per launch in those pallas calls.

@@ -1007,7 +1007,7 @@ recurrent_gated_delta_rule.__doc__ = _recurrent_gated_delta_rule_reference.__doc
 _GDN_EXP_CLIP = 80.0
 _GDN_TPU_MULT = 64
 _MXU_TILE = 128
-_GDN_SEGMENT_SCAN_UNROLL = 4
+_GDN_SEGMENT_SCAN_UNROLL = 8
 
 
 def _round_up_to(x: int, m: int) -> int:
