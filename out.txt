@@ -1,0 +1,472 @@
+f-workers-101] Task complete, reporting result for shard 39
+2026-02-18 11:22:03,854 - zephyr.execution - INFO - [stage0-Map] 49/160 tasks completed
+2026-02-18 11:22:05,705 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000105 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:05,706 - zephyr.execution - INFO - [shard 105] Complete: 1 chunks produced
+2026-02-18 11:22:05,706 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-53] Task complete, reporting result for shard 105
+2026-02-18 11:22:06,210 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000092 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:06,212 - zephyr.execution - INFO - [shard 92] Complete: 1 chunks produced
+2026-02-18 11:22:06,212 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-28] Task complete, reporting result for shard 92
+2026-02-18 11:22:06,317 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000107 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:06,318 - zephyr.execution - INFO - [shard 107] Complete: 1 chunks produced
+2026-02-18 11:22:06,318 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-47] Task complete, reporting result for shard 107
+2026-02-18 11:22:06,374 - zephyr.execution - INFO - [stage0-Map] 52/160 tasks completed
+2026-02-18 11:22:07,675 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000060 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:07,676 - zephyr.execution - INFO - [shard 60] Complete: 1 chunks produced
+2026-02-18 11:22:07,676 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-119] Task complete, reporting result for shard 60
+2026-02-18 11:22:07,821 - zephyr.execution - INFO - [stage0-Map] 53/160 complete, 107 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:07,919 - zephyr.execution - INFO - [stage0-Map] 53/160 tasks completed
+2026-02-18 11:22:09,816 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000004 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:09,817 - zephyr.execution - INFO - [shard 4] Complete: 1 chunks produced
+2026-02-18 11:22:09,817 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-70] Task complete, reporting result for shard 4
+2026-02-18 11:22:10,106 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000071 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:10,108 - zephyr.execution - INFO - [shard 71] Complete: 1 chunks produced
+2026-02-18 11:22:10,108 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-123] Task complete, reporting result for shard 71
+2026-02-18 11:22:10,197 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000106 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:10,198 - zephyr.execution - INFO - [shard 106] Complete: 1 chunks produced
+2026-02-18 11:22:10,198 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-52] Task complete, reporting result for shard 106
+2026-02-18 11:22:10,447 - zephyr.execution - INFO - [stage0-Map] 56/160 tasks completed
+2026-02-18 11:22:11,432 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000120 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:11,433 - zephyr.execution - INFO - [shard 120] Complete: 1 chunks produced
+2026-02-18 11:22:11,433 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-54] Task complete, reporting result for shard 120
+2026-02-18 11:22:11,462 - zephyr.execution - INFO - [stage0-Map] 57/160 tasks completed
+2026-02-18 11:22:12,823 - zephyr.execution - INFO - [stage0-Map] 57/160 complete, 103 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:15,971 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000112 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:15,972 - zephyr.execution - INFO - [shard 112] Complete: 1 chunks produced
+2026-02-18 11:22:15,972 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-64] Task complete, reporting result for shard 112
+2026-02-18 11:22:16,784 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000086 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:16,786 - zephyr.execution - INFO - [shard 86] Complete: 1 chunks produced
+2026-02-18 11:22:16,786 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-33] Task complete, reporting result for shard 86
+2026-02-18 11:22:16,862 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000057 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:16,863 - zephyr.execution - INFO - [shard 57] Complete: 1 chunks produced
+2026-02-18 11:22:16,863 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-112] Task complete, reporting result for shard 57
+2026-02-18 11:22:16,934 - zephyr.execution - INFO - [stage0-Map] 60/160 tasks completed
+2026-02-18 11:22:17,021 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000073 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:17,022 - zephyr.execution - INFO - [shard 73] Complete: 1 chunks produced
+2026-02-18 11:22:17,022 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-127] Task complete, reporting result for shard 73
+2026-02-18 11:22:17,057 - zephyr.execution - INFO - [stage0-Map] 61/160 tasks completed
+2026-02-18 11:22:17,073 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000100 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:17,074 - zephyr.execution - INFO - [shard 100] Complete: 1 chunks produced
+2026-02-18 11:22:17,074 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-34] Task complete, reporting result for shard 100
+2026-02-18 11:22:17,112 - zephyr.execution - INFO - [stage0-Map] 62/160 tasks completed
+2026-02-18 11:22:17,482 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000038 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:17,484 - zephyr.execution - INFO - [shard 38] Complete: 1 chunks produced
+2026-02-18 11:22:17,484 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-10] Task complete, reporting result for shard 38
+2026-02-18 11:22:17,518 - zephyr.execution - INFO - [stage0-Map] 63/160 tasks completed
+2026-02-18 11:22:17,654 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000089 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:17,655 - zephyr.execution - INFO - [shard 89] Complete: 1 chunks produced
+2026-02-18 11:22:17,655 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-25] Task complete, reporting result for shard 89
+2026-02-18 11:22:17,756 - zephyr.execution - INFO - [stage0-Map] 64/160 tasks completed
+2026-02-18 11:22:17,824 - zephyr.execution - INFO - [stage0-Map] 64/160 complete, 96 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:19,491 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000040 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:19,493 - zephyr.execution - INFO - [shard 40] Complete: 1 chunks produced
+2026-02-18 11:22:19,493 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-85] Task complete, reporting result for shard 40
+2026-02-18 11:22:20,256 - zephyr.execution - INFO - [stage0-Map] 65/160 tasks completed
+2026-02-18 11:22:21,470 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000138 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:21,471 - zephyr.execution - INFO - [shard 138] Complete: 1 chunks produced
+2026-02-18 11:22:21,471 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-4] Task complete, reporting result for shard 138
+2026-02-18 11:22:21,663 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000014 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:21,664 - zephyr.execution - INFO - [shard 14] Complete: 1 chunks produced
+2026-02-18 11:22:21,664 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-7] Task complete, reporting result for shard 14
+2026-02-18 11:22:21,846 - zephyr.execution - INFO - [stage0-Map] 67/160 tasks completed
+2026-02-18 11:22:21,894 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000028 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:21,895 - zephyr.execution - INFO - [shard 28] Complete: 1 chunks produced
+2026-02-18 11:22:21,895 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-93] Task complete, reporting result for shard 28
+2026-02-18 11:22:21,973 - zephyr.execution - INFO - [stage0-Map] 68/160 tasks completed
+2026-02-18 11:22:22,825 - zephyr.execution - INFO - [stage0-Map] 68/160 complete, 92 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:24,100 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000063 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:24,101 - zephyr.execution - INFO - [shard 63] Complete: 1 chunks produced
+2026-02-18 11:22:24,101 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-118] Task complete, reporting result for shard 63
+2026-02-18 11:22:24,467 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000002 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:24,469 - zephyr.execution - INFO - [shard 2] Complete: 1 chunks produced
+2026-02-18 11:22:24,469 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-65] Task complete, reporting result for shard 2
+2026-02-18 11:22:24,477 - zephyr.execution - INFO - [stage0-Map] 70/160 tasks completed
+2026-02-18 11:22:24,548 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000132 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:24,549 - zephyr.execution - INFO - [shard 132] Complete: 1 chunks produced
+2026-02-18 11:22:24,549 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-0] Task complete, reporting result for shard 132
+2026-02-18 11:22:24,608 - zephyr.execution - INFO - [stage0-Map] 71/160 tasks completed
+2026-02-18 11:22:24,826 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000115 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:24,827 - zephyr.execution - INFO - [shard 115] Complete: 1 chunks produced
+2026-02-18 11:22:24,827 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-50] Task complete, reporting result for shard 115
+2026-02-18 11:22:24,856 - zephyr.execution - INFO - [stage0-Map] 72/160 tasks completed
+2026-02-18 11:22:24,897 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000021 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:24,898 - zephyr.execution - INFO - [shard 21] Complete: 1 chunks produced
+2026-02-18 11:22:24,898 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-14] Task complete, reporting result for shard 21
+2026-02-18 11:22:24,906 - zephyr.execution - INFO - [stage0-Map] 73/160 tasks completed
+2026-02-18 11:22:25,074 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000077 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:25,075 - zephyr.execution - INFO - [shard 77] Complete: 1 chunks produced
+2026-02-18 11:22:25,075 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-22] Task complete, reporting result for shard 77
+2026-02-18 11:22:25,150 - zephyr.execution - INFO - [stage0-Map] 74/160 tasks completed
+2026-02-18 11:22:25,225 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000047 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:25,226 - zephyr.execution - INFO - [shard 47] Complete: 1 chunks produced
+2026-02-18 11:22:25,226 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-102] Task complete, reporting result for shard 47
+2026-02-18 11:22:25,281 - zephyr.execution - INFO - [stage0-Map] 75/160 tasks completed
+2026-02-18 11:22:25,697 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000110 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:25,698 - zephyr.execution - INFO - [shard 110] Complete: 1 chunks produced
+2026-02-18 11:22:25,698 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-56] Task complete, reporting result for shard 110
+2026-02-18 11:22:25,966 - zephyr.execution - INFO - [stage0-Map] 76/160 tasks completed
+2026-02-18 11:22:27,070 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000142 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:27,071 - zephyr.execution - INFO - [shard 142] Complete: 1 chunks produced
+2026-02-18 11:22:27,071 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-96] Task complete, reporting result for shard 142
+2026-02-18 11:22:27,545 - zephyr.execution - INFO - [stage0-Map] 77/160 tasks completed
+2026-02-18 11:22:27,826 - zephyr.execution - INFO - [stage0-Map] 77/160 complete, 83 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:29,293 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000094 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:29,295 - zephyr.execution - INFO - [shard 94] Complete: 1 chunks produced
+2026-02-18 11:22:29,295 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-46] Task complete, reporting result for shard 94
+2026-02-18 11:22:30,114 - zephyr.execution - INFO - [stage0-Map] 78/160 tasks completed
+2026-02-18 11:22:30,229 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000016 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:30,230 - zephyr.execution - INFO - [shard 16] Complete: 1 chunks produced
+2026-02-18 11:22:30,231 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-75] Task complete, reporting result for shard 16
+2026-02-18 11:22:30,234 - zephyr.execution - INFO - [stage0-Map] 79/160 tasks completed
+2026-02-18 11:22:30,486 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000049 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:30,487 - zephyr.execution - INFO - [shard 49] Complete: 1 chunks produced
+2026-02-18 11:22:30,487 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-98] Task complete, reporting result for shard 49
+2026-02-18 11:22:30,628 - zephyr.execution - INFO - [stage0-Map] 80/160 tasks completed
+2026-02-18 11:22:32,036 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000023 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:32,037 - zephyr.execution - INFO - [shard 23] Complete: 1 chunks produced
+2026-02-18 11:22:32,037 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-9] Task complete, reporting result for shard 23
+2026-02-18 11:22:32,100 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000036 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:32,101 - zephyr.execution - INFO - [shard 36] Complete: 1 chunks produced
+2026-02-18 11:22:32,101 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-87] Task complete, reporting result for shard 36
+2026-02-18 11:22:32,151 - zephyr.execution - INFO - [stage0-Map] 82/160 tasks completed
+2026-02-18 11:22:32,790 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000102 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:32,792 - zephyr.execution - INFO - [shard 102] Complete: 1 chunks produced
+2026-02-18 11:22:32,792 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-58] Task complete, reporting result for shard 102
+2026-02-18 11:22:32,808 - zephyr.execution - INFO - [stage0-Map] 83/160 tasks completed
+2026-02-18 11:22:32,828 - zephyr.execution - INFO - [stage0-Map] 83/160 complete, 77 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:32,940 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000125 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:32,941 - zephyr.execution - INFO - [shard 125] Complete: 1 chunks produced
+2026-02-18 11:22:32,941 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-3] Task complete, reporting result for shard 125
+2026-02-18 11:22:33,041 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000090 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:33,042 - zephyr.execution - INFO - [shard 90] Complete: 1 chunks produced
+2026-02-18 11:22:33,042 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-32] Task complete, reporting result for shard 90
+2026-02-18 11:22:33,046 - zephyr.execution - INFO - [stage0-Map] 85/160 tasks completed
+2026-02-18 11:22:33,283 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000015 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:33,284 - zephyr.execution - INFO - [shard 15] Complete: 1 chunks produced
+2026-02-18 11:22:33,284 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-77] Task complete, reporting result for shard 15
+2026-02-18 11:22:33,286 - zephyr.execution - INFO - [stage0-Map] 86/160 tasks completed
+2026-02-18 11:22:34,715 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000055 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:34,716 - zephyr.execution - INFO - [shard 55] Complete: 1 chunks produced
+2026-02-18 11:22:34,716 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-117] Task complete, reporting result for shard 55
+2026-02-18 11:22:34,917 - zephyr.execution - INFO - [stage0-Map] 87/160 tasks completed
+2026-02-18 11:22:36,659 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000012 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:36,660 - zephyr.execution - INFO - [shard 12] Complete: 1 chunks produced
+2026-02-18 11:22:36,660 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-73] Task complete, reporting result for shard 12
+2026-02-18 11:22:36,701 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000031 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:36,702 - zephyr.execution - INFO - [shard 31] Complete: 1 chunks produced
+2026-02-18 11:22:36,702 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-80] Task complete, reporting result for shard 31
+2026-02-18 11:22:37,299 - zephyr.execution - INFO - [stage0-Map] 89/160 tasks completed
+2026-02-18 11:22:37,829 - zephyr.execution - INFO - [stage0-Map] 89/160 complete, 71 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:37,866 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000075 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:37,867 - zephyr.execution - INFO - [shard 75] Complete: 1 chunks produced
+2026-02-18 11:22:37,867 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-115] Task complete, reporting result for shard 75
+2026-02-18 11:22:37,948 - zephyr.execution - INFO - [stage0-Map] 90/160 tasks completed
+2026-02-18 11:22:37,989 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000026 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:37,990 - zephyr.execution - INFO - [shard 26] Complete: 1 chunks produced
+2026-02-18 11:22:37,990 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-86] Task complete, reporting result for shard 26
+2026-02-18 11:22:37,995 - zephyr.execution - INFO - [stage0-Map] 91/160 tasks completed
+2026-02-18 11:22:39,997 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000084 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:39,998 - zephyr.execution - INFO - [shard 84] Complete: 1 chunks produced
+2026-02-18 11:22:39,998 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-29] Task complete, reporting result for shard 84
+2026-02-18 11:22:40,380 - zephyr.execution - INFO - [stage0-Map] 92/160 tasks completed
+2026-02-18 11:22:40,565 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000101 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:40,567 - zephyr.execution - INFO - [shard 101] Complete: 1 chunks produced
+2026-02-18 11:22:40,567 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-51] Task complete, reporting result for shard 101
+2026-02-18 11:22:40,611 - zephyr.execution - INFO - [stage0-Map] 93/160 tasks completed
+2026-02-18 11:22:41,221 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000155 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:41,222 - zephyr.execution - INFO - [shard 155] Complete: 1 chunks produced
+2026-02-18 11:22:41,222 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-76] Task complete, reporting result for shard 155
+2026-02-18 11:22:41,301 - zephyr.execution - INFO - [stage0-Map] 94/160 tasks completed
+2026-02-18 11:22:41,724 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000044 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:41,725 - zephyr.execution - INFO - [shard 44] Complete: 1 chunks produced
+2026-02-18 11:22:41,725 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-90] Task complete, reporting result for shard 44
+2026-02-18 11:22:41,936 - zephyr.execution - INFO - [stage0-Map] 95/160 tasks completed
+2026-02-18 11:22:42,537 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000011 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:42,538 - zephyr.execution - INFO - [shard 11] Complete: 1 chunks produced
+2026-02-18 11:22:42,538 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-74] Task complete, reporting result for shard 11
+2026-02-18 11:22:42,617 - zephyr.execution - INFO - [stage0-Map] 96/160 tasks completed
+2026-02-18 11:22:42,830 - zephyr.execution - INFO - [stage0-Map] 96/160 complete, 64 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:43,998 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000130 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:43,999 - zephyr.execution - INFO - [shard 130] Complete: 1 chunks produced
+2026-02-18 11:22:43,999 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-42] Task complete, reporting result for shard 130
+2026-02-18 11:22:44,239 - zephyr.execution - INFO - [stage0-Map] 97/160 tasks completed
+2026-02-18 11:22:45,229 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000029 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:45,230 - zephyr.execution - INFO - [shard 29] Complete: 1 chunks produced
+2026-02-18 11:22:45,230 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-84] Task complete, reporting result for shard 29
+2026-02-18 11:22:45,265 - zephyr.execution - INFO - [stage0-Map] 98/160 tasks completed
+2026-02-18 11:22:45,290 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000152 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:45,291 - zephyr.execution - INFO - [shard 152] Complete: 1 chunks produced
+2026-02-18 11:22:45,291 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-114] Task complete, reporting result for shard 152
+2026-02-18 11:22:45,316 - zephyr.execution - INFO - [stage0-Map] 99/160 tasks completed
+2026-02-18 11:22:46,043 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000010 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:46,044 - zephyr.execution - INFO - [shard 10] Complete: 1 chunks produced
+2026-02-18 11:22:46,044 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-69] Task complete, reporting result for shard 10
+2026-02-18 11:22:46,379 - zephyr.execution - INFO - [stage0-Map] 100/160 tasks completed
+2026-02-18 11:22:47,128 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000065 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:47,130 - zephyr.execution - INFO - [shard 65] Complete: 1 chunks produced
+2026-02-18 11:22:47,130 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-122] Task complete, reporting result for shard 65
+2026-02-18 11:22:47,324 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000020 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:47,326 - zephyr.execution - INFO - [shard 20] Complete: 1 chunks produced
+2026-02-18 11:22:47,326 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-81] Task complete, reporting result for shard 20
+2026-02-18 11:22:47,447 - zephyr.execution - INFO - [stage0-Map] 102/160 tasks completed
+2026-02-18 11:22:47,831 - zephyr.execution - INFO - [stage0-Map] 102/160 complete, 58 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:48,573 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000151 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:48,574 - zephyr.execution - INFO - [shard 151] Complete: 1 chunks produced
+2026-02-18 11:22:48,574 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-24] Task complete, reporting result for shard 151
+2026-02-18 11:22:49,024 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000097 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:49,025 - zephyr.execution - INFO - [shard 97] Complete: 1 chunks produced
+2026-02-18 11:22:49,025 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-37] Task complete, reporting result for shard 97
+2026-02-18 11:22:49,122 - zephyr.execution - INFO - [stage0-Map] 104/160 tasks completed
+2026-02-18 11:22:50,012 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000080 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:50,013 - zephyr.execution - INFO - [shard 80] Complete: 1 chunks produced
+2026-02-18 11:22:50,013 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-21] Task complete, reporting result for shard 80
+2026-02-18 11:22:50,102 - zephyr.execution - INFO - [stage0-Map] 105/160 tasks completed
+2026-02-18 11:22:50,837 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000143 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:50,838 - zephyr.execution - INFO - [shard 143] Complete: 1 chunks produced
+2026-02-18 11:22:50,838 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-103] Task complete, reporting result for shard 143
+2026-02-18 11:22:51,142 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000113 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:51,143 - zephyr.execution - INFO - [shard 113] Complete: 1 chunks produced
+2026-02-18 11:22:51,143 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-60] Task complete, reporting result for shard 113
+2026-02-18 11:22:51,177 - zephyr.execution - INFO - [stage0-Map] 107/160 tasks completed
+2026-02-18 11:22:52,832 - zephyr.execution - INFO - [stage0-Map] 107/160 complete, 53 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:53,081 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000159 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:53,083 - zephyr.execution - INFO - [shard 159] Complete: 1 chunks produced
+2026-02-18 11:22:53,083 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-72] Task complete, reporting result for shard 159
+2026-02-18 11:22:53,712 - zephyr.execution - INFO - [stage0-Map] 108/160 tasks completed
+2026-02-18 11:22:55,257 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000001 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:55,258 - zephyr.execution - INFO - [shard 1] Complete: 1 chunks produced
+2026-02-18 11:22:55,258 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-5] Task complete, reporting result for shard 1
+2026-02-18 11:22:55,370 - zephyr.execution - INFO - [stage0-Map] 109/160 tasks completed
+2026-02-18 11:22:55,514 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000157 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:55,516 - zephyr.execution - INFO - [shard 157] Complete: 1 chunks produced
+2026-02-18 11:22:55,516 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-11] Task complete, reporting result for shard 157
+2026-02-18 11:22:55,605 - zephyr.execution - INFO - [stage0-Map] 110/160 tasks completed
+2026-02-18 11:22:55,810 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000131 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:55,811 - zephyr.execution - INFO - [shard 131] Complete: 1 chunks produced
+2026-02-18 11:22:55,812 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-126] Task complete, reporting result for shard 131
+2026-02-18 11:22:55,850 - zephyr.execution - INFO - [stage0-Map] 111/160 tasks completed
+2026-02-18 11:22:55,853 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000046 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:55,854 - zephyr.execution - INFO - [shard 46] Complete: 1 chunks produced
+2026-02-18 11:22:55,854 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-106] Task complete, reporting result for shard 46
+2026-02-18 11:22:55,895 - zephyr.execution - INFO - [stage0-Map] 112/160 tasks completed
+2026-02-18 11:22:56,773 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000053 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:56,774 - zephyr.execution - INFO - [shard 53] Complete: 1 chunks produced
+2026-02-18 11:22:56,774 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-13] Task complete, reporting result for shard 53
+2026-02-18 11:22:56,913 - zephyr.execution - INFO - [stage0-Map] 113/160 tasks completed
+2026-02-18 11:22:57,015 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000017 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:57,016 - zephyr.execution - INFO - [shard 17] Complete: 1 chunks produced
+2026-02-18 11:22:57,016 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-8] Task complete, reporting result for shard 17
+2026-02-18 11:22:57,036 - zephyr.execution - INFO - [stage0-Map] 114/160 tasks completed
+2026-02-18 11:22:57,834 - zephyr.execution - INFO - [stage0-Map] 114/160 complete, 46 in-flight, 0 queued, 128 workers
+2026-02-18 11:22:58,669 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000098 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:58,670 - zephyr.execution - INFO - [shard 98] Complete: 1 chunks produced
+2026-02-18 11:22:58,670 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-31] Task complete, reporting result for shard 98
+2026-02-18 11:22:58,804 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000156 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:22:58,805 - zephyr.execution - INFO - [shard 156] Complete: 1 chunks produced
+2026-02-18 11:22:58,805 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-111] Task complete, reporting result for shard 156
+2026-02-18 11:22:59,464 - zephyr.execution - INFO - [stage0-Map] 116/160 tasks completed
+2026-02-18 11:23:00,223 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000136 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:00,224 - zephyr.execution - INFO - [shard 136] Complete: 1 chunks produced
+2026-02-18 11:23:00,224 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-121] Task complete, reporting result for shard 136
+2026-02-18 11:23:00,518 - zephyr.execution - INFO - [stage0-Map] 117/160 tasks completed
+2026-02-18 11:23:00,518 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000148 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:00,519 - zephyr.execution - INFO - [shard 148] Complete: 1 chunks produced
+2026-02-18 11:23:00,519 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-124] Task complete, reporting result for shard 148
+2026-02-18 11:23:00,568 - zephyr.execution - INFO - [stage0-Map] 118/160 tasks completed
+2026-02-18 11:23:02,365 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000139 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:02,367 - zephyr.execution - INFO - [shard 139] Complete: 1 chunks produced
+2026-02-18 11:23:02,367 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-41] Task complete, reporting result for shard 139
+2026-02-18 11:23:02,564 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000076 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:02,566 - zephyr.execution - INFO - [shard 76] Complete: 1 chunks produced
+2026-02-18 11:23:02,566 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-116] Task complete, reporting result for shard 76
+2026-02-18 11:23:02,835 - zephyr.execution - INFO - [stage0-Map] 120/160 complete, 40 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:02,977 - zephyr.execution - INFO - [stage0-Map] 120/160 tasks completed
+2026-02-18 11:23:03,399 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000116 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:03,399 - zephyr.execution - INFO - [shard 116] Complete: 1 chunks produced
+2026-02-18 11:23:03,400 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-57] Task complete, reporting result for shard 116
+2026-02-18 11:23:03,416 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000128 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:03,417 - zephyr.execution - INFO - [shard 128] Complete: 1 chunks produced
+2026-02-18 11:23:03,417 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-16] Task complete, reporting result for shard 128
+2026-02-18 11:23:03,646 - zephyr.execution - INFO - [stage0-Map] 122/160 tasks completed
+2026-02-18 11:23:04,347 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000146 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:04,348 - zephyr.execution - INFO - [shard 146] Complete: 1 chunks produced
+2026-02-18 11:23:04,348 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-38] Task complete, reporting result for shard 146
+2026-02-18 11:23:04,697 - zephyr.execution - INFO - [stage0-Map] 123/160 tasks completed
+2026-02-18 11:23:04,705 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000008 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:04,706 - zephyr.execution - INFO - [shard 8] Complete: 1 chunks produced
+2026-02-18 11:23:04,706 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-71] Task complete, reporting result for shard 8
+2026-02-18 11:23:04,748 - zephyr.execution - INFO - [stage0-Map] 124/160 tasks completed
+2026-02-18 11:23:05,330 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000153 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:05,331 - zephyr.execution - INFO - [shard 153] Complete: 1 chunks produced
+2026-02-18 11:23:05,331 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-59] Task complete, reporting result for shard 153
+2026-02-18 11:23:05,386 - zephyr.execution - INFO - [stage0-Map] 125/160 tasks completed
+2026-02-18 11:23:05,572 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000043 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:05,573 - zephyr.execution - INFO - [shard 43] Complete: 1 chunks produced
+2026-02-18 11:23:05,573 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-97] Task complete, reporting result for shard 43
+2026-02-18 11:23:05,624 - zephyr.execution - INFO - [stage0-Map] 126/160 tasks completed
+2026-02-18 11:23:06,824 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000056 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:06,825 - zephyr.execution - INFO - [shard 56] Complete: 1 chunks produced
+2026-02-18 11:23:06,825 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-99] Task complete, reporting result for shard 56
+2026-02-18 11:23:07,171 - zephyr.execution - INFO - [stage0-Map] 127/160 tasks completed
+2026-02-18 11:23:07,219 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000027 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:07,220 - zephyr.execution - INFO - [shard 27] Complete: 1 chunks produced
+2026-02-18 11:23:07,220 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-92] Task complete, reporting result for shard 27
+2026-02-18 11:23:07,223 - zephyr.execution - INFO - [stage0-Map] 128/160 tasks completed
+2026-02-18 11:23:07,836 - zephyr.execution - INFO - [stage0-Map] 128/160 complete, 32 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:08,211 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000137 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:08,212 - zephyr.execution - INFO - [shard 137] Complete: 1 chunks produced
+2026-02-18 11:23:08,212 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-66] Task complete, reporting result for shard 137
+2026-02-18 11:23:08,242 - zephyr.execution - INFO - [stage0-Map] 129/160 tasks completed
+2026-02-18 11:23:08,739 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000091 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:08,740 - zephyr.execution - INFO - [shard 91] Complete: 1 chunks produced
+2026-02-18 11:23:08,740 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-27] Task complete, reporting result for shard 91
+2026-02-18 11:23:08,936 - zephyr.execution - INFO - [stage0-Map] 130/160 tasks completed
+2026-02-18 11:23:10,027 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000158 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:10,028 - zephyr.execution - INFO - [shard 158] Complete: 1 chunks produced
+2026-02-18 11:23:10,028 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-2] Task complete, reporting result for shard 158
+2026-02-18 11:23:10,523 - zephyr.execution - INFO - [stage0-Map] 131/160 tasks completed
+2026-02-18 11:23:10,812 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000072 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:10,814 - zephyr.execution - INFO - [shard 72] Complete: 1 chunks produced
+2026-02-18 11:23:10,814 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-113] Task complete, reporting result for shard 72
+2026-02-18 11:23:10,944 - zephyr.execution - INFO - [stage0-Map] 132/160 tasks completed
+2026-02-18 11:23:10,946 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000150 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:10,947 - zephyr.execution - INFO - [shard 150] Complete: 1 chunks produced
+2026-02-18 11:23:10,947 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-19] Task complete, reporting result for shard 150
+2026-02-18 11:23:10,996 - zephyr.execution - INFO - [stage0-Map] 133/160 tasks completed
+2026-02-18 11:23:11,227 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000103 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:11,228 - zephyr.execution - INFO - [shard 103] Complete: 1 chunks produced
+2026-02-18 11:23:11,228 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-40] Task complete, reporting result for shard 103
+2026-02-18 11:23:11,242 - zephyr.execution - INFO - [stage0-Map] 134/160 tasks completed
+2026-02-18 11:23:11,286 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000067 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:11,287 - zephyr.execution - INFO - [shard 67] Complete: 1 chunks produced
+2026-02-18 11:23:11,287 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-125] Task complete, reporting result for shard 67
+2026-02-18 11:23:11,291 - zephyr.execution - INFO - [stage0-Map] 135/160 tasks completed
+2026-02-18 11:23:11,572 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000133 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:11,573 - zephyr.execution - INFO - [shard 133] Complete: 1 chunks produced
+2026-02-18 11:23:11,573 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-43] Task complete, reporting result for shard 133
+2026-02-18 11:23:11,674 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000041 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:11,675 - zephyr.execution - INFO - [shard 41] Complete: 1 chunks produced
+2026-02-18 11:23:11,675 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-88] Task complete, reporting result for shard 41
+2026-02-18 11:23:11,699 - zephyr.execution - INFO - [stage0-Map] 137/160 tasks completed
+2026-02-18 11:23:12,454 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000005 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:12,455 - zephyr.execution - INFO - [shard 5] Complete: 1 chunks produced
+2026-02-18 11:23:12,455 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-1] Task complete, reporting result for shard 5
+2026-02-18 11:23:12,727 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000141 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:12,728 - zephyr.execution - INFO - [shard 141] Complete: 1 chunks produced
+2026-02-18 11:23:12,728 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-68] Task complete, reporting result for shard 141
+2026-02-18 11:23:12,763 - zephyr.execution - INFO - [stage0-Map] 139/160 tasks completed
+2026-02-18 11:23:12,837 - zephyr.execution - INFO - [stage0-Map] 139/160 complete, 21 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:13,222 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000154 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:13,223 - zephyr.execution - INFO - [shard 154] Complete: 1 chunks produced
+2026-02-18 11:23:13,223 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-44] Task complete, reporting result for shard 154
+2026-02-18 11:23:13,424 - zephyr.execution - INFO - [stage0-Map] 140/160 tasks completed
+2026-02-18 11:23:13,611 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000096 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:13,612 - zephyr.execution - INFO - [shard 96] Complete: 1 chunks produced
+2026-02-18 11:23:13,612 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-35] Task complete, reporting result for shard 96
+2026-02-18 11:23:13,659 - zephyr.execution - INFO - [stage0-Map] 141/160 tasks completed
+2026-02-18 11:23:15,584 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000074 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:15,585 - zephyr.execution - INFO - [shard 74] Complete: 1 chunks produced
+2026-02-18 11:23:15,585 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-110] Task complete, reporting result for shard 74
+2026-02-18 11:23:15,900 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000025 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:15,901 - zephyr.execution - INFO - [shard 25] Complete: 1 chunks produced
+2026-02-18 11:23:15,901 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-83] Task complete, reporting result for shard 25
+2026-02-18 11:23:16,196 - zephyr.execution - INFO - [stage0-Map] 143/160 tasks completed
+2026-02-18 11:23:16,929 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000135 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:16,930 - zephyr.execution - INFO - [shard 135] Complete: 1 chunks produced
+2026-02-18 11:23:16,930 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-36] Task complete, reporting result for shard 135
+2026-02-18 11:23:17,207 - zephyr.execution - INFO - [stage0-Map] 144/160 tasks completed
+2026-02-18 11:23:17,675 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000054 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:17,677 - zephyr.execution - INFO - [shard 54] Complete: 1 chunks produced
+2026-02-18 11:23:17,677 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-107] Task complete, reporting result for shard 54
+2026-02-18 11:23:17,839 - zephyr.execution - INFO - [stage0-Map] 145/160 complete, 15 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:17,866 - zephyr.execution - INFO - [stage0-Map] 145/160 tasks completed
+2026-02-18 11:23:17,967 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000108 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:17,968 - zephyr.execution - INFO - [shard 108] Complete: 1 chunks produced
+2026-02-18 11:23:17,968 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-62] Task complete, reporting result for shard 108
+2026-02-18 11:23:17,984 - zephyr.execution - INFO - [stage0-Map] 146/160 tasks completed
+2026-02-18 11:23:18,205 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000035 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:18,206 - zephyr.execution - INFO - [shard 35] Complete: 1 chunks produced
+2026-02-18 11:23:18,206 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-91] Task complete, reporting result for shard 35
+2026-02-18 11:23:18,224 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000122 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:18,225 - zephyr.execution - INFO - [shard 122] Complete: 1 chunks produced
+2026-02-18 11:23:18,225 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-55] Task complete, reporting result for shard 122
+2026-02-18 11:23:18,230 - zephyr.execution - INFO - [stage0-Map] 148/160 tasks completed
+2026-02-18 11:23:19,362 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000088 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:19,363 - zephyr.execution - INFO - [shard 88] Complete: 1 chunks produced
+2026-02-18 11:23:19,363 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-39] Task complete, reporting result for shard 88
+2026-02-18 11:23:19,545 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000006 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:19,546 - zephyr.execution - INFO - [shard 6] Complete: 1 chunks produced
+2026-02-18 11:23:19,546 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-67] Task complete, reporting result for shard 6
+2026-02-18 11:23:19,819 - zephyr.execution - INFO - [stage0-Map] 150/160 tasks completed
+2026-02-18 11:23:22,063 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000149 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:22,064 - zephyr.execution - INFO - [shard 149] Complete: 1 chunks produced
+2026-02-18 11:23:22,064 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-12] Task complete, reporting result for shard 149
+2026-02-18 11:23:22,379 - zephyr.execution - INFO - [stage0-Map] 151/160 tasks completed
+2026-02-18 11:23:22,840 - zephyr.execution - INFO - [stage0-Map] 151/160 complete, 9 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:23,815 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000033 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:23,816 - zephyr.execution - INFO - [shard 33] Complete: 1 chunks produced
+2026-02-18 11:23:23,816 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-79] Task complete, reporting result for shard 33
+2026-02-18 11:23:23,948 - zephyr.execution - INFO - [stage0-Map] 152/160 tasks completed
+2026-02-18 11:23:24,431 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000085 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:24,433 - zephyr.execution - INFO - [shard 85] Complete: 1 chunks produced
+2026-02-18 11:23:24,433 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-23] Task complete, reporting result for shard 85
+2026-02-18 11:23:24,603 - zephyr.execution - INFO - [stage0-Map] 153/160 tasks completed
+2026-02-18 11:23:25,167 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000129 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:25,168 - zephyr.execution - INFO - [shard 129] Complete: 1 chunks produced
+2026-02-18 11:23:25,168 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-30] Task complete, reporting result for shard 129
+2026-02-18 11:23:25,273 - zephyr.execution - INFO - [stage0-Map] 154/160 tasks completed
+2026-02-18 11:23:25,435 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000058 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:25,435 - zephyr.execution - INFO - [shard 58] Complete: 1 chunks produced
+2026-02-18 11:23:25,435 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-105] Task complete, reporting result for shard 58
+2026-02-18 11:23:25,515 - zephyr.execution - INFO - [stage0-Map] 155/160 tasks completed
+2026-02-18 11:23:26,027 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000134 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:26,028 - zephyr.execution - INFO - [shard 134] Complete: 1 chunks produced
+2026-02-18 11:23:26,029 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-48] Task complete, reporting result for shard 134
+2026-02-18 11:23:26,200 - zephyr.execution - INFO - [stage0-Map] 156/160 tasks completed
+2026-02-18 11:23:27,841 - zephyr.execution - INFO - [stage0-Map] 156/160 complete, 4 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:31,246 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000144 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:31,247 - zephyr.execution - INFO - [shard 144] Complete: 1 chunks produced
+2026-02-18 11:23:31,247 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-26] Task complete, reporting result for shard 144
+2026-02-18 11:23:31,571 - zephyr.execution - INFO - [stage0-Map] 157/160 tasks completed
+2026-02-18 11:23:32,842 - zephyr.execution - INFO - [stage0-Map] 157/160 complete, 3 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:34,416 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000145 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:34,418 - zephyr.execution - INFO - [shard 145] Complete: 1 chunks produced
+2026-02-18 11:23:34,418 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-63] Task complete, reporting result for shard 145
+2026-02-18 11:23:34,981 - zephyr.execution - INFO - [stage0-Map] 158/160 tasks completed
+2026-02-18 11:23:37,843 - zephyr.execution - INFO - [stage0-Map] 158/160 complete, 2 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:41,764 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000147 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:41,766 - zephyr.execution - INFO - [shard 147] Complete: 1 chunks produced
+2026-02-18 11:23:41,766 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-61] Task complete, reporting result for shard 147
+2026-02-18 11:23:42,243 - zephyr.execution - INFO - [stage0-Map] 159/160 tasks completed
+2026-02-18 11:23:42,844 - zephyr.execution - INFO - [stage0-Map] 159/160 complete, 1 in-flight, 0 queued, 128 workers
+2026-02-18 11:23:46,472 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000140 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
+2026-02-18 11:23:46,473 - zephyr.execution - INFO - [shard 140] Complete: 1 chunks produced
+2026-02-18 11:23:46,473 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-104] Task complete, reporting result for shard 140
+2026-02-18 11:24:16,350 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-0 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:17,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-1 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:17,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-2 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:17,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-3 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:17,851 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-4 failed to heartbeat within timeout (30.2s)
+2026-02-18 11:24:18,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-5 failed to heartbeat within timeout (30.4s)
+2026-02-18 11:24:19,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-6 failed to heartbeat within timeout (30.4s)
+2026-02-18 11:24:20,352 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-7 failed to heartbeat within timeout (30.5s)
+2026-02-18 11:24:20,352 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-8 failed to heartbeat within timeout (30.0s)
+2026-02-18 11:24:20,852 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-9 failed to heartbeat within timeout (30.2s)
+2026-02-18 11:24:20,852 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-10 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:21,352 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-11 failed to heartbeat within timeout (30.5s)
+2026-02-18 11:24:21,852 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-12 failed to heartbeat within timeout (30.5s)
+2026-02-18 11:24:22,352 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-13 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:22,853 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-14 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:23,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-15 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:23,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-16 failed to heartbeat within timeout (30.1s)
+2026-02-18 11:24:24,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-17 failed to heartbeat within timeout (30.5s)
+2026-02-18 11:24:24,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-19 failed to heartbeat within timeout (30.0s)
+2026-02-18 11:24:24,853 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-18 failed to heartbeat within timeout (30.5s)
+2026-02-18 11:24:24,853 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-20 failed to heartbeat within timeout (30.5s)
+c2026-02-18 11:24:25,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-21 failed to heartbeat within timeout (30.0s)
+2026-02-18 11:24:26,354 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-22 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:27,354 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-23 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:27,354 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-24 failed to heartbeat within timeout (30.2s)
+2026-02-18 11:24:27,854 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-25 failed to heartbeat within timeout (30.4s)
+2026-02-18 11:24:27,854 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-26 failed to heartbeat within timeout (30.3s)
+2026-02-18 11:24:28,354 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-27 failed to heartbeat within timeout (30.2s)
+2026-02-18 11:24:29,355 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-28 failed to heartbeat within timeout (30.2s)
