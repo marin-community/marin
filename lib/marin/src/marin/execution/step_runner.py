@@ -7,6 +7,12 @@ This module provides the execution layer for ``StepSpec`` objects. The main
 entry point is ``StepRunner``, which eagerly runs steps as they are yielded
 from an iterable, launching each as soon as its dependencies are satisfied.
 
+Each step is executed on a fray worker as
+``disk_cached(distributed_lock(fn))``.  Caching, distributed locking,
+heartbeats, artifact saving, and status writes all happen on the worker.
+``StepRunner`` itself is a thin DAG scheduler that submits jobs and polls
+for completion.
+
 ``ExecutorStep`` objects can be converted to ``StepSpec`` via
 ``resolve_executor_step``.
 """
@@ -19,7 +25,6 @@ import os
 import re
 import time
 from collections.abc import Iterable
-from threading import Event, Thread
 from typing import TYPE_CHECKING, Any
 
 import fsspec
@@ -27,19 +32,17 @@ import levanter.utils.fsspec_utils as fsspec_utils
 
 from fray.v2 import client as fray_client
 from fray.v2.client import JobHandle, JobStatus
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray.v2.types import ResourceConfig
 
 from marin.execution.executor_step_status import (
-    HEARTBEAT_INTERVAL,
-    STATUS_DEP_FAILED,
-    STATUS_FAILED,
-    STATUS_RUNNING,
     STATUS_SUCCESS,
     StatusFile,
 )
 from marin.execution.step_model import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
-from marin.utilities.time_logger import log_time
+
+# Re-export for backward compatibility
+from marin.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id  # noqa: F401
 
 if TYPE_CHECKING:
     from marin.execution.executor import ExecutorStep
@@ -50,12 +53,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def worker_id() -> str:
-    import threading
-
-    return f"{os.uname()[1]}-{threading.get_ident()}"
 
 
 def _sanitize_job_name(name: str) -> str:
@@ -262,6 +259,10 @@ class StepRunner:
     Steps are launched eagerly as they are yielded from an iterable. Each step
     is launched as soon as its dependencies are satisfied. Already-succeeded
     steps (STATUS_SUCCESS on disk) are skipped automatically.
+
+    Each step is executed on the worker as
+    ``disk_cached(distributed_lock(fn))``, so caching, locking, heartbeats,
+    and status writes all happen on the worker side.
     """
 
     def __init__(self, client: fray_client.Client | None = None):
@@ -287,7 +288,7 @@ class StepRunner:
         # Keyed by output_path (guaranteed unique)
         completed: set[str] = set()
         failed: set[str] = set()
-        running: dict[str, StepJobRunner] = {}
+        running: dict[str, JobHandle] = {}
         waiting: list[StepSpec] = []
         failures: list[Exception] = []
         # output_path → name_with_hash, for human-readable logging
@@ -301,19 +302,19 @@ class StepRunner:
             if not running:
                 return
             while True:
-                done = [p for p, r in running.items() if r.poll()]
+                done = [p for p, h in running.items() if JobStatus.finished(h.status())]
                 if done or not block:
                     break
                 time.sleep(1)
             for path in done:
-                runner = running.pop(path)
-                try:
-                    runner.wait()
-                    completed.add(path)
-                except Exception as e:
-                    logger.exception("Step failed: %s", _display_name(path))
+                handle = running.pop(path)
+                status = handle.wait(raise_on_failure=False)
+                if status == JobStatus.FAILED:
+                    logger.error(f"Step failed: {_display_name(path)}")
                     failed.add(path)
-                    failures.append(e)
+                    failures.append(RuntimeError(f"Step failed: {_display_name(path)}"))
+                else:
+                    completed.add(path)
 
         def _flush_waiting() -> None:
             """Launch buffered steps whose deps are now met."""
@@ -335,9 +336,9 @@ class StepRunner:
 
         def _do_launch(step: StepSpec) -> None:
             path = step.output_path
-            runner = self._launch_step(step, force_run_failed=force_run_failed, dry_run=dry_run)
-            if runner is not None:
-                running[path] = runner
+            handle = self._launch_step(step, force_run_failed=force_run_failed, dry_run=dry_run)
+            if handle is not None:
+                running[path] = handle
             else:
                 completed.add(path)
 
@@ -381,53 +382,54 @@ class StepRunner:
         if failures:
             raise RuntimeError(f"{len(failures)} step(s) failed") from failures[0]
 
-    def _launch_step(self, step: StepSpec, *, force_run_failed: bool, dry_run: bool) -> StepJobRunner | None:
+    def _launch_step(self, step: StepSpec, *, force_run_failed: bool, dry_run: bool) -> JobHandle | None:
         """Launch a single step as a fray job. Returns None if skipped."""
-        output_path = step.output_path
-        step_name_with_hash = step.name_with_hash
-        logger.info(f"Step = {step_name_with_hash}\tParams = {step.hash_attrs}\tOutput_path = {output_path}")
+        from marin.execution.artifact import Artifact
+        from marin.execution.disk_cache import disk_cached
+        from marin.execution.distributed_lock import distributed_lock
+        from marin.execution.fray_exe import exe_on_fray
 
-        if dry_run:
-            status = StatusFile(output_path, worker_id="dry-run").status
-            if status == STATUS_SUCCESS:
-                logger.info("[DRY RUN] Skip %s: already succeeded", step_name_with_hash)
-            else:
-                logger.info("[DRY RUN] Would run %s (status: %s)", step_name_with_hash, status or "none")
+        output_path = step.output_path
+        step_name = step.name_with_hash
+        logger.info(f"Step = {step_name}\tParams = {step.hash_attrs}\tOutput_path = {output_path}")
+
+        # Quick read-only status check to avoid submitting unnecessary fray jobs
+        status = StatusFile(output_path, worker_id="check").status
+        if status == STATUS_SUCCESS:
+            logger.info(f"Skip {step_name}: already succeeded")
             return None
 
-        status_file = StatusFile(output_path, worker_id())
-        if not should_run(status_file, step_name_with_hash, force_run_failed):
+        if dry_run:
+            logger.info(f"[DRY RUN] Would run {step_name} (status: {status})")
             return None
 
         _write_executor_info(step)
 
         if step.fn is None:
-            raise ValueError(f"Step {step_name_with_hash} has no callable fn")
+            raise ValueError(f"Step {step_name} has no callable fn")
+
+        # Build worker function: disk_cached(distributed_lock(fn))
+        # All caching, locking, heartbeat, artifact saving, and status writes
+        # happen on the worker.
         step_fn = step.fn
 
-        def materialize_fn_output_fn():
-            from marin.execution.artifact import Artifact
+        def worker_fn():
+            disk_cached(
+                step.name,
+                distributed_lock(step_fn, force_run_failed=force_run_failed),
+                override_output_path=output_path,
+                save=Artifact.save,
+                load=Artifact.load,
+            )
 
-            logger.debug(f"Executing step fn for: {step_name_with_hash}")
-            with log_time(f"Step {step_name_with_hash} execution"):
-                result = step_fn(output_path)
+        worker_fn.__qualname__ = step_name
+        worker_fn.__name__ = step_name
 
-            Artifact.save(result, output_path)
-            return result
-
-        materialize_fn_output_fn.__qualname__ = step_name_with_hash
-        materialize_fn_output_fn.__name__ = step_name_with_hash
-
-        job_request = JobRequest(
-            name=_sanitize_job_name(step_name_with_hash),
-            entrypoint=Entrypoint.from_callable(materialize_fn_output_fn),
+        return exe_on_fray(
+            worker_fn,
+            name=step_name,
             resources=step.resources,
-            environment=create_environment(
-                extras=step.pip_dependency_groups,
-                env_vars=step.env_vars,
-            ),
+            env_vars=step.env_vars,
+            pip_dependency_groups=step.pip_dependency_groups,
+            client=self.client,
         )
-
-        runner = StepJobRunner(self.client, status_file)
-        runner.launch(job_request)
-        return runner
