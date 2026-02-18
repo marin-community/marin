@@ -60,7 +60,6 @@ class RemoteClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
-        fail_if_exists: bool = False,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -84,7 +83,7 @@ class RemoteClusterClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
-                fail_if_exists=fail_if_exists,
+                fail_if_exists=False,
             )
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
@@ -98,7 +97,7 @@ class RemoteClusterClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
-                fail_if_exists=fail_if_exists,
+                fail_if_exists=False,
             )
 
         if scheduling_timeout is not None:

@@ -177,7 +177,7 @@ class StepRunner:
     def launch(self, job_request: JobRequest) -> None:
         """Launch job and start heartbeat thread."""
         self._status_file.write_status(STATUS_RUNNING)
-        self._job = self.client.submit(job_request)
+        self._job = self.client.submit(job_request, adopt_existing=True)
         self._start_heartbeat()
 
     def wait(self) -> None:

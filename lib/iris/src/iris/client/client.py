@@ -26,6 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
     BundleCreator,
@@ -133,6 +136,14 @@ class JobFailedError(Exception):
         if status.error:
             msg += f": {status.error}"
         super().__init__(msg)
+
+
+class JobAlreadyExists(Exception):
+    """Raised when a job with the same name is already running."""
+
+    def __init__(self, job: "Job", message: str):
+        self.job = job
+        super().__init__(message)
 
 
 class Task:
@@ -613,7 +624,6 @@ class IrisClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
-        fail_if_exists: bool = False,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -630,15 +640,13 @@ class IrisClient:
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
-            fail_if_exists: If True, return ALREADY_EXISTS error even if an existing
-                job with the same name is finished. If False (default), finished jobs
-                are automatically replaced.
 
         Returns:
             Job handle for the submitted job
 
         Raises:
             ValueError: If name contains '/' or replicas < 1
+            JobAlreadyExists: If a job with the same name already exists
         """
         if "/" in name:
             raise ValueError("Job name cannot contain '/'")
@@ -684,21 +692,25 @@ class IrisClient:
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
 
-        self._cluster_client.submit_job(
-            job_id=job_id,
-            entrypoint=entrypoint,
-            resources=resources_proto,
-            environment=environment_proto,
-            ports=ports,
-            scheduling_timeout=scheduling_timeout,
-            constraints=constraints_proto,
-            coscheduling=coscheduling_proto,
-            replicas=replicas,
-            max_retries_failure=max_retries_failure,
-            max_retries_preemption=max_retries_preemption,
-            timeout=timeout,
-            fail_if_exists=fail_if_exists,
-        )
+        try:
+            self._cluster_client.submit_job(
+                job_id=job_id,
+                entrypoint=entrypoint,
+                resources=resources_proto,
+                environment=environment_proto,
+                ports=ports,
+                scheduling_timeout=scheduling_timeout,
+                constraints=constraints_proto,
+                coscheduling=coscheduling_proto,
+                replicas=replicas,
+                max_retries_failure=max_retries_failure,
+                max_retries_preemption=max_retries_preemption,
+                timeout=timeout,
+            )
+        except ConnectError as e:
+            if e.code == Code.ALREADY_EXISTS:
+                raise JobAlreadyExists(Job(self, job_id), str(e)) from e
+            raise
 
         return Job(self, job_id)
 
