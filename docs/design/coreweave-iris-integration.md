@@ -78,43 +78,143 @@ Workloads use `nodeSelector` or `nodeAffinity` + `nvidia.com/gpu` resource reque
 
 | Iris Concept | GCP Implementation | CoreWeave Equivalent |
 |---|---|---|
-| **ScalingGroup** | Config + scaling policy | **NodePool CRD** (1:1 mapping) |
-| **Slice** | TPU pod (atomic multi-VM unit) | **Set of Pods** on dedicated nodes (or a single multi-GPU node) |
-| **SliceHandle** | Wraps TPU pod name + zone | Wraps NodePool name + scheduled Pod references |
-| **VmHandle** | SSH to TPU worker VM | **`kubectl exec` into Pod** (or SSH to bare metal node) |
-| **create_slice()** | `gcloud compute tpus tpu-vm create` | Create Pod(s) with `nodeSelector` (autoscaler provisions nodes) OR `kubectl patch nodepool` to increment `targetNodes` |
-| **list_slices()** | `gcloud compute tpus list` | `kubectl get pods -l iris-scale-group=X` |
-| **terminate()** | `gcloud compute tpus delete` | Delete Pod(s); autoscaler handles node scale-down |
-| **describe()** | `gcloud compute tpus describe` | `kubectl get pods` + node IP lookup |
-| **discover_controller()** | Label-based VM lookup | Kubernetes Service / static config / DNS |
-| **Bootstrap** | SSH + Docker on VM | Pod spec with container image (no SSH needed) |
+| **ScalingGroup** | Config + scaling policy | Config + scaling policy (same, no CW autoscaler) |
+| **Slice** | TPU pod (atomic multi-VM unit) | **One NodePool** (`targetNodes: 1`) + worker **Pod** on that node |
+| **SliceHandle** | Wraps TPU pod name + zone | Wraps NodePool name + worker Pod reference |
+| **VmHandle** | SSH to TPU worker VM (`GcloudSshConnection`) | **`kubectl exec` into Pod** (`KubectlExecConnection`) |
+| **create_slice()** | `gcloud compute tpus tpu-vm create` | `kubectl apply` NodePool CRD + deploy worker Pod |
+| **list_slices()** | `gcloud compute tpus list` | `kubectl get nodepools -l iris-scale-group=X` |
+| **terminate()** | `gcloud compute tpus delete` | `kubectl delete nodepool <slice-id>` (deterministic) |
+| **describe()** | `gcloud compute tpus describe` | NodePool status conditions + Pod status |
+| **discover_controller()** | Label-based VM lookup | Kubernetes Service by name |
+| **Bootstrap** | SSH + install Docker + pull image + run container | `kubectl exec` + simplified script (already in container) |
 | **QuotaExhaustedError** | gcloud error parsing | NodePool status conditions (quota/capacity) |
-| **Labels for discovery** | GCE labels (`gcloud ... --labels`) | Kubernetes labels on Pods |
+| **Labels for discovery** | GCE labels (`gcloud ... --labels`) | Kubernetes labels on NodePools + Pods |
 | **tunnel()** | `gcloud compute ssh -L` | `kubectl port-forward` |
 
 ---
 
 ## 4. Proposed Integration Design
 
-### Option A: Pod-Based Model (Recommended)
+### Key Design Decisions
 
-Instead of creating VMs and SSHing into them, deploy Iris workers as **Kubernetes Pods** on CoreWeave nodes. This is the idiomatic Kubernetes approach and avoids fighting the platform.
+**Decision 1: Iris owns all scaling (CoreWeave autoscaler disabled).**
 
-**ScalingGroup -> NodePool mapping**: Each Iris `ScaleGroupConfig` with `slice_template.coreweave` maps 1:1 to a CoreWeave NodePool CRD. The `instance_type` field in `CoreweaveSliceConfig` maps to the NodePool's `instanceType`.
+Iris's autoscaler reasons about individual slices with full identity. `ScalingGroup._slices`
+is a `dict[str, SliceState]` keyed by `slice_id`. Scale-down picks the *specific longest-idle
+slice* via `get_idle_slices()` (sorted by `last_active`). CoreWeave's Cluster Autoscaler
+doesn't give you that — it picks which node to remove based on `PreferIdle`/`IdleOnly`
+heuristics that don't know about Iris-level task activity.
+
+Running two autoscalers would be a split brain: Iris has backoff, quota tracking, cooldowns,
+and waterfall routing across groups; CoreWeave's has its own independent logic. They'd fight.
+
+**Resolution**: Set `autoscaling: false` on all NodePools. **One NodePool = one slice = one
+bare metal node.** Iris creates a new NodePool (with `targetNodes: 1`) to scale up, and
+deletes the specific NodePool to scale down. This preserves full per-slice addressability.
+
+**Decision 2: `kubectl exec` as a drop-in for SSH (no bootstrap protocol changes).**
+
+The `SshConnection` protocol (`ssh.py:35-61`) is intentionally narrow — `run(command) ->
+CompletedProcess` and `run_streaming(command) -> Popen`. All existing implementations
+(`GcloudSshConnection`, `DirectSshConnection`, `GceSshConnection`) build a subprocess
+command list and shell out. A `KubectlExecConnection` follows the exact same pattern:
+
+```python
+@dataclass
+class KubectlExecConnection:
+    """SshConnection implementation backed by kubectl exec.
+
+    Drop-in replacement for SSH-based connections when workers run as
+    Kubernetes Pods. Uses kubectl exec to run commands inside the worker
+    container, producing the same subprocess.CompletedProcess / Popen
+    results as SSH connections.
+    """
+    pod_name: str
+    namespace: str
+    container: str = "iris-worker"
+    kubeconfig: str | None = None
+
+    @property
+    def address(self) -> str:
+        return self.pod_name
+
+    @property
+    def zone(self) -> str:
+        return self.namespace
+
+    def _build_cmd(self, command: str) -> list[str]:
+        cmd = ["kubectl", "exec", self.pod_name,
+               "-n", self.namespace, "-c", self.container, "--",
+               "bash", "-c", command]
+        if self.kubeconfig:
+            cmd.insert(1, f"--kubeconfig={self.kubeconfig}")
+        return cmd
+
+    def run(self, command: str, timeout: Duration = ...) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            self._build_cmd(command), capture_output=True, text=True,
+            timeout=timeout.to_seconds())
+
+    def run_streaming(self, command: str) -> subprocess.Popen:
+        return subprocess.Popen(
+            self._build_cmd(command), stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True)
+```
+
+This gives full compatibility with `SshVmBase` — `run_command()`, `bootstrap()`,
+`wait_for_connection()`, and `run_streaming_with_retry()` all work unchanged. Only the
+*bootstrap script content* changes (worker is already inside a container, so no Docker
+install/pull needed), not the bootstrap *protocol*.
+
+### Architecture: One NodePool Per Slice, Pods as Workers
 
 **Scaling flow**:
-1. `create_slice()`: Deploy a Pod (or set of Pods for multi-node training) with appropriate `nodeSelector` for the target GPU type. If autoscaling is enabled on the NodePool, the Cluster Autoscaler handles node provisioning automatically. If not, `kubectl patch nodepool` to increment `targetNodes`.
-2. `describe()`: Query Pod status + node assignments to discover worker addresses.
-3. `terminate()`: Delete the Pod(s). Cluster Autoscaler scales down the idle node after the configured delay.
 
-**Worker deployment**: Instead of SSH + Docker bootstrap, define a Pod spec:
+1. **Scale-up** (`create_slice()`): Create a new CoreWeave NodePool CRD with a unique name
+   (the slice ID), `targetNodes: 1`, `autoscaling: false`, and the desired `instanceType`.
+   Then deploy a worker Pod on the new node once it's ready. The Pod uses `nodeSelector` to
+   bind to the specific NodePool's node.
+
+2. **Worker bootstrap**: The Pod starts the iris-worker container image. Config is injected
+   via ConfigMap. `KubectlExecConnection` provides the `SshConnection` interface into the
+   running container. The bootstrap script is simplified — no Docker install/pull since the
+   container is already running.
+
+3. **Describe** (`describe()`): Query NodePool status conditions (`queuedNodes`,
+   `currentNodes`, validation/capacity conditions) + Pod status.
+
+4. **Scale-down** (`terminate()`): `kubectl delete nodepool <slice-id>`. This deterministically
+   removes exactly the node Iris chose — no ambiguity about which node is removed.
+
+5. **List** (`list_slices()`): `kubectl get nodepools -l iris-scale-group=X`.
+
+6. **Reconcile**: On controller restart, `list_slices()` discovers existing NodePools by label
+   and rebuilds `SliceState` tracking.
+
+**Worker Pod spec**:
 ```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: iris-worker-<slice-id>
+  namespace: iris
+  labels:
+    iris-managed: "true"
+    iris-scale-group: "h100_8x"
+    iris-slice-id: "<slice-id>"
 spec:
   nodeSelector:
+    # Binds to the specific node from this slice's NodePool
     node.kubernetes.io/instance-type: gd-8xh100ib-i128
+    iris-slice-id: "<slice-id>"  # NodePool sets this via nodeLabels
   containers:
     - name: iris-worker
       image: <worker-image>
+      command: [".venv/bin/python", "-m", "iris.cluster.worker.main", "serve",
+                "--host", "0.0.0.0", "--port", "10001",
+                "--cache-dir", "/var/cache/iris",
+                "--config", "/etc/iris/config.yaml"]
       resources:
         limits:
           nvidia.com/gpu: 8
@@ -122,57 +222,34 @@ spec:
       ports:
         - containerPort: 10001
       volumeMounts:
+        - name: config
+          mountPath: /etc/iris
+          readOnly: true
         - name: cache
           mountPath: /var/cache/iris
+  volumes:
+    - name: config
+      configMap:
+        name: iris-cluster-config
+    - name: cache
+      emptyDir: {}
   tolerations:
     - key: nvidia.com/gpu
       operator: Exists
       effect: NoSchedule
+  restartPolicy: Always
 ```
 
-**Pros**: No SSH management, native Kubernetes health checks, Pod restart policies handle failures, ConfigMaps for config distribution, container image registry auth via Kubernetes secrets.
+**Comparison of scaling approaches**:
 
-**Cons**: Significant departure from the SSH+Docker bootstrap model used by GCP and Manual platforms. The `VmHandle` protocol (SSH-based `run_command()`, `bootstrap()`) doesn't map cleanly to Pods.
-
-### Option B: Kubernetes-Managed Nodes with SSH (Closer to Current Architecture)
-
-Keep the existing SSH + Docker bootstrap model but use CoreWeave Node Pools as the provisioning layer.
-
-**Scaling flow**:
-1. `create_slice()`: Create or patch a NodePool to add nodes. Poll `kubectl get nodes` until new nodes appear.
-2. Worker bootstrap: SSH into the bare metal nodes and run the existing Docker-based bootstrap script (requires SSH keys deployed to nodes).
-3. `describe()`: Query node IPs from `kubectl get nodes -l node-pool=X`.
-4. `terminate()`: Patch NodePool to reduce `targetNodes`, wait for node drain.
-
-**Pros**: Minimal changes to existing Iris architecture. Reuses `DirectSshConnection`, `WorkerBootstrap`, and the Docker bootstrap script.
-
-**Cons**: SSH to Kubernetes nodes is non-idiomatic. Requires ensuring nodes have SSH keys and Docker. The 20-30 minute bare metal boot time means the existing requesting timeout (120s) and boot timeout (300s) are insufficient.
-
-### Option C: Hybrid -- Autoscaler-Driven with Pod Workers
-
-Use CoreWeave's Kubernetes Cluster Autoscaler as the scaling mechanism, with Iris creating Pods that trigger autoscaling.
-
-**Scaling flow**:
-1. Pre-create NodePool CRDs (one per scale group) with `autoscaling: true`, `minNodes: 0`, `maxNodes: N`.
-2. `create_slice()`: Create a Pod with `nodeSelector` matching the desired GPU type. The Cluster Autoscaler scales up the NodePool if no existing node can satisfy the Pod.
-3. `describe()`: Query Pod status to determine when node is provisioned and Pod is running.
-4. `terminate()`: Delete the Pod. Cluster Autoscaler scales down the idle node after the configured delay.
-
-**Pros**: Leverages CoreWeave's autoscaler (they contributed it to upstream Kubernetes). No manual NodePool patching. Aligns with how CoreWeave intends their platform to be used.
-
-**Cons**: Iris loses fine-grained control over scaling decisions (double autoscaler problem). The CoreWeave autoscaler may conflict with Iris's autoscaler logic.
-
-### Recommendation: Option A with Pod-Based Workers
-
-Option A is the cleanest integration. The key insight is that on CoreWeave, the "slice" concept maps to a **Pod or set of Pods** rather than a set of VMs. The implementation would:
-
-1. **Use the Kubernetes Python client** (`kubernetes` package) instead of `gcloud` subprocess calls
-2. **Pre-provision NodePools** as infrastructure (via Terraform or `kubectl apply` at cluster setup time), similar to how GCP zones are configured upfront
-3. **Deploy workers as Pods** with `nodeSelector` targeting the right instance type
-4. **Use Pod IP addresses** as worker addresses (host networking on CoreWeave)
-5. **Use Kubernetes labels** for discovery (replace GCE labels)
-6. **Use `kubectl port-forward`** for tunneling
-7. **Controller discovery** via Kubernetes Service or static config
+| | Iris manages scaling (autoscaler off) | CoreWeave autoscaler |
+|---|---|---|
+| **Scale-up** | Iris creates a new NodePool (`targetNodes: 1`) | Iris creates a Pod, CW decides when/where to scale |
+| **Scale-down** | Iris deletes specific NodePool (deterministic) | CW picks node to remove (non-deterministic) |
+| **Slice identity** | NodePool name = slice ID (1:1) | Pod = slice, but node removal is opaque |
+| **Idle tracking** | Iris tracks per-slice, picks longest-idle | CW has own `IdleOnly`/`PreferIdle` heuristic |
+| **Backoff/quota** | Iris manages fully (NodePool status conditions) | Split brain between two autoscalers |
+| **Connection** | `kubectl exec` into Pod (drop-in for SSH) | Same |
 
 ---
 
@@ -211,21 +288,40 @@ message CoreweaveControllerConfig {
 
 ### Platform Implementation (`coreweave.py`)
 
-Implement using the `kubernetes` Python client:
+Implement using the `kubernetes` Python client (or `kubectl` subprocess calls for consistency
+with the gcloud pattern):
 
-- `create_slice()`: Create Pod(s) with appropriate `nodeSelector`, resource requests, and Iris labels
-- `list_slices()`: `kubectl get pods -l iris-label-prefix-scale-group=X`
-- `list_all_slices()`: `kubectl get pods -l iris-label-prefix-managed=true`
-- `describe()` on SliceHandle: Query Pod status + node IP
-- `terminate()` on SliceHandle: Delete Pod(s)
-- `create_vm()`: Create a Pod for the controller
-- `discover_controller()`: Query Kubernetes Service or labeled Pod
+- `create_slice()`: Create a NodePool CRD (`targetNodes: 1`, `autoscaling: false`) with a
+  unique slice ID as the name. Wait for node ready. Deploy worker Pod with `nodeSelector`
+  binding to the new node. Return `CoreweaveSliceHandle`.
+- `list_slices()`: `kubectl get nodepools -l iris-scale-group=X` (NodePools are the slice identity)
+- `list_all_slices()`: `kubectl get nodepools -l iris-managed=true`
+- `describe()` on `CoreweaveSliceHandle`: Query NodePool status + Pod status → derive
+  `SliceStatus` with `CoreweaveVmHandle` for each worker Pod
+- `terminate()` on `CoreweaveSliceHandle`: Delete worker Pod(s), then delete NodePool
+- `create_vm()`: Create a Pod (for controller) via Deployment + Service
+- `discover_controller()`: Query Kubernetes Service by name
 - `tunnel()`: `kubectl port-forward`
-- `shutdown()`: No-op (clean up Kubernetes client)
+- `shutdown()`: Clean up Kubernetes client
+
+### SSH / Connection Layer (`ssh.py`)
+
+Add `KubectlExecConnection` implementing `SshConnection` protocol. This is a drop-in for
+`DirectSshConnection` — same `run()` and `run_streaming()` interface, backed by `kubectl exec`
+instead of `ssh`. The `SshVmBase` base class, `WorkerBootstrap`, and all retry/streaming
+infrastructure work unchanged.
 
 ### Bootstrap Changes
 
-For Option A, the bootstrap script becomes a Pod spec rather than an SSH script. The `WorkerBootstrap` class would need a CoreWeave-specific path that creates a Pod instead of SSHing + running a bash script. Alternatively, the bootstrap could be skipped entirely since the Pod spec already defines the container image, env vars, and volume mounts.
+The bootstrap *protocol* (`WorkerBootstrap.bootstrap_vm()`) stays the same — it calls
+`vm.wait_for_connection()` then `vm.bootstrap(script)` via the `SshConnection` interface.
+
+The bootstrap *script content* is simplified for CoreWeave since the worker is already inside
+a container (the Pod). The script just needs to:
+1. Write config.yaml (from ConfigMap, or embedded)
+2. Start the worker process (or it's already running as the Pod's entrypoint)
+
+No Docker install, no Docker pull, no `gcloud auth configure-docker`.
 
 ### Config Changes
 
@@ -290,17 +386,23 @@ Current bootstrap configures `gcloud auth configure-docker` for GCP Artifact Reg
 
 ---
 
-## 7. Open Questions
+## 7. Resolved Decisions
 
-1. **Autoscaler interaction**: Should Iris manage NodePool `targetNodes` directly, or rely on CoreWeave's Cluster Autoscaler? The latter is simpler but means Iris's autoscaler and CoreWeave's autoscaler could conflict. A clean approach: Iris creates Pods (expressing demand), CoreWeave's autoscaler provisions nodes. Iris only deletes Pods, and CoreWeave handles node scale-down.
+1. **Autoscaler**: Iris owns all scaling. CoreWeave's Cluster Autoscaler is disabled (`autoscaling: false`). One NodePool per slice, `targetNodes: 1`. This preserves per-slice identity for idle tracking and deterministic scale-down.
 
-2. **Multi-node training slices**: For distributed training across multiple 8-GPU nodes (e.g., 16-GPU job on 2 nodes), the `num_vms` field in `ScaleGroupConfig` maps to multiple Pods that need InfiniBand connectivity. This requires all Pods to land on nodes in the same InfiniBand fabric (same region, same instance type). CoreWeave handles this via the `rdma/ib` resource and proper node selection.
+2. **SSH vs. Pod exec**: `KubectlExecConnection` implements `SshConnection` protocol as a drop-in. No changes to bootstrap protocol, `SshVmBase`, or retry infrastructure. Only bootstrap script content is simplified.
 
-3. **SSH vs. Pod exec**: The current `VmHandle` protocol is SSH-centric (`run_command`, `bootstrap`, `wait_for_connection`). For a Pod-based model, these could be implemented via `kubectl exec` instead of SSH. The `kubernetes` Python client supports exec via websocket.
+## 8. Open Questions
 
-4. **Controller deployment**: Should the controller run as a Kubernetes Deployment (with a Service for discovery), or as a separate standalone process? Kubernetes Deployment is more idiomatic and gives automatic restarts.
+1. **Multi-node training slices**: For distributed training across multiple 8-GPU nodes (e.g., 16-GPU job on 2 nodes), the `num_vms` field in `ScaleGroupConfig` maps to multiple Pods that need InfiniBand connectivity. This may require a single NodePool with `targetNodes: N` (breaking the 1:1 NodePool:slice assumption) or N separate NodePools that are logically grouped. CoreWeave handles IB fabric via the `rdma/ib` resource and region affinity, but co-scheduling across NodePools needs investigation.
 
-5. **Image registry**: CoreWeave has its own container registry, or you can use any external registry (Docker Hub, GitHub Container Registry, etc.) with `imagePullSecrets`. Need to decide where Iris images are published for CoreWeave deployments.
+2. **Controller deployment**: Should the controller run as a Kubernetes Deployment (with a Service for discovery), or as a separate standalone process? Kubernetes Deployment is more idiomatic and gives automatic restarts.
+
+3. **Image registry**: CoreWeave supports any external registry with `imagePullSecrets`. Need to decide where Iris images are published for CoreWeave deployments (GCP Artifact Registry with cross-cloud pull, or a CoreWeave-local registry).
+
+4. **NodePool creation latency**: Creating many small NodePools (one per slice) may hit API rate limits or have overhead vs. a single large pool. Need to validate with CoreWeave that this pattern is supported at scale (e.g., 50+ concurrent NodePools).
+
+5. **Node readiness detection**: After NodePool creation, how to efficiently detect when the bare metal node is ready (20-30 min). Options: poll NodePool status conditions, watch Kubernetes node events, or poll `kubectl get nodes -l iris-slice-id=X`.
 
 ---
 
