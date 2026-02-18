@@ -35,6 +35,8 @@ from fray.v2.client import JobHandle, JobStatus
 from fray.v2.types import ResourceConfig
 
 from marin.execution.executor_step_status import (
+    STATUS_DEP_FAILED,
+    STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
 )
@@ -70,8 +72,17 @@ def _get_fn_name(fn: Any) -> str:
 
 
 def _write_executor_info(step: StepSpec) -> None:
-    """Write a ``.executor_info`` JSON file matching the legacy ExecutorStepInfo schema."""
+    """Write a ``.executor_info`` JSON file matching the legacy ExecutorStepInfo schema.
+
+    Skips writing if the file already exists (e.g. Executor.write_infos() wrote
+    a richer version before StepRunner launched the step).
+    """
+    info_path = os.path.join(step.output_path, ".executor_info")
+    fs = fsspec.core.url_to_fs(info_path, use_listings_cache=False)[0]
+    if fs.exists(info_path):
+        return
     info = {
+        "executor_version": "step_runner",
         "name": step.name,
         "fn_name": _get_fn_name(step.fn),
         "config": step.hash_attrs,
@@ -81,7 +92,6 @@ def _write_executor_info(step: StepSpec) -> None:
         "dependencies": list(step.deps),
         "output_path": step.output_path,
     }
-    info_path = os.path.join(step.output_path, ".executor_info")
     fsspec_utils.mkdirs(step.output_path)
     with fsspec.open(info_path, "w") as f:
         f.write(json.dumps(info, indent=2, cls=CustomJsonEncoder))
@@ -398,6 +408,9 @@ class StepRunner:
         if status == STATUS_SUCCESS:
             logger.info(f"Skip {step_name}: already succeeded")
             return None
+
+        if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
+            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
 
         if dry_run:
             logger.info(f"[DRY RUN] Would run {step_name} (status: {status})")
