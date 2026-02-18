@@ -178,7 +178,7 @@ def resolve_executor_step(
     step: "ExecutorStep",
     config: Any,
     output_path: str,
-    deps: list[str] | None = None,
+    deps: list[StepSpec] | None = None,
 ) -> StepSpec:
     """Convert an ExecutorStep into a StepSpec.
 
@@ -708,15 +708,23 @@ class Executor:
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""
-        return [
-            resolve_executor_step(
+        # First pass: create StepSpecs without deps so we have a mapping
+        spec_by_step: dict[ExecutorStep, StepSpec] = {}
+        for step in steps:
+            spec_by_step[step] = resolve_executor_step(
                 step=step,
                 config=self.configs[step],
                 output_path=self.output_paths[step],
-                deps=[self.output_paths[dep] for dep in self.dependencies[step]],
             )
-            for step in steps
-        ]
+        # Second pass: rebuild with deps pointing to resolved StepSpecs
+        result = []
+        for step in steps:
+            dep_specs = [spec_by_step[dep] for dep in self.dependencies[step] if dep in spec_by_step]
+            if dep_specs:
+                result.append(dataclasses.replace(spec_by_step[step], deps=dep_specs))
+            else:
+                result.append(spec_by_step[step])
+        return result
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """

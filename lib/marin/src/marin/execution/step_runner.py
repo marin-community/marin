@@ -124,7 +124,7 @@ def _write_executor_info(step: StepSpec) -> None:
         "description": None,
         "override_output_path": step.override_output_path,
         "version": {},
-        "dependencies": list(step.deps),
+        "dependencies": list(step.dep_paths),
         "output_path": step.output_path,
     }
     fsspec_utils.mkdirs(step.output_path)
@@ -319,10 +319,10 @@ class StepRunner:
             while i < len(waiting):
                 step = waiting[i]
                 path = step.output_path
-                if any(d in failed for d in step.deps):
+                if any(d in failed for d in step.dep_paths):
                     waiting.pop(i)
                     failed.add(path)
-                elif all(d in completed for d in step.deps):
+                elif all(d in completed for d in step.dep_paths):
                     if max_concurrent is not None and len(running) >= max_concurrent:
                         i += 1
                         continue
@@ -351,9 +351,9 @@ class StepRunner:
             _flush_waiting()
 
             path = step.output_path
-            if any(d in failed for d in step.deps):
+            if any(d in failed for d in step.dep_paths):
                 failed.add(path)
-            elif all(d in completed for d in step.deps):
+            elif all(d in completed for d in step.dep_paths):
                 _do_launch(step)
             else:
                 waiting.append(step)

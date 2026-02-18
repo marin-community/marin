@@ -178,13 +178,15 @@ def test_runner_saves_artifact_automatically(tmp_path):
 
 def test_resolve_executor_step_preserves_deps():
     step = ExecutorStep(name="train", fn=lambda c: None, config=None)
+    dep1 = StepSpec(name="download", override_output_path="/out/download-abc123")
+    dep2 = StepSpec(name="tokenize", override_output_path="/out/tokenize-def456")
     resolved = resolve_executor_step(
         step,
         config={},
         output_path="/out/train-abc123",
-        deps=["/out/download-abc123", "/out/tokenize-def456"],
+        deps=[dep1, dep2],
     )
-    assert resolved.deps == ["/out/download-abc123", "/out/tokenize-def456"]
+    assert resolved.dep_paths == ["/out/download-abc123", "/out/tokenize-def456"]
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +218,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
         name="tokenize",
         output_path_prefix=tmp_path_posix,
         hash_attrs={"tokenizer": tokenizer},
-        deps=[download_step.output_path],
+        deps=[download_step],
         fn=lambda output_path: tokenize_data(
             output_path,
             Artifact.load(download_step.output_path, PathMetadata),
@@ -226,7 +228,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
     train_step = StepSpec(
         name="train",
         output_path_prefix=tmp_path_posix,
-        deps=[tokenize_step.output_path],
+        deps=[tokenize_step],
         fn=lambda output_path: train_on_tokenized_data(
             output_path, Artifact.load(tokenize_step.output_path, TokenizeMetadata)
         ),

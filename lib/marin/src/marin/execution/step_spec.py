@@ -22,12 +22,8 @@ class StepSpec:
     """Name of the step, used for readability and in the output path."""
     output_path_prefix: str | None = None
     """Output path prefix for the step. If not provided, it will be taken from the MARIN_PREFIX environment variable."""
-    deps: "list[str | StepSpec]" = dataclasses.field(default_factory=list)
-    """
-    List of output paths that this step depends on. Used for tracking dependencies and cache invalidation.
-
-    NOTE: If StepSpec instances are provided, their output paths will be automatically coerced.
-    """
+    deps: list["StepSpec"] = dataclasses.field(default_factory=list)
+    """Steps that this step depends on. Their output paths are used for dependency tracking and cache invalidation."""
     hash_attrs: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Attributes to include in the hash calculation for the step. Used for cache invalidation.
 
@@ -44,16 +40,16 @@ class StepSpec:
     arguments. Usually you would specify this via a `lambda output_path: foo(output_path=output_path, bar=42)`.
     """
 
-    def __post_init__(self):
-        # Coerce StepSpec instances in deps to their output_path strings
-        # NOTE: https://stackoverflow.com/a/54119384 - use setattr to handle the frozen class
-        object.__setattr__(self, "deps", [dep.output_path if isinstance(dep, StepSpec) else dep for dep in self.deps])
+    @cached_property
+    def dep_paths(self) -> list[str]:
+        """Output paths of all dependencies."""
+        return [dep.output_path for dep in self.deps]
 
     @cached_property
     def hash_id(self) -> str:
         """Hash ID of the step, used for cache invalidation and output path generation."""
         content = json.dumps(
-            {"name": self.name, "attrs": self.hash_attrs, "deps": sorted(self.deps)},
+            {"name": self.name, "attrs": self.hash_attrs, "deps": sorted(self.dep_paths)},
             sort_keys=True,
         )
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
