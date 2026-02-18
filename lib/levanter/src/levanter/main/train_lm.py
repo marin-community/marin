@@ -69,6 +69,12 @@ class TrainLmConfig:
     eval_harness: Optional[LmEvalHarnessConfig] = None
     eval_harness_steps: int = 10000
 
+    vlm_mc_eval_benchmarks: Optional[list[str]] = None
+    """MC benchmark names (e.g. ["ai2d", "mmmu"]) for VLM accuracy evaluation via log-likelihood comparison."""
+    vlm_mc_eval_parquet_path: Optional[str] = None
+    """Base GCS path to tokenized eval parquets (default: gs://marin-vlm/eval_benchmarks_tokenized)."""
+    vlm_mc_eval_steps: int = 10000
+
     # TODO: really need to add callback framework
     log_entropy: bool = False
 
