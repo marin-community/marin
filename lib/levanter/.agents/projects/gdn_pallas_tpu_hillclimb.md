@@ -77,3 +77,29 @@ Each iteration should include:
   - Large non-GDN training cost remains in logits path (`fusion.321`, source in Equinox/JAX jit; `long_name` includes `bf16[2,4096,128256]` dot-general outputs).
 - MFU/throughput delta: N/A (infra-validation iteration; no kernel math change yet).
 - Next hypothesis: reduce GDN segment scan overhead by fusing segment boundaries/state handoff so line-2361 and line-1861 while/custom-call blocks execute fewer large-loop iterations per step.
+
+### Iteration 2 - Unroll flash segment scans
+- Date: 2026-02-18T12:55:20Z
+- Commit: (pending)
+- Hypothesis: Unrolling the segment-level `lax.scan` loops in the flash TPU forward/backward path will remove `while` overhead and improve MFU.
+- Change summary:
+  - Added `_GDN_SEGMENT_SCAN_UNROLL = 4` in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
+  - Applied `unroll=_GDN_SEGMENT_SCAN_UNROLL` to both segment scans at `gated_deltanet.py:1862` (forward) and `gated_deltanet.py:2041` (backward).
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+  - Result: Ray job `ray-run-calvinxu-levanter-20260218-123907` succeeded; `49 passed, 40 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_unroll4_i1 --no-wait`, then `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260218-124457 --show-logs --tail 600`
+  - Job ID: `ray-run-calvinxu-bash-20260218-124457`
+  - Trace location:
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_unroll4_i1_130m_ch128_seg16_20steps-12a667`
+    - Downloaded trace: `.profiles/wandb/plugins/profile/2026_02_18_04_51_05/perfetto_trace.json.gz`
+- Hotspots observed (TPU XLA Ops aggregate from downloaded Perfetto trace):
+  - `while` category dropped from `1751.883 ms` in baseline run `gdn_loopcheck_130m_ch128_seg16_8steps-5ecaf5` to `0.000 ms` in this run.
+  - `custom-call` remains dominant at `1465.997 ms`; largest GDN sources are `gated_deltanet.py:2374` (`964.671 ms`) and `gated_deltanet.py:1316` (`571.327 ms`), both from shard-map pallas calls.
+  - Non-GDN top ops are still logits/haliax heavy (`conditional.2`, `select_reduce_fusion`, `fusion.6073`).
+- MFU/throughput delta (vs baseline run `gdn_loopcheck_130m_ch128_seg16_8steps-5ecaf5`):
+  - `throughput/mfu`: `4.1533 -> 4.2092` (`+1.34%`).
+  - `throughput/tokens_per_second`: `134358.54 -> 136165.61` (`+1.35%`).
+  - `throughput/duration`: `0.24388s -> 0.24065s` (`-1.33%`).
+- Next hypothesis: reduce remaining GDN custom-call cost at `gated_deltanet.py:2374`/`1316` by increasing useful work per pallas call (fewer shard-map launches per training step).

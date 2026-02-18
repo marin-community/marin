@@ -1007,6 +1007,7 @@ recurrent_gated_delta_rule.__doc__ = _recurrent_gated_delta_rule_reference.__doc
 _GDN_EXP_CLIP = 80.0
 _GDN_TPU_MULT = 64
 _MXU_TILE = 128
+_GDN_SEGMENT_SCAN_UNROLL = 4
 
 
 def _round_up_to(x: int, m: int) -> int:
@@ -1858,7 +1859,13 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
         )
         return S_end, (out_seg, S_carry)  # store seg start state for backward
 
-    S_final, (out_segs, seg_starts) = lax.scan(seg_body, S0, (q_tm, k_tm, v_tm, g_tm, b_tm), length=n_segments)
+    S_final, (out_segs, seg_starts) = lax.scan(
+        seg_body,
+        S0,
+        (q_tm, k_tm, v_tm, g_tm, b_tm),
+        length=n_segments,
+        unroll=_GDN_SEGMENT_SCAN_UNROLL,
+    )
 
     # out_segs: (n_segments,B,H,seg,Ct,V) -> (B,H,n_chunks_pad,Ct,V)
     out_bhnscv = jnp.transpose(out_segs, (1, 2, 0, 3, 4, 5)).reshape(B, H, n_chunks_pad, Ct, V_pad)
@@ -2031,7 +2038,13 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
 
     # reverse segments
     seg_inputs_rev = (q_tm[::-1], k_tm[::-1], v_tm[::-1], g_tm[::-1], b_tm[::-1], dO_tm[::-1], Sstart_tm[::-1])
-    dS0, grads_rev = lax.scan(seg_bwd, dS_next0, seg_inputs_rev, length=n_segments)
+    dS0, grads_rev = lax.scan(
+        seg_bwd,
+        dS_next0,
+        seg_inputs_rev,
+        length=n_segments,
+        unroll=_GDN_SEGMENT_SCAN_UNROLL,
+    )
     grads = jax.tree_util.tree_map(lambda x: x[::-1], grads_rev)
 
     dq_seg, dk_seg, dv_seg, dg_seg, db_seg = grads  # each: (n_segments,B,H,seg,Ct,...)
