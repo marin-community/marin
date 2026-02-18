@@ -256,7 +256,6 @@ class ZephyrCoordinator:
         self,
         chunk_prefix: str,
         coordinator_handle: ActorHandle,
-        expected_worker_count: int,
     ) -> None:
         """Initialize coordinator for push-based worker registration.
 
@@ -266,13 +265,11 @@ class ZephyrCoordinator:
         Args:
             chunk_prefix: Storage prefix for intermediate chunks
             coordinator_handle: Handle to this coordinator actor (passed from context)
-            expected_worker_count: Number of workers expected to register
         """
         self._chunk_prefix = chunk_prefix
         self._self_handle = coordinator_handle
-        self._expected_workers = expected_worker_count
 
-        logger.info("Coordinator initialized, expecting %d workers to register", expected_worker_count)
+        logger.info("Coordinator initialized")
 
         # Start coordinator background loop (heartbeat checking only)
         self._coordinator_thread = threading.Thread(
@@ -863,14 +860,17 @@ class ZephyrContext:
     """Execution context for Zephyr pipelines.
 
     Creates a coordinator actor on __enter__ which owns and manages the worker
-    pool. Workers persist across pipeline stages and execute() calls, allowing
-    cached state (tokenizers, models) to be reused. Shared data broadcast via
-    put() is delivered to workers with each task.
+    pool. Workers are created lazily on the first execute() call, sized to
+    min(max_workers, plan.num_shards) to avoid over-provisioning. Workers
+    persist across pipeline stages and execute() calls, allowing cached state
+    (tokenizers, models) to be reused. Shared data broadcast via put() is
+    delivered to workers with each task.
 
     Args:
         client: The fray client to use. If None, auto-detects using current_client().
-        num_workers: Number of workers. If None, defaults to os.cpu_count() for LocalClient,
-            or 128 for distributed clients.
+        max_workers: Upper bound on worker count. The actual count is
+            min(max_workers, num_shards), computed at first execute(). If None,
+            defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
         resources: Resource config per worker.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
@@ -879,7 +879,7 @@ class ZephyrContext:
     """
 
     client: Client | None = None
-    num_workers: int | None = None
+    max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
@@ -888,6 +888,7 @@ class ZephyrContext:
     _coordinator: ActorHandle | None = field(default=None, repr=False)
     _coordinator_group: Any = field(default=None, repr=False)
     _worker_group: Any = field(default=None, repr=False)
+    _worker_count: int = field(default=0, repr=False)
 
     def __post_init__(self):
         if self.client is None:
@@ -895,14 +896,15 @@ class ZephyrContext:
 
             self.client = current_client()
 
-        if self.num_workers is None:
+        if self.max_workers is None:
             from fray.v2.local_backend import LocalClient
 
             if isinstance(self.client, LocalClient):
-                self.num_workers = os.cpu_count() or 1
+                self.max_workers = os.cpu_count() or 1
             else:
-                # Default to 128 for distributed, but allow override for testing
-                self.num_workers = int(os.environ.get("ZEPHYR_NUM_WORKERS", 128))
+                # Default to 128 for distributed, but allow override
+                env_val = os.environ.get("ZEPHYR_MAX_WORKERS")
+                self.max_workers = int(env_val) if env_val else 128
 
         if self.chunk_storage_prefix is None:
             marin_prefix = os.environ.get("MARIN_PREFIX", "")
@@ -944,6 +946,7 @@ class ZephyrContext:
 
         try:
             self._ensure_coordinator()
+            self._ensure_workers(plan.num_shards)
 
             # Run pipeline on coordinator (blocking call)
             results = self._coordinator.run_pipeline.remote(plan, self._shared_data, execution_id, hints).result()
@@ -959,7 +962,7 @@ class ZephyrContext:
             _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
     def _ensure_coordinator(self) -> None:
-        """Create coordinator and workers if not already initialized."""
+        """Create coordinator if not already initialized."""
         if self._coordinator is not None:
             return
 
@@ -975,27 +978,44 @@ class ZephyrContext:
         )
         self._coordinator = self._coordinator_group.wait_ready()[0]
 
-        # Initialize coordinator with expected worker count (push-based registration)
         self._coordinator.initialize.remote(
             self.chunk_storage_prefix,
             self._coordinator,
-            self.num_workers,
         ).result()
 
-        # Create workers with coordinator handle - workers will self-register
-        logger.info("Starting worker group for %d workers", self.num_workers)
+        logger.info("Coordinator initialized for %s", self.name)
+
+    def _ensure_workers(self, num_shards: int) -> None:
+        """Create workers if not already initialized, sized to demand.
+
+        The worker count is min(max_workers, num_shards) to avoid
+        over-provisioning when there are fewer shards than the cap.
+        """
+        if self._worker_group is not None or num_shards == 0:
+            return
+
+        assert self.max_workers is not None  # set by __post_init__
+        actual_workers = min(self.max_workers, num_shards)
+        logger.info(
+            "Starting worker group: %d workers (max_workers=%d, num_shards=%d)",
+            actual_workers,
+            self.max_workers,
+            num_shards,
+        )
         self._worker_group = self.client.create_actor_group(
             ZephyrWorker,
             self._coordinator,  # Pass coordinator handle as init arg
             name=f"zephyr-{self.name}-workers",
-            count=self.num_workers,
+            count=actual_workers,
             resources=self.resources,
         )
+
+        self._worker_count = actual_workers
 
         # Wait for at least one worker to be ready before proceeding
         self._worker_group.wait_ready(count=1, timeout=3600.0)
 
-        logger.info("ZephyrContext initialized with coordinator and %d workers", self.num_workers)
+        logger.info("ZephyrContext initialized with coordinator and %d workers", actual_workers)
 
     def shutdown(self) -> None:
         """Shutdown coordinator and all workers."""
@@ -1014,7 +1034,7 @@ class ZephyrContext:
         self._worker_group = None
 
     def __enter__(self) -> ZephyrContext:
-        # Eagerly initialize coordinator and workers on context entry
+        # Eagerly initialize coordinator; workers are deferred to first execute()
         self._ensure_coordinator()
         return self
 

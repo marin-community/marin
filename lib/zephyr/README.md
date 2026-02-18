@@ -167,7 +167,7 @@ Zephyr uses an actor-based execution model with a pull-based task distribution p
 User Code
     │
     ▼
-ZephyrContext(client, num_workers, resources)
+ZephyrContext(client, max_workers, resources)
     │
     ├── .put(name, obj)              # broadcast shared data
     ├── .execute(dataset)             # run pipeline

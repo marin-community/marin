@@ -151,7 +151,7 @@ def run_local(
 
     with ZephyrContext(
         client=client,
-        num_workers=config.max_parallelism,
+        max_workers=config.max_parallelism,
         resources=resources,
         chunk_storage_prefix=chunk_storage_prefix,
         name="cli",
