@@ -95,6 +95,29 @@ def test_render_template_raises_on_missing_variable():
         render_template(template, name="Alice")
 
 
+def test_render_template_raises_on_unused_variable():
+    """render_template() should raise ValueError when extra variables are passed."""
+    template = "Hello {{ name }}"
+    with pytest.raises(ValueError, match="Unused template variables: extra"):
+        render_template(template, name="Alice", extra="unused")
+
+
+def test_render_template_rejects_sloppy_whitespace():
+    """render_template() requires exactly one space inside braces."""
+    # Extra spaces should NOT match, leaving the placeholder unsubstituted.
+    # Since the variable is passed but never used, we expect an "unused" error.
+    template = "Hello {{  name  }}"
+    with pytest.raises(ValueError, match="Unused template variables: name"):
+        render_template(template, name="Alice")
+
+
+def test_render_template_mixed_syntaxes():
+    """render_template() handles Iris, Docker, and shell syntaxes together."""
+    template = 'echo ${PATH}; docker inspect --format "{{.State.Status}}" {{ container }}; ' "echo {{ greeting }}"
+    result = render_template(template, container="myapp", greeting="hi")
+    assert result == 'echo ${PATH}; docker inspect --format "{{.State.Status}}" myapp; echo hi'
+
+
 def test_worker_bootstrap_script_generation():
     """build_worker_bootstrap_script() should generate valid script without escaping issues."""
     from iris.cluster.platform.bootstrap import build_worker_bootstrap_script

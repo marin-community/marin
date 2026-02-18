@@ -26,29 +26,38 @@ logger = logging.getLogger(__name__)
 def render_template(template: str, **variables: str | int) -> str:
     """Render a template string with {{ variable }} placeholders.
 
-    Uses {{ variable }} syntax (double braces with spaces) to avoid conflicts
-    with shell ${var} and Docker {{.Field}} syntax.
+    Uses ``{{ variable }}`` syntax (double braces with exactly one space) to
+    avoid conflicts with shell ``${var}`` and Docker ``{{.Field}}`` syntax.
 
     Args:
-        template: Template string with {{ variable }} placeholders
-        **variables: Variable values to substitute
+        template: Template string with ``{{ variable }}`` placeholders.
+        **variables: Variable values to substitute.
 
     Returns:
-        Rendered template string
+        Rendered template string.
 
     Raises:
-        ValueError: If a required variable is missing from the template
+        ValueError: If a required variable is missing from the template or if
+            variables are passed that do not appear in the template.
     """
+    used_vars: set[str] = set()
 
     def replace_var(match: re.Match) -> str:
         var_name = match.group(1)
         if var_name not in variables:
             raise ValueError(f"Template variable '{var_name}' not provided")
+        used_vars.add(var_name)
         value = variables[var_name]
         return str(value)
 
-    # Match {{ variable_name }} (double braces with spaces and identifier)
-    return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace_var, template)
+    # Match {{ variable_name }} — exactly one space inside each brace pair.
+    result = re.sub(r"\{\{ (\w+) \}\}", replace_var, template)
+
+    unused = set(variables) - used_vars
+    if unused:
+        raise ValueError(f"Unused template variables: {', '.join(sorted(unused))}")
+
+    return result
 
 
 # ============================================================================
