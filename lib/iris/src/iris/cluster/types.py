@@ -12,6 +12,7 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
+import json
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -361,6 +362,15 @@ class Constraint:
             proto.value.CopyFrom(AttributeValue(self.value).to_proto())
         return proto
 
+    @staticmethod
+    def from_proto(proto: cluster_pb2.Constraint) -> "Constraint":
+        """Convert from protobuf representation."""
+        op = ConstraintOp(proto.op)
+        value: str | int | float | None = None
+        if proto.HasField("value"):
+            value = AttributeValue.from_proto(proto.value).value
+        return Constraint(key=proto.key, op=op, value=value)
+
 
 @dataclass(frozen=True)
 class CoschedulingConfig:
@@ -456,7 +466,6 @@ class ResourceSpec:
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
-    regions: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
         """Convert to wire format."""
@@ -466,7 +475,6 @@ class ResourceSpec:
             cpu=self.cpu,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            regions=list(self.regions or []),
         )
         if self.device is not None:
             spec.device.CopyFrom(self.device)
@@ -577,11 +585,162 @@ class Namespace(str):
 
 
 PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
+REGION_ATTRIBUTE_KEY = "region"
 
 
 def preemptible_constraint(preemptible: bool = True) -> Constraint:
     """Constraint requiring workers to be preemptible (or not)."""
     return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
+
+
+def region_constraint(region: str) -> Constraint:
+    """Constraint requiring workers to be in a given region."""
+    if not region:
+        raise ValueError("region must be non-empty")
+    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=region)
+
+
+@dataclass(frozen=True)
+class NormalizedConstraints:
+    """Normalized canonical placement constraints derived from proto constraints."""
+
+    preemptible: bool | None
+    required_regions: frozenset[str] | None
+
+
+def preemptible_preference_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
+    """Extract preemptible preference from constraints.
+
+    Returns:
+        True if explicitly required preemptible workers, False if explicitly
+        requiring non-preemptible workers, or None if unspecified.
+
+    Raises:
+        ValueError: If multiple conflicting preemptible constraints are present
+            or an invalid non-boolean value is used.
+    """
+    values: set[bool] = set()
+    for constraint in constraints:
+        if constraint.key != PREEMPTIBLE_ATTRIBUTE_KEY:
+            continue
+        if constraint.op != cluster_pb2.CONSTRAINT_OP_EQ:
+            raise ValueError("preemptible constraint must use EQ")
+        if not constraint.value.HasField("string_value"):
+            raise ValueError("preemptible constraint requires string value")
+        raw = constraint.value.string_value.strip().lower()
+        if raw == "true":
+            values.add(True)
+        elif raw == "false":
+            values.add(False)
+        else:
+            raise ValueError("preemptible constraint must be 'true' or 'false'")
+
+    if len(values) > 1:
+        raise ValueError("conflicting preemptible constraints")
+    return next(iter(values)) if values else None
+
+
+def required_regions_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> frozenset[str] | None:
+    """Extract required regions from constraints.
+
+    Returns:
+        Set of required regions when specified, otherwise None.
+
+    Raises:
+        ValueError: If region constraints use invalid operators/values or contain
+            conflicting EQ values.
+    """
+    regions: set[str] = set()
+    for constraint in constraints:
+        if constraint.key != REGION_ATTRIBUTE_KEY:
+            continue
+        if constraint.op != cluster_pb2.CONSTRAINT_OP_EQ:
+            raise ValueError("region constraint must use EQ")
+        if not constraint.value.HasField("string_value"):
+            raise ValueError("region constraint requires string value")
+        region = constraint.value.string_value.strip()
+        if not region:
+            raise ValueError("region constraint must be non-empty")
+        regions.add(region)
+
+    if len(regions) > 1:
+        raise ValueError("conflicting region constraints")
+    return frozenset(regions) if regions else None
+
+
+def normalize_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> NormalizedConstraints:
+    """Normalize canonical placement constraints from protobuf constraints."""
+    return NormalizedConstraints(
+        preemptible=preemptible_preference_from_constraints(constraints),
+        required_regions=required_regions_from_constraints(constraints),
+    )
+
+
+def merge_constraints(parent: Sequence[Constraint], child: Sequence[Constraint]) -> list[Constraint]:
+    """Merge parent and child constraints with canonical-key override semantics."""
+
+    merged_by_key: dict[str, list[Constraint]] = {}
+    for constraint in parent:
+        merged_by_key.setdefault(constraint.key, []).append(constraint)
+
+    for key in (REGION_ATTRIBUTE_KEY, PREEMPTIBLE_ATTRIBUTE_KEY):
+        child_for_key = [constraint for constraint in child if constraint.key == key]
+        if child_for_key:
+            merged_by_key[key] = child_for_key
+
+    for constraint in child:
+        if constraint.key in (REGION_ATTRIBUTE_KEY, PREEMPTIBLE_ATTRIBUTE_KEY):
+            continue
+        existing = merged_by_key.setdefault(constraint.key, [])
+        if constraint not in existing:
+            existing.append(constraint)
+
+    result: list[Constraint] = []
+    for constraints_for_key in merged_by_key.values():
+        result.extend(constraints_for_key)
+    return result
+
+
+def constraints_to_json(constraints: Sequence[Constraint]) -> str:
+    """Serialize constraints to JSON for IRIS_JOB_CONSTRAINTS."""
+    encoded: list[dict[str, str | int | float | None]] = []
+    for constraint in constraints:
+        encoded.append(
+            {
+                "key": constraint.key,
+                "op": int(constraint.op),
+                "value": constraint.value,
+            }
+        )
+    return json.dumps(encoded)
+
+
+def constraints_from_json(raw: str) -> list[Constraint]:
+    """Deserialize constraints from JSON encoded by constraints_to_json()."""
+    if not raw:
+        return []
+    decoded = json.loads(raw)
+    if not isinstance(decoded, list):
+        raise ValueError("constraints JSON must be a list")
+
+    constraints: list[Constraint] = []
+    for item in decoded:
+        if not isinstance(item, dict):
+            raise ValueError("constraint item must be an object")
+        key = item.get("key")
+        op = item.get("op")
+        value = item.get("value")
+        if not isinstance(key, str):
+            raise ValueError("constraint key must be a string")
+        if not isinstance(op, int):
+            raise ValueError("constraint op must be an int")
+        constraints.append(Constraint(key=key, op=ConstraintOp(op), value=value))
+    return constraints
+
+
+def constraints_from_proto(constraints: Sequence[cluster_pb2.Constraint]) -> list[Constraint]:
+    """Convert protobuf constraints to dataclass constraints."""
+    return [Constraint.from_proto(constraint) for constraint in constraints]
 
 
 def is_job_finished(state: int) -> bool:

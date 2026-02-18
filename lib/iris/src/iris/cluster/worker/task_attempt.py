@@ -19,7 +19,13 @@ from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime
-from iris.cluster.types import DEFAULT_BASE_IMAGE, JobName, is_task_finished
+from iris.cluster.types import (
+    DEFAULT_BASE_IMAGE,
+    JobName,
+    constraints_from_proto,
+    constraints_to_json,
+    is_task_finished,
+)
 from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -161,6 +167,8 @@ def build_iris_env(
     user_env_vars = dict(task.request.environment.env_vars)
     if user_env_vars:
         env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
+    if task.request.constraints:
+        env["IRIS_JOB_CONSTRAINTS"] = constraints_to_json(constraints_from_proto(task.request.constraints))
 
     # Inject allocated ports
     for name, port in task.ports.items():
@@ -195,6 +203,7 @@ class TaskAttempt:
         worker_metadata: WorkerMetadata,
         worker_id: str | None,
         controller_address: str | None,
+        default_task_env: dict[str, str],
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
         log_sink: LogSink,
@@ -209,6 +218,7 @@ class TaskAttempt:
             worker_metadata: Worker's hardware/environment metadata
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
+            default_task_env: Worker-level default env vars injected into task containers
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
@@ -219,6 +229,7 @@ class TaskAttempt:
         self._worker_metadata = worker_metadata
         self._worker_id = worker_id
         self._controller_address = controller_address
+        self._default_task_env = default_task_env
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
@@ -447,16 +458,14 @@ class TaskAttempt:
         Prepares the container configuration including environment variables,
         mounts, and workdir setup. The actual container is not started yet.
         """
-        # Build environment from user-provided vars + EnvironmentConfig
-        env_config = self.request.environment
-        env = dict(env_config.env_vars)
-
         iris_env = build_iris_env(
             self,
             self._worker_id,
             self._controller_address,
         )
-        env.update(iris_env)
+        env = dict(iris_env)
+        env.update(self._default_task_env)
+        env.update(dict(self.request.environment.env_vars))
 
         # uv needs a writable directory for Python downloads.
         # Use a subdirectory of the cache which is bind-mounted from the worker.

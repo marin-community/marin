@@ -28,7 +28,7 @@ from enum import Enum
 
 from iris.cluster.platform.base import Platform, PlatformError, QuotaExhaustedError, SliceHandle, VmHandle
 from iris.cluster.platform.bootstrap import WorkerBootstrap
-from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_tpu_topology
+from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, get_tpu_topology
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
@@ -86,6 +86,7 @@ class DemandEntry:
     constraints: list[cluster_pb2.Constraint]
     resources: cluster_pb2.ResourceSpecProto
     preemptible: bool | None = None  # None = no preference
+    required_regions: frozenset[str] | None = None
     invalid_reason: str | None = None
 
 
@@ -127,11 +128,27 @@ def route_demand(
     unmet: list[UnmetDemand] = []
     group_reasons: dict[str, str] = {}
 
+    def group_region(group: ScalingGroup) -> str | None:
+        if group.config.HasField("worker"):
+            region = group.config.worker.attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
+            if region:
+                return region
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone.rsplit("-", 1)[0]
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
             return False
         if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
             return False
+        if entry.required_regions:
+            region = group_region(group)
+            if region not in entry.required_regions:
+                return False
         if entry.invalid_reason:
             return False
         if entry.coschedule_group_id and group.num_vms != len(entry.task_ids):
@@ -183,10 +200,12 @@ def route_demand(
             for g in sorted_groups
             if g.matches_device_requirement(entry.device_type, entry.device_variant)
             and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
+            and (not entry.required_regions or group_region(g) in entry.required_regions)
         ]
         if not matching_groups:
             reason = (
                 f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
+                f", required_regions={sorted(entry.required_regions) if entry.required_regions else []}"
                 f", available groups={[g.name for g in sorted_groups]}"
             )
             unmet.append(UnmetDemand(entry=entry, reason=reason))
@@ -264,6 +283,7 @@ def bootstrap_slice_vms(
     handle: SliceHandle,
     worker_bootstrap: WorkerBootstrap,
     threads: ThreadContainer,
+    scale_group_config: config_pb2.ScaleGroupConfig | None = None,
     timeout: float = 600.0,
     poll_interval: float = 10.0,
     boot_timeout: float = 1800.0,
@@ -296,7 +316,7 @@ def bootstrap_slice_vms(
 
                 def _do_bootstrap(stop_event, *, _vm=vm, _box=result_box):
                     try:
-                        _box.append(("ok", worker_bootstrap.bootstrap_vm(_vm)))
+                        _box.append(("ok", worker_bootstrap.bootstrap_vm(_vm, scale_group_config=scale_group_config)))
                     except Exception as e:
                         _box.append(("error", e))
 
@@ -715,7 +735,9 @@ class Autoscaler:
         """
         bootstrap_logs: dict[str, str] = {}
         if self._worker_bootstrap:
-            bootstrap_logs = bootstrap_slice_vms(handle, self._worker_bootstrap, self._threads)
+            group = self._groups.get(scale_group)
+            group_config = group.config if group else None
+            bootstrap_logs = bootstrap_slice_vms(handle, self._worker_bootstrap, self._threads, group_config)
 
         self._register_slice_vms(handle, scale_group, bootstrap_logs)
 

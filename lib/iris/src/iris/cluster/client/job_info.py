@@ -11,7 +11,7 @@ import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from iris.cluster.types import JobName
+from iris.cluster.types import Constraint, JobName, constraints_from_json
 
 
 @dataclass
@@ -41,6 +41,9 @@ class JobInfo:
 
     env: dict[str, str] = field(default_factory=dict)
     """Explicit env vars from the job's EnvironmentConfig, for child job inheritance."""
+
+    constraints: list[Constraint] = field(default_factory=list)
+    """Explicit job constraints for child job inheritance."""
 
     @property
     def job_id(self) -> JobName:
@@ -75,6 +78,8 @@ def get_job_info() -> JobInfo | None:
             return None
         job_env_json = os.environ.get("IRIS_JOB_ENV", "")
         job_env = json.loads(job_env_json) if job_env_json else {}
+        constraints_json = os.environ.get("IRIS_JOB_CONSTRAINTS", "")
+        constraints = constraints_from_json(constraints_json) if constraints_json else []
 
         info = JobInfo(
             task_id=task_id,
@@ -88,6 +93,7 @@ def get_job_info() -> JobInfo | None:
             bundle_gcs_path=os.environ.get("IRIS_BUNDLE_GCS_PATH"),
             ports=_parse_ports_from_env(),
             env=job_env,
+            constraints=constraints,
         )
         _job_info.set(info)
         return info

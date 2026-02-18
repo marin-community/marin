@@ -3,7 +3,9 @@
 
 """Click-based CLI for the Iris worker daemon."""
 
+import json
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -13,6 +15,28 @@ from iris.cluster.config import load_config
 from iris.cluster.platform.factory import create_platform
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.logging import configure_logging
+
+
+def _load_task_default_env() -> dict[str, str]:
+    """Load default task environment injected by bootstrap."""
+    raw = os.environ.get("IRIS_TASK_DEFAULT_ENV_JSON", "")
+    if not raw:
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_TASK_DEFAULT_ENV_JSON must decode to a dictionary")
+    return {str(k): str(v) for k, v in parsed.items()}
+
+
+def _load_worker_attributes() -> dict[str, str]:
+    """Parse IRIS_WORKER_ATTRIBUTES JSON into a map."""
+    raw = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
+    if not raw:
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_WORKER_ATTRIBUTES must decode to a dictionary")
+    return {str(k): str(v) for k, v in parsed.items()}
 
 
 @click.group()
@@ -61,6 +85,8 @@ def serve(
         port_range=(port_start, port_end),
         controller_address=controller_address,
         worker_id=worker_id,
+        worker_attributes=_load_worker_attributes(),
+        default_task_env=_load_task_default_env(),
     )
 
     worker = Worker(config)

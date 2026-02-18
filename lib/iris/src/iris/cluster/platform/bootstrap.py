@@ -10,6 +10,7 @@ is performed by the worker environment probe at runtime.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shlex
@@ -77,7 +78,7 @@ class WorkerBootstrap:
     def __init__(self, cluster_config: config_pb2.IrisClusterConfig):
         self._cluster_config = cluster_config
 
-    def bootstrap_vm(self, vm: VmHandle) -> str:
+    def bootstrap_vm(self, vm: VmHandle, scale_group_config: config_pb2.ScaleGroupConfig | None = None) -> str:
         """Bootstrap a single VM: wait for connection, validate, run script.
 
         Returns bootstrap log text. Raises PlatformError on failure.
@@ -86,7 +87,7 @@ class WorkerBootstrap:
             raise PlatformError(f"VM {vm.vm_id} failed to become reachable within timeout.")
         if not vm.internal_address:
             raise PlatformError(f"VM {vm.vm_id} has no internal address.")
-        script = build_worker_bootstrap_script(self._cluster_config, vm.internal_address)
+        script = build_worker_bootstrap_script(self._cluster_config, vm.internal_address, scale_group_config)
         vm.bootstrap(script)
         return vm.bootstrap_log
 
@@ -203,14 +204,28 @@ exit 1
 """
 
 
-def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str:
+def build_worker_env_flags(
+    config: config_pb2.BootstrapConfig,
+    vm_address: str,
+    scale_group_config: config_pb2.ScaleGroupConfig | None = None,
+) -> str:
     """Generate docker -e flags with proper escaping.
 
     TPU metadata is probed by the worker process via env_probe.py, so bootstrap
     only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
     """
+    env_vars = dict(config.env_vars)
+    if scale_group_config and scale_group_config.HasField("worker"):
+        attributes = dict(scale_group_config.worker.attributes)
+        if attributes:
+            env_vars["IRIS_WORKER_ATTRIBUTES"] = json.dumps(attributes, sort_keys=True)
+        if scale_group_config.worker.env:
+            env_vars["IRIS_TASK_DEFAULT_ENV_JSON"] = json.dumps(dict(scale_group_config.worker.env))
+        if scale_group_config.name:
+            env_vars["IRIS_SCALE_GROUP"] = scale_group_config.name
+
     flags = []
-    for k, v in config.env_vars.items():
+    for k, v in env_vars.items():
         flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
@@ -222,6 +237,7 @@ def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) 
 def build_worker_bootstrap_script(
     cluster_config: config_pb2.IrisClusterConfig,
     vm_address: str,
+    scale_group_config: config_pb2.ScaleGroupConfig | None = None,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
@@ -241,7 +257,7 @@ def build_worker_bootstrap_script(
     config_yaml = yaml.dump(config_to_dict(cluster_config), default_flow_style=False)
     config_setup = _build_config_setup(config_yaml, log_prefix="[iris-init]")
 
-    env_flags = build_worker_env_flags(bootstrap_config, vm_address)
+    env_flags = build_worker_env_flags(bootstrap_config, vm_address, scale_group_config)
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,

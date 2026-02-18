@@ -248,9 +248,6 @@ message ResourceSpecProto {
 
   // Device configuration
   DeviceConfig device = 5;
-
-  // Scheduling preferences
-  repeated string regions = 8; // Preferred cloud regions
 }
 
 // ============================================================================
@@ -697,6 +694,7 @@ message Worker {
     iris.time.Duration timeout = 7;
     repeated string ports = 8;
     int32 attempt_id = 9;
+    repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
   }
 
   message GetTaskStatusRequest {

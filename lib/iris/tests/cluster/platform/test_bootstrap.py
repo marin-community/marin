@@ -135,3 +135,21 @@ def test_worker_bootstrap_script_generation():
     assert "{{ docker_image }}" not in script
     assert "{{ cache_dir }}" not in script
     assert "{{ worker_port }}" not in script
+
+
+def test_worker_bootstrap_includes_scale_group_worker_settings():
+    from iris.cluster.platform.bootstrap import build_worker_bootstrap_script
+
+    config = _make_cluster_config()
+    group = config_pb2.ScaleGroupConfig(name="g")
+    group.worker.attributes["region"] = "us-west4"
+    group.worker.attributes["preemptible"] = "true"
+    group.worker.env["IRIS_REGION"] = "us-west4"
+
+    script = build_worker_bootstrap_script(config, vm_address="10.0.0.1", scale_group_config=group)
+
+    assert "IRIS_WORKER_ATTRIBUTES=" in script
+    assert '"region": "us-west4"' in script
+    assert '"preemptible": "true"' in script
+    assert "IRIS_TASK_DEFAULT_ENV_JSON=" in script
+    assert '"IRIS_REGION": "us-west4"' in script

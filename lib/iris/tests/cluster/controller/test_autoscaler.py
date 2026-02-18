@@ -22,7 +22,7 @@ from iris.cluster.controller.autoscaler import (
 )
 from iris.cluster.controller.scaling_group import ScalingGroup, SliceLifecycleState
 from iris.cluster.platform.base import CloudSliceState, CloudVmState, QuotaExhaustedError, SliceStatus, VmStatus
-from iris.cluster.types import DeviceType, VmWorkerStatus
+from iris.cluster.types import REGION_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
@@ -928,6 +928,42 @@ class TestPreemptibleRouting:
         assert result.unmet_entries == []
 
 
+class TestRegionRouting:
+    def test_route_demand_filters_by_required_region(self):
+        config_west = make_scale_group_config(name="west", max_slices=5, priority=10, zones=["us-west4-b"])
+        config_west.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config_eu.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+
+        west = ScalingGroup(config_west, make_mock_platform())
+        eu = ScalingGroup(config_eu, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        for entry in demand:
+            entry.required_regions = frozenset({"us-west4"})
+
+        result = route_demand([west, eu], demand)
+
+        assert len(result.routed_entries["west"]) == 2
+        assert result.routed_entries.get("eu") is None
+        assert result.unmet_entries == []
+
+    def test_route_demand_unmet_when_no_group_matches_region(self):
+        config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config_eu.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+        eu = ScalingGroup(config_eu, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_regions = frozenset({"us-west4"})
+
+        result = route_demand([eu], demand)
+
+        assert result.routed_entries.get("eu") is None
+        assert len(result.unmet_entries) == 1
+        assert "required_regions=['us-west4']" in result.unmet_entries[0].reason
+
+
 class TestAutoscalerWaterfallEndToEnd:
     """End-to-end tests for waterfall routing with FakePlatform."""
 
@@ -1711,9 +1747,9 @@ class TestBootstrapTimeout:
         hang_event = threading.Event()
         original_bootstrap = worker_bootstrap.bootstrap_vm
 
-        def slow_bootstrap(vm):
+        def slow_bootstrap(vm, scale_group_config=None):
             hang_event.wait(timeout=10)
-            return original_bootstrap(vm)
+            return original_bootstrap(vm, scale_group_config=scale_group_config)
 
         worker_bootstrap.bootstrap_vm = slow_bootstrap
 
@@ -1744,9 +1780,9 @@ class TestBootstrapTimeout:
         hang_event = threading.Event()
         original_bootstrap = worker_bootstrap.bootstrap_vm
 
-        def slow_bootstrap(vm):
+        def slow_bootstrap(vm, scale_group_config=None):
             hang_event.wait(timeout=10)
-            return original_bootstrap(vm)
+            return original_bootstrap(vm, scale_group_config=scale_group_config)
 
         worker_bootstrap.bootstrap_vm = slow_bootstrap
 
