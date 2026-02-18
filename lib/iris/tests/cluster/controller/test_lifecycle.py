@@ -17,7 +17,7 @@
 
 """Tests for controller lifecycle functions (start, stop, reload).
 
-Uses fake Platform and StandaloneVmHandle implementations to exercise the
+Uses fake Platform and StandaloneWorkerHandle implementations to exercise the
 lifecycle orchestration without SSH, Docker, or cloud API calls. The
 wait_healthy function is patched since it does real SSH polling internally.
 """
@@ -36,10 +36,10 @@ from iris.cluster.controller.lifecycle import (
     stop_controller,
 )
 from iris.cluster.platform.base import (
-    CloudVmState,
+    CloudWorkerState,
     CommandResult,
     SliceHandle,
-    VmStatus,
+    WorkerStatus,
 )
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
@@ -49,11 +49,11 @@ from iris.time_utils import Duration
 # ============================================================================
 
 
-class FakeVmHandle:
-    """Fake StandaloneVmHandle for testing lifecycle orchestration.
+class FakeWorkerHandle:
+    """Fake StandaloneWorkerHandle for testing lifecycle orchestration.
 
     Tracks calls to terminate, bootstrap, set_labels, set_metadata so tests
-    can verify the lifecycle functions interact with VMs correctly.
+    can verify the lifecycle functions interact with workers correctly.
     """
 
     def __init__(
@@ -82,8 +82,8 @@ class FakeVmHandle:
     def external_address(self) -> str | None:
         return None
 
-    def status(self) -> VmStatus:
-        return VmStatus(state=CloudVmState.RUNNING)
+    def status(self) -> WorkerStatus:
+        return WorkerStatus(state=CloudWorkerState.RUNNING)
 
     def wait_for_connection(
         self,
@@ -121,14 +121,14 @@ class FakePlatform:
 
     def __init__(
         self,
-        existing_vms: list[FakeVmHandle] | None = None,
-        vm_to_create: FakeVmHandle | None = None,
+        existing_vms: list[FakeWorkerHandle] | None = None,
+        vm_to_create: FakeWorkerHandle | None = None,
     ):
         self._existing_vms = existing_vms or []
-        self._vm_to_create = vm_to_create or FakeVmHandle()
-        self.created_vms: list[FakeVmHandle] = []
+        self._vm_to_create = vm_to_create or FakeWorkerHandle()
+        self.created_vms: list[FakeWorkerHandle] = []
 
-    def create_vm(self, config: config_pb2.VmConfig) -> FakeVmHandle:
+    def create_vm(self, config: config_pb2.VmConfig) -> FakeWorkerHandle:
         self.created_vms.append(self._vm_to_create)
         return self._vm_to_create
 
@@ -149,7 +149,7 @@ class FakePlatform:
         self,
         zones: list[str],
         labels: dict[str, str] | None = None,
-    ) -> list[FakeVmHandle]:
+    ) -> list[FakeWorkerHandle]:
         return list(self._existing_vms)
 
     def tunnel(
@@ -198,7 +198,7 @@ LIFECYCLE_MODULE = "iris.cluster.controller.lifecycle"
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
 def test_start_controller_fresh(mock_wait_healthy, mock_bootstrap_script, config):
     """No existing controller VM -- creates a new one, bootstraps, health checks, labels."""
-    new_vm = FakeVmHandle(vm_id="ctrl-new", internal_address="10.0.0.5")
+    new_vm = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.5")
     platform = FakePlatform(existing_vms=[], vm_to_create=new_vm)
 
     address, vm = start_controller(platform, config)
@@ -215,7 +215,7 @@ def test_start_controller_fresh(mock_wait_healthy, mock_bootstrap_script, config
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
 def test_start_controller_reuses_healthy_existing(mock_wait_healthy, mock_bootstrap_script, config):
     """Existing labeled VM is healthy -- reuses it without creating a new one."""
-    existing = FakeVmHandle(vm_id="ctrl-existing", internal_address="10.0.0.2")
+    existing = FakeWorkerHandle(vm_id="ctrl-existing", internal_address="10.0.0.2")
     platform = FakePlatform(existing_vms=[existing])
 
     address, vm = start_controller(platform, config)
@@ -232,8 +232,8 @@ def test_start_controller_reuses_healthy_existing(mock_wait_healthy, mock_bootst
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy")
 def test_start_controller_replaces_unhealthy_existing(mock_wait_healthy, mock_bootstrap_script, config):
     """Existing VM is unhealthy -- terminates it and creates a fresh one."""
-    unhealthy = FakeVmHandle(vm_id="ctrl-sick", internal_address="10.0.0.2")
-    replacement = FakeVmHandle(vm_id="ctrl-new", internal_address="10.0.0.6")
+    unhealthy = FakeWorkerHandle(vm_id="ctrl-sick", internal_address="10.0.0.2")
+    replacement = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.6")
     platform = FakePlatform(existing_vms=[unhealthy], vm_to_create=replacement)
 
     # First call checks existing (unhealthy), second call checks new VM (healthy)
@@ -251,7 +251,7 @@ def test_start_controller_replaces_unhealthy_existing(mock_wait_healthy, mock_bo
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
 def test_start_controller_connection_timeout_terminates_vm(mock_wait_healthy, mock_bootstrap_script, config):
     """VM created but wait_for_connection fails -- terminates the VM and raises."""
-    unreachable = FakeVmHandle(
+    unreachable = FakeWorkerHandle(
         vm_id="ctrl-unreachable",
         internal_address="10.0.0.9",
         wait_for_connection_result=False,
@@ -272,7 +272,7 @@ def test_start_controller_connection_timeout_terminates_vm(mock_wait_healthy, mo
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
 def test_stop_controller_found(mock_wait_healthy, config):
     """Finds controller VM and terminates it."""
-    existing = FakeVmHandle(vm_id="ctrl-to-stop")
+    existing = FakeWorkerHandle(vm_id="ctrl-to-stop")
     platform = FakePlatform(existing_vms=[existing])
 
     stop_controller(platform, config)
@@ -298,7 +298,7 @@ def test_stop_controller_not_found(mock_wait_healthy, config):
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
 def test_reload_controller_success(mock_wait_healthy, mock_bootstrap_script, config):
     """Discovers existing VM, re-bootstraps, health check passes, returns address."""
-    existing = FakeVmHandle(vm_id="ctrl-reload", internal_address="10.0.0.3")
+    existing = FakeWorkerHandle(vm_id="ctrl-reload", internal_address="10.0.0.3")
     platform = FakePlatform(existing_vms=[existing])
 
     address = reload_controller(platform, config)
@@ -313,8 +313,8 @@ def test_reload_controller_success(mock_wait_healthy, mock_bootstrap_script, con
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
 def test_start_controller_duplicate_vms_raises(mock_wait_healthy, mock_bootstrap_script, config):
     """Multiple controller VMs found -- raises RuntimeError listing duplicates."""
-    vm1 = FakeVmHandle(vm_id="ctrl-dup-1", internal_address="10.0.0.1")
-    vm2 = FakeVmHandle(vm_id="ctrl-dup-2", internal_address="10.0.0.2")
+    vm1 = FakeWorkerHandle(vm_id="ctrl-dup-1", internal_address="10.0.0.1")
+    vm2 = FakeWorkerHandle(vm_id="ctrl-dup-2", internal_address="10.0.0.2")
     platform = FakePlatform(existing_vms=[vm1, vm2])
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
@@ -335,7 +335,7 @@ def test_reload_controller_no_vm_found(mock_wait_healthy, mock_bootstrap_script,
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=False)
 def test_reload_controller_health_check_fails(mock_wait_healthy, mock_bootstrap_script, config):
     """Reload bootstraps successfully but health check fails -- raises RuntimeError."""
-    existing = FakeVmHandle(vm_id="ctrl-reload-fail", internal_address="10.0.0.4")
+    existing = FakeWorkerHandle(vm_id="ctrl-reload-fail", internal_address="10.0.0.4")
     platform = FakePlatform(existing_vms=[existing])
 
     with pytest.raises(RuntimeError, match="failed health check after reload"):
@@ -347,8 +347,8 @@ def test_reload_controller_health_check_fails(mock_wait_healthy, mock_bootstrap_
 
 def test_stop_controller_duplicate_vms_raises(config):
     """stop_controller with multiple matching VMs raises RuntimeError."""
-    vm1 = FakeVmHandle(vm_id="ctrl-dup-1", internal_address="10.0.0.1")
-    vm2 = FakeVmHandle(vm_id="ctrl-dup-2", internal_address="10.0.0.2")
+    vm1 = FakeWorkerHandle(vm_id="ctrl-dup-1", internal_address="10.0.0.1")
+    vm2 = FakeWorkerHandle(vm_id="ctrl-dup-2", internal_address="10.0.0.2")
     platform = FakePlatform(existing_vms=[vm1, vm2])
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
