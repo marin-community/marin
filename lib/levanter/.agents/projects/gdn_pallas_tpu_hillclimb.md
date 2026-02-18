@@ -167,3 +167,37 @@ Each iteration should include:
   - `throughput/duration`: `0.23799s -> 0.24169s` (`+1.56%`).
 - Assessment: **low-impact / regression**. MFU gain is below 3% (negative), and dominant hotspot is unchanged (`custom-call` in the same GDN callsites).
 - Next hypothesis: escalate to a radical backward redesign that changes algorithmic decomposition (e.g., blockwise associative state propagation or a two-stage backward that avoids large per-call gradient tensors) so we can safely reduce both forward and backward launch count without vmem blowups.
+
+### Iteration 5 - Backward state tape with segmented forward launches
+- Date: 2026-02-18T16:55:00Z
+- Commit: (pending)
+- Dominant bottleneck carried in: `custom-call` from `jit__train_step` remained dominant in Iteration 4 (`4531.684 ms` in XProf `op_profile` by-program view), with biggest GDN sources at `gated_deltanet.py:2375` and `gated_deltanet.py:1335`.
+- Candidate shortlist (estimated upside / risk):
+  1. Full super-segment state tape (forward all chunks + backward no recompute) (`+10-20%`, high scoped-vmem risk).
+  2. Segmented-forward state tape + backward no-recompute (keep segment launch sizing, change backward dataflow) (`+8-15%`, medium implementation risk).
+  3. Blockwise associative state composition in backward (`>20%`, very high algorithmic/verification risk).
+- Selected hypothesis: implement option (2) to remove backward forward-recompute while keeping forward launches segment-bounded to avoid scoped-vmem blowups.
+- Change summary:
+  - Added per-chunk forward state tape output from TPU pallas forward kernel (`Schunkstarts_ref`) and threaded it through custom VJP residuals.
+  - Replaced backward in-kernel forward-recompute with direct `S_prev` tape consumption (`Sprev_chunks_ref`) in `_gdn_chunk_segment_bwd_kernel_tpu`.
+  - Updated flash forward path to run a segmented `lax.scan` of `_gdn_chunk_segment_fwd_pallas` (instead of one all-chunks super-segment launch), concatenating chunk-start tape for backward.
+  - Preserved segment scan unroll (`_GDN_SEGMENT_SCAN_UNROLL = 8`) and segment-bounded backward launch structure.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+  - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_chunkstarts_segfwd_i2_dev`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_chunkstarts_segfwd_i2_dev_130m_ch128_seg16_20steps-2c11a3`
+  - Trace location: `.profiles/wandb/gdn_chunkstarts_segfwd_i2_dev/plugins/profile/2026_02_18_16_49_38/perfetto_trace.json.gz`
+  - XProf extraction path: compared `run-...-profiler:v0` `xplane.pb` via `xprof.convert.raw_to_tool_data(..., tool="op_profile", group_by="program")` on dev TPU host.
+- Hotspots observed (before/after vs Iteration 4 run `gdn_supersegfwd_i1_ray_130m_ch128_seg16_20steps-51e61a`):
+  - `custom-call`: `4531.684 ms -> 4284.468 ms` (`-5.46%`), still dominant.
+  - GDN line hotspot: `gated_deltanet.py:2375 -> 2337`: `2359.334 ms -> 2246.928 ms` (`-4.76%`).
+  - GDN line hotspot: `gated_deltanet.py:1335 -> 1329`: `1852.074 ms -> 1713.839 ms` (`-7.46%`).
+  - Secondary shift: `all-gather` increased `562.782 ms -> 755.833 ms` (`+34.30%`), now clearly the #2 category behind `custom-call`.
+- MFU/throughput delta (vs Iteration 4 run):
+  - `throughput/mfu`: `4.1910 -> 4.3196` (`+3.07%`).
+  - `throughput/tokens_per_second`: `135577.14 -> 139737.23` (`+3.07%`).
+  - `throughput/duration`: `0.24169s -> 0.23450s` (`-2.98%`).
+- Assessment: moderate win; this clears prior scoped-vmem failure path and improves MFU above the 3% threshold, but the dominant hotspot category is still `custom-call`.
+- Next hypothesis: pursue a more radical launch/dataflow reduction in the remaining GDN custom-call path (e.g., associative/blockwise backward decomposition or fewer larger pallas calls that keep scoped-vmem bounded).
