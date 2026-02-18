@@ -1,0 +1,149 @@
+Literature Scaling Laws for Data Mixing — Two-Phase StarCoder Experiment
+N=60, target=eval/paloma/dolma_100_programing_languages/bpb
+y range: [0.9086, 2.5289], median=0.9289
+
+======================================================================
+BASELINES
+
+======================================================================
+
+--- PowerLaw (2-term) ---
+  CV: R²=0.6905  RMSE=0.1015  Spearman=0.7720  RMSE_bot=0.0113
+  Slice optimal: p1_sc=0.1852, pred=0.9030
+  2D optimal: p0_sc=0.0040, p1_sc=0.1851, pred=0.9033
+
+--- GP(Matern) ---
+  CV: R²=0.9389  RMSE=0.0443  Spearman=0.9413  RMSE_bot=0.0053
+  Slice optimal: p1_sc=0.2951, pred=0.9110
+  2D optimal: p0_sc=0.1715, p1_sc=0.1723, pred=0.8541
+
+  Actual best (slice): p1_sc=0.2814, bpb=0.9086
+  Actual best (2D):    p0_sc=0.0000, p1_sc=0.2814, bpb=0.9086
+
+======================================================================
+Paper 1: Data Mixing Laws (Ye et al., 2403.16952)
+M4: c + k*exp(Σ t_j*r_j)  |  M1: c + Σ k_j*exp(t_j*r_j)
+======================================================================
+
+--- DML_M4 (vdom) ---
+  CV: R²=-26.3165  RMSE=1.1468  Spearman=-0.0238  RMSE_bot=0.0725
+  Slice optimal: p1_sc=0.0020, pred=0.9894
+  2D optimal: p0_sc=0.0241, p1_sc=0.0022, pred=0.9894
+
+--- DML_M1 (vdom) ---
+  CV: R²=0.8164  RMSE=0.0834  Spearman=0.8322  RMSE_bot=0.0152
+  Slice optimal: p1_sc=0.2851, pred=0.9069
+  2D optimal: p0_sc=0.3897, p1_sc=0.2836, pred=0.8452
+
+--- DML_M4 (epoch) ---
+  CV: R²=-26.2712  RMSE=1.1427  Spearman=0.2042  RMSE_bot=0.0840
+  Slice optimal: p1_sc=0.0020, pred=0.9894
+  2D optimal: p0_sc=0.0241, p1_sc=0.0022, pred=0.9894
+
+--- DML_M1 (epoch) ---
+  CV: R²=-9.9347  RMSE=0.6918  Spearman=0.8336  RMSE_bot=0.0152
+  Slice optimal: p1_sc=0.2818, pred=0.9065
+  2D optimal: p0_sc=0.8080, p1_sc=0.2827, pred=0.8461
+
+  Actual best (slice): p1_sc=0.2814, bpb=0.9086
+  Actual best (2D):    p0_sc=0.0000, p1_sc=0.2814, bpb=0.9086
+
+======================================================================
+Paper 2: Scaling Laws for Optimal Data Mixtures (Liu et al., 2507.09404)
+Additive: E + 1/Σ(C_j * r_j^γ_j)
+======================================================================
+
+--- SLODM (vdom) ---
+  CV: R²=0.5059  RMSE=0.1286  Spearman=0.8266  RMSE_bot=0.0148
+  Slice optimal: p1_sc=0.2885, pred=0.9079
+  2D optimal: p0_sc=0.3906, p1_sc=0.2895, pred=0.8452
+
+--- SLODM (epoch) ---
+  CV: R²=0.5055  RMSE=0.1286  Spearman=0.8322  RMSE_bot=0.0148
+  Slice optimal: p1_sc=0.2885, pred=0.9079
+  2D optimal: p0_sc=0.3916, p1_sc=0.2892, pred=0.8454
+
+  Actual best (slice): p1_sc=0.2814, bpb=0.9086
+  Actual best (2D):    p0_sc=0.0000, p1_sc=0.2814, bpb=0.9086
+
+======================================================================
+Paper 3: BiMix (Park et al., 2405.14908)
+Multi-domain: Σ A_j/(r_j+eps)^α_j + C
+======================================================================
+
+--- BiMix (vdom) ---
+  CV: R²=0.5414  RMSE=0.1211  Spearman=0.7622  RMSE_bot=0.0181
+  Slice optimal: p1_sc=0.0520, pred=0.8981
+  2D optimal: p0_sc=0.5216, p1_sc=0.0518, pred=0.8949
+
+--- BiMix (epoch) ---
+  CV: R²=0.5574  RMSE=0.1195  Spearman=0.7566  RMSE_bot=0.0176
+  Slice optimal: p1_sc=0.0087, pred=0.8884
+  2D optimal: p0_sc=0.0585, p1_sc=0.0086, pred=0.8884
+
+  Actual best (slice): p1_sc=0.2814, bpb=0.9086
+  Actual best (2D):    p0_sc=0.0000, p1_sc=0.2814, bpb=0.9086
+
+======================================================================
+Paper 4: Aioli (Shin et al., 2411.05735)
+Static + interactions: c + b*exp(Σ t_j*r_j + Σ B_jk*r_j*r_k)
+======================================================================
+
+--- Aioli (vdom) ---
+  CV: R²=-22518.8441  RMSE=14.6752  Spearman=0.5594  RMSE_bot=0.0384
+  Slice optimal: p1_sc=0.3917, pred=0.8982
+  2D optimal: p0_sc=0.0043, p1_sc=0.3913, pred=0.8986
+
+--- Aioli (epoch) ---
+  CV: R²=-3.8304  RMSE=0.2186  Spearman=0.1865  RMSE_bot=0.0866
+  Slice optimal: p1_sc=0.3917, pred=0.8981
+  2D optimal: p0_sc=0.0044, p1_sc=0.3913, pred=0.8985
+
+  Actual best (slice): p1_sc=0.2814, bpb=0.9086
+  Actual best (2D):    p0_sc=0.0000, p1_sc=0.2814, bpb=0.9086
+
+======================================================================
+IMPROVED VARIANTS
+Tied params, hybrid models, weighted loss
+======================================================================
+
+--- DML_M1_tied (vdom) ---
+  CV: R²=0.1290  RMSE=0.1383  Spearman=0.5133  RMSE_bot=0.0726
+  Slice optimal: p1_sc=0.3185, pred=0.9787
+  2D optimal: p0_sc=0.3193, p1_sc=0.3201, pred=0.8000
+
+--- SLODM+linear (vdom) ---
+  CV: R²=-25.8275  RMSE=1.1634  Spearman=0.9245  RMSE_bot=0.0134
+  Slice optimal: p1_sc=0.3218, pred=0.9152
+  2D optimal: p0_sc=0.2662, p1_sc=0.1236, pred=0.8563
+
+--- DML_M1_weighted (vdom) ---
+  CV: R²=-234.5502  RMSE=3.1158  Spearman=0.8503  RMSE_bot=0.0088
+  Slice optimal: p1_sc=0.2785, pred=0.9086
+  2D optimal: p0_sc=0.4202, p1_sc=0.2778, pred=0.8853
+
+  Actual best (slice): p1_sc=0.2814, bpb=0.9086
+  Actual best (2D):    p0_sc=0.0000, p1_sc=0.2814, bpb=0.9086
+
+======================================================================
+SUMMARY — Ranked by RMSE_bot
+======================================================================
+Model                          R²    RMSE  Spearman  RMSE_bot
+------------------------------------------------------------
+GP(Matern)                 0.9389  0.0443    0.9413    0.0053
+DML_M1_weighted (vdom)    -234.5502  3.1158    0.8503    0.0088
+PowerLaw (2-term)          0.6905  0.1015    0.7720    0.0113
+SLODM+linear (vdom)       -25.8275  1.1634    0.9245    0.0134
+SLODM (vdom)               0.5059  0.1286    0.8266    0.0148
+SLODM (epoch)              0.5055  0.1286    0.8322    0.0148
+DML_M1 (vdom)              0.8164  0.0834    0.8322    0.0152
+DML_M1 (epoch)            -9.9347  0.6918    0.8336    0.0152
+BiMix (epoch)              0.5574  0.1195    0.7566    0.0176
+BiMix (vdom)               0.5414  0.1211    0.7622    0.0181
+Aioli (vdom)              -22518.8441 14.6752    0.5594    0.0384
+DML_M4 (vdom)             -26.3165  1.1468   -0.0238    0.0725
+DML_M1_tied (vdom)         0.1290  0.1383    0.5133    0.0726
+DML_M4 (epoch)            -26.2712  1.1427    0.2042    0.0840
+Aioli (epoch)             -3.8304  0.2186    0.1865    0.0866
+
+Saved plot to literature_scaling_laws.png

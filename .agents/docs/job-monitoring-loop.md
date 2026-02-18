@@ -15,6 +15,7 @@ Cluster-level actions are out of scope for this loop. Do not restart, recreate, 
 Ask the user for any missing information before proceeding. Example:
 
 > "I need a few details to start the monitoring loop:
+>
 > - Job ID?
 > - Cluster?
 > - Experiment script path?"
@@ -81,12 +82,14 @@ When step 4 (EVALUATE) detects an error, before restarting:
    - Report to user and exit the loop
 
 Examples of small fixes:
+
 - `NameError: name 'foo' is not defined` → typo in variable name
 - `ImportError: cannot import 'bar'` → missing or misspelled import
 - `SyntaxError` → missing comma, bracket, colon
 - `KeyError` → wrong dict key name (if obvious from context)
 
 Examples of complex issues (do not auto-fix):
+
 - OOM errors
 - Distributed training failures
 - Data loading issues
