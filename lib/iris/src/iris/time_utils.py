@@ -1,6 +1,7 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import random
 import time
 from collections.abc import Callable
@@ -413,8 +414,13 @@ class ExponentialBackoff:
         self._jitter = jitter
         self._attempt = 0
 
+        # Beyond this attempt count the raw interval exceeds maximum, so
+        # further exponentiation is pointless (and eventually overflows float64).
+        self._max_attempt = int(math.log(self._maximum / self._initial) / math.log(self._factor)) + 1
+
     def next_interval(self) -> float:
-        interval = self._initial * (self._factor**self._attempt)
+        effective_attempt = min(self._attempt, self._max_attempt)
+        interval = self._initial * (self._factor**effective_attempt)
         interval = min(interval, self._maximum)
 
         if self._jitter > 0:
