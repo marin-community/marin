@@ -1,0 +1,67 @@
+# PII scanner allowlist for the Marin codebase.
+#
+# Each entry suppresses findings matching a file glob + pattern type.
+# All entries here have been audited and are known-acceptable:
+# - contributor attribution in open-source projects
+# - academic author emails from public arxiv papers in test fixtures
+# - public web content in test fixture snapshots
+# - GCP service account identifiers (not credentials) in deployment docs
+# - documentation placeholder emails
+
+allowlist:
+  # --- Contributor attribution (standard open-source practice) ---
+  - file_glob: "**/CONTRIBUTORS.md"
+    pattern_name: email
+    reason: Public contributor attribution with commit counts
+
+  # --- Package author metadata ---
+  - file_glob: "**/pyproject.toml"
+    pattern_name: email
+    reason: Standard pyproject.toml author fields
+
+  # --- Test fixture snapshots from public arxiv papers ---
+  - file_glob: "tests/snapshots/ar5iv/**"
+    pattern_name: email
+    reason: Academic author emails from publicly published arxiv papers
+
+  # --- Test fixture snapshots from public web crawls (DCLM) ---
+  - file_glob: "tests/snapshots/dclm_hq/**"
+    pattern_name: email
+    reason: Emails from public websites in DCLM web crawl test fixtures
+
+  # --- Test fixture snapshots from public web pages ---
+  - file_glob: "tests/snapshots/web/**"
+    pattern_name: email
+    reason: Journalist/author emails from public web pages
+
+  # --- Test resources for deduplication (public RFCs/documents) ---
+  - file_glob: "tests/processing/**/resources/**"
+    pattern_name: email
+    reason: Emails from public RFC documents used as dedup test data
+
+  # --- Documentation and deployment (GCP service account identifiers) ---
+  - file_glob: "docs/**"
+    pattern_name: email
+    reason: GCP service account identifiers and placeholder emails in docs
+
+  - file_glob: "data_browser/**"
+    pattern_name: email
+    reason: GCP service account identifier in deployment script
+
+  - file_glob: ".github/**"
+    pattern_name: email
+    reason: GCP service account identifier in CI workflow
+
+  # --- Levanter library docs (code snippets with @-syntax) ---
+  - file_glob: "lib/levanter/docs/**"
+    pattern_name: email
+    reason: False positives from hax.named decorator syntax in code examples
+
+  # --- PII scanner's own test file (contains dummy PII for testing allowlist logic) ---
+  - file_glob: "tests/test_pii_scanner.py"
+    pattern_name: email
+    reason: Dummy email addresses used in allowlist matching unit tests
+
+  - file_glob: "tests/test_pii_scanner.py"
+    pattern_name: api_key
+    reason: Dummy API key pattern used in allowlist matching unit tests
