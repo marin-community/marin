@@ -423,7 +423,7 @@ class FrayIrisClient:
         instance._iris = iris_client
         return instance
 
-    def submit(self, request: JobRequest, adopt_existing: bool = False) -> IrisJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
         from iris.cluster.types import CoschedulingConfig
 
         iris_resources = convert_resources(request.resources)

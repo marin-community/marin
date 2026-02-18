@@ -624,7 +624,6 @@ class IrisClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
-        fail_if_exists: bool = False,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -641,15 +640,13 @@ class IrisClient:
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
-            fail_if_exists: If True, return ALREADY_EXISTS error even if an existing
-                job with the same name is finished. If False (default), finished jobs
-                are automatically replaced.
 
         Returns:
             Job handle for the submitted job
 
         Raises:
             ValueError: If name contains '/' or replicas < 1
+            JobAlreadyExists: If a job with the same name already exists
         """
         if "/" in name:
             raise ValueError("Job name cannot contain '/'")
@@ -709,7 +706,7 @@ class IrisClient:
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
-                fail_if_exists=fail_if_exists,
+                fail_if_exists=False,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:

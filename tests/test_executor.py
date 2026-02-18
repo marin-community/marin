@@ -619,7 +619,7 @@ def test_parent_will_run_if_some_child_is_not_skippable():
 
 
 def test_step_runner_adopts_on_job_already_exists(tmp_path):
-    """StepRunner.launch() should pass adopt_existing=True to client.submit()."""
+    """StepRunner.launch() relies on client's default adopt_existing=True behavior."""
 
     class FakeHandle:
         @property
@@ -649,8 +649,8 @@ def test_step_runner_adopts_on_job_already_exists(tmp_path):
     )
     runner.launch(job_request)
 
-    # Verify that submit was called with adopt_existing=True
-    client.submit.assert_called_once_with(job_request, adopt_existing=True)
+    # Verify that submit was called (without explicit adopt_existing parameter)
+    client.submit.assert_called_once_with(job_request)
     assert runner._job is fake_handle
     assert status_file.status == STATUS_RUNNING
     runner._stop_heartbeat()

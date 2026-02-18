@@ -245,12 +245,12 @@ class RayClient:
                 pass
         return self._address
 
-    def submit(self, request: JobRequest, adopt_existing: bool = False) -> RayJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> RayJobHandle:
         """Submit a job, routing to TPU/binary/callable based on device type.
 
         Args:
             request: The job request to submit.
-            adopt_existing: If True, return existing job handle when name conflicts.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
                           RayClient currently doesn't enforce unique names, so this
                           parameter has no effect but is included for API compatibility.
         """

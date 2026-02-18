@@ -32,13 +32,13 @@ class JobHandle(Protocol):
 
 
 class Client(Protocol):
-    def submit(self, request: JobRequest, adopt_existing: bool = False) -> JobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> JobHandle:
         """Submit a job for execution. Returns immediately.
 
         Args:
             request: The job request to submit.
-            adopt_existing: If True, return existing job handle when name conflicts.
-                          If False (default), raise JobAlreadyExists on duplicate names.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          If False, raise JobAlreadyExists on duplicate names.
         """
         ...
 

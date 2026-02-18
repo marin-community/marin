@@ -163,7 +163,7 @@ def test_job_already_exists_without_handle():
 
 
 def test_submit_with_adopt_existing_false_default(client: LocalClient):
-    """By default, adopt_existing=False and LocalClient doesn't enforce uniqueness."""
+    """By default, adopt_existing=True and LocalClient doesn't enforce uniqueness."""
     # LocalClient doesn't track job names, so calling submit twice with the same name
     # creates two separate jobs (no exception)
     h1 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)))
