@@ -1,20 +1,10 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for local cluster client functionality."""
 
 import logging
+import time
 
 import pytest
 
@@ -183,6 +173,29 @@ def _parent_with_two_children():
     job_b.wait(timeout=30, raise_on_failure=True)
 
 
+def _parent_with_delayed_child():
+    """Parent callable that starts a child after streaming has already begun."""
+    from iris.client.client import iris_ctx
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+
+    ctx = iris_ctx()
+    res = ResourceSpec(cpu=1, memory="1g")
+    env = EnvironmentSpec()
+
+    print("PARENT_STARTED")
+    time.sleep(1.0)
+    child = ctx.client.submit(
+        Entrypoint.from_command("sh", "-c", "echo CHILD_DYNAMIC_LINE"),
+        "child-dynamic",
+        res,
+        environment=env,
+    )
+    child.wait(timeout=30, raise_on_failure=True)
+    # Keep parent alive briefly so child logs must be discovered while parent is still active.
+    time.sleep(1.0)
+    print("PARENT_DONE")
+
+
 def test_child_job_logs_sorted_by_timestamp(client):
     """Logs from multiple child jobs are sorted globally by timestamp and include worker_id."""
     parent_id = JobName.root("test-child-logs")
@@ -210,3 +223,21 @@ def test_child_job_logs_sorted_by_timestamp(client):
     assert all(
         b.worker_id for b in batches_with_logs
     ), f"worker_id missing in batches: {[(b.task_id, b.worker_id) for b in batches_with_logs]}"
+
+
+def test_wait_stream_logs_discovers_child_tasks(client, caplog):
+    """Streaming discovers and emits logs for child tasks created after wait starts."""
+    iris = IrisClient(client)
+    parent_id = JobName.root("test-stream-child-discovery")
+    entrypoint = Entrypoint.from_callable(_parent_with_delayed_child)
+    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+
+    client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
+    job = Job(iris, parent_id)
+
+    with caplog.at_level(logging.INFO, logger="iris.client.client"):
+        status = job.wait(stream_logs=True, include_children=True, timeout=60.0, poll_interval=0.2)
+
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    messages = [r.message for r in caplog.records]
+    assert any("CHILD_DYNAMIC_LINE" in msg for msg in messages), messages

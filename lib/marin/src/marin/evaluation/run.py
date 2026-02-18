@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Script to run an evaluator on a model checkpoint.
@@ -33,6 +22,7 @@ from fray.v1.cluster import TpuConfig as V1TpuConfig
 
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
 from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
 from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
@@ -44,6 +34,7 @@ logger = logging.getLogger(__name__)
 EVALUATORS = {
     "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
     "levanter_lm_evaluation_harness": LevanterLmEvalEvaluator,
+    "evalchemy": EvalchemyEvaluator,
     "debug": SimpleEvaluator,
 }
 
@@ -98,6 +89,7 @@ def evaluate(config: EvaluationConfig) -> None:
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
             resource_config=v1_resources,
+            wandb_tags=config.wandb_tags,
         )
     else:
         evaluator.evaluate(
@@ -105,6 +97,7 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
+            wandb_tags=config.wandb_tags,
         )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
@@ -163,6 +156,7 @@ def _impute_model_config(config):
         engine_kwargs=engine_kwargs,
         generation_params=generation_params,
         apply_chat_template=config.apply_chat_template,
+        base_eval_run_name=config.base_eval_run_name,
     )
 
 

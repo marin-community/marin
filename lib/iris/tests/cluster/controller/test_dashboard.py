@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller dashboard behavioral logic.
 
@@ -25,7 +14,7 @@ from starlette.testclient import TestClient
 
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import JobSubmittedEvent, WorkerRegisteredEvent
-from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
@@ -92,16 +81,45 @@ def state():
 
 
 @pytest.fixture
-def scheduler(state):
-    return Scheduler(state)
+def scheduler():
+    return Scheduler()
+
+
+def _make_controller_mock(state, scheduler, autoscaler=None):
+    """Build a mock that implements the ControllerProtocol for testing.
+
+    The mock delegates create_scheduling_context and get_job_scheduling_diagnostics
+    to the scheduler, mirroring how the real controller converts ControllerWorker
+    and ControllerJob into scheduler-native types at the boundary.
+    """
+
+    def _create_scheduling_context(workers):
+        building_counts = state.snapshot_building_counts()
+        return scheduler.create_scheduling_context(workers, building_counts=building_counts)
+
+    def _get_job_scheduling_diagnostics(job, context):
+        req = JobRequirements(
+            resources=job.request.resources,
+            constraints=list(job.request.constraints),
+            is_coscheduled=job.is_coscheduled,
+            coscheduling_group_by=job.coscheduling_group_by,
+        )
+        tasks = state.get_job_tasks(job.job_id)
+        schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
+        return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
+
+    controller_mock = Mock()
+    controller_mock.wake = Mock()
+    controller_mock.create_scheduling_context = _create_scheduling_context
+    controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
+    controller_mock.autoscaler = autoscaler
+    controller_mock.stub_factory = Mock()
+    return controller_mock
 
 
 @pytest.fixture
 def service(state, scheduler):
-    controller_mock = Mock()
-    controller_mock.wake = Mock()
-    controller_mock.task_schedule_status = scheduler.task_schedule_status
-    controller_mock.autoscaler = None  # No autoscaler by default
+    controller_mock = _make_controller_mock(state, scheduler)
     return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
@@ -114,10 +132,7 @@ def client(service):
 @pytest.fixture
 def service_with_autoscaler(state, scheduler, mock_autoscaler):
     """Service with autoscaler enabled for tests."""
-    controller_mock = Mock()
-    controller_mock.wake = Mock()
-    controller_mock.task_schedule_status = scheduler.task_schedule_status
-    controller_mock.autoscaler = mock_autoscaler  # Enable autoscaler
+    controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
     return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
@@ -600,7 +615,10 @@ def test_get_task_logs_error_for_unassigned_task(client, state, job_request):
 
 
 def test_coscheduling_failure_reason_no_workers(client, state):
-    """Pending coscheduled tasks report diagnostic reason when no workers match constraints."""
+    """Pending coscheduled job reports diagnostic reason when no workers match constraints.
+
+    Diagnostics are on the job-level (via GetJobStatus), not per-task in ListTasks.
+    """
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
         entrypoint=_make_test_entrypoint(),
@@ -618,18 +636,17 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     )
     submit_job(state, "cosched-job", request)
 
-    resp = rpc_post(client, "ListTasks", {"jobId": JobName.root("cosched-job").to_wire()})
-    tasks = resp.get("tasks", [])
-    assert len(tasks) == 2
-
-    # All tasks should have a pending_reason explaining no workers match
-    for t in tasks:
-        reason = t.get("pendingReason", "")
-        assert "no workers match constraints" in reason.lower(), f"Expected constraint failure reason, got: {reason}"
+    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("cosched-job").to_wire()})
+    job = resp.get("job", {})
+    reason = job.get("pendingReason", "")
+    assert "no workers match constraints" in reason.lower(), f"Expected constraint failure reason, got: {reason}"
 
 
 def test_coscheduling_failure_reason_insufficient_group(client, state, make_worker_metadata):
-    """Pending coscheduled tasks report diagnostic when group is too small."""
+    """Pending coscheduled job reports diagnostic when group is too small.
+
+    Diagnostics are on the job-level (via GetJobStatus), not per-task in ListTasks.
+    """
     # Register 2 workers with tpu-name=my-tpu
     for i in range(2):
         meta = make_worker_metadata()
@@ -655,14 +672,11 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     )
     submit_job(state, "big-cosched", request)
 
-    resp = rpc_post(client, "ListTasks", {"jobId": JobName.root("big-cosched").to_wire()})
-    tasks = resp.get("tasks", [])
-    assert len(tasks) == 4
-
-    for t in tasks:
-        reason = t.get("pendingReason", "")
-        assert "need 4" in reason, f"Expected 'need 4' in reason, got: {reason}"
-        assert "largest group has 2" in reason, f"Expected 'largest group has 2' in reason, got: {reason}"
+    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("big-cosched").to_wire()})
+    job = resp.get("job", {})
+    reason = job.get("pendingReason", "")
+    assert "need 4" in reason, f"Expected 'need 4' in reason, got: {reason}"
+    assert "largest group has 2" in reason, f"Expected 'largest group has 2' in reason, got: {reason}"
 
 
 # =============================================================================

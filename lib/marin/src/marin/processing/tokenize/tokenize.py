@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Tokenize datasets using zephyr pipeline and write to Levanter cache format.
@@ -43,7 +32,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from zephyr import Dataset, ZephyrContext, shard_ctx
+from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
@@ -258,7 +247,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = shard_ctx().get_shared("tokenizer")
+    tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     batch_count = 0
@@ -323,7 +312,7 @@ def tokenize(config: TokenizeConfigBase):
             return
 
         # Use local backend for lightweight file stats - no remote workers needed
-        with ZephyrContext(client=LocalClient(), num_workers=8, name="tokenize-filescan") as local_ctx:
+        with ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan") as local_ctx:
             file_stats = list(
                 local_ctx.execute(
                     Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
@@ -381,7 +370,7 @@ def tokenize(config: TokenizeConfigBase):
 
     with ZephyrContext(
         resources=ResourceConfig(ram="16g", disk="16g"),
-        num_workers=min(128, len(train_paths) + len(validation_paths)),
+        max_workers=min(128, len(train_paths) + len(validation_paths)),
         name="tokenize",
     ) as ctx:
         if train_paths:

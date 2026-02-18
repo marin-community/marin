@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for BundleCreator."""
 
@@ -20,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from iris.cluster.client.bundle import BundleCreator
+from iris.cluster.client.bundle import MAX_BUNDLE_SIZE_BYTES, BundleCreator
 
 
 @pytest.fixture
@@ -57,3 +46,18 @@ def test_bundle_creator_uses_git_files_when_available(workspace):
         assert "pyproject.toml" in names
         assert "src/main.py" in names
         assert not any("__pycache__" in n for n in names)
+
+
+def test_bundle_creator_rejects_oversized_bundles(workspace):
+    """Test that bundles exceeding MAX_BUNDLE_SIZE_BYTES are rejected."""
+    # Create a large file with random data that won't compress well
+    import os
+
+    large_file = workspace / "large_file.bin"
+    # Use urandom to create incompressible data
+    large_file.write_bytes(os.urandom(MAX_BUNDLE_SIZE_BYTES + 1024 * 1024))
+
+    with patch("iris.cluster.client.bundle._get_git_non_ignored_files", return_value=None):
+        creator = BundleCreator(workspace)
+        with pytest.raises(ValueError, match=r"Bundle size .* exceeds maximum"):
+            creator.create_bundle()

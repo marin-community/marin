@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for the actor-based execution engine (ZephyrContext)."""
 
@@ -24,7 +13,7 @@ from pathlib import Path
 import pytest
 from fray.v2 import ResourceConfig
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, shard_ctx
+from zephyr.execution import ZephyrContext, zephyr_worker_ctx
 
 
 def test_simple_map(zephyr_ctx):
@@ -42,15 +31,15 @@ def test_filter(zephyr_ctx):
 
 
 def test_shared_data(fray_client):
-    """Workers can access shared data via shard_ctx()."""
+    """Workers can access shared data via zephyr_worker_ctx()."""
 
     def use_shared(x):
-        multiplier = shard_ctx().get_shared("multiplier")
+        multiplier = zephyr_worker_ctx().get_shared("multiplier")
         return x * multiplier
 
     zctx = ZephyrContext(
         client=fray_client,
-        num_workers=1,
+        max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
@@ -72,7 +61,7 @@ def test_context_manager(fray_client):
     """ZephyrContext works as context manager."""
     with ZephyrContext(
         client=fray_client,
-        num_workers=1,
+        max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     ) as zctx:
@@ -123,7 +112,7 @@ def test_chunk_cleanup(fray_client, tmp_path):
     chunk_prefix = str(tmp_path / "chunks")
     ctx = ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -226,7 +215,7 @@ def test_workers_persist_across_executes(fray_client, tmp_path):
 
     with ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -260,7 +249,7 @@ def test_fatal_errors_fail_fast(fray_client, tmp_path):
 
     with ZephyrContext(
         client=fray_client,
-        num_workers=1,
+        max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -281,7 +270,7 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
     chunk_prefix = str(tmp_path / "chunks")
     ctx = ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -302,3 +291,36 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
     assert len(results) == 2
     assert results[0] == {"id": 1, "a": "x", "b": "p"}
     assert results[1] == {"id": 2, "a": "y", "b": "q"}
+
+
+def test_workers_capped_to_shard_count(fray_client, tmp_path):
+    """When max_workers > num_shards, only num_shards workers are created."""
+    ds = Dataset.from_list([1, 2, 3])  # 3 shards
+    with ZephyrContext(
+        client=fray_client,
+        max_workers=10,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    ) as ctx:
+        # Workers not yet created before execute()
+        assert ctx._worker_group is None
+        results = list(ctx.execute(ds.map(lambda x: x * 2)))
+        assert sorted(results) == [2, 4, 6]
+        # Worker group sized to min(10, 3) = 3
+        assert ctx._worker_count == 3
+
+
+def test_worker_group_identity_stable_across_executes(fray_client, tmp_path):
+    """Second execute() reuses the same worker group object (no re-creation)."""
+    with ZephyrContext(
+        client=fray_client,
+        max_workers=10,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    ) as ctx:
+        ctx.execute(Dataset.from_list([1, 2]).map(lambda x: x))
+        group_after_first = ctx._worker_group
+        ctx.execute(Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x))
+        assert ctx._worker_group is group_after_first

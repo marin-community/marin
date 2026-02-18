@@ -1,19 +1,9 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterator, Sequence
 from functools import partial
+import dupekit
 import logging
 from marin.utils import rebase_file_path
 import pyarrow as pa
@@ -90,9 +80,6 @@ def dedup_fuzzy_document(config: DedupConfig):
             f"minhash_num_bands ({config.fuzzy_minhash_num_bands})"
         )
 
-    import dupekit
-    from dupekit import Transformation
-
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
     _init_wandb(config)
@@ -103,19 +90,19 @@ def dedup_fuzzy_document(config: DedupConfig):
         Yields {bucket: str, id: Any} for each bucket hit.
         """
         pipeline = [
-            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
-            Transformation.CleanText(input_col=config.text_field, output_col="clean_text"),
-            Transformation.MinHash(
+            dupekit.Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            dupekit.Transformation.CleanText(input_col=config.text_field, output_col="clean_text"),
+            dupekit.Transformation.MinHash(
                 input_col="clean_text",
                 output_col="signature",
                 num_perms=config.fuzzy_minhash_num_perms,
                 ngram_size=config.fuzzy_minhash_ngram_size,
                 seed=config.fuzzy_minhash_seed,
             ),
-            Transformation.MinHashLSH(
+            dupekit.Transformation.MinHashLSH(
                 input_col="signature", output_col="buckets", num_bands=config.fuzzy_minhash_num_bands
             ),
-            Transformation.SelectColumns(columns=["resolved_id", "buckets"]),
+            dupekit.Transformation.SelectColumns(columns=["resolved_id", "buckets"]),
         ]
 
         result_batch = dupekit.transform(batch, pipeline)
