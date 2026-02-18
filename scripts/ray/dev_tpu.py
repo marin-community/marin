@@ -495,15 +495,9 @@ cd /home/$USER/marin
 echo "Installing Claude Code..."
 curl -fsSL https://claude.ai/install.sh | bash
 
-echo "Installing Linuxbrew and Codex..."
-if ! command -v brew &>/dev/null; then
-    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-    echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> $HOME/.bashrc
-fi
-if command -v brew &>/dev/null; then
-    brew install codex
-fi
+echo "Installing Codex..."
+curl -fsSL https://get.pnpm.io/install.sh | sh
+pnpm i -g @openai/codex
 """
     logger.info("Setting up remote environment...")
     run_logged(["ssh", target_host, "bash", "-s"], input=setup_script.encode(), check=True)
