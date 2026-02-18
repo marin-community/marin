@@ -50,6 +50,29 @@ Key architectural decisions vs. the GCP platform:
 
 ---
 
+## Problem
+
+Iris needs CoreWeave support as a first-class backend for GPU training. Today this is blocked
+by concrete gaps in the codebase:
+
+1. CoreWeave platform exists only as a stub (`lib/iris/src/iris/cluster/platform/coreweave.py:18`,
+   `lib/iris/src/iris/cluster/platform/coreweave.py:47`), so CoreWeave cannot be used in production.
+2. Platform and autoscaler interfaces are VM+SSH-oriented (`lib/iris/src/iris/cluster/platform/base.py:113`,
+   `lib/iris/src/iris/cluster/controller/autoscaler.py:241`, `lib/iris/src/iris/cluster/platform/bootstrap.py:29`),
+   which does not map cleanly to Kubernetes-native lifecycle management.
+3. Task runtime semantics depend on host-network behavior for endpoint registration and task-to-task
+   communication (`lib/iris/src/iris/cluster/runtime/types.py:39`, `lib/iris/src/iris/cluster/worker/task_attempt.py:87`,
+   `lib/iris/src/iris/cluster/worker/task_attempt.py:143`) and must be preserved under containerd/CRI.
+4. Worker startup currently hardwires Docker runtime behavior (`lib/iris/src/iris/cluster/worker/main.py:26`,
+   `lib/iris/src/iris/cluster/worker/worker.py:69`) and does not support containerd selection.
+
+Non-goals for this PR:
+- Multi-node CoreWeave slices (`num_vms > 1`) are out of scope and must fail fast with a clear error.
+- CoreWeave-specific autoscaling policy optimization is out of scope; parity with existing Iris scheduling
+  and scale semantics is the goal.
+
+---
+
 ## 1. Responsibility Boundary: Operator vs. `platform.py`
 
 A clean separation between what a human operator does (one-time / infrequent) and what
@@ -551,6 +574,45 @@ All Iris images (`iris-controller`, `iris-worker`, `iris-task`) are pushed to
 - `imagePullSecrets` can be added for private registry deployments (e.g., internal forks)
 - The task image pulling story on CoreWeave is simple:
   `crictl pull ghcr.io/marin-community/iris-task:latest` just works
+
+### Decision 8: Task networking uses CRI host network semantics
+
+Task containers launched by `ContainerdRuntime` run in a CRI sandbox with
+`linux.security_context.namespace_options.network = NODE` (host network namespace in CRI terms).
+This preserves Iris's current host-network assumptions used by endpoint registration and discovery.
+
+Implications:
+- Tasks can bind advertised ports reachable from peers on the flat cluster network.
+- Tasks do not need to talk to the worker process directly.
+- Worker/controller communication remains independent (worker RPC heartbeat to controller Service DNS).
+
+This design aligns with:
+- CRI `NamespaceMode` definition (`NODE` for host namespace)
+- Kubernetes host-network behavior and DNS policy requirements (`ClusterFirstWithHostNet`)
+
+### Decision 9: Controller restart recovery is reconcile-driven, not thread-driven
+
+`create_slice()` may still spawn short-lived monitor threads for fast transitions, but correctness
+cannot depend on in-memory thread state. Recovery after controller restart is handled by reconcile:
+
+1. On startup, platform `list_all_slices()` discovers in-flight CoreWeave resources by labels.
+2. `describe()` maps observed NodePool+Pod state to Iris slice state (`CREATING`, `BOOTSTRAPPING`,
+   `READY`, `FAILED`) deterministically.
+3. Reconcile applies idempotent actions (e.g., create missing worker Pod when NodePool is ready).
+
+This guarantees eventual convergence after process restarts and avoids leaked slices.
+
+### Decision 10: Worker Pod security posture for containerd socket access
+
+The worker Pod mounts `/run/containerd/containerd.sock` and must run with an explicit security context.
+Baseline requirements:
+- `allowPrivilegeEscalation: false`
+- `privileged: false`
+- `capabilities.drop: ["ALL"]`
+- `seccompProfile.type: RuntimeDefault`
+
+If socket permissions require root, run as root but keep the restrictions above. Do not grant broad
+Linux capabilities or privileged mode.
 
 ---
 
@@ -1390,64 +1452,56 @@ uv run iris build push iris-worker:latest --region us-central1 --project hai-gcp
 
 ## 9. Testing Plan
 
-### Unit Tests (run without CoreWeave access)
+The test strategy is behavior-first and integration-heavy. Mock-only command-construction tests
+are kept minimal and secondary.
 
-Tests use mocked `subprocess.run` to validate command construction and response parsing.
+### 9.1 Existing test suites that must remain green
 
-1. **`CoreweavePlatform.create_slice()` flow**: Mock kubectl calls to verify:
-   - NodePool CRD YAML contains correct labels, instanceType, autoscaling: false
-   - Worker Pod YAML contains correct image, ports, env vars, volume mounts from bootstrap config
-   - Handle returns `CREATING` immediately, transitions to `BOOTSTRAPPING` then `READY`
-   - `QuotaExhaustedError` raised when NodePool status has Failed condition with quota message
-   - On failure: platform cleans up resources (deletes Pod + NodePool) and marks handle FAILED
+Spiral 1 (platform refactor) is accepted only if existing suites pass, especially:
+- `uv run pytest lib/iris/tests/cluster/platform/ -o "addopts="`
+- `uv run pytest lib/iris/tests/cluster/controller/ -o "addopts="`
+- `uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="`
 
-2. **`CoreweavePlatform.list_slices()`**: Mock `kubectl get nodepools -o json` response,
-   verify correct `CoreweaveSliceHandle` objects returned with correct labels and slice IDs.
+This validates that the protocol/rename/bootstrap refactor preserves behavior across GCP/manual/local.
 
-3. **`CoreweavePlatform.discover_controller()`**: Verify DNS name construction from
-   service_name, namespace, and port.
+### 9.2 New behavior tests (CoreWeave-capable)
 
-4. **`ContainerdRuntime` command construction**: Mock `crictl` subprocess calls to verify:
-   - Pod sandbox config JSON is correct
-   - Container config JSON maps `ContainerConfig` fields correctly
-   - `crictl pull` is called without auth credentials (public images)
-   - `status()` parses crictl inspect output correctly
-   - `logs()` handles `--since` flag correctly
-   - `cleanup()` removes container and sandbox
+1. **Lifecycle convergence test** (`tests/cluster/platform/test_coreweave_platform.py`):
+   - `create_slice()` returns quickly in `CREATING`
+   - transitions to `BOOTSTRAPPING` then `READY` via `describe()`
+   - failed provisioning transitions to `FAILED` and resources are cleaned up
 
-5. **Autoscaler state monitoring**: Verify the autoscaler correctly:
-   - Calls `complete_scale_up()` immediately after `create_slice()` returns
-   - Polls `handle.describe()` for state transitions
-   - Calls `mark_slice_ready()` when state reaches `READY`
-   - Calls `mark_slice_failed()` + `handle.terminate()` when state reaches `FAILED`
+2. **Restart recovery test** (`tests/cluster/platform/test_coreweave_platform.py`):
+   - simulate controller restart mid-creation
+   - `list_all_slices()` re-discovers in-flight slices
+   - reconcile converges to `READY` or `FAILED` without duplicate worker Pods
 
-### E2E Test (requires CoreWeave cluster)
+3. **Containerd networking behavior test** (`tests/cluster/runtime/test_containerd_runtime.py`):
+   - verify task sandbox uses CRI `network=NODE`
+   - run two task processes that register controller endpoints and connect peer-to-peer by
+     advertised host/port
+   - assert endpoint-based rendezvous succeeds
 
-Submit a simple job to an Iris cluster running entirely on CoreWeave, verify it succeeds.
+4. **Failure classification test** (`tests/cluster/platform/test_coreweave_platform.py`):
+   - NodePool failure conditions map deterministically to quota-exhausted vs generic platform failure
+   - no dependence on brittle free-text matching alone when structured fields are available
 
-```bash
-# 1. Operator deploys (one-time)
-kubectl apply -f tests/e2e/coreweave-bootstrap/
+### 9.3 CoreWeave smoke test (end-to-end, required pre-merge)
 
-# 2. Wait for controller
-kubectl wait --for=condition=available deployment/iris-controller -n iris-test --timeout=600s
+Add a CoreWeave path to `lib/iris/scripts/smoke-test.py` or a sibling script
+`lib/iris/scripts/smoke-test-coreweave.py` that runs:
+1. scale-up and worker registration
+2. single task success
+3. multi-task endpoint rendezvous (flat-network requirement)
+4. scale-down and resource cleanup verification
 
-# 3. Port-forward
-kubectl port-forward svc/iris-controller-svc 10000:10000 -n iris-test &
+The smoke test should emit artifacts (controller logs, worker logs, kubectl describe snapshots)
+for post-mortem debugging.
 
-# 4. Run test
-IRIS_COREWEAVE_URL=http://localhost:10000 \
-  uv run pytest tests/e2e/test_coreweave_smoke.py -v -m coreweave
-```
+### 9.4 Optional CI runtime check
 
-Validates: controller startup, create_slice with NodePool + Pod, worker registration,
-task execution via ContainerdRuntime, scale-down.
-
-### CI Integration for ContainerdRuntime
-
-The `ContainerdRuntime` can be tested in CI without CoreWeave by running a containerd
-daemon in the CI environment. This validates the crictl command construction and response
-parsing against a real containerd instance.
+Add a CI job that boots containerd + crictl and runs `tests/cluster/runtime/test_containerd_runtime.py`
+to validate runtime semantics without requiring CoreWeave capacity.
 
 ---
 
@@ -1576,6 +1630,14 @@ Built on the clean interface from Spiral 1.
     interface.
 15. **Async `create_slice()` model**: `create_slice()` returns immediately with a handle in
     `CREATING` state. Platform monitors internally. Autoscaler polls `describe()`.
+16. **Task networking for containerd**: Task sandboxes use CRI host networking
+    (`namespace_options.network = NODE`) so endpoint-based task discovery continues to work
+    with flat host:port semantics.
+17. **Restart correctness**: convergence is reconcile-driven (discover existing resources,
+    map observed state, apply idempotent actions), not dependent on in-memory monitor threads.
+18. **Worker Pod security posture**: containerd socket access is constrained with explicit
+    hardening defaults (`allowPrivilegeEscalation=false`, `privileged=false`, drop all caps,
+    `seccompProfile: RuntimeDefault`).
 
 ## 12. Open Questions
 
@@ -1586,15 +1648,6 @@ Built on the clean interface from Spiral 1.
    with CoreWeave.
 
 3. **Bundle storage**: GCS with cross-cloud pull, or CoreWeave's S3-compatible storage.
-
-4. **TODO: Research task container networking for crictl sandboxes.** The worker Pod runs in
-   the Kubernetes pod network. Task containers created via `crictl runp` get their own pod
-   sandbox with a separate network namespace by default. The only requirement is that workers
-   and controller can reach each other -- what is the right equivalent of `--net=host` (which
-   GCP uses for Docker) in the crictl/containerd world? Options: (a) set
-   `"linux.security_context.namespace_options.network": 2` (NODE mode) on the sandbox to
-   share the host network, (b) use the worker Pod's network namespace for the sandbox. Needs
-   testing on a real containerd setup.
 
 ---
 
@@ -1612,3 +1665,7 @@ Built on the clean interface from Spiral 1.
 - [CoreWeave Terraform Provider](https://docs.coreweave.com/docs/products/cks/terraform/about)
 - [IAM Access Policies](https://docs.coreweave.com/docs/security/iam/access-policies)
 - [CRI tools / crictl](https://github.com/kubernetes-sigs/cri-tools)
+- [CRI API proto (`NamespaceMode` and `NamespaceOption`)](https://raw.githubusercontent.com/kubernetes/cri-api/master/pkg/apis/runtime/v1/api.proto)
+- [Kubernetes Cluster Networking](https://kubernetes.io/docs/concepts/cluster-administration/networking/)
+- [Kubernetes DNS for hostNetwork pods (`ClusterFirstWithHostNet`)](https://v1-32.docs.kubernetes.io/docs/concepts/services-networking/dns-pod-service/)
+- [Kubernetes Application Security Checklist](https://kubernetes.io/docs/concepts/security/application-security-checklist/)
