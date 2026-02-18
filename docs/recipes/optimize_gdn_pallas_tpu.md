@@ -4,15 +4,26 @@
 Use this recipe when iterating on `lib/levanter/src/levanter/layers/gated_deltanet.py` for TPU performance.
 
 This recipe standardizes the loop:
-1. pick one optimization hypothesis,
+1. pick one high-impact optimization hypothesis,
 2. run correctness on TPU,
 3. run a small profiled training job,
 4. inspect the trace,
 5. commit one validated optimization.
 
+Current phase goal:
+- Push MFU toward ~50% with large kernel-level wins.
+- Treat small tuning wins as secondary; prioritize architecture/kernel redesigns first.
+
 The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://github.com/marin-community/marin/issues/1884#issuecomment-3714287157), updated January 6, 2026):
 - strict lower-triangular inversion is expensive on TPU; sequential dependencies hurt MXU occupancy,
 - dynamic slicing inside Pallas TPU kernels is not available, forcing static indexing and segmented loop structures.
+
+## Optimization Policy (Aggressive Phase)
+- Every iteration must target a meaningful reduction in dominant hotspot cost, not only parameter retuning.
+- Prefer changes that reduce Pallas custom-call launch count, increase work per call, improve tiling/layout, or remove serial dependencies.
+- Do not run standalone iterations that only tweak scalar constants (`unroll`, `chunk`, `segment`, `batch`) unless paired with a structural kernel/dataflow change.
+- If an iteration delivers <3% MFU gain and hotspots are unchanged, the next iteration must escalate to a more radical design.
+- Use FlashLinearAttention and Pallas TPU docs as design references before implementing.
 
 ## Infra Added For This Loop
 - `scripts/gdn/gdnctl.py`: one CLI for tests, profile submission, Ray wait/logs, HF trace downloads, and unattended Codex loops.
@@ -122,6 +133,7 @@ Notes:
 - Use `--codex-profile <profile-name>` if you have a Codex CLI profile for `gpt-5.3-codex` / high reasoning settings.
 - By default, `codex-loop` stops if an iteration does not create a new commit.
 - Use `--allow-dirty` or `--allow-no-commit` only when intentionally debugging the loop harness.
+- The default iteration prompt (`scripts/gdn/codex_iteration_prompt.md`) is intentionally aggressive; keep it aligned with this policy.
 
 ## Logging Expectations
 After each meaningful iteration, append:
@@ -130,6 +142,6 @@ After each meaningful iteration, append:
 - test pass/fail,
 - profile job id and trace path,
 - key hotspot findings,
-- next hypothesis,
+- next bold hypothesis,
 
 to `lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md`.

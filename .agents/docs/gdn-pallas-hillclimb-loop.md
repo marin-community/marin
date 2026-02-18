@@ -2,6 +2,10 @@
 
 Run repeated Codex iterations that each produce one validated TPU optimization commit.
 
+Target outcome:
+- Move quickly toward major speedups (not fractional tuning gains), with MFU trajectory aiming for ~50%.
+- Require structural kernel/algorithm changes when current traces show the same dominant hotspots.
+
 ## One-Time Setup
 1. Ensure local auth/env is ready:
    - `RAY_AUTH_MODE=token`
@@ -36,6 +40,11 @@ Prompt and final-response logs are stored under:
 ## Operational Advice
 - Prefer `--post-check` commands that are strict but fast enough to run every iteration.
 - Keep each iteration scoped to one optimization so regressions are easy to bisect.
+- Ensure the prompt enforces aggressive optimization strategy. `scripts/gdn/codex_iteration_prompt.md` now requires:
+  - 3-candidate shortlist each iteration,
+  - one high-upside structural choice,
+  - no standalone scalar-only tuning iterations,
+  - escalation after low-impact (<3%) results.
 - If TPU queueing is unstable, switch profile runs to `dev-tpu-profile` on an allocated TPU.
 - If runs flap on infra errors, restart from the latest successful commit.
 

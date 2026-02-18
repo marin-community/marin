@@ -45,3 +45,8 @@ uv run python scripts/gdn/gdnctl.py codex-loop --iterations 5 --model gpt-5.3-co
 
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
+
+The default prompt is aggressive by design:
+- prioritizes high-upside kernel redesigns over small tuning,
+- disallows standalone scalar-only tweaks,
+- requires hotspot-driven escalation when gains are small.
