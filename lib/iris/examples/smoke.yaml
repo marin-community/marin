@@ -1,5 +1,5 @@
-# Iris production configuration for europe-west4 cluster
-# Usage: uv run iris cluster --config=examples/eu-west4.yaml start
+# Iris smoke-test configuration for europe-west4 cluster
+# Usage: uv run python scripts/smoke-test.py
 
 platform:
   label_prefix: smoke
