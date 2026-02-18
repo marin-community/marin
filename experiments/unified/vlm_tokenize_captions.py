@@ -8,37 +8,45 @@ Reads parquet shards from GCS containing TokLIP image tokens and captions,
 produces dual-ordering (image-first + text-first) token sequences with per-token
 loss weights, and writes them to Levanter cache format.
 
+Supports two parquet schemas:
+- **Messages format**: columns ``messages`` (chat-format) + ``image_tokens`` (nested list).
+- **Caption format**: columns ``caption`` (plain string) + ``image_tokens`` (flat list).
+
+Two processing modes:
+- **Sequential** (default): 1:1 mapping from input parquet to output shard cache.
+- **Shuffled** (``--shuffle true``): cross-source mixing via size-limited batching
+  and proportional sampling. Each output shard receives proportional slices from
+  every file in the batch, guaranteeing cross-source mixing. Controlled by
+  ``--max_batch_gb`` (larger batches = more files = better mixing, more memory).
+
 Requires the unified tokenizer to be created first via create_unified_tokenizer()
 in experiments/unified/unified_pretrain.py.
 
 Usage:
-    # Dual ordering (default): both image-first and text-first per row
+    # Sequential mode (1:1, default)
     uv run experiments/unified/vlm_tokenize_captions.py \
         --input_path gs://marin-vlm/stage2_sharded_full_tokenized \
         --start_shard 0 --end_shard 10
 
-    # Process all shards with dual ordering
-    uv run experiments/unified/vlm_tokenize_captions.py
-
-    # Custom input parquet path
+    # Shuffled mode with cross-source mixing
     uv run experiments/unified/vlm_tokenize_captions.py \
-        --input_path gs://marin-vlm/stage2_sharded_full_tokenized \
-        --output_path gs://marin-vlm/stage2_sharded_full_tokenized_llama3 \
-        --start_shard 0 --end_shard 10 --dual_ordering false
+        --input_path gs://marin-vlm/hf_85m_tokenized \
+        --output_path gs://marin-vlm/hf_85m_levanter_cache \
+        --shuffle true --max_batch_gb 10 --rows_per_shard 8000 --seed 42 \
+        --num_workers 32
+
+    # Shuffled mode, small test run
+    uv run experiments/unified/vlm_tokenize_captions.py \
+        --input_path gs://marin-vlm/hf_85m_tokenized \
+        --output_path gs://marin-vlm/hf_85m_levanter_cache_test \
+        --shuffle true --max_batch_gb 1 --rows_per_shard 8000 \
+        --start_shard 0 --end_shard 100 --num_workers 16
 
     # Ratio-controlled: 30% generation (text-first), 70% understanding (image-first)
     uv run experiments/unified/vlm_tokenize_captions.py \
         --input_path gs://marin-vlm/stage2_sharded_full_tokenized \
         --start_shard 0 --end_shard 100 \
         --dual_ordering false --generation_ratio 0.3
-
-    # All understanding (image-first only)
-    uv run experiments/unified/vlm_tokenize_captions.py \
-        --dual_ordering false --generation_ratio 0.0
-
-    # All generation (text-first only)
-    uv run experiments/unified/vlm_tokenize_captions.py \
-        --dual_ordering false --generation_ratio 1.0
 
     # Custom visual loss weight and worker count
     uv run experiments/unified/vlm_tokenize_captions.py \
@@ -383,6 +391,10 @@ class TokenizeVLMConfig:
     are mixed together in each output shard instead of the default 1:1 mapping."""
     rows_per_shard: int = 8000
     """Number of records per output shard (only used when shuffle=True)."""
+    max_batch_gb: float = 10.0
+    """Maximum total parquet file size per batch in GB (only used when shuffle=True).
+    Larger batches mix more files per proportional-sampling round → better cross-source mixing,
+    but use more memory (~6x expansion from parquet to tokenized records in RAM)."""
     seed: int = 42
     """Random seed for shuffling."""
 
@@ -524,11 +536,14 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
 
     Follows the same approach as convert_llava_onevision_to_levanter.py:
     1. File-level shuffle: randomize input file order for cross-source mixing
-    2. Per-file record shuffle: shuffle tokenized records within each file
-    3. Proportional distribution: each output shard receives a proportional
+    2. Size-limited batching: group files into batches capped at max_batch_gb
+    3. Per-file record shuffle: shuffle tokenized records within each file
+    4. Proportional distribution: each output shard receives a proportional
        slice from every file in the batch, guaranteeing cross-source mixing
-    4. Shard-level shuffle: shuffle each output shard buffer before writing
+    5. Shard-level shuffle: shuffle each output shard buffer before writing
     """
+    import fsspec as _fsspec
+
     from levanter.store.cache import consolidate_shard_caches
     from zephyr.writers import write_levanter_cache
 
@@ -536,6 +551,38 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     random.shuffle(shard_paths)
     logger.info("Shuffled %d input files (seed=%d)", len(shard_paths), config.seed)
 
+    # --- Get file sizes and create size-limited batches ---
+    logger.info("Querying file sizes for %d files ...", len(shard_paths))
+    fs = _fsspec.filesystem("gs")
+    files_with_sizes: list[tuple[str, int]] = []
+    for path in shard_paths:
+        gcs_path = path if path.startswith("gs://") else f"gs://{path}"
+        info = fs.info(gcs_path)
+        files_with_sizes.append((path, info["size"]))
+
+    max_batch_bytes = int(config.max_batch_gb * 1024 * 1024 * 1024)
+    batches: list[list[str]] = []
+    current_batch: list[str] = []
+    current_size = 0
+    for path, size in files_with_sizes:
+        if current_size + size > max_batch_bytes and current_batch:
+            batches.append(current_batch)
+            current_batch = []
+            current_size = 0
+        current_batch.append(path)
+        current_size += size
+    if current_batch:
+        batches.append(current_batch)
+
+    total_gb = sum(s for _, s in files_with_sizes) / (1024**3)
+    logger.info(
+        "Created %d batches (max %.1f GB each) from %.1f GB total",
+        len(batches),
+        config.max_batch_gb,
+        total_gb,
+    )
+
+    # --- Setup ---
     local_tokenizer_path = _cache_tokenizer_locally(config.tokenizer)
 
     metadata = {
@@ -551,82 +598,80 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     }
 
     num_workers = min(config.num_workers, len(shard_paths))
-    chunk_size = num_workers
-    num_chunks = math.ceil(len(shard_paths) / chunk_size)
-
     shard_idx = 0
     all_output_paths: list[str] = []
     total_records = 0
 
     logger.info(
-        "Shuffle mode: %d files in %d batches, rows_per_shard=%d",
+        "Shuffle mode: %d files in %d batches, rows_per_shard=%d, num_workers=%d",
         len(shard_paths),
-        num_chunks,
+        len(batches),
         config.rows_per_shard,
+        num_workers,
     )
 
-    for chunk_idx in range(num_chunks):
-        chunk = shard_paths[chunk_idx * chunk_size : (chunk_idx + 1) * chunk_size]
-        chunk_label = f"Batch {chunk_idx + 1}/{num_chunks}"
-
-        # Create per-batch work directory
-        work_dir = tempfile.mkdtemp(prefix=f"vlm_shuffle_batch{chunk_idx}_")
-        local_parquet_dir = os.path.join(work_dir, "parquets")
-        os.makedirs(local_parquet_dir)
-
-        # Step 1: Download this batch's parquet files
-        logger.info("[%s] Downloading %d files ...", chunk_label, len(chunk))
-        local_parquets = []
-        for shard_path in chunk:
-            gcs_shard = shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
-            filename = shard_path.rsplit("/", 1)[-1]
-            local_parquet = os.path.join(local_parquet_dir, filename)
-            gcs_download(gcs_shard, local_parquet)
-            local_parquets.append(local_parquet)
-
-        # Step 2: Tokenize all files in parallel, keeping per-file record lists
-        logger.info("[%s] Tokenizing %d files with %d workers ...", chunk_label, len(local_parquets), num_workers)
+    # --- Process each batch ---
+    for batch_idx, batch in enumerate(batches):
+        batch_label = f"Batch {batch_idx + 1}/{len(batches)} ({len(batch)} files)"
         file_records: dict[str, list[dict[str, np.ndarray]]] = {}
 
-        with ProcessPoolExecutor(max_workers=num_workers) as pool:
-            futures = {
-                pool.submit(
-                    tokenize_shard,
-                    lp,
-                    local_tokenizer_path,
-                    config.w_visual,
-                    config.dual_ordering,
-                    config.generation_ratio,
-                ): lp
-                for lp in local_parquets
-            }
+        # Download and tokenize in sub-chunks of num_workers
+        num_sub_chunks = math.ceil(len(batch) / num_workers)
+        for sub_idx in range(num_sub_chunks):
+            sub_chunk = batch[sub_idx * num_workers : (sub_idx + 1) * num_workers]
+            sub_label = f"{batch_label} sub {sub_idx + 1}/{num_sub_chunks}"
 
-            for future in as_completed(futures):
-                source = futures[future]
-                try:
-                    records = future.result()
-                    # Layer 2: shuffle records within each file
-                    random.shuffle(records)
-                    file_records[source] = records
-                    logger.info(
-                        "[%s] Tokenized %s: %d records",
-                        chunk_label,
-                        os.path.basename(source),
-                        len(records),
-                    )
-                except Exception:
-                    logger.exception("Failed to tokenize %s", source)
-                    raise
+            # Download sub-chunk to local disk
+            work_dir = tempfile.mkdtemp(prefix=f"vlm_batch{batch_idx}_sub{sub_idx}_")
+            local_parquet_dir = os.path.join(work_dir, "parquets")
+            os.makedirs(local_parquet_dir)
 
-        # Step 3: Proportional distribution across output shards
+            local_parquets = []
+            for shard_path in sub_chunk:
+                gcs_shard = shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
+                filename = shard_path.rsplit("/", 1)[-1]
+                local_parquet = os.path.join(local_parquet_dir, filename)
+                gcs_download(gcs_shard, local_parquet)
+                local_parquets.append(local_parquet)
+
+            # Tokenize in parallel
+            logger.info("[%s] Tokenizing %d files ...", sub_label, len(local_parquets))
+            with ProcessPoolExecutor(max_workers=min(num_workers, len(local_parquets))) as pool:
+                futures = {
+                    pool.submit(
+                        tokenize_shard,
+                        lp,
+                        local_tokenizer_path,
+                        config.w_visual,
+                        config.dual_ordering,
+                        config.generation_ratio,
+                    ): lp
+                    for lp in local_parquets
+                }
+
+                for future in as_completed(futures):
+                    source = futures[future]
+                    try:
+                        records = future.result()
+                        random.shuffle(records)
+                        file_records[source] = records
+                    except Exception:
+                        logger.exception("Failed to tokenize %s", source)
+                        raise
+
+            # Free disk immediately
+            shutil.rmtree(work_dir)
+
+        # --- Proportional distribution across output shards ---
         batch_total = sum(len(r) for r in file_records.values())
         total_records += batch_total
         num_shards_in_batch = math.ceil(batch_total / config.rows_per_shard)
 
         logger.info(
-            "[%s] Distributing %d records across %d shards (proportional sampling)",
-            chunk_label,
+            "[%s] Distributing %d records from %d files across %d shards",
+            batch_label,
             batch_total,
+            len(file_records),
             num_shards_in_batch,
         )
 
@@ -636,7 +681,6 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
             n = len(records)
             if n == 0:
                 continue
-            # a_i = fractional records per shard from this file
             a_i = n / num_shards_in_batch
 
             for shard_k in range(num_shards_in_batch):
@@ -644,13 +688,12 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
                 end = int((shard_k + 1) * a_i) if shard_k < num_shards_in_batch - 1 else n
                 shard_buffers[shard_k].extend(records[start:end])
 
-            # Free this file's records to reduce peak memory
             records.clear()
 
         file_records.clear()
 
-        # Step 4: Shuffle each shard buffer and write
-        logger.info("[%s] Shuffling and writing %d shards ...", chunk_label, num_shards_in_batch)
+        # --- Shuffle each shard buffer and write ---
+        logger.info("[%s] Shuffling and writing %d shards ...", batch_label, num_shards_in_batch)
         for buf in shard_buffers:
             if not buf:
                 continue
@@ -663,10 +706,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
             buf.clear()
 
         del shard_buffers
-
-        # Step 5: Clean up local files
-        shutil.rmtree(work_dir)
-        logger.info("[%s] Done. Total records so far: %d", chunk_label, total_records)
+        logger.info("[%s] Done. Total records so far: %d", batch_label, total_records)
 
     logger.info("Wrote %d shuffled shards (%d total records)", len(all_output_paths), total_records)
 
