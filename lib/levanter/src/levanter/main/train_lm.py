@@ -285,6 +285,21 @@ def main(config: TrainLmConfig):
                 every=config.eval_harness_steps,
             )
 
+        if config.vlm_mc_eval_benchmarks:
+            from experiments.unified.vlm_mc_eval import vlm_mc_eval_callback
+
+            trainer.add_hook(
+                vlm_mc_eval_callback(
+                    benchmarks=config.vlm_mc_eval_benchmarks,
+                    parquet_base_path=config.vlm_mc_eval_parquet_path or "gs://marin-vlm/eval_benchmarks_tokenized",
+                    tokenizer=tokenizer,
+                    EvalBatch=EvalBatch,
+                    axis_resources=compute_axis_mapping,
+                    mp=trainer.mp,
+                ),
+                every=config.vlm_mc_eval_steps,
+            )
+
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = trainer.mp.cast_to_compute(model)

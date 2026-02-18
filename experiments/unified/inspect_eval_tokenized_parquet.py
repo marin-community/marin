@@ -145,7 +145,6 @@ def preview_tokenized_sequence(table, row_idx: int):
     Uses the same logic as tokenize_eval_benchmarks.py to build input_ids
     and loss_weights, then displays a breakdown similar to inspect_parquet_row.py.
     """
-    import transformers
 
     from experiments.unified.tokenize_eval_benchmarks import (
         GENERATION_TASK_TYPES,
@@ -158,7 +157,7 @@ def preview_tokenized_sequence(table, row_idx: int):
     image_token_lists = table.column("image_tokens")[row_idx].as_py()
     task_type = table.column("task_type")[row_idx].as_py()
 
-    print(f"\n--- Tokenized Sequence Preview ---")
+    print("\n--- Tokenized Sequence Preview ---")
 
     # Load tokenizer
     from levanter.compat.hf_checkpoints import load_tokenizer
@@ -212,7 +211,7 @@ def print_summary(table):
     if "task_type" in table.column_names:
         task_types = [table.column("task_type")[i].as_py() for i in range(n_rows)]
         counts = Counter(task_types)
-        print(f"\nTask type distribution:")
+        print("\nTask type distribution:")
         for task_type, count in counts.most_common():
             print(f"  {task_type}: {count}")
 
@@ -220,7 +219,7 @@ def print_summary(table):
     if "benchmark" in table.column_names:
         benchmarks = [table.column("benchmark")[i].as_py() for i in range(n_rows)]
         counts = Counter(benchmarks)
-        print(f"\nBenchmark distribution:")
+        print("\nBenchmark distribution:")
         for benchmark, count in counts.most_common():
             print(f"  {benchmark}: {count}")
 
@@ -236,13 +235,15 @@ def print_summary(table):
 
         if all_token_counts:
             arr = np.array(all_token_counts)
-            print(f"\nImage token counts (per image):")
+            print("\nImage token counts (per image):")
             print(f"  Total images: {len(all_token_counts)}")
-            print(f"  Tokens/image: min={arr.min()}, mean={arr.mean():.1f}, max={arr.max()}, median={np.median(arr):.0f}")
+            print(
+                f"  Tokens/image: min={arr.min()}, mean={arr.mean():.1f}, max={arr.max()}, median={np.median(arr):.0f}"
+            )
 
         if all_num_images:
             arr = np.array(all_num_images)
-            print(f"\nImages per row:")
+            print("\nImages per row:")
             print(f"  min={arr.min()}, mean={arr.mean():.1f}, max={arr.max()}")
             counts = Counter(all_num_images)
             for n_img, count in sorted(counts.items()):

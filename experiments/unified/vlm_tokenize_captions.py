@@ -199,6 +199,10 @@ def process_parquet_rows(
 ) -> Iterator[dict[str, np.ndarray]]:
     """Process all rows in a PyArrow table, yielding token sequences.
 
+    Supports two parquet schemas:
+    - **Messages format**: columns ``messages`` (chat-format) + ``image_tokens`` (nested list).
+    - **Caption format**: columns ``caption`` (plain string) + ``image_tokens`` (flat list).
+
     When dual_ordering is True, every valid row produces both an image-first
     (understanding) and a text-first (generation) sequence.
 
@@ -206,23 +210,40 @@ def process_parquet_rows(
     (1 - generation_ratio) fraction of valid rows yield image-first sequences;
     the remaining generation_ratio fraction yield text-first sequences.
     """
-    messages_col = table.column("messages")
-    image_tokens_col = table.column("image_tokens")
+    # Auto-detect parquet schema
+    has_caption_col = "caption" in table.column_names
+    has_messages_col = "messages" in table.column_names
 
-    # First pass: collect valid row indices and compute generation threshold
+    if not has_caption_col and not has_messages_col:
+        raise ValueError(f"Parquet must have either 'caption' or 'messages' column, got: {table.column_names}")
+
+    image_tokens_col = table.column("image_tokens")
+    if has_caption_col:
+        caption_col = table.column("caption")
+    else:
+        messages_col = table.column("messages")
+
+    # First pass: collect valid row indices
     valid_indices = []
     mismatched = 0
     for i in range(len(table)):
-        messages = messages_col[i].as_py()
-        image_token_lists = image_tokens_col[i].as_py()
-        caption = extract_caption(messages)
-        if caption is None or not image_token_lists:
-            continue
+        image_tokens_raw = image_tokens_col[i].as_py()
 
-        n_images = sum(1 for msg in messages for part in msg["content"] if part["type"] == "image")
-        if n_images != len(image_token_lists):
-            mismatched += 1
-            continue
+        if has_caption_col:
+            caption = caption_col[i].as_py()
+            if not caption or not image_tokens_raw:
+                continue
+        else:
+            messages = messages_col[i].as_py()
+            image_token_lists = image_tokens_raw
+            caption = extract_caption(messages)
+            if caption is None or not image_token_lists:
+                continue
+
+            n_images = sum(1 for msg in messages for part in msg["content"] if part["type"] == "image")
+            if n_images != len(image_token_lists):
+                mismatched += 1
+                continue
 
         valid_indices.append(i)
 
@@ -240,13 +261,15 @@ def process_parquet_rows(
     rng = random.Random(42)
 
     for rank, i in enumerate(valid_indices):
-        messages = messages_col[i].as_py()
-        image_token_lists = image_tokens_col[i].as_py()
+        if has_caption_col:
+            caption = caption_col[i].as_py()
+            raw_image_tokens = image_tokens_col[i].as_py()
+        else:
+            messages = messages_col[i].as_py()
+            caption = extract_caption(messages)
+            # Use the first image's tokens (all examples in this dataset are single-image)
+            raw_image_tokens = image_tokens_col[i].as_py()[0]
 
-        caption = extract_caption(messages)
-
-        # Use the first image's tokens (all examples in this dataset are single-image)
-        raw_image_tokens = image_token_lists[0]
         shifted_image_tokens = [t + VISUAL_TOKEN_OFFSET for t in raw_image_tokens]
 
         # Tokenize caption (no BOS per doc spec)
@@ -308,7 +331,7 @@ def process_shard(
 
 def _list_shard_paths(input_path: str, start_shard: int | None, end_shard: int | None) -> list[str]:
     """List parquet shard paths, optionally filtering by index range."""
-    all_paths = sorted(fsspec_glob(f"{input_path}/train-*.parquet"))
+    all_paths = sorted(fsspec_glob(f"{input_path}/*.parquet"))
     if not all_paths:
         raise ValueError(f"No parquet shards found at {input_path}")
     logger.info("Found %d total shards at %s", len(all_paths), input_path)

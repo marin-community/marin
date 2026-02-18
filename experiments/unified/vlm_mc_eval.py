@@ -46,12 +46,10 @@ from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completio
 from levanter.eval_harness import (
     _LmEvalHarnessWorker,
     get_padding_count_from_batch,
-    get_segment_ids_from_batch,
 )
 from levanter.utils.background_iterable import BackgroundIterator
 
 from experiments.unified.vlm_tokenize_captions import (
-    ENDOFTEXT_ID,
     VISION_END_ID,
     VISION_START_ID,
     VISUAL_TOKEN_OFFSET,
@@ -243,7 +241,10 @@ def evaluate_vlm_mc_benchmark(
             image_token_lists = image_tokens_col[i].as_py()
 
             completions = build_vlm_prompt_completions(
-                messages, image_token_lists, choices, tokenizer,
+                messages,
+                image_token_lists,
+                choices,
+                tokenizer,
                 segment_id_start=segment_counter,
             )
 
@@ -253,7 +254,8 @@ def evaluate_vlm_mc_benchmark(
             if too_long:
                 logger.warning(
                     "Question %d has sequences exceeding max_length=%d, skipping",
-                    question_idx, max_len,
+                    question_idx,
+                    max_len,
                 )
                 skipped += 1
                 continue
@@ -276,7 +278,9 @@ def evaluate_vlm_mc_benchmark(
 
     logger.info(
         "Built %d completions for %d questions (%d skipped)",
-        len(all_completions), num_questions, skipped,
+        len(all_completions),
+        num_questions,
+        skipped,
     )
 
     # Step 2: Pack and run loglikelihood (same pipeline as text MMLU)
@@ -303,14 +307,10 @@ def evaluate_vlm_mc_benchmark(
     for batch in packed_iterator:
         batch = hax.shard(batch, worker.axis_resources)
 
-        segments_this_batch = get_segment_ids_from_batch(
-            batch, worker.max_packed_segments * worker.EvalBatch.size
-        )
-
-        padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
+        _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
         batch = jax.device_put(batch)
 
-        out_ids, out_lls, out_correct = worker.dispatch_loglikelihood(batch)
+        out_ids, out_lls, _out_correct = worker.dispatch_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
         out_lls = jax.device_get(out_lls.array)
@@ -347,12 +347,14 @@ def evaluate_vlm_mc_benchmark(
         correct = best[1]
         if correct:
             num_correct += 1
-        per_question.append({
-            "question_idx": q_idx,
-            "predicted": best[0],
-            "correct": correct,
-            "log_likelihoods": {opt_idx: ll for opt_idx, _, ll in options},
-        })
+        per_question.append(
+            {
+                "question_idx": q_idx,
+                "predicted": best[0],
+                "correct": correct,
+                "log_likelihoods": {opt_idx: ll for opt_idx, _, ll in options},
+            }
+        )
 
     accuracy = num_correct / max(num_questions, 1)
     logger.info("MC accuracy: %d/%d = %.4f", num_correct, num_questions, accuracy)
@@ -397,9 +399,7 @@ def find_benchmark_parquets(benchmark: str, base_path: str = DEFAULT_EVAL_PARQUE
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="VLM multiple-choice evaluation using log-likelihood comparison."
-    )
+    parser = argparse.ArgumentParser(description="VLM multiple-choice evaluation using log-likelihood comparison.")
     parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to model checkpoint")
     parser.add_argument("--checkpoint_is_hf", action="store_true", help="Checkpoint is HuggingFace format")
     parser.add_argument(
@@ -410,18 +410,17 @@ def main():
     parser.add_argument("--max_length", type=int, default=4096, help="Maximum sequence length")
     parser.add_argument("--output_json", type=str, default=None, help="Path to write results JSON")
     parser.add_argument(
-        "--tokenizer", type=str, default=None,
+        "--tokenizer",
+        type=str,
+        default=None,
         help="Tokenizer path (default: inferred from checkpoint or unified tokenizer)",
     )
     args = parser.parse_args()
 
-    import dataclasses
     import typing
 
     import equinox as eqx
 
-    import levanter
-    import levanter.config
     from levanter.checkpoint import load_checkpoint
     from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
     from levanter.main.train_lm import TrainerConfig
@@ -501,7 +500,10 @@ def main():
                 results[bench_name] = result
                 logger.info(
                     "%s: accuracy=%.4f (%d/%d)",
-                    bench_name, result["accuracy"], result["num_correct"], result["num_questions"],
+                    bench_name,
+                    result["accuracy"],
+                    result["num_correct"],
+                    result["num_questions"],
                 )
 
             worker.stop()
@@ -512,14 +514,16 @@ def main():
             for bench, res in results.items():
                 logger.info(
                     "  %s: %.2f%% (%d/%d)",
-                    bench, res["accuracy"] * 100, res["num_correct"], res["num_questions"],
+                    bench,
+                    res["accuracy"] * 100,
+                    res["num_correct"],
+                    res["num_questions"],
                 )
 
             if args.output_json:
                 # Strip per_question details for compact output
                 compact = {
-                    bench: {k: v for k, v in res.items() if k != "per_question"}
-                    for bench, res in results.items()
+                    bench: {k: v for k, v in res.items() if k != "per_question"} for bench, res in results.items()
                 }
                 with open(args.output_json, "w") as f:
                     json.dump(compact, f, indent=2)
@@ -581,11 +585,19 @@ def vlm_mc_eval_callback(
 
         logger.info(
             "Running VLM MC eval at step %d (EvalPos=%d, EvalBatch=%d, params=%s)",
-            step.step, EvalPos.size, EvalBatch.size, f"{parameter_count(model):,}",
+            step.step,
+            EvalPos.size,
+            EvalBatch.size,
+            f"{parameter_count(model):,}",
         )
 
         worker = _LmEvalHarnessWorker(
-            EvalBatch, EvalPos, model, axis_resources, tokenizer, mp,
+            EvalBatch,
+            EvalPos,
+            model,
+            axis_resources,
+            tokenizer,
+            mp,
             max_packed_segments=64,
         )
 
@@ -596,7 +608,10 @@ def vlm_mc_eval_callback(
                 accuracy = result["accuracy"]
                 logger.info(
                     "%s: accuracy=%.4f (%d/%d)",
-                    bench_name, accuracy, result["num_correct"], result["num_questions"],
+                    bench_name,
+                    accuracy,
+                    result["num_correct"],
+                    result["num_questions"],
                 )
 
                 levanter.tracker.log(

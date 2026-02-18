@@ -47,6 +47,12 @@ class SimpleTrainConfig:
     steps_per_export: int = 10000
     steps_per_task_eval: int | None = None
     """how often to run task evaluations"""
+    vlm_mc_eval_benchmarks: list[str] | None = None
+    """MC benchmark names for VLM accuracy eval (e.g. ["ai2d", "mmmu"])."""
+    vlm_mc_eval_parquet_path: str | None = None
+    """Base GCS path to tokenized eval parquets."""
+    vlm_mc_eval_steps: int | None = None
+    """How often to run VLM MC evaluation. Defaults to steps_per_task_eval."""
     steps_per_hf_export: int | None = None
     """None means match steps_per_export, -1 disables"""
     per_device_parallelism: int = -1

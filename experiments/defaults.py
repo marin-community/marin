@@ -407,6 +407,9 @@ def default_train(
         data_seed=train_config.data_seed,
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
+        vlm_mc_eval_benchmarks=train_config.vlm_mc_eval_benchmarks,
+        vlm_mc_eval_parquet_path=train_config.vlm_mc_eval_parquet_path,
+        vlm_mc_eval_steps=train_config.vlm_mc_eval_steps or train_config.steps_per_task_eval or 10000,
     )
 
     # Create the pod config
