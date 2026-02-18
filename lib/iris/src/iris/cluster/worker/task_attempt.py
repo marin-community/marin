@@ -19,11 +19,11 @@ from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime
+from google.protobuf import json_format
+
 from iris.cluster.types import (
     DEFAULT_BASE_IMAGE,
     JobName,
-    constraints_from_proto,
-    constraints_to_json,
     is_task_finished,
 )
 from iris.cluster.worker.bundle_cache import BundleProvider
@@ -168,7 +168,9 @@ def build_iris_env(
     if user_env_vars:
         env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
     if task.request.constraints:
-        env["IRIS_JOB_CONSTRAINTS"] = constraints_to_json(constraints_from_proto(task.request.constraints))
+        env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
+            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in task.request.constraints]
+        )
 
     # Inject allocated ports
     for name, port in task.ports.items():

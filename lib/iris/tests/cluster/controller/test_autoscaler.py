@@ -963,6 +963,38 @@ class TestRegionRouting:
         assert len(result.unmet_entries) == 1
         assert "required_regions=['us-west4']" in result.unmet_entries[0].reason
 
+    def test_route_demand_combined_region_and_preemptible(self):
+        """Demand requiring both region=us-west4 and preemptible=True only routes to the matching group."""
+        config_west_preemptible = make_scale_group_config(
+            name="west-preemptible", max_slices=5, priority=10, zones=["us-west4-b"], preemptible=True
+        )
+        config_west_preemptible.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_west_ondemand = make_scale_group_config(
+            name="west-ondemand", max_slices=5, priority=10, zones=["us-west4-b"], preemptible=False
+        )
+        config_west_ondemand.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_eu_preemptible = make_scale_group_config(
+            name="eu-preemptible", max_slices=5, priority=10, zones=["europe-west4-b"], preemptible=True
+        )
+        config_eu_preemptible.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+
+        west_preemptible = ScalingGroup(config_west_preemptible, make_mock_platform())
+        west_ondemand = ScalingGroup(config_west_ondemand, make_mock_platform())
+        eu_preemptible = ScalingGroup(config_eu_preemptible, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=True)
+        for entry in demand:
+            entry.required_regions = frozenset({"us-west4"})
+
+        result = route_demand([west_preemptible, west_ondemand, eu_preemptible], demand)
+
+        assert len(result.routed_entries["west-preemptible"]) == 2
+        assert result.routed_entries.get("west-ondemand") is None
+        assert result.routed_entries.get("eu-preemptible") is None
+        assert result.unmet_entries == []
+
 
 class TestAutoscalerWaterfallEndToEnd:
     """End-to-end tests for waterfall routing with FakePlatform."""

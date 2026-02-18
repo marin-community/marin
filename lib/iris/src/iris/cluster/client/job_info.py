@@ -11,7 +11,10 @@ import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from iris.cluster.types import Constraint, JobName, constraints_from_json
+from google.protobuf import json_format
+
+from iris.cluster.types import Constraint, JobName
+from iris.rpc import cluster_pb2
 
 
 @dataclass
@@ -79,7 +82,10 @@ def get_job_info() -> JobInfo | None:
         job_env_json = os.environ.get("IRIS_JOB_ENV", "")
         job_env = json.loads(job_env_json) if job_env_json else {}
         constraints_json = os.environ.get("IRIS_JOB_CONSTRAINTS", "")
-        constraints = constraints_from_json(constraints_json) if constraints_json else []
+        constraints: list[Constraint] = []
+        if constraints_json:
+            for item in json.loads(constraints_json):
+                constraints.append(Constraint.from_proto(json_format.ParseDict(item, cluster_pb2.Constraint())))
 
         info = JobInfo(
             task_id=task_id,

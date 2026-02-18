@@ -381,6 +381,7 @@ class LocalPlatform:
         cache_path: Path | None = None,
         fake_bundle: Path | None = None,
         port_allocator: PortAllocator | None = None,
+        worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
     ):
         self._label_prefix = label_prefix
         self._threads = threads or ThreadContainer(name="local-platform")
@@ -390,6 +391,7 @@ class LocalPlatform:
         self._cache_path = cache_path
         self._fake_bundle = fake_bundle
         self._port_allocator = port_allocator
+        self._worker_attributes_by_group = worker_attributes_by_group or {}
 
     def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneVmHandle:
         """Create an in-process "VM". Used by start_controller() for local mode."""
@@ -469,6 +471,13 @@ class LocalPlatform:
                 attributes["tpu-topology"] = config.accelerator_variant
                 topo = get_tpu_topology(config.accelerator_variant)
                 device = tpu_device(config.accelerator_variant, count=topo.chips_per_vm)
+
+            # Merge worker attributes from scale group config (e.g. region, preemptible).
+            # The scale group name is embedded in slice labels by prepare_slice_config().
+            sg_name = config.labels.get(f"{self._label_prefix}-scale-group", "")
+            if sg_name and sg_name in self._worker_attributes_by_group:
+                for k, v in self._worker_attributes_by_group[sg_name].items():
+                    attributes.setdefault(k, v)
 
             environment_provider = LocalEnvironmentProvider(
                 cpu=1000,

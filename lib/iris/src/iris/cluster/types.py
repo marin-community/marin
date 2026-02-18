@@ -12,7 +12,6 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
-import json
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -699,48 +698,6 @@ def merge_constraints(parent: Sequence[Constraint], child: Sequence[Constraint])
     for constraints_for_key in merged_by_key.values():
         result.extend(constraints_for_key)
     return result
-
-
-def constraints_to_json(constraints: Sequence[Constraint]) -> str:
-    """Serialize constraints to JSON for IRIS_JOB_CONSTRAINTS."""
-    encoded: list[dict[str, str | int | float | None]] = []
-    for constraint in constraints:
-        encoded.append(
-            {
-                "key": constraint.key,
-                "op": int(constraint.op),
-                "value": constraint.value,
-            }
-        )
-    return json.dumps(encoded)
-
-
-def constraints_from_json(raw: str) -> list[Constraint]:
-    """Deserialize constraints from JSON encoded by constraints_to_json()."""
-    if not raw:
-        return []
-    decoded = json.loads(raw)
-    if not isinstance(decoded, list):
-        raise ValueError("constraints JSON must be a list")
-
-    constraints: list[Constraint] = []
-    for item in decoded:
-        if not isinstance(item, dict):
-            raise ValueError("constraint item must be an object")
-        key = item.get("key")
-        op = item.get("op")
-        value = item.get("value")
-        if not isinstance(key, str):
-            raise ValueError("constraint key must be a string")
-        if not isinstance(op, int):
-            raise ValueError("constraint op must be an int")
-        constraints.append(Constraint(key=key, op=ConstraintOp(op), value=value))
-    return constraints
-
-
-def constraints_from_proto(constraints: Sequence[cluster_pb2.Constraint]) -> list[Constraint]:
-    """Convert protobuf constraints to dataclass constraints."""
-    return [Constraint.from_proto(constraint) for constraint in constraints]
 
 
 def is_job_finished(state: int) -> bool:
