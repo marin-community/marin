@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -29,10 +28,10 @@ class GrugLmExample:
     def causal(
         tokens: jax.Array,
         *,
-        loss_weight: Optional[jax.Array] = None,
-        ignore_id: Optional[int] = None,
-        eos_id: Optional[int] = None,
-        segment_ids: Optional[jax.Array] = None,
+        loss_weight: jax.Array | None = None,
+        ignore_id: int | None = None,
+        eos_id: int | None = None,
+        segment_ids: jax.Array | None = None,
         sliding_window: int | None = None,
         block_cross_document_attention: bool = True,
     ) -> "GrugLmExample":
@@ -76,7 +75,7 @@ class GrugLmExample:
         tokens: jax.Array,
         prompt_length: NamedOrNumeric,
         *,
-        ignore_id: Optional[int] = None,
+        ignore_id: int | None = None,
         all_causal: bool = True,
         sliding_window: int | None = None,
     ) -> "GrugLmExample":
@@ -94,7 +93,7 @@ class GrugLmExample:
         return GrugLmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     @staticmethod
-    def causal_loss_mask(seq_len: int, prompt_length: Optional[NamedOrNumeric] = None) -> jax.Array:
+    def causal_loss_mask(seq_len: int, prompt_length: NamedOrNumeric | None = None) -> jax.Array:
         if seq_len <= 0:
             raise ValueError(f"seq_len must be positive, got {seq_len}")
 
