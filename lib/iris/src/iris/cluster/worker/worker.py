@@ -19,7 +19,7 @@ from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.task_logging import FsspecLogSink, LocalLogSink, LogSink, LogSinkConfig, resolve_log_prefix
+from iris.cluster.task_logging import FsspecLogSink, LocalLogSink, LogSink, LogSinkConfig
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
@@ -70,6 +70,7 @@ class Worker:
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
         self._runtime = container_runtime or DockerRuntime()
         self._environment_provider = environment_provider or DefaultEnvironmentProvider()
+        self._inferred_log_prefix = self._environment_provider.infer_log_prefix()
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Probe worker metadata eagerly so it's available before any task arrives.
@@ -303,7 +304,7 @@ class Worker:
             attempt_id=attempt_id,
         )
 
-        prefix = self._config.log_prefix or resolve_log_prefix()
+        prefix = self._config.log_prefix or self._inferred_log_prefix
         if prefix:
             config.prefix = prefix
             return FsspecLogSink(config)

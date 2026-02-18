@@ -54,8 +54,8 @@ def _get_gcp_metadata(path: str) -> str | None:
         return None
 
 
-def infer_worker_log_prefix() -> str | None:
-    """Infer worker log prefix from environment/GCP metadata."""
+def _infer_worker_log_prefix() -> str | None:
+    """Infer worker log prefix from GCP metadata."""
     if not _is_gcp_vm():
         return None
     zone = _get_gcp_metadata("zone")
@@ -300,6 +300,7 @@ class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
+    def infer_log_prefix(self) -> str | None: ...
 
 
 class TPUSimEnvironmentProvider:
@@ -332,6 +333,9 @@ class TPUSimEnvironmentProvider:
         # Mark device as TPU so _build_device_env_vars triggers
         base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
         return base
+
+    def infer_log_prefix(self) -> str | None:
+        return None
 
 
 class DefaultEnvironmentProvider:
@@ -415,3 +419,6 @@ class DefaultEnvironmentProvider:
             attributes=attributes,
             vm_address=vm_address,
         )
+
+    def infer_log_prefix(self) -> str | None:
+        return _infer_worker_log_prefix()

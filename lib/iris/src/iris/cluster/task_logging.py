@@ -16,7 +16,6 @@ import fsspec
 from google.protobuf import json_format
 
 from iris.cluster.types import JobName
-from iris.cluster.worker.env_probe import infer_worker_log_prefix
 from iris.rpc import logging_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -63,11 +62,6 @@ class LogSink(Protocol):
     def log_path(self) -> str:
         """Get storage path for this task attempt's logs."""
         ...
-
-
-def resolve_log_prefix() -> str | None:
-    """Resolve storage prefix for Iris worker logs."""
-    return infer_worker_log_prefix()
 
 
 def _default_sync_interval() -> Duration:
@@ -311,32 +305,38 @@ class LocalLogSink:
             return self._metadata
 
 
-@dataclass
-class LogLocation:
-    """Location of logs in storage for a specific task attempt."""
+class LogReader:
+    """Incremental reader for a single task-attempt log file.
 
-    prefix: str
-    worker_id: str
-    task_id: JobName
-    attempt_id: int
+    Keeps byte offset and trailing partial line so callers can stream logs
+    without re-reading full files.
+    """
+
+    def __init__(self, *, logs_path: str, metadata_path: str):
+        self._logs_path = logs_path
+        self._metadata_path = metadata_path
+        self._offset = 0
+        self._tail = ""
+        assert "://" in logs_path, f"log path must be a URL, got: {logs_path}"
+        scheme, _ = logs_path.split("://", 1)
+        self._fs = fsspec.filesystem(scheme)
 
     @classmethod
-    def create(
+    def from_attempt(
         cls,
         *,
         prefix: str,
         worker_id: str,
         task_id: JobName,
         attempt_id: int,
-    ) -> "LogLocation":
-        return cls(prefix=prefix, worker_id=worker_id, task_id=task_id, attempt_id=attempt_id)
+    ) -> "LogReader":
+        assert "://" in prefix, f"log prefix must be a URL, got: {prefix}"
+        task_wire = task_id.to_wire().lstrip("/")
+        base = f"{prefix}/{worker_id}/{task_wire}/{attempt_id}"
+        return cls(logs_path=f"{base}/logs.jsonl", metadata_path=f"{base}/metadata.json")
 
     @classmethod
-    def from_logdir(cls, log_directory: str) -> "LogLocation":
-        """Parse persisted log_directory into a location.
-
-        Format: {prefix}/iris-logs/{worker_id}/{task_id}/{attempt_id}
-        """
+    def from_log_directory(cls, *, log_directory: str) -> "LogReader":
         if not log_directory:
             raise ValueError("log_directory is required")
         marker = "/iris-logs/"
@@ -352,43 +352,26 @@ class LogLocation:
         attempt_id = int(parts[-1])
         task_id = JobName.from_wire("/" + "/".join(parts[1:-1]))
         task_id.require_task()
-        return cls(prefix=prefix, worker_id=worker_id, task_id=task_id, attempt_id=attempt_id)
+        return cls.from_attempt(prefix=prefix, worker_id=worker_id, task_id=task_id, attempt_id=attempt_id)
 
-    @property
-    def base_path(self) -> str:
-        """Get the base storage path for this task attempt."""
-        task_id = self.task_id.to_wire().lstrip("/")
-        return f"{self.prefix}/{self.worker_id}/{task_id}/{self.attempt_id}"
-
-    @property
-    def logs_path(self) -> str:
-        """Get the storage path for all logs (single logs.jsonl file)."""
-        return f"{self.base_path}/logs.jsonl"
-
-    @property
-    def metadata_path(self) -> str:
-        """Get the storage path for task metadata."""
-        return f"{self.base_path}/metadata.json"
-
-
-class LogReader:
-    """Incremental reader for a single task-attempt log file.
-
-    Keeps byte offset and trailing partial line so callers can stream logs
-    without re-reading full files.
-    """
-
-    def __init__(self, location: LogLocation):
-        self._location = location
-        self._offset = 0
-        self._tail = ""
-        assert "://" in location.prefix, f"log prefix must be a URL, got: {location.prefix}"
-        scheme, _ = location.prefix.split("://", 1)
-        self._fs = fsspec.filesystem(scheme)
-
-    @property
-    def location(self) -> LogLocation:
-        return self._location
+    @classmethod
+    def parse_log_directory(cls, *, log_directory: str) -> tuple[str, str, JobName, int]:
+        if not log_directory:
+            raise ValueError("log_directory is required")
+        marker = "/iris-logs/"
+        marker_index = log_directory.find(marker)
+        if marker_index < 0:
+            raise ValueError(f"log_directory missing '/iris-logs/' marker: {log_directory}")
+        prefix = log_directory[: marker_index + len(marker) - 1]
+        suffix = log_directory[marker_index + len(marker) :]
+        parts = suffix.split("/")
+        if len(parts) < 3:
+            raise ValueError(f"Invalid log_directory format: {log_directory}")
+        worker_id = parts[0]
+        attempt_id = int(parts[-1])
+        task_id = JobName.from_wire("/" + "/".join(parts[1:-1]))
+        task_id.require_task()
+        return prefix, worker_id, task_id, attempt_id
 
     def read_logs(
         self,
@@ -400,7 +383,7 @@ class LogReader:
         include_incomplete_tail: bool = False,
     ) -> list[logging_pb2.LogEntry]:
         """Read entries appended since the last call."""
-        log_path = self._location.logs_path
+        log_path = self._logs_path
         try:
             with self._fs.open(log_path, mode="rb") as f:
                 f.seek(self._offset)
@@ -446,7 +429,7 @@ class LogReader:
         return entries
 
     def read_metadata(self) -> logging_pb2.TaskAttemptMetadata | None:
-        metadata_path = self._location.metadata_path
+        metadata_path = self._metadata_path
         try:
             content = self._fs.cat_file(metadata_path).decode("utf-8")
             metadata = logging_pb2.TaskAttemptMetadata()
@@ -457,147 +440,3 @@ class LogReader:
         except Exception as e:
             logger.warning(f"Failed to read metadata from {metadata_path}: {e}")
             return None
-
-
-def get_log_location(
-    task_id: JobName,
-    worker_id: str,
-    attempt_id: int,
-    prefix: str | None = None,
-) -> LogLocation:
-    """Get storage location for a task attempt.
-
-    Args:
-        task_id: Full task ID
-        worker_id: Worker ID that ran the task
-        attempt_id: Attempt ID
-        prefix: Storage prefix (defaults to resolve_log_prefix())
-
-    Returns:
-        LogLocation for accessing logs
-    """
-    if prefix is None:
-        prefix = resolve_log_prefix()
-        if prefix is None:
-            raise ValueError("worker log prefix is not configured and could not be inferred from environment")
-
-    return LogLocation.create(
-        prefix=prefix,
-        worker_id=worker_id,
-        task_id=task_id,
-        attempt_id=attempt_id,
-    )
-
-
-def create_attempt_log_reader(
-    *,
-    task_id: JobName,
-    worker_id: str,
-    attempt_id: int,
-    prefix: str | None = None,
-) -> LogReader:
-    """Create an incremental reader for a task attempt."""
-    return LogReader(
-        get_log_location(
-            task_id=task_id,
-            worker_id=worker_id,
-            attempt_id=attempt_id,
-            prefix=prefix,
-        )
-    )
-
-
-def create_attempt_log_reader_from_directory(
-    *,
-    log_directory: str,
-) -> LogReader:
-    """Create an incremental reader from persisted log_directory."""
-    return LogReader(LogLocation.from_logdir(log_directory))
-
-
-def read_logs(
-    location: LogLocation,
-    source: str | None = None,
-    regex: str | None = None,
-    max_lines: int = 0,
-) -> list[logging_pb2.LogEntry]:
-    """Read logs from storage.
-
-    Args:
-        location: Storage location
-        source: Optional log source filter ("stdout", "stderr", or "build"). If None, returns all logs.
-        regex: Optional regex filter (applied in-memory)
-        max_lines: Maximum number of lines to return (0 = unlimited)
-
-    Returns:
-        List of LogEntry protos
-    """
-    reader = LogReader(location)
-    return reader.read_logs(source=source, regex_filter=regex, max_lines=max_lines, include_incomplete_tail=True)
-
-
-def read_metadata(location: LogLocation) -> logging_pb2.TaskAttemptMetadata | None:
-    """Read task metadata from storage.
-
-    Args:
-        location: Storage location
-
-    Returns:
-        TaskAttemptMetadata proto or None if not found
-    """
-    return LogReader(location).read_metadata()
-
-
-def fetch_logs_for_task(
-    task_id_wire: str,
-    worker_id: str,
-    attempt_id: int,
-    source: str | None = None,
-    regex: str | None = None,
-    max_lines: int = 0,
-    prefix: str | None = None,
-) -> list[logging_pb2.LogEntry]:
-    """Convenience function to fetch logs from storage for a specific task attempt.
-
-    Args:
-        task_id_wire: Full task ID in wire format
-        worker_id: Worker ID that ran the task
-        attempt_id: Attempt ID
-        source: Optional log source filter ("stdout", "stderr", or "build"). If None, returns all logs.
-        regex: Optional regex filter
-        max_lines: Maximum number of lines (0 = unlimited)
-        prefix: Storage prefix (defaults to resolve_log_prefix())
-
-    Returns:
-        List of LogEntry protos, or empty list if logs not found
-    """
-    try:
-        location = get_log_location(
-            task_id=JobName.from_wire(task_id_wire),
-            worker_id=worker_id,
-            attempt_id=attempt_id,
-            prefix=prefix,
-        )
-        return read_logs(location, source=source, regex=regex, max_lines=max_lines)
-    except Exception as e:
-        logger.warning(f"Failed to fetch logs for {task_id_wire} attempt {attempt_id}: {e}")
-        return []
-
-
-def fetch_logs_for_directory(
-    log_directory: str,
-    source: str | None = None,
-    regex: str | None = None,
-    max_lines: int = 0,
-) -> list[logging_pb2.LogEntry]:
-    """Fetch logs for a task attempt from its persisted log directory."""
-    try:
-        return read_logs(
-            LogLocation.from_logdir(log_directory),
-            source=source,
-            regex=regex,
-            max_lines=max_lines,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to fetch logs from {log_directory}: {e}")
-        return []

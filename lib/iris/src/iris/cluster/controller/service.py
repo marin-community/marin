@@ -34,7 +34,7 @@ from iris.cluster.controller.state import (
 from iris.cluster import task_logging
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
-from iris.rpc import cluster_pb2, logging_pb2, vm_pb2
+from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import task_state_name
@@ -904,28 +904,20 @@ class ControllerServiceImpl:
                     continue
 
                 try:
-                    reader = task_logging.create_attempt_log_reader_from_directory(log_directory=attempt.log_directory)
+                    reader = task_logging.LogReader.from_log_directory(log_directory=attempt.log_directory)
                     log_entries = reader.read_logs(
                         source=None,  # All sources
                         regex_filter=request.regex if request.regex else None,
                         max_lines=max(0, max_lines - total_lines) if max_lines > 0 else 0,
                     )
 
-                    # Convert logging.LogEntry to Worker.LogEntry for response
                     worker_logs = []
                     for entry in log_entries:
                         # Filter by timestamp if requested
                         if request.since_ms > 0 and entry.timestamp.epoch_ms <= request.since_ms:
                             continue
 
-                        worker_logs.append(
-                            logging_pb2.LogEntry(
-                                timestamp=entry.timestamp,
-                                source=entry.source,
-                                data=entry.data,
-                                attempt_id=entry.attempt_id,
-                            )
-                        )
+                        worker_logs.append(entry)
 
                         if entry.timestamp.epoch_ms > last_timestamp_ms:
                             last_timestamp_ms = entry.timestamp.epoch_ms

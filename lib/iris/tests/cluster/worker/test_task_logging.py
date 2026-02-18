@@ -9,11 +9,9 @@ from pathlib import Path
 from google.protobuf import json_format
 
 from iris.cluster.task_logging import (
-    LogLocation,
     FsspecLogSink,
+    LogReader,
     LogSinkConfig,
-    read_logs,
-    read_metadata,
 )
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
@@ -141,42 +139,6 @@ def test_log_syncer_writes_metadata():
         assert parsed.exit_code == 0
 
 
-def test_log_location_base_path():
-    """Test LogLocation.base_path property."""
-    location = LogLocation(
-        prefix="gs://bucket/ttl=30d/iris-logs",
-        worker_id="worker-1",
-        task_id=TASK_ID,
-        attempt_id=0,
-    )
-    expected = "gs://bucket/ttl=30d/iris-logs/worker-1/job/test/task/0/0"
-    assert location.base_path == expected
-
-
-def test_log_location_logs_path():
-    """Test LogLocation.logs_path property."""
-    location = LogLocation(
-        prefix="gs://bucket",
-        worker_id="worker-1",
-        task_id=TASK_ID,
-        attempt_id=0,
-    )
-    expected = "gs://bucket/worker-1/job/test/task/0/0/logs.jsonl"
-    assert location.logs_path == expected
-
-
-def test_log_location_metadata_path():
-    """Test LogLocation.metadata_path property."""
-    location = LogLocation(
-        prefix="gs://bucket",
-        worker_id="worker-1",
-        task_id=TASK_ID,
-        attempt_id=0,
-    )
-    expected = "gs://bucket/worker-1/job/test/task/0/0/metadata.json"
-    assert location.metadata_path == expected
-
-
 def test_read_logs():
     """Test reading logs from storage."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -194,23 +156,35 @@ def test_read_logs():
         syncer.sync()
 
         # Read all logs
-        location = LogLocation(
+        reader = LogReader.from_attempt(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
             task_id=TASK_ID,
             attempt_id=0,
         )
-        all_logs = read_logs(location)
+        all_logs = reader.read_logs(include_incomplete_tail=True)
         assert len(all_logs) == 3
 
         # Read only stdout logs
-        stdout_logs = read_logs(location, source="stdout")
+        reader = LogReader.from_attempt(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        stdout_logs = reader.read_logs(source="stdout", include_incomplete_tail=True)
         assert len(stdout_logs) == 2
         assert stdout_logs[0].data == "line 1"
         assert stdout_logs[1].data == "line 2"
 
         # Read only stderr logs
-        stderr_logs = read_logs(location, source="stderr")
+        reader = LogReader.from_attempt(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        stderr_logs = reader.read_logs(source="stderr", include_incomplete_tail=True)
         assert len(stderr_logs) == 1
         assert stderr_logs[0].data == "error 1"
 
@@ -231,13 +205,13 @@ def test_read_logs_with_regex_filter():
         syncer.sync()
 
         # Read with filter
-        location = LogLocation(
+        reader = LogReader.from_attempt(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
             task_id=TASK_ID,
             attempt_id=0,
         )
-        logs = read_logs(location, source="stdout", regex="ERROR")
+        logs = reader.read_logs(source="stdout", regex_filter="ERROR", include_incomplete_tail=True)
 
         assert len(logs) == 1
         assert logs[0].data == "ERROR: line 2"
@@ -259,13 +233,13 @@ def test_read_logs_max_lines():
         syncer.sync()
 
         # Read with limit
-        location = LogLocation(
+        reader = LogReader.from_attempt(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
             task_id=TASK_ID,
             attempt_id=0,
         )
-        logs = read_logs(location, source="stdout", max_lines=5)
+        logs = reader.read_logs(source="stdout", max_lines=5, include_incomplete_tail=True)
 
         assert len(logs) == 5
 
@@ -293,13 +267,13 @@ def test_read_metadata():
         syncer.write_metadata(metadata)
 
         # Read metadata
-        location = LogLocation(
+        reader = LogReader.from_attempt(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
             task_id=TASK_ID,
             attempt_id=0,
         )
-        read_meta = read_metadata(location)
+        read_meta = reader.read_metadata()
 
         assert read_meta is not None
         assert read_meta.task_id == "/job/test/task/0"
@@ -310,24 +284,24 @@ def test_read_metadata():
 def test_read_logs_not_found():
     """Test reading logs when file doesn't exist."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        location = LogLocation(
+        reader = LogReader.from_attempt(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
             task_id=TASK_ID,
             attempt_id=0,
         )
-        logs = read_logs(location, source="stdout")
+        logs = reader.read_logs(source="stdout", include_incomplete_tail=True)
         assert logs == []
 
 
 def test_read_metadata_not_found():
     """Test reading metadata when file doesn't exist."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        location = LogLocation(
+        reader = LogReader.from_attempt(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
             task_id=TASK_ID,
             attempt_id=0,
         )
-        metadata = read_metadata(location)
+        metadata = reader.read_metadata()
         assert metadata is None

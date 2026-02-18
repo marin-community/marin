@@ -7,11 +7,7 @@ import logging
 import time
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.task_logging import (
-    LogReader,
-    create_attempt_log_reader_from_directory,
-    LogLocation,
-)
+from iris.cluster.task_logging import LogReader
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -274,7 +270,7 @@ class RemoteClusterClient:
             if not task_status.worker_id:
                 continue
             try:
-                parsed = LogLocation.from_logdir(task_status.log_directory)
+                prefix, _, parsed_task_id, _ = LogReader.parse_log_directory(log_directory=task_status.log_directory)
             except ValueError:
                 logger.warning("Invalid log_directory format for %s: %s", task_status.task_id, task_status.log_directory)
                 continue
@@ -296,13 +292,11 @@ class RemoteClusterClient:
                 if not worker_id:
                     continue
 
-                reader = LogReader(
-                    LogLocation.create(
-                        prefix=parsed.prefix,
-                        worker_id=worker_id,
-                        task_id=JobName.from_wire(task_status.task_id),
-                        attempt_id=att_id,
-                    )
+                reader = LogReader.from_attempt(
+                    prefix=prefix,
+                    worker_id=worker_id,
+                    task_id=parsed_task_id,
+                    attempt_id=att_id,
                 )
                 log_entries = reader.read_logs(source=None, regex_filter=regex, max_lines=max_lines - total_lines)
 
@@ -369,7 +363,13 @@ class RemoteClusterClient:
                 reader_key = f"{task_status.log_directory}|{worker_id}|{att_id}"
                 reader = self._attempt_readers.get(reader_key)
                 if reader is None:
-                    reader = create_attempt_log_reader_from_directory(log_directory=task_status.log_directory)
+                    prefix, _, task_id, _ = LogReader.parse_log_directory(log_directory=task_status.log_directory)
+                    reader = LogReader.from_attempt(
+                        prefix=prefix,
+                        worker_id=worker_id,
+                        task_id=task_id,
+                        attempt_id=att_id,
+                    )
                     self._attempt_readers[reader_key] = reader
 
                 entries = reader.read_logs(
