@@ -1507,137 +1507,59 @@ to validate runtime semantics without requiring CoreWeave capacity.
 
 ## 10. Implementation Order
 
-The implementation is split into two spirals. **Spiral 1** refactors the platform layer on
-existing platforms (GCP + Manual + Local) and is independently shippable and testable before
-any CoreWeave code is written. **Spiral 2** builds CoreWeave support on the clean interface
-from Spiral 1.
+Execution is split into two spirals. Spiral 1 is a behavior-preserving platform refactor.
+Spiral 2 delivers CoreWeave support on that interface.
 
-### Spiral 1: Platform refactor (GCP + Manual + Local)
+### Spiral 1 (refactor, no CoreWeave dependency)
 
-This spiral is independently shippable and testable on existing platforms BEFORE writing
-any CoreWeave code.
+Scope:
+1. Rename transport/handle types (`SshConnection` -> `RemoteExec`, `VmHandle` -> `RemoteWorkerHandle`,
+   related status/field names) and update all call sites.
+2. Move bootstrap ownership into `Platform.create_slice(config, bootstrap_config)` across
+   GCP/Manual/Local; add `BOOTSTRAPPING` slice state.
+3. Remove autoscaler-driven bootstrap threads (`WorkerBootstrap` path) and make reconcile
+   observe platform-reported state transitions.
 
-1. **Rename `SshConnection` -> `RemoteExec`** (mechanical): rename file `ssh.py` ->
-   `remote_exec.py`, rename protocol and all implementations, update all imports.
+Exit criteria:
+1. Existing platform/controller/e2e test suites in Section 9.1 stay green.
+2. GCP/manual/local behavior is unchanged except for the new state progression visibility
+   (`CREATING -> BOOTSTRAPPING -> READY|FAILED`).
 
-2. **Rename `VmHandle` -> `RemoteWorkerHandle`**: rename protocol, all implementations
-   (`GcpVmHandle` -> `GcpWorkerHandle`, `StandaloneVmHandle` -> `StandaloneWorkerHandle`,
-   `_LocalVmHandle` -> `_LocalWorkerHandle`), rename `CloudVmState` -> `CloudWorkerState`,
-   `VmStatus` -> `WorkerStatus`, `vm_id` -> `worker_id` on protocol, `SliceStatus.vms` ->
-   `SliceStatus.workers`, `TrackedVm` -> `TrackedWorker`. Update all call sites.
+### Spiral 2 (CoreWeave delivery)
 
-3. **Move `bootstrap()` and `wait_for_connection()` off the `RemoteWorkerHandle` protocol**:
-   these become methods on `RemoteExecWorkerBase` (the SSH implementation base class) only.
-   Remove from protocol definition. Update `_LocalWorkerHandle` to drop these methods.
-   Update any code that calls these through the protocol type.
+Scope:
+1. Implement `CoreweavePlatform` with idempotent reconcile semantics, lifecycle state mapping,
+   and deterministic cleanup on failure.
+2. Implement `ContainerdRuntime` with CRI host-network task sandbox semantics (`network=NODE`).
+3. Add worker runtime selection (`--runtime`) and image/build pipeline updates for CoreWeave.
+4. Add operator manifests under `infra/coreweave/k8s/`.
 
-4. **Add `BootstrapConfig` proto** and `bootstrap_config` parameter to
-   `Platform.create_slice()`.
-
-5. **Move GCP bootstrap into `GcpPlatform.create_slice()`** with async model:
-   `create_slice()` returns immediately with a handle in `CREATING` state. Internal
-   monitoring thread runs SSH bootstrap, transitions through `BOOTSTRAPPING` -> `READY`.
-   On failure, GcpPlatform deletes the TPU and marks handle `FAILED`.
-
-6. **Same for `ManualPlatform`**: move bootstrap into `create_slice()` with async model.
-
-7. **`LocalPlatform` accepts `bootstrap_config` for compliance, ignores it**:
-   `LocalPlatform.create_slice(config, bootstrap_config)` accepts the parameter for
-   protocol compliance and ignores it. LocalPlatform spawns workers directly
-   (ProcessRuntime), it doesn't need bootstrap. Returns handle in READY state immediately.
-
-8. **Simplify autoscaler**: remove `WorkerBootstrap` dependency, remove
-   `bootstrap_slice_vms()`, `_bootstrap_slice()`, `_bootstrap_slice_safe()`.
-   `_do_scale_up()` calls `group.scale_up()` -> `platform.create_slice()` which returns
-   immediately. `complete_scale_up()` is called right after. The reconcile cycle polls
-   `handle.describe()` to monitor state. No more background bootstrap threads.
-
-9. **Add `BOOTSTRAPPING` to `CloudSliceState`** enum.
-
-10. **Run existing platform tests + GCP E2E to validate** that the refactor is
-    behavior-preserving.
-
-### Spiral 2: CoreWeave platform + ContainerdRuntime
-
-Built on the clean interface from Spiral 1.
-
-1. **`CoreweavePlatform` implementation**: `CoreweaveWorkerHandle`,
-   `CoreweaveSliceHandle`, `CoreweavePlatform` with `create_slice` (async model),
-   `list_slices`, `terminate`, `discover_controller`. Quota error detection from
-   NodePool status conditions. Unit tests with mocked `kubectl` subprocess.
-
-2. **`ContainerdRuntime` + `ContainerdContainerHandle`** in `runtime/containerd.py`.
-   Unit tests with mocked `crictl` subprocess. CI test with real containerd daemon.
-
-3. **`--runtime` flag on worker** (`worker/main.py`).
-
-4. **Dockerfiles**: Add `crictl` to existing worker Dockerfile (single image, both
-   runtimes). CoreWeave controller Dockerfile (`kubectl` instead of `gcloud`).
-
-5. **Extend `iris build push` for ghcr.io**: Add `--registry ghcr` option to
-   `build.py` push command. Supports `ghcr.io/marin-community/` (default) and
-   custom orgs for private forks. Update CI pipeline to push all images
-   (`iris-worker`, `iris-controller-coreweave`, `iris-task`) to ghcr.io as
-   public packages in addition to GCP Artifact Registry.
-
-6. **K8s manifests**: `infra/coreweave/k8s/` (Namespace, RBAC, ConfigMap,
-   controller NodePool, controller Deployment + Service).
-
-7. **E2E test on CKS**: deploy to a CoreWeave CKS cluster, run smoke test validating
-   full lifecycle: create_slice -> worker register -> task execute -> scale down.
+Exit criteria:
+1. New behavior tests in Section 9.2 pass.
+2. CoreWeave smoke test in Section 9.3 passes end-to-end.
+3. Documentation/manifests and runtime behavior are aligned (no unresolved critical TODOs).
 
 ---
 
-## 11. Resolved Decisions
+## 11. Final Decision Checklist
 
-1. **Autoscaler**: Iris owns all scaling. `autoscaling: false`. One NodePool per slice.
-2. **Bootstrap**: Moved into `Platform.create_slice()` for all platforms with async state
-   model. `create_slice()` returns immediately; platform monitors internally. State
-   transitions: `CREATING -> BOOTSTRAPPING -> READY | FAILED`. GCP bootstrap (SSH + Docker
-   script) moves from `WorkerBootstrap` into `GcpPlatform`. CoreWeave bootstrap is Pod spec
-   + readiness probe. `WorkerBootstrap` class removed. Autoscaler no longer drives bootstrap
-   -- it polls `handle.describe()` to observe state and acts on `READY`/`FAILED`.
-3. **Platform cleanup on failure**: Each platform cleans up its own resources when bootstrap
-   fails. GCP deletes the TPU. CoreWeave deletes the Pod and NodePool. The autoscaler calls
-   `handle.terminate()` as a safety net after observing `FAILED`.
-4. **Task containers**: `ContainerdRuntime` via `crictl`. No Docker socket on CoreWeave.
-5. **Single worker image**: One Dockerfile with both `docker-ce-cli` and `crictl`.
-   `--runtime` flag selects backend. Socket mount is a deployment concern (bootstrap
-   script on GCP, Pod spec on CoreWeave).
-6. **Remote execution**: `SshConnection` renamed to `RemoteExec`. No new implementations.
-   CoreWeave does not use `RemoteExec` -- it has no SSH/exec in the production path.
-7. **Handle rename**: `VmHandle` renamed to `RemoteWorkerHandle`. On CoreWeave it represents
-   a Pod, on GCP a TPU VM. `internal_address` = Pod IP on CoreWeave, TPU VM IP on GCP.
-   `vm_id` renamed to `worker_id` on protocol. `CloudVmState` -> `CloudWorkerState`.
-   `SliceStatus.vms` -> `SliceStatus.workers`.
-8. **`bootstrap()` and `wait_for_connection()` removed from protocol**: These are SSH
-   implementation details. They live on `RemoteExecWorkerBase` only.
-   `CoreweaveWorkerHandle` does not implement them.
-9. **Controller**: Kubernetes Deployment + Service, operator-managed. In-cluster
-   ServiceAccount auth.
-10. **Images**: `ghcr.io/marin-community/` for all Iris images. **Public** -- no auth
-    needed for pull. Built via `iris build` CLI (`build.py`), which is extended with
-    `--registry ghcr` for ghcr.io push alongside existing GCP Artifact Registry support.
-    `imagePullSecrets` only for private registry deployments.
-11. **Operator vs. platform.py**: Operator manages infrastructure (cluster, RBAC, Deployment,
-    Secrets). `platform.py` manages dynamic worker resources (NodePools, Pods).
-12. **Health probes**: HTTP GET on `/health`. Works because Connect protocol serves JSON
-    over HTTP.
-13. **`BootstrapConfig` proto**: Defines image, task_image, worker_port, env_vars, cache_dir,
-    runtime. Passed to `Platform.create_slice()`. LocalPlatform accepts and ignores it.
-14. **Spiral implementation**: Spiral 1 refactors platform layer on existing platforms (GCP +
-    Manual + Local) before writing any CoreWeave code. Spiral 2 builds CoreWeave on the clean
-    interface.
-15. **Async `create_slice()` model**: `create_slice()` returns immediately with a handle in
-    `CREATING` state. Platform monitors internally. Autoscaler polls `describe()`.
-16. **Task networking for containerd**: Task sandboxes use CRI host networking
-    (`namespace_options.network = NODE`) so endpoint-based task discovery continues to work
-    with flat host:port semantics.
-17. **Restart correctness**: convergence is reconcile-driven (discover existing resources,
-    map observed state, apply idempotent actions), not dependent on in-memory monitor threads.
-18. **Worker Pod security posture**: containerd socket access is constrained with explicit
-    hardening defaults (`allowPrivilegeEscalation=false`, `privileged=false`, drop all caps,
-    `seccompProfile: RuntimeDefault`).
+Authoritative outcomes agreed in this spec:
+
+1. Iris owns scaling decisions on CoreWeave (`autoscaling: false`, one NodePool per slice).
+2. Bootstrap ownership moves into `Platform.create_slice(...)`; autoscaler observes state instead
+   of driving bootstrap.
+3. `create_slice()` is asynchronous and reports `CREATING -> BOOTSTRAPPING -> READY|FAILED`.
+4. Platform implementations clean up their own failed resources; autoscaler termination is a
+   safety net.
+5. CoreWeave task runtime is `ContainerdRuntime` via `crictl`.
+6. Task sandbox networking uses CRI host mode (`namespace_options.network = NODE`) to preserve
+   endpoint-based peer connectivity.
+7. Restart correctness is reconcile-driven and idempotent, not dependent on process-local threads.
+8. Worker Pod containerd socket access uses explicit security hardening defaults.
+9. Naming/protocol refactor (`SshConnection`/`VmHandle` families) is accepted scope to make the
+   platform interface match CoreWeave reality.
+10. Images are published on `ghcr.io/marin-community/` (public by default), with private-registry
+    support via pull secrets.
 
 ## 12. Open Questions
 
