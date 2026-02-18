@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 
-from iris.cluster.platform.base import SliceHandle, StandaloneVmHandle, VmHandle
+from iris.cluster.platform.base import RemoteWorkerHandle, SliceHandle, StandaloneWorkerHandle
 from iris.rpc import config_pb2
 
 
@@ -41,10 +41,14 @@ class CoreweavePlatform:
         self._config = config
         self._label_prefix = label_prefix
 
-    def create_vm(self, config: config_pb2.VmConfig) -> StandaloneVmHandle:
+    def create_vm(self, config: config_pb2.VmConfig) -> StandaloneWorkerHandle:
         raise NotImplementedError("CoreWeave platform is not yet implemented")
 
-    def create_slice(self, config: config_pb2.SliceConfig) -> SliceHandle:
+    def create_slice(
+        self,
+        config: config_pb2.SliceConfig,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+    ) -> SliceHandle:
         raise NotImplementedError("CoreWeave platform is not yet implemented")
 
     def list_slices(
@@ -61,7 +65,7 @@ class CoreweavePlatform:
         self,
         zones: list[str],
         labels: dict[str, str] | None = None,
-    ) -> list[VmHandle]:
+    ) -> list[RemoteWorkerHandle]:
         raise NotImplementedError("CoreWeave platform is not yet implemented")
 
     def tunnel(
