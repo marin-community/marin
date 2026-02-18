@@ -15,8 +15,11 @@ from iris.cluster.task_logging import (
     read_logs,
     read_metadata,
 )
+from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
 from iris.time_utils import Timestamp
+
+TASK_ID = JobName.from_wire("/job/test/task/0")
 
 
 def test_log_syncer_writes_new_logs():
@@ -25,7 +28,7 @@ def test_log_syncer_writes_new_logs():
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         syncer = LogSyncer(config)
@@ -68,7 +71,7 @@ def test_log_syncer_skips_when_no_new_logs():
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         syncer = LogSyncer(config)
@@ -102,7 +105,7 @@ def test_log_syncer_appends_to_existing_files():
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         syncer = LogSyncer(config)
@@ -144,7 +147,7 @@ def test_log_syncer_writes_metadata():
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         syncer = LogSyncer(config)
@@ -178,7 +181,7 @@ def test_log_location_base_path():
     location = LogLocation(
         prefix="gs://bucket/ttl=30d/iris-logs",
         worker_id="worker-1",
-        task_id_wire="/job/test/task/0",
+        task_id=TASK_ID,
         attempt_id=0,
     )
     expected = "gs://bucket/ttl=30d/iris-logs/worker-1/job/test/task/0/0"
@@ -190,7 +193,7 @@ def test_log_location_logs_path():
     location = LogLocation(
         prefix="gs://bucket",
         worker_id="worker-1",
-        task_id_wire="/job/test/task/0",
+        task_id=TASK_ID,
         attempt_id=0,
     )
     expected = "gs://bucket/worker-1/job/test/task/0/0/logs.jsonl"
@@ -202,7 +205,7 @@ def test_log_location_metadata_path():
     location = LogLocation(
         prefix="gs://bucket",
         worker_id="worker-1",
-        task_id_wire="/job/test/task/0",
+        task_id=TASK_ID,
         attempt_id=0,
     )
     expected = "gs://bucket/worker-1/job/test/task/0/0/metadata.json"
@@ -216,7 +219,7 @@ def test_read_logs():
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         syncer = LogSyncer(config)
@@ -250,7 +253,7 @@ def test_read_logs():
         location = LogLocation(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         all_logs = read_logs(location)
@@ -275,7 +278,7 @@ def test_read_logs_with_regex_filter():
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         syncer = LogSyncer(config)
@@ -301,7 +304,7 @@ def test_read_logs_with_regex_filter():
         location = LogLocation(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         logs = read_logs(location, source="stdout", regex="ERROR")
@@ -317,7 +320,7 @@ def test_read_logs_max_lines():
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         syncer = LogSyncer(config)
@@ -336,7 +339,7 @@ def test_read_logs_max_lines():
         location = LogLocation(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         logs = read_logs(location, source="stdout", max_lines=5)
@@ -351,7 +354,7 @@ def test_read_metadata():
         config = LogSyncerConfig(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         syncer = LogSyncer(config)
@@ -370,7 +373,7 @@ def test_read_metadata():
         location = LogLocation(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         read_meta = read_metadata(location)
@@ -387,7 +390,7 @@ def test_read_logs_not_found():
         location = LogLocation(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         logs = read_logs(location, source="stdout")
@@ -400,7 +403,7 @@ def test_read_metadata_not_found():
         location = LogLocation(
             prefix=f"file://{tmpdir}",
             worker_id="worker-1",
-            task_id_wire="/job/test/task/0",
+            task_id=TASK_ID,
             attempt_id=0,
         )
         metadata = read_metadata(location)

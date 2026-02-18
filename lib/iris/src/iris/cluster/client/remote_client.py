@@ -8,10 +8,9 @@ import time
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.task_logging import (
-    AttemptLogReader,
+    LogReader,
     create_attempt_log_reader_from_directory,
-    fetch_logs_for_task,
-    parse_log_directory,
+    LogLocation,
 )
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
 from iris.rpc import cluster_pb2, logging_pb2
@@ -51,7 +50,7 @@ class RemoteClusterClient:
             address=controller_address,
             timeout_ms=timeout_ms,
         )
-        self._attempt_readers: dict[str, AttemptLogReader] = {}
+        self._attempt_readers: dict[str, LogReader] = {}
 
     def submit_job(
         self,
@@ -275,7 +274,7 @@ class RemoteClusterClient:
             if not task_status.worker_id:
                 continue
             try:
-                parsed = parse_log_directory(task_status.log_directory, worker_id=task_status.worker_id)
+                parsed = LogLocation.from_logdir(task_status.log_directory)
             except ValueError:
                 logger.warning("Invalid log_directory format for %s: %s", task_status.task_id, task_status.log_directory)
                 continue
@@ -297,15 +296,15 @@ class RemoteClusterClient:
                 if not worker_id:
                     continue
 
-                log_entries = fetch_logs_for_task(
-                    task_id_wire=task_status.task_id,
-                    worker_id=worker_id,
-                    attempt_id=att_id,
-                    source=None,
-                    regex=regex,
-                    max_lines=max_lines - total_lines,
-                    prefix=parsed.prefix,
+                reader = LogReader(
+                    LogLocation.create(
+                        prefix=parsed.prefix,
+                        worker_id=worker_id,
+                        task_id=JobName.from_wire(task_status.task_id),
+                        attempt_id=att_id,
+                    )
                 )
+                log_entries = reader.read_logs(source=None, regex_filter=regex, max_lines=max_lines - total_lines)
 
                 filtered: list[logging_pb2.LogEntry] = []
                 for entry in log_entries:
@@ -376,7 +375,7 @@ class RemoteClusterClient:
                     )
                     self._attempt_readers[reader_key] = reader
 
-                entries = reader.read_new(
+                entries = reader.read_logs(
                     source=None,
                     regex_filter=regex,
                     since_ms=since_ms,

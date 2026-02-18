@@ -904,11 +904,10 @@ class ControllerServiceImpl:
                     continue
 
                 try:
-                    log_entries = task_logging.fetch_logs_for_directory(
-                        log_directory=attempt.log_directory,
-                        worker_id=str(attempt.worker_id),
+                    reader = task_logging.create_attempt_log_reader_from_directory(log_directory=attempt.log_directory)
+                    log_entries = reader.read_logs(
                         source=None,  # All sources
-                        regex=request.regex if request.regex else None,
+                        regex_filter=request.regex if request.regex else None,
                         max_lines=max(0, max_lines - total_lines) if max_lines > 0 else 0,
                     )
 

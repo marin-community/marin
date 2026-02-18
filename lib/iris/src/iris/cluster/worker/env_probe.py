@@ -54,6 +54,23 @@ def _get_gcp_metadata(path: str) -> str | None:
         return None
 
 
+def infer_worker_log_prefix() -> str | None:
+    """Infer worker log prefix from environment/GCP metadata."""
+    if explicit := os.environ.get("IRIS_WORKER_PREFIX"):
+        return explicit
+    if not _is_gcp_vm():
+        return None
+    zone = _get_gcp_metadata("zone")
+    if not zone:
+        return None
+    # zone format: projects/<project>/zones/us-central2-b
+    zone_name = zone.split("/")[-1]
+    if "-" not in zone_name:
+        return None
+    region = zone_name.rsplit("-", 1)[0]
+    return f"gs://marin-tmp-{region}/ttl=30d/iris-logs"
+
+
 def _extract_tpu_name(instance_name: str) -> str:
     """Derive TPU slice name by stripping worker suffix from instance name."""
     return re.sub(r"-w-*[0-9]*$", "", instance_name.strip())

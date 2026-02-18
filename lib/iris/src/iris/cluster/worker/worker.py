@@ -299,7 +299,7 @@ class Worker:
         config = LogSyncerConfig(
             prefix="",  # Will be set below
             worker_id=self._worker_id or "unknown",
-            task_id_wire=task_id_wire,
+            task_id=JobName.from_wire(task_id_wire),
             attempt_id=attempt_id,
         )
 
