@@ -122,6 +122,12 @@ def test_fetch_task_logs_retries_on_connection_error(mock_client):
                     worker_id="worker-1",
                     log_directory="file:///tmp/task-logs/worker-1/test-job/0/0",
                     current_attempt_id=0,
+                    attempts=[
+                        cluster_pb2.TaskAttempt(
+                            attempt_id=0,
+                            worker_id="worker-1",
+                        )
+                    ],
                 )
             ],
         )

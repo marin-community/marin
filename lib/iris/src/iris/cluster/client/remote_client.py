@@ -7,7 +7,12 @@ import logging
 import time
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.task_logging import fetch_logs_for_task, parse_log_directory
+from iris.cluster.task_logging import (
+    AttemptLogReader,
+    create_attempt_log_reader_from_directory,
+    fetch_logs_for_task,
+    parse_log_directory,
+)
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -46,6 +51,7 @@ class RemoteClusterClient:
             address=controller_address,
             timeout_ms=timeout_ms,
         )
+        self._attempt_readers: dict[str, AttemptLogReader] = {}
 
     def submit_job(
         self,
@@ -256,25 +262,7 @@ class RemoteClusterClient:
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
         """
-        # Query controller for task status and log directory metadata.
-        if target.is_task:
-            parent_job = target.parent
-            if parent_job is None:
-                return cluster_pb2.Controller.GetTaskLogsResponse()
-            parent_status = self.get_job_status(parent_job)
-            tasks = [ts for ts in parent_status.tasks if ts.task_id == target.to_wire()]
-        else:
-            root_status = self.get_job_status(target)
-            tasks = list(root_status.tasks)
-            if include_children:
-                all_jobs = self.list_jobs()
-                prefix_wire = target.to_wire()
-                for job in all_jobs:
-                    if job.job_id == prefix_wire:
-                        continue
-                    if job.job_id.startswith(prefix_wire + "/"):
-                        child_status = self.get_job_status(JobName.from_wire(job.job_id))
-                        tasks.extend(child_status.tasks)
+        tasks = self._collect_task_statuses(target, include_children=include_children)
 
         task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
         total_lines = 0
@@ -296,7 +284,8 @@ class RemoteClusterClient:
             if attempt_id >= 0:
                 attempt_ids = [attempt_id]
             else:
-                attempt_ids = sorted(attempts_by_id) if attempts_by_id else [task_status.current_attempt_id]
+                assert attempts_by_id, f"Task {task_status.task_id} missing attempts in status response"
+                attempt_ids = sorted(attempts_by_id)
 
             for att_id in attempt_ids:
                 if total_lines >= max_lines:
@@ -341,6 +330,96 @@ class RemoteClusterClient:
             last_timestamp_ms=last_timestamp_ms,
             truncated=total_lines >= max_lines,
         )
+
+    def stream_task_logs(
+        self,
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        """Stream logs incrementally using per-attempt readers."""
+        tasks = self._collect_task_statuses(target, include_children=include_children)
+        task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
+        total_lines = 0
+        last_timestamp_ms = since_ms
+        max_lines = max_total_lines if max_total_lines > 0 else 10000
+
+        for task_status in tasks:
+            if not task_status.log_directory or not task_status.worker_id:
+                continue
+
+            attempts_by_id = {a.attempt_id: a for a in task_status.attempts}
+            if attempt_id >= 0:
+                attempt_ids = [attempt_id]
+            else:
+                assert attempts_by_id, f"Task {task_status.task_id} missing attempts in status response"
+                attempt_ids = sorted(attempts_by_id)
+
+            for att_id in attempt_ids:
+                if total_lines >= max_lines:
+                    break
+                attempt = attempts_by_id.get(att_id)
+                worker_id = attempt.worker_id if attempt and attempt.worker_id else task_status.worker_id
+                if not worker_id:
+                    continue
+
+                reader_key = f"{task_status.log_directory}|{worker_id}|{att_id}"
+                reader = self._attempt_readers.get(reader_key)
+                if reader is None:
+                    reader = create_attempt_log_reader_from_directory(
+                        log_directory=task_status.log_directory,
+                        worker_id=worker_id,
+                    )
+                    self._attempt_readers[reader_key] = reader
+
+                entries = reader.read_new(
+                    source=None,
+                    regex_filter=regex,
+                    since_ms=since_ms,
+                    max_lines=max_lines - total_lines,
+                )
+                if not entries:
+                    continue
+                last_timestamp_ms = max(last_timestamp_ms, max(e.timestamp.epoch_ms for e in entries))
+                total_lines += len(entries)
+                task_logs.append(
+                    cluster_pb2.Controller.TaskLogBatch(
+                        task_id=task_status.task_id,
+                        worker_id=worker_id,
+                        logs=entries,
+                    )
+                )
+
+        return cluster_pb2.Controller.GetTaskLogsResponse(
+            task_logs=task_logs,
+            last_timestamp_ms=last_timestamp_ms,
+            truncated=total_lines >= max_lines,
+        )
+
+    def _collect_task_statuses(self, target: JobName, *, include_children: bool) -> list[cluster_pb2.TaskStatus]:
+        """Collect TaskStatus entries for target job/task."""
+        if target.is_task:
+            parent_job = target.parent
+            assert parent_job is not None, f"Task id must have parent job: {target}"
+            parent_status = self.get_job_status(parent_job)
+            return [ts for ts in parent_status.tasks if ts.task_id == target.to_wire()]
+
+        root_status = self.get_job_status(target)
+        tasks = list(root_status.tasks)
+        if include_children:
+            all_jobs = self.list_jobs()
+            prefix_wire = target.to_wire()
+            for job in all_jobs:
+                if job.job_id == prefix_wire:
+                    continue
+                if job.job_id.startswith(prefix_wire + "/"):
+                    child_status = self.get_job_status(JobName.from_wire(job.job_id))
+                    tasks.extend(child_status.tasks)
+        return tasks
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

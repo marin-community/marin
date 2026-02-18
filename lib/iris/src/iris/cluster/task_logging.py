@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -324,6 +325,79 @@ class LogLocation:
         return f"{self.base_path}/metadata.json"
 
 
+class AttemptLogReader:
+    """Incremental reader for a single task-attempt log file.
+
+    Keeps byte offset and trailing partial line so callers can stream logs
+    without re-reading full files.
+    """
+
+    def __init__(self, location: LogLocation):
+        self._location = location
+        self._offset = 0
+        self._tail = ""
+        if "://" in location.prefix:
+            scheme, _ = location.prefix.split("://", 1)
+            self._fs = fsspec.filesystem(scheme)
+        else:
+            self._fs = fsspec.filesystem("file")
+
+    @property
+    def location(self) -> LogLocation:
+        return self._location
+
+    def read_new(
+        self,
+        *,
+        source: str | None = None,
+        regex_filter: str | None = None,
+        since_ms: int = 0,
+        max_lines: int = 0,
+    ) -> list[logging_pb2.LogEntry]:
+        """Read entries appended since the last call."""
+        log_path = self._location.logs_path
+        try:
+            with self._fs.open(log_path, mode="rb") as f:
+                f.seek(self._offset)
+                chunk = f.read()
+                self._offset = f.tell()
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return []
+
+        if not chunk:
+            return []
+
+        text = self._tail + chunk.decode("utf-8", errors="replace")
+        lines = text.split("\n")
+        if text.endswith("\n"):
+            self._tail = ""
+        else:
+            self._tail = lines.pop()
+
+        entries: list[logging_pb2.LogEntry] = []
+        for line in lines:
+            if not line:
+                continue
+            entry = logging_pb2.LogEntry()
+            try:
+                json_format.Parse(line, entry)
+            except Exception:
+                logger.warning("Failed to parse log entry in %s", log_path)
+                continue
+            if source and entry.source != source:
+                continue
+            if since_ms > 0 and entry.timestamp.epoch_ms <= since_ms:
+                continue
+            if regex_filter and not re.search(regex_filter, entry.data):
+                continue
+            entries.append(entry)
+            if max_lines > 0 and len(entries) >= max_lines:
+                break
+        return entries
+
+
 def get_log_location(
     task_id_wire: str,
     worker_id: str,
@@ -385,6 +459,33 @@ def parse_log_directory(log_directory: str, worker_id: str) -> LogLocation:
     )
 
 
+def create_attempt_log_reader(
+    *,
+    task_id_wire: str,
+    worker_id: str,
+    attempt_id: int,
+    prefix: str | None = None,
+) -> AttemptLogReader:
+    """Create an incremental reader for a task attempt."""
+    return AttemptLogReader(
+        get_log_location(
+            task_id_wire=task_id_wire,
+            worker_id=worker_id,
+            attempt_id=attempt_id,
+            prefix=prefix,
+        )
+    )
+
+
+def create_attempt_log_reader_from_directory(
+    *,
+    log_directory: str,
+    worker_id: str,
+) -> AttemptLogReader:
+    """Create an incremental reader from persisted log_directory."""
+    return AttemptLogReader(parse_log_directory(log_directory, worker_id=worker_id))
+
+
 def read_logs(
     location: LogLocation,
     source: str | None = None,
@@ -432,11 +533,8 @@ def read_logs(
                 continue
 
             # Apply regex filter if specified
-            if regex:
-                import re
-
-                if not re.search(regex, log_entry.data):
-                    continue
+            if regex and not re.search(regex, log_entry.data):
+                continue
 
             entries.append(log_entry)
 

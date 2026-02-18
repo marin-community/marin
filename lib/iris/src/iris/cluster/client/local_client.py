@@ -192,5 +192,24 @@ class LocalClusterClient:
             attempt_id=attempt_id,
         )
 
+    def stream_task_logs(
+        self,
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        return self._remote_client.stream_task_logs(
+            target,
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_total_lines,
+            regex=regex,
+            attempt_id=attempt_id,
+        )
+
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         return self._remote_client.get_autoscaler_status()
