@@ -5,12 +5,11 @@
 
 import json
 import logging
-import os
 import re
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Thread
 from typing import Protocol
 
 import fsspec
@@ -19,7 +18,7 @@ from google.protobuf import json_format
 from iris.cluster.types import JobName
 from iris.cluster.worker.env_probe import infer_worker_log_prefix
 from iris.rpc import logging_pb2
-from iris.time_utils import Duration
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +29,8 @@ class LogSink(Protocol):
     Implementations handle storing logs and metadata for task attempts.
     """
 
-    def append(self, log_entry: logging_pb2.LogEntry) -> None:
-        """Append a log entry to the sink."""
+    def append(self, *, source: str, data: str) -> None:
+        """Append a log entry to the sink with implicit current timestamp."""
         ...
 
     def sync(self) -> None:
@@ -39,6 +38,10 @@ class LogSink(Protocol):
 
         Called periodically during task execution.
         """
+        ...
+
+    def close(self) -> None:
+        """Stop background work and flush remaining logs."""
         ...
 
     def write_metadata(self, metadata: logging_pb2.TaskAttemptMetadata) -> None:
@@ -62,28 +65,21 @@ class LogSink(Protocol):
         ...
 
 
-def get_log_prefix() -> str | None:
-    """Get storage prefix for Iris worker logs.
-
-    Returns:
-        Storage prefix URL like "gs://marin-tmp-us-central2/ttl=30d/iris-logs" or None
-    """
-    prefix = os.environ.get("IRIS_WORKER_PREFIX")
-    if prefix:
-        return prefix
+def resolve_log_prefix() -> str | None:
+    """Resolve storage prefix for Iris worker logs."""
     return infer_worker_log_prefix()
 
 
 def _default_sync_interval() -> Duration:
-    """Default sync interval for LogSyncerConfig."""
+    """Default sync interval for LogSinkConfig."""
     return Duration.from_seconds(30.0)
 
 
 @dataclass
-class LogSyncerConfig:
-    """Configuration for log syncing."""
+class LogSinkConfig:
+    """Configuration for log sinks."""
 
-    prefix: str  # Storage prefix from IRIS_WORKER_PREFIX
+    prefix: str
     worker_id: str
     task_id: JobName
     attempt_id: int
@@ -100,19 +96,29 @@ class FsspecLogSink:
     Path structure: {prefix}/{worker_id}/{task_id}/{attempt_id}/
     """
 
-    def __init__(self, config: LogSyncerConfig):
+    def __init__(self, config: LogSinkConfig):
         self._config = config
         self._logs: list[logging_pb2.LogEntry] = []
         self._last_sync_index = 0
         self._lock = Lock()
+        self._stop_event = Event()
+        self._sync_thread = Thread(target=self._sync_loop, name=f"log-sync-{config.worker_id}", daemon=True)
 
         assert "://" in config.prefix, f"log prefix must be a URL, got: {config.prefix}"
         scheme, path = config.prefix.split("://", 1)
+        self._scheme = scheme
         self._fs = fsspec.filesystem(scheme)
         self._path_prefix = path
+        self._sync_thread.start()
 
-    def append(self, log_entry: logging_pb2.LogEntry) -> None:
-        """Append a log entry (called by TaskAttempt)."""
+    def append(self, *, source: str, data: str) -> None:
+        """Append a log entry with current timestamp."""
+        log_entry = logging_pb2.LogEntry(
+            timestamp=Timestamp.now().to_proto(),
+            source=source,
+            data=data,
+            attempt_id=self._config.attempt_id,
+        )
         with self._lock:
             self._logs.append(log_entry)
 
@@ -131,7 +137,7 @@ class FsspecLogSink:
             self._last_sync_index = len(self._logs)
 
         # Write all logs to single file (logs.jsonl)
-        file_path = f"{self.log_path}/logs.jsonl"
+        file_path = f"{self._storage_log_path}/logs.jsonl"
         try:
             # Convert proto entries to JSON lines
             lines = [self._proto_to_json_line(entry) for entry in new_logs]
@@ -139,13 +145,19 @@ class FsspecLogSink:
         except Exception as e:
             logger.warning(f"Failed to write logs to {file_path}: {e}")
 
+    def close(self) -> None:
+        """Stop periodic sync and flush final buffered logs."""
+        self._stop_event.set()
+        self._sync_thread.join(timeout=5.0)
+        self.sync()
+
     def write_metadata(self, metadata: logging_pb2.TaskAttemptMetadata) -> None:
         """Write task metadata on completion.
 
         Args:
             metadata: TaskAttemptMetadata proto to persist
         """
-        path = f"{self.log_path}/metadata.json"
+        path = f"{self._storage_log_path}/metadata.json"
         try:
             # Convert proto to JSON (compact, no pretty printing)
             json_str = json_format.MessageToJson(
@@ -177,7 +189,12 @@ class FsspecLogSink:
 
     @property
     def log_path(self) -> str:
-        """Get path for this task attempt's logs (without scheme)."""
+        """Get URL path for this task attempt's logs."""
+        task_id = self._config.task_id.to_wire().lstrip("/")
+        return f"{self._scheme}://{self._path_prefix}/{self._config.worker_id}/{task_id}/{self._config.attempt_id}"
+
+    @property
+    def _storage_log_path(self) -> str:
         task_id = self._config.task_id.to_wire().lstrip("/")
         return f"{self._path_prefix}/{self._config.worker_id}/{task_id}/{self._config.attempt_id}"
 
@@ -216,6 +233,14 @@ class FsspecLogSink:
             content = existing + "".join(line + "\n" for line in lines)
             self._fs.write_text(path, content)
 
+    def _sync_loop(self) -> None:
+        interval_s = self._config.sync_interval.to_seconds()
+        while not self._stop_event.wait(interval_s):
+            try:
+                self.sync()
+            except Exception as e:
+                logger.warning("Periodic log sync failed: %s", e)
+
 
 class LocalLogSink:
     """In-memory log sink for testing.
@@ -224,18 +249,28 @@ class LocalLogSink:
     Does not persist to disk.
     """
 
-    def __init__(self, config: LogSyncerConfig, maxlen: int = 10000):
+    def __init__(self, config: LogSinkConfig, maxlen: int = 10000):
         self._config = config
         self._logs: deque[logging_pb2.LogEntry] = deque(maxlen=maxlen)
         self._lock = Lock()
         self._metadata: logging_pb2.TaskAttemptMetadata | None = None
 
-    def append(self, log_entry: logging_pb2.LogEntry) -> None:
+    def append(self, *, source: str, data: str) -> None:
         """Append a log entry to in-memory buffer."""
+        log_entry = logging_pb2.LogEntry(
+            timestamp=Timestamp.now().to_proto(),
+            source=source,
+            data=data,
+            attempt_id=self._config.attempt_id,
+        )
         with self._lock:
             self._logs.append(log_entry)
 
     def sync(self) -> None:
+        """No-op for in-memory sink."""
+        pass
+
+    def close(self) -> None:
         """No-op for in-memory sink."""
         pass
 
@@ -276,9 +311,6 @@ class LocalLogSink:
             return self._metadata
 
 
-LogSyncer = FsspecLogSink
-
-
 @dataclass
 class LogLocation:
     """Location of logs in storage for a specific task attempt."""
@@ -303,22 +335,14 @@ class LogLocation:
     def from_logdir(cls, log_directory: str) -> "LogLocation":
         """Parse persisted log_directory into a location.
 
-        Supported formats:
-        - {prefix}/iris-logs/{worker_id}/{task_id}/{attempt_id}
-        - {prefix}/task_logs/{worker_id}/{task_id}/{attempt_id}
+        Format: {prefix}/iris-logs/{worker_id}/{task_id}/{attempt_id}
         """
         if not log_directory:
             raise ValueError("log_directory is required")
-        marker = None
-        marker_index = -1
-        for candidate in ("/iris-logs/", "/task_logs/"):
-            candidate_index = log_directory.find(candidate)
-            if candidate_index >= 0:
-                marker = candidate
-                marker_index = candidate_index
-                break
-        if marker is None:
-            raise ValueError(f"log_directory missing '/iris-logs/' or '/task_logs/' marker: {log_directory}")
+        marker = "/iris-logs/"
+        marker_index = log_directory.find(marker)
+        if marker_index < 0:
+            raise ValueError(f"log_directory missing '/iris-logs/' marker: {log_directory}")
         prefix = log_directory[: marker_index + len(marker) - 1]
         suffix = log_directory[marker_index + len(marker) :]
         parts = suffix.split("/")
@@ -358,11 +382,9 @@ class LogReader:
         self._location = location
         self._offset = 0
         self._tail = ""
-        if "://" in location.prefix:
-            scheme, _ = location.prefix.split("://", 1)
-            self._fs = fsspec.filesystem(scheme)
-        else:
-            self._fs = fsspec.filesystem("file")
+        assert "://" in location.prefix, f"log prefix must be a URL, got: {location.prefix}"
+        scheme, _ = location.prefix.split("://", 1)
+        self._fs = fsspec.filesystem(scheme)
 
     @property
     def location(self) -> LogLocation:
@@ -449,15 +471,15 @@ def get_log_location(
         task_id: Full task ID
         worker_id: Worker ID that ran the task
         attempt_id: Attempt ID
-        prefix: Storage prefix (defaults to get_log_prefix())
+        prefix: Storage prefix (defaults to resolve_log_prefix())
 
     Returns:
         LogLocation for accessing logs
     """
     if prefix is None:
-        prefix = get_log_prefix()
+        prefix = resolve_log_prefix()
         if prefix is None:
-            raise ValueError("IRIS_WORKER_PREFIX not configured and could not infer from region")
+            raise ValueError("worker log prefix is not configured and could not be inferred from environment")
 
     return LogLocation.create(
         prefix=prefix,
@@ -488,10 +510,8 @@ def create_attempt_log_reader(
 def create_attempt_log_reader_from_directory(
     *,
     log_directory: str,
-    worker_id: str | None = None,
 ) -> LogReader:
     """Create an incremental reader from persisted log_directory."""
-    del worker_id
     return LogReader(LogLocation.from_logdir(log_directory))
 
 
@@ -546,7 +566,7 @@ def fetch_logs_for_task(
         source: Optional log source filter ("stdout", "stderr", or "build"). If None, returns all logs.
         regex: Optional regex filter
         max_lines: Maximum number of lines (0 = unlimited)
-        prefix: Storage prefix (defaults to get_log_prefix())
+        prefix: Storage prefix (defaults to resolve_log_prefix())
 
     Returns:
         List of LogEntry protos, or empty list if logs not found

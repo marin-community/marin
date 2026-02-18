@@ -19,7 +19,7 @@ from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.task_logging import FsspecLogSink, LocalLogSink, LogSink, LogSyncerConfig, get_log_prefix
+from iris.cluster.task_logging import FsspecLogSink, LocalLogSink, LogSink, LogSinkConfig, resolve_log_prefix
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
@@ -296,20 +296,20 @@ class Worker:
         Returns:
             LogSink instance (FsspecLogSink or LocalLogSink)
         """
-        config = LogSyncerConfig(
+        config = LogSinkConfig(
             prefix="",  # Will be set below
             worker_id=self._worker_id or "unknown",
             task_id=JobName.from_wire(task_id_wire),
             attempt_id=attempt_id,
         )
 
-        prefix = self._config.log_prefix or get_log_prefix()
+        prefix = self._config.log_prefix or resolve_log_prefix()
         if prefix:
             config.prefix = prefix
             return FsspecLogSink(config)
         else:
             # Fallback to in-memory sink if no storage configured
-            logger.info(f"No IRIS_WORKER_PREFIX configured, using in-memory log sink for {task_id_wire}")
+            logger.info("No log prefix configured, using in-memory log sink for %s", task_id_wire)
             config.prefix = "memory://"
             return LocalLogSink(config)
 

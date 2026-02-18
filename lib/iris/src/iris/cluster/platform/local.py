@@ -441,7 +441,7 @@ class LocalPlatform:
         vm_ids: list[str] = []
         addresses: list[str] = []
         assert self._cache_path is not None
-        log_prefix = f"file://{(self._cache_path / 'task_logs').as_posix()}"
+        log_prefix = f"file://{(self._cache_path / 'iris-logs').as_posix()}"
 
         # Determine worker count from TPU topology if applicable
         worker_count = num_vms

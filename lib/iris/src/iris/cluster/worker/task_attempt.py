@@ -27,7 +27,7 @@ from iris.cluster.task_logging import LogSink
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
-from iris.time_utils import Deadline, Duration, RateLimiter, Timestamp
+from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -385,14 +385,7 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_KILLED)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            self._log_sink.append(
-                logging_pb2.LogEntry(
-                    timestamp=Timestamp.now().to_proto(),
-                    source="error",
-                    data=f"Task failed:\n{error_msg}",
-                    attempt_id=self.attempt_id,
-                )
-            )
+            self._log_sink.append(source="error", data=f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             if is_task_finished(self.status):
@@ -534,15 +527,7 @@ class TaskAttempt:
 
         # Capture build logs into log sink
         for log_line in build_logs:
-            ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
-            self._log_sink.append(
-                logging_pb2.LogEntry(
-                    timestamp=ts.to_proto(),
-                    source=log_line.source,
-                    data=log_line.data,
-                    attempt_id=self.attempt_id,
-                )
-            )
+            self._log_sink.append(source=log_line.source, data=log_line.data)
 
         self.build_finished = Timestamp.now()
         if self.request.entrypoint.setup_commands:
@@ -585,9 +570,6 @@ class TaskAttempt:
 
         # Track last log timestamp for incremental fetching
         last_log_time: Timestamp | None = None
-
-        # Rate limit GCS log syncing to every 30 seconds
-        log_sync_limiter = RateLimiter(interval_seconds=30.0)
 
         while True:
             if rule := chaos("worker.task_monitor"):
@@ -634,14 +616,7 @@ class TaskAttempt:
                         try:
                             self.result = result_path.read_bytes()
                         except Exception as e:
-                            self._log_sink.append(
-                                logging_pb2.LogEntry(
-                                    timestamp=Timestamp.now().to_proto(),
-                                    source="error",
-                                    data=f"Failed to read result file: {e}",
-                                    attempt_id=self.attempt_id,
-                                )
-                            )
+                            self._log_sink.append(source="error", data=f"Failed to read result file: {e}")
 
                 # Container has stopped
                 if status.error:
@@ -662,14 +637,7 @@ class TaskAttempt:
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
-                        self._log_sink.append(
-                            logging_pb2.LogEntry(
-                                timestamp=Timestamp.now().to_proto(),
-                                source="error",
-                                data="Container was OOM killed by the kernel",
-                                attempt_id=self.attempt_id,
-                            )
-                        )
+                        self._log_sink.append(source="error", data="Container was OOM killed by the kernel")
                     self.transition_to(
                         cluster_pb2.TASK_STATE_FAILED,
                         error=error,
@@ -679,13 +647,6 @@ class TaskAttempt:
 
             # Stream logs incrementally
             last_log_time = self._stream_logs(last_log_time)
-
-            # Periodically sync logs to storage
-            if log_sync_limiter.should_run():
-                try:
-                    self._log_sink.sync()
-                except Exception as e:
-                    logger.warning(f"Log sync failed: {e}")
 
             # Collect stats
             try:
@@ -721,14 +682,7 @@ class TaskAttempt:
         try:
             new_logs = self._container_handle.logs(since=since)
             for log_line in new_logs:
-                ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
-                log_entry = logging_pb2.LogEntry(
-                    timestamp=ts.to_proto(),
-                    source=log_line.source,
-                    data=log_line.data,
-                    attempt_id=self.attempt_id,
-                )
-                self._log_sink.append(log_entry)
+                self._log_sink.append(source=log_line.source, data=log_line.data)
 
             if new_logs:
                 last_ts = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
@@ -754,9 +708,6 @@ class TaskAttempt:
         # Final log sync and metadata write
         if is_task_finished(self.status):
             try:
-                # Sync any remaining logs
-                self._log_sink.sync()
-
                 # Write metadata
                 metadata = logging_pb2.TaskAttemptMetadata(
                     task_id=self.task_id.to_wire(),
@@ -787,6 +738,8 @@ class TaskAttempt:
                 self._log_sink.write_metadata(metadata)
             except Exception as e:
                 logger.error(f"Failed to write final logs/metadata: {e}")
+
+        self._log_sink.close()
 
         # Clean up container handle (logs already captured in monitor loop)
         if self._container_handle:

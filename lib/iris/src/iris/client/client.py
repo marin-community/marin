@@ -878,24 +878,14 @@ class IrisClient:
         Returns:
             TaskLogsResult with entries, errors, and metadata
         """
-        if hasattr(self._cluster_client, "stream_task_logs"):
-            response = self._cluster_client.stream_task_logs(
-                target,
-                include_children=include_children,
-                since_ms=since_ms,
-                max_total_lines=max_lines,
-                regex=regex,
-                attempt_id=attempt_id,
-            )
-        else:
-            response = self._cluster_client.fetch_task_logs(
-                target,
-                include_children=include_children,
-                since_ms=since_ms,
-                max_total_lines=max_lines,
-                regex=regex,
-                attempt_id=attempt_id,
-            )
+        response = self._cluster_client.stream_task_logs(
+            target,
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_lines,
+            regex=regex,
+            attempt_id=attempt_id,
+        )
 
         entries: list[TaskLogEntry] = []
         errors: list[TaskLogError] = []

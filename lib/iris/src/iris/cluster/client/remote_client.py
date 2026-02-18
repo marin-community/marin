@@ -369,10 +369,7 @@ class RemoteClusterClient:
                 reader_key = f"{task_status.log_directory}|{worker_id}|{att_id}"
                 reader = self._attempt_readers.get(reader_key)
                 if reader is None:
-                    reader = create_attempt_log_reader_from_directory(
-                        log_directory=task_status.log_directory,
-                        worker_id=worker_id,
-                    )
+                    reader = create_attempt_log_reader_from_directory(log_directory=task_status.log_directory)
                     self._attempt_readers[reader_key] = reader
 
                 entries = reader.read_logs(

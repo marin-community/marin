@@ -20,8 +20,7 @@ from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerStats, ContainerStatus
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2, logging_pb2
-from iris.time_utils import Timestamp
+from iris.rpc import cluster_pb2
 from starlette.testclient import TestClient
 
 # ============================================================================
@@ -244,14 +243,7 @@ def test_get_logs_with_tail_parameter(client, worker):
     # Inject logs
     task = worker.get_task(task_id)
     for i in range(100):
-        task._log_sink.append(
-            logging_pb2.LogEntry(
-                timestamp=Timestamp.now().to_proto(),
-                source="stdout",
-                data=f"Log line {i}",
-                attempt_id=task.attempt_id,
-            )
-        )
+        task._log_sink.append(source="stdout", data=f"Log line {i}")
 
     response = rpc_post(
         client,
@@ -294,14 +286,7 @@ def test_get_logs_with_source_filter(client, worker):
         ("stderr", "stderr line 1"),
         ("stderr", "stderr line 2"),
     ]:
-        task._log_sink.append(
-            logging_pb2.LogEntry(
-                timestamp=Timestamp.now().to_proto(),
-                source=source,
-                data=data,
-                attempt_id=task.attempt_id,
-            )
-        )
+        task._log_sink.append(source=source, data=data)
 
     response = rpc_post(
         client,
@@ -328,14 +313,7 @@ def test_fetch_task_logs_tail_with_negative_start_line(service, worker, request_
     # Add logs directly to canonical log sink
     task = worker.get_task(task_id)
     for i in range(10):
-        task._log_sink.append(
-            logging_pb2.LogEntry(
-                timestamp=Timestamp.now().to_proto(),
-                source="stdout",
-                data=f"Log line {i}",
-                attempt_id=task.attempt_id,
-            )
-        )
+        task._log_sink.append(source="stdout", data=f"Log line {i}")
 
     log_filter = cluster_pb2.Worker.FetchLogsFilter(start_line=-3)
     logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter)
@@ -361,14 +339,7 @@ def test_fetch_task_logs_with_regex_filter(service, worker, request_context):
         "ERROR: another error",
         "DEBUG: details",
     ]:
-        task._log_sink.append(
-            logging_pb2.LogEntry(
-                timestamp=Timestamp.now().to_proto(),
-                source="stdout",
-                data=data,
-                attempt_id=task.attempt_id,
-            )
-        )
+        task._log_sink.append(source="stdout", data=data)
 
     log_filter = cluster_pb2.Worker.FetchLogsFilter(regex="ERROR")
     logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter)
@@ -395,14 +366,7 @@ def test_fetch_task_logs_combined_filters(service, worker, request_context):
         "ERROR: fourth error",
         "ERROR: fifth error",
     ]:
-        task._log_sink.append(
-            logging_pb2.LogEntry(
-                timestamp=Timestamp.now().to_proto(),
-                source="stdout",
-                data=data,
-                attempt_id=task.attempt_id,
-            )
-        )
+        task._log_sink.append(source="stdout", data=data)
 
     # Use regex to filter ERRORs, then limit to 2
     log_filter = cluster_pb2.Worker.FetchLogsFilter(regex="ERROR", max_lines=2)

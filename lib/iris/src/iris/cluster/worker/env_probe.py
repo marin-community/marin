@@ -56,8 +56,6 @@ def _get_gcp_metadata(path: str) -> str | None:
 
 def infer_worker_log_prefix() -> str | None:
     """Infer worker log prefix from environment/GCP metadata."""
-    if explicit := os.environ.get("IRIS_WORKER_PREFIX"):
-        return explicit
     if not _is_gcp_vm():
         return None
     zone = _get_gcp_metadata("zone")
