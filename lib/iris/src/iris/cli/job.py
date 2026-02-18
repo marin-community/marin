@@ -169,7 +169,7 @@ def build_resources(
     memory: str | None,
 ) -> ResourceSpec:
     """Build ResourceSpec from CLI arguments."""
-    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "2GB", disk="10GB")
+    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "8GB", disk="10GB")
 
     if tpu:
         spec.device = tpu_device(tpu)
@@ -344,7 +344,7 @@ Examples:
 @click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16)")
 @click.option("--gpu", type=int, help="Number of GPUs to request")
 @click.option("--cpu", type=int, help="Number of CPUs to request (default: 1)")
-@click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 2GB)")
+@click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 8GB)")
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
 @click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
