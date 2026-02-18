@@ -116,6 +116,9 @@ class LocalEnvironmentProvider:
             attributes=proto_attrs,
         )
 
+    def log_prefix(self) -> str | None:
+        return None
+
 
 # ============================================================================
 # Handle Implementations
@@ -440,6 +443,8 @@ class LocalPlatform:
         workers: list[Worker] = []
         vm_ids: list[str] = []
         addresses: list[str] = []
+        assert self._cache_path is not None
+        log_prefix = f"file://{(self._cache_path / 'iris-logs').as_posix()}"
 
         # Determine worker count from TPU topology if applicable
         worker_count = num_vms
@@ -478,6 +483,7 @@ class LocalPlatform:
                 cache_dir=self._cache_path,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
+                log_prefix=log_prefix,
                 poll_interval=Duration.from_seconds(0.1),
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
