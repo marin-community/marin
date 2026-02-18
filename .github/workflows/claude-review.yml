@@ -2,23 +2,36 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened, labeled]
+    types: [opened, ready_for_review, reopened]
+  issue_comment:
+    # NOTE: there's no PR comment specific event, so instead we need to check all comments and filter in the job.
+    # This is annoying and wasteful, but afaiu there's no better way in GH Actions.
+    types: [created]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   review:
     if: >-
       (
-        github.event.pull_request.author_association == 'OWNER' ||
-        github.event.pull_request.author_association == 'MEMBER' ||
-        github.event.pull_request.author_association == 'COLLABORATOR'
-      ) &&
+        github.event_name == 'pull_request' &&
+        (
+          github.event.pull_request.author_association == 'OWNER' ||
+          github.event.pull_request.author_association == 'MEMBER' ||
+          github.event.pull_request.author_association == 'COLLABORATOR'
+        )
+      ) ||
       (
-        github.event.action != 'labeled' ||
-        github.event.label.name == 'claude-review'
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, 'claude review this') &&
+        (
+          github.event.comment.author_association == 'OWNER' ||
+          github.event.comment.author_association == 'MEMBER' ||
+          github.event.comment.author_association == 'COLLABORATOR'
+        )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -45,13 +58,15 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
-          track_progress: ${{ github.event.action != 'labeled' }}
+          track_progress: ${{ github.event_name == 'pull_request' }}
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
 
             ${{ steps.prompt.outputs.review_prompt }}
+
+            ${{ github.event_name == 'issue_comment' && format('EXTRA INSTRUCTIONS FROM COMMENT:\n{0}', github.event.comment.body) || '' }}
           claude_args: |
-            --max-turns 12
+            --max-turns 30
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
           allowed_bots: 'claude[bot]'
