@@ -487,9 +487,22 @@ source $HOME/.local/bin/env
 echo "Installing dependencies..."
 cd /home/$USER/marin
     uv sync --all-packages --extra=tpu --python=3.11 || true
+
+echo "Installing Claude Code..."
+curl -fsSL https://claude.ai/install.sh | bash
+
+echo "Installing Linuxbrew and Codex..."
+if ! command -v brew &>/dev/null; then
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+    echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> $HOME/.bashrc
+fi
+if command -v brew &>/dev/null; then
+    brew install codex
+fi
 """
     logger.info("Setting up remote environment...")
-    run_logged(["ssh", target_host, "bash", "-c", setup_script], check=True)
+    run_logged(["ssh", target_host, "bash", "-s"], input=setup_script.encode(), check=True)
     logger.info("Environment setup completed")
 
 
