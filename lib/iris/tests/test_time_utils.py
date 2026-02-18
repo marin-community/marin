@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from iris.time_utils import Deadline, Duration, RateLimiter, Timestamp
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, RateLimiter, Timestamp
 
 
 def test_deadline_expires():
@@ -208,3 +208,24 @@ def test_expired_deadline_remaining_is_zero():
     assert deadline.expired()
     assert deadline.remaining_ms() == 0
     assert deadline.remaining_seconds() == 0.0
+
+
+def test_exponential_backoff_does_not_overflow_at_high_attempt_counts():
+    """Backoff returns the maximum interval instead of overflowing when attempt count is large.
+
+    Reproduces the bug where idle Zephyr workers poll for ~30 min without a
+    task, accumulating ~1800 attempts. With default params (factor=1.5),
+    1.5**1755 exceeds float64 max and raises OverflowError.
+    """
+    backoff = ExponentialBackoff(initial=0.05, maximum=1.0, jitter=0.0)
+
+    # Simulate 2000 consecutive polls with no reset — well past the overflow
+    # threshold of ~1755 attempts for factor=1.5.
+    backoff._attempt = 2000
+    interval = backoff.next_interval()
+    assert interval == 1.0
+
+    # Also verify at an extreme count
+    backoff._attempt = 100_000
+    interval = backoff.next_interval()
+    assert interval == 1.0
