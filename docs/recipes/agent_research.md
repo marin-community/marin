@@ -27,8 +27,9 @@ For each research thread, maintain all of:
 
 ## W&B Project Policy
 When using W&B:
-- Default to creating a new W&B project for each new research logbook series.
-- Reuse an existing W&B project only when the work is an obvious follow-up to that series.
+- Choose project scope by the type signature of the work.
+- Use the `marin` project for pretraining runs.
+- Use a new project when the work type is materially different (for example kernel development or a new RL variant).
 - If explicit run-to-run comparison is required, runs must be in the same W&B project.
 - You cannot reliably move/copy runs across W&B projects later, so decide project scope early.
 
@@ -41,6 +42,7 @@ When using W&B:
   - iteration is quick,
   - you are tuning kernels or benchmarks,
   - full pipeline apparatus is unnecessary.
+- See [docs/dev-guide/dev_tpu.md](docs/dev-guide/dev_tpu.md) for operational details and troubleshooting.
 
 ### Dev TPU script (explicit)
 For fast iteration, use:
@@ -78,13 +80,16 @@ Rule of thumb:
 4. Add links both ways immediately:
    - logbook links to the issue URL,
    - issue body links to the logbook path.
+5. Add an agent-generated marker/tag for the research thread (for example in issue labels, comments, or snapshot metadata).
 
 At kickoff, write:
+- motivation,
 - problem statement,
 - success metrics,
 - initial hypotheses,
 - first experiment matrix,
 - links to relevant code paths.
+- key references (papers/blog posts) when applicable.
 - stop criteria (what evidence is enough to stop/ship/escalate).
 - a fixed baseline case for repeated comparison.
 
@@ -113,7 +118,9 @@ For each non-trivial experiment:
 4. Add a GitHub issue comment with:
    - concise delta since last update,
    - important findings only,
-   - links to research logbook sections and W&B runs.
+   - links to research logbook sections and W&B runs,
+   - links to artifacts in the GitHub tree pinned to the relevant commit/tag.
+   - example permalink: if referencing `.agents/logbooks/foo.md`, link to `https://github.com/marin-community/marin/tree/<commit-or-tag>/.agents/logbooks/foo.md`.
 
 Update cadence:
 - Post an issue update whenever a significant milestone is reached, or every 6 hours, whichever is sooner.
@@ -123,6 +130,7 @@ Update cadence:
 Issue comment style:
 - Mostly append-only.
 - Do not rewrite historical comments.
+- It is fine (and preferred) to edit a comment to fix formatting/escaping/errors.
 - Keep claims scoped and falsifiable.
 
 ### 3) Maintain the Issue Body
@@ -133,6 +141,7 @@ The issue body is the public summary layer:
 - summarize takeaways that matter for non-specialists.
 - maintain a short decision log (decision, evidence, date, owner).
 - maintain a negative-results index with links.
+- keep a short `Conclusion` section current as evidence solidifies.
 
 Write the body for readers who:
 - know Marin/LLM systems generally,
@@ -157,7 +166,7 @@ When you reach a meaningful milestone:
 4. Add issue comment linking:
    - tag,
    - commit,
-   - benchmark/report files.
+   - benchmark/report files (prefer GitHub tree permalinks pinned to that commit/tag).
 5. Include a repro bundle for the snapshot:
    - exact command(s),
    - hardware/cluster and device count,
@@ -172,6 +181,7 @@ At completion:
    - what worked,
    - what did not,
    - confidence level and limitations.
+   - explicit `Conclusion` (decision/outcome and why).
 2. Add **next steps** (small, concrete, ordered).
 3. Close the issue.
 
@@ -228,7 +238,7 @@ Keep these sections in the issue body:
 ## Experiment Design Rules
 - Run one-axis sweeps first (change one variable at a time), then run interaction sweeps.
 - Keep comparisons apples-to-apples (same shape, dtype, pass mode, and backend unless that axis is the test).
-- Keep a fixed baseline case and compare against it repeatedly.
+- Always compare against an explicit baseline/reference configuration.
 - Only move the baseline after enough repeated evidence; note the baseline change explicitly in the logbook.
 
 ## Practical Rules
@@ -240,6 +250,8 @@ Keep these sections in the issue body:
 - Separate "measurement code" from "production path" whenever possible.
 - Prefer persistent remote shells/scripts for long sweeps; avoid repeated sync/launch overhead when possible.
 - Check accelerator contention (existing processes/locks) before attributing regressions to code.
+- For long remote runs, track a monotonic progress signal (for example rows emitted, steps completed, checkpoints written) and tail recent logs for context.
+- Validate machine-readable extraction before publishing results (for example expected row counts and key uniqueness) and de-duplicate when needed.
 
 Ops hygiene checklist (before claiming regression):
 - confirm no stale benchmark process is still occupying accelerator,
@@ -257,6 +269,7 @@ Before posting a result:
 
 Before closing the issue:
 - Final TL;DR is current.
+- Issue body includes a clear `Conclusion`.
 - Next steps are listed.
 - Final snapshot tag is linked.
 
