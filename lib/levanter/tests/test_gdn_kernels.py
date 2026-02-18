@@ -173,7 +173,7 @@ def test_recurrent_no_learning_beta_zero_outputs_zero(use_flash: bool):
     np.testing.assert_allclose(S_final, 0.0, rtol=1e-6, atol=1e-6)
 
 
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_recurrent_perfect_fit_on_current_key_when_alpha1_beta1_and_L2norm(use_flash: bool):
     """
     With α=1 (g=0) and β=1 and L2-normed K, the post-update state satisfies S_t^T k̂_t == v_t,
@@ -1348,6 +1348,7 @@ def test_backward_mode_gradients_exist():
             chunk_size=chunk_size,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
+            use_flash=False,
         )
         return jnp.sum(out.array)
 

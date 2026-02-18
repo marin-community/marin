@@ -48,8 +48,6 @@ import haliax.nn as hnn
 from haliax import Axis, NamedArray
 
 _GDN_DBG_SHARDING = bool(int(os.environ.get("GDN_DEBUG_SHARDING", "0")))
-# jax.config.update("jax_debug_nans", True)
-jax.config.update("jax_debug_infs", True)
 
 
 def _dbg(tag: str, arr):
