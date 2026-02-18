@@ -18,6 +18,7 @@ import click
 from fray.v2.client import current_client
 from fray.v2.local_backend import LocalClient
 from fray.v2.types import ResourceConfig
+from iris.temp_buckets import get_temp_bucket_path
 
 from zephyr.execution import ZephyrContext
 
@@ -137,14 +138,15 @@ def run_local(
     chunk_storage_prefix = None
     is_distributed = not isinstance(client, LocalClient)
     if is_distributed:
-        marin_prefix = os.environ.get("MARIN_PREFIX", "")
-        if not marin_prefix:
-            marin_prefix = "gs://marin-us-central2/scratch"
-            logger.warning(
-                "MARIN_PREFIX not set for distributed backend; using default %s",
-                marin_prefix,
-            )
-        chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
+        chunk_storage_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
+        if chunk_storage_prefix is None:
+            marin_prefix = os.environ.get("MARIN_PREFIX")
+            if not marin_prefix:
+                raise click.UsageError(
+                    "MARIN_PREFIX must be set when using a distributed backend.\n"
+                    "  Example: export MARIN_PREFIX=gs://marin-us-central2"
+                )
+            chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
 
     main_fn = _load_entry_point(script_path, entry_point)
     sys.argv = [script_path, *script_args]

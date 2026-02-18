@@ -27,6 +27,7 @@ from typing import Any, Protocol
 
 import fsspec
 from fray.v2 import ActorHandle, Client, ResourceConfig
+from iris.temp_buckets import get_temp_bucket_path
 from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
@@ -918,11 +919,8 @@ class ZephyrContext:
                 self.max_workers = int(env_val) if env_val else 128
 
         if self.chunk_storage_prefix is None:
-            marin_prefix = os.environ.get("MARIN_PREFIX", "")
-            if marin_prefix:
-                self.chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
-            else:
-                self.chunk_storage_prefix = "/tmp/zephyr"
+            temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
+            self.chunk_storage_prefix = temp_prefix if temp_prefix is not None else "/tmp/zephyr"
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
