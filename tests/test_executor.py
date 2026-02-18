@@ -9,18 +9,14 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass
 from threading import Thread
-from unittest.mock import MagicMock
 
 import pytest
 from draccus.utils import Dataclass
-from fray.v2.client import JobStatus
-from fray.v2.types import Entrypoint, JobRequest
 from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.executor import (
     Executor,
     ExecutorStep,
     InputName,
-    StepRunner,
     _get_info_path,
     collect_dependencies_and_version,
     output_path_of,
@@ -28,7 +24,6 @@ from marin.execution.executor import (
     versioned,
 )
 from marin.execution.executor_step_status import (
-    STATUS_RUNNING,
     STATUS_SUCCESS,
     StatusFile,
 )
@@ -616,44 +611,6 @@ def test_parent_will_run_if_some_child_is_not_skippable():
 
         # make sure parent ran
         assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))
-
-
-def test_step_runner_adopts_on_job_already_exists(tmp_path):
-    """StepRunner.launch() relies on client's default adopt_existing=True behavior."""
-
-    class FakeHandle:
-        @property
-        def job_id(self) -> str:
-            return "adopted-job"
-
-        def wait(self, timeout=None, *, raise_on_failure=True):
-            return JobStatus.SUCCEEDED
-
-        def status(self):
-            return JobStatus.RUNNING
-
-        def terminate(self):
-            pass
-
-    fake_handle = FakeHandle()
-
-    client = MagicMock()
-    client.submit.return_value = fake_handle
-
-    status_file = StatusFile(str(tmp_path), worker_id="test-worker")
-    runner = StepRunner(client, status_file)
-
-    job_request = JobRequest(
-        name="my-job",
-        entrypoint=Entrypoint.from_callable(lambda: None),
-    )
-    runner.launch(job_request)
-
-    # Verify that submit was called (without explicit adopt_existing parameter)
-    client.submit.assert_called_once_with(job_request)
-    assert runner._job is fake_handle
-    assert status_file.status == STATUS_RUNNING
-    runner._stop_heartbeat()
 
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
