@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Reference small train: Qwen3 ~30M (hid512) with optimal AdamH hparams from mega sweep.
 
@@ -24,8 +13,8 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
 
 from experiments.defaults import default_train
-from experiments.pretraining_datasets.main import nemotron_mix
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
