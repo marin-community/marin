@@ -3,14 +3,13 @@
   "checkpoint_id": "5eeeb24e0060",
   "strategy": "manual-commit",
   "branch": "rav-step-poc",
-  "checkpoints_count": 2,
+  "checkpoints_count": 5,
   "files_touched": [
     "lib/marin/src/marin/execution/__init__.py",
     "lib/marin/src/marin/execution/disk_cache.py",
-    "lib/marin/src/marin/execution/distributed_lock.py",
     "lib/marin/src/marin/execution/executor_step_status.py",
-    "lib/marin/src/marin/execution/fray_exe.py",
     "lib/marin/src/marin/execution/step_runner.py",
+    "tests/integration_nomagic_test.py",
     "tests/test_disk_cache.py"
   ],
   "sessions": [
@@ -30,10 +29,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 67,
-    "cache_creation_tokens": 226783,
-    "cache_read_tokens": 4970148,
-    "output_tokens": 9460,
-    "api_call_count": 55
+    "input_tokens": 95,
+    "cache_creation_tokens": 245507,
+    "cache_read_tokens": 7052900,
+    "output_tokens": 12048,
+    "api_call_count": 75
   }
 }
