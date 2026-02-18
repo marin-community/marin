@@ -52,7 +52,13 @@ class Chunk(Protocol):
 
 @dataclass(frozen=True)
 class DiskChunk:
-    """Reference to a chunk stored on disk."""
+    """Reference to a chunk stored on disk.
+
+    Each write goes to a UUID-unique path to avoid collisions when multiple
+    workers race on the same shard.  No coordinator-side rename is needed;
+    the winning result's paths are used directly and the entire execution
+    directory is cleaned up after the pipeline completes.
+    """
 
     path: str
     count: int
@@ -62,17 +68,22 @@ class DiskChunk:
 
     @classmethod
     def write(cls, path: str, data: list) -> DiskChunk:
-        """Write data to path using temp-file pattern."""
+        """Write *data* to a UUID-unique path derived from *path*.
+
+        The UUID suffix avoids collisions when multiple workers race on
+        the same shard.  The resulting path is used directly for reads —
+        no rename step is required.
+        """
+        from zephyr.writers import unique_temp_path
+
         ensure_parent_dir(path)
         data = list(data)
         count = len(data)
 
-        from zephyr.writers import atomic_rename
-
-        with atomic_rename(path) as temp_path:
-            with fsspec.open(temp_path, "wb") as f:
-                pickle.dump(data, f)
-        return cls(path=path, count=count)
+        unique_path = unique_temp_path(path)
+        with fsspec.open(unique_path, "wb") as f:
+            pickle.dump(data, f)
+        return cls(path=unique_path, count=count)
 
     def read(self) -> list:
         """Load chunk data from disk."""
