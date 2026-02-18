@@ -226,3 +226,5 @@ scr/*
 
 # Generated restart scripts
 run_sft.sh
+
+results.md
