@@ -131,3 +131,39 @@ Each iteration should include:
   - `throughput/tokens_per_second`: `136165.61 -> 137688.28` (`+1.12%`).
   - `throughput/duration`: `0.24065s -> 0.23799s` (`-1.11%`).
 - Next hypothesis: `custom-call` at `gated_deltanet.py:2374`/`1316` dominates; target fewer shard-map launches or more work per launch in those pallas calls.
+
+### Iteration 4 - Single forward super-segment pallas call
+- Date: 2026-02-18T07:40:10Z
+- Commit: (pending)
+- Dominant bottleneck carried in: `custom-call` at `gated_deltanet.py:2374`/`1316` from Iteration 3 trace (`183.251 ms` total on TPU:0 XLA Ops aggregate).
+- Candidate shortlist (estimated upside / risk):
+  1. Full-sequence super-segment for both forward and backward (`+10-20%`, high vmem risk).
+  2. Associative blockwise state composition to break serial segment dependencies (`>20%`, very high implementation risk).
+  3. WY-style decomposition into reusable prep + state/output kernels (`+8-15%`, medium/high complexity and memory-traffic risk).
+- Selected hypothesis: collapse segment-level forward launches to one large pallas custom-call (more work per launch, fewer launches), while preserving backward correctness via segment-boundary states.
+- Change summary:
+  - Updated forward flash path to execute one `_gdn_chunk_segment_fwd_pallas` call over all padded chunks and emit segment-start states for backward.
+  - Extended forward TPU pallas kernel/specs to output segment-boundary start states (`SegStartStride`) used by backward.
+  - Kept backward on bounded segment scan to avoid the full-super-segment backward vmem blowup.
+  - During development, full forward+backward super-segment attempt failed with scoped vmem OOM (`RESOURCE_EXHAUSTED`) in job `ray-run-calvinxu-bash-20260218-151423`; stale job was explicitly stopped via `uv run scripts/ray/cluster.py --cluster us-central1 stop-job ray-run-calvinxu-bash-20260218-151423`.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+  - Result: Ray job `ray-run-calvinxu-levanter-20260218-152558` succeeded; `49 passed, 40 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_supersegfwd_i1_ray --no-wait`, then `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260218-153121 --tail 80`
+  - Job ID: `ray-run-calvinxu-bash-20260218-153121`
+  - Trace location:
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_supersegfwd_i1_ray_130m_ch128_seg16_20steps-51e61a`
+    - W&B profiler artifact: `run-gdn_supersegfwd_i1_ray_130m_ch128_seg16_20steps-51e61a-profiler:v0`
+    - Downloaded trace: `.profiles/wandb/gdn_supersegfwd_i1_ray/plugins/profile/2026_02_18_07_38_54/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops aggregate, compared to Iteration 3 baseline trace):
+  - `custom-call`: `183.251 ms -> 188.818 ms` (`+3.04%`), still dominant.
+  - Dominant GDN source from chunk flash entry call remained: `gated_deltanet.py:2374 -> 2375`, `120.561 ms -> 121.882 ms` (`+1.10%`).
+  - Secondary GDN shard-map hotspot worsened: `gated_deltanet.py:1316 -> 1335`, `71.415 ms -> 77.171 ms` (`+8.06%`).
+  - `while` remained effectively eliminated (`0 ms` in both runs).
+- MFU/throughput delta (vs Iteration 3 run `gdn_unroll8_i2_ray_130m_ch128_seg16_20steps-44ec2b`):
+  - `throughput/mfu`: `4.2562 -> 4.1910` (`-1.53%`).
+  - `throughput/tokens_per_second`: `137688.28 -> 135577.14` (`-1.53%`).
+  - `throughput/duration`: `0.23799s -> 0.24169s` (`+1.56%`).
+- Assessment: **low-impact / regression**. MFU gain is below 3% (negative), and dominant hotspot is unchanged (`custom-call` in the same GDN callsites).
+- Next hypothesis: escalate to a radical backward redesign that changes algorithmic decomposition (e.g., blockwise associative state propagation or a two-stage backward that avoids large per-call gradient tensors) so we can safely reduce both forward and backward launch count without vmem blowups.

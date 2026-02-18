@@ -1134,7 +1134,7 @@ def _invert_I_minus_strict_lower_doubling(
     return Inv.astype(jnp.float32)
 
 
-def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
+def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, NStarts: int, Ct: int, K_pad: int, V_pad: int):
     """One program per (b,h). Inputs carry Seg chunks inside the program."""
 
     def _bh(nh):
@@ -1154,6 +1154,7 @@ def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: in
     out_specs = (
         pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # out (for this segment)
         pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # S_end
+        pl.BlockSpec((1, 1, NStarts, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # segment starts
     )
     return in_specs, out_specs
 
@@ -1167,8 +1168,11 @@ def _gdn_chunk_segment_fwd_kernel_tpu(
     Sprev_ref,
     out_ref,
     Send_ref,
+    Sstarts_ref,
     *,
     Seg: int,
+    SegStartStride: int,
+    NStarts: int,
     Ct: int,
     K_pad: int,
     V_pad: int,
@@ -1241,6 +1245,18 @@ def _gdn_chunk_segment_fwd_kernel_tpu(
 
     # Process Seg chunks
     for c in range(int(Seg)):
+        if c % int(SegStartStride) == 0:
+            s_idx = c // int(SegStartStride)
+            Sstarts_ref[
+                dslice(0, 1),
+                dslice(0, 1),
+                dslice(s_idx, 1),
+                dslice(0, K_pad),
+                dslice(0, V_pad),
+            ] = S[
+                None, None, None, :, :
+            ].astype(Sstarts_ref.dtype)
+
         q = (
             q_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
             .astype(jnp.float32)
@@ -1288,13 +1304,17 @@ def _gdn_chunk_segment_fwd_pallas(
     S_prev_bhKV: jnp.ndarray,
     *,
     Seg: int,
+    SegStartStride: int,
     Ct: int,
     K_pad: int,
     V_pad: int,
 ):
+    NStarts = int(Seg) // int(SegStartStride)
     kernel = functools.partial(
         _gdn_chunk_segment_fwd_kernel_tpu,
         Seg=int(Seg),
+        SegStartStride=int(SegStartStride),
+        NStarts=int(NStarts),
         Ct=int(Ct),
         K_pad=int(K_pad),
         V_pad=int(V_pad),
@@ -1310,17 +1330,24 @@ def _gdn_chunk_segment_fwd_pallas(
 
         out_struct = jax.ShapeDtypeStruct((B, H, Seg, Ct, V_pad), jnp.float32)
         st_struct = jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32)
+        starts_struct = jax.ShapeDtypeStruct((B, H, NStarts, K_pad, V_pad), jnp.float32)
 
-        in_specs, out_specs = _in_specs_chunk_segment_fwd_tpu(B, H, Seg, Ct, K_pad, V_pad)
+        in_specs, out_specs = _in_specs_chunk_segment_fwd_tpu(B, H, Seg, NStarts, Ct, K_pad, V_pad)
 
         return pl.pallas_call(
             kernel,
             grid=(NH,),
             in_specs=in_specs,
             out_specs=out_specs,
-            out_shape=(out_struct, st_struct),
+            out_shape=(out_struct, st_struct, starts_struct),
             compiler_params=compiler_params,
         )(q_bhscK, k_bhscK, v_bhscV, gcum5, b5, S_prev_bhKV)
+
+    def _insert_segment_axis(pspec):
+        tup = tuple(pspec) if pspec is not None else ()
+        if len(tup) < 4:
+            tup = (*tup, *([None] * (4 - len(tup))))
+        return P(tup[0], tup[1], None, tup[2], tup[3])
 
     # shard_map wrapper
     mesh, q_spec = _get_mesh_and_spec(q_bhscK)
@@ -1329,13 +1356,14 @@ def _gdn_chunk_segment_fwd_pallas(
     _, g_spec = _get_mesh_and_spec(g_cum_bhsc)  # rank-4
     _, b_spec = _get_mesh_and_spec(b_bhsc)  # rank-4
     _, S_spec = _get_mesh_and_spec(S_prev_bhKV)  # rank-4
+    Sstarts_spec = _insert_segment_axis(S_spec)
 
     if _mesh_size(mesh) > 1:
         return _mk_shard_map(
             _local_call,
             mesh=mesh,
             in_specs=(q_spec, k_spec, v_spec, g_spec, b_spec, S_spec),
-            out_specs=(v_spec, S_spec),
+            out_specs=(v_spec, S_spec, Sstarts_spec),
         )(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_bhKV)
     else:
         return _local_call(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_bhKV)
@@ -1778,7 +1806,8 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
     L1 = L + pad_tok
     Nc = L1 // C
 
-    # effective segment size
+    # Backward segment granularity (forward uses one fused pallas call over all chunks,
+    # but still emits starts at this stride so backward can run in bounded-memory slices).
     seg = int(segment_size)
     seg = 1 if seg < 1 else seg
     seg = min(seg, Nc) if Nc > 0 else 1
@@ -1827,48 +1856,22 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
     else:
         S0 = _pad_kv_state_bh(initial_state.astype(jnp.float32), K_pad=K_pad, V_pad=V_pad)
 
-    # segment view: (B,H,n_segments,seg,Ct,*)
-    n_segments = n_chunks_pad // seg
-    q_s = q_c.reshape(B, H, n_segments, seg, Ct, K_pad)
-    k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
-    v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
-    g_s = g_cum.reshape(B, H, n_segments, seg, Ct)
-    b_s = b_c.reshape(B, H, n_segments, seg, Ct)
-
-    # time-major segments for scan
-    q_tm = jnp.moveaxis(q_s, 2, 0)  # (n_segments,B,H,seg,Ct,K)
-    k_tm = jnp.moveaxis(k_s, 2, 0)
-    v_tm = jnp.moveaxis(v_s, 2, 0)
-    g_tm = jnp.moveaxis(g_s, 2, 0)  # (n_segments,B,H,seg,Ct)
-    b_tm = jnp.moveaxis(b_s, 2, 0)
-
-    def seg_body(S_carry, seg_inp):
-        q_seg, k_seg, v_seg, g_seg, b_seg = seg_inp  # (B,H,seg,Ct,*)
-
-        out_seg, S_end = _gdn_chunk_segment_fwd_pallas(
-            q_seg,
-            k_seg,
-            v_seg,
-            g_seg,
-            b_seg,
-            S_carry,
-            Seg=seg,
-            Ct=Ct,
-            K_pad=K_pad,
-            V_pad=V_pad,
-        )
-        return S_end, (out_seg, S_carry)  # store seg start state for backward
-
-    S_final, (out_segs, seg_starts) = lax.scan(
-        seg_body,
+    out_bhnscv, S_final, seg_starts_bh = _gdn_chunk_segment_fwd_pallas(
+        q_c,
+        k_c,
+        v_c,
+        g_cum,
+        b_c,
         S0,
-        (q_tm, k_tm, v_tm, g_tm, b_tm),
-        length=n_segments,
-        unroll=_GDN_SEGMENT_SCAN_UNROLL,
+        Seg=n_chunks_pad,
+        SegStartStride=seg,
+        Ct=Ct,
+        K_pad=K_pad,
+        V_pad=V_pad,
     )
 
-    # out_segs: (n_segments,B,H,seg,Ct,V) -> (B,H,n_chunks_pad,Ct,V)
-    out_bhnscv = jnp.transpose(out_segs, (1, 2, 0, 3, 4, 5)).reshape(B, H, n_chunks_pad, Ct, V_pad)
+    # backward expects time-major starts: (n_segments,B,H,K,V)
+    seg_starts = jnp.moveaxis(seg_starts_bh, 2, 0)
 
     # drop padded chunks, drop Ct padding to C, flatten tokens, crop dv
     out_bhncv = out_bhnscv[:, :, :Nc, :C, :]  # (B,H,Nc,C,V)
