@@ -36,6 +36,7 @@ GDN_LAYER_TEST = "tests/test_gdn_layer.py"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
+CODEX_SEARCH_FLAG_RE = re.compile(r"(^|\\s)--search(\\s|$)")
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -99,6 +100,15 @@ def _build_remote_test_command(test_selection: str, extra_pytest_args: str | Non
 def _extract_submission_id(text: str) -> str | None:
     match = SUBMISSION_ID_RE.search(text)
     return None if match is None else match.group(1)
+
+
+def _codex_exec_supports_search() -> bool:
+    """Return True when `codex exec` advertises a `--search` flag."""
+    proc = _run(["codex", "exec", "--help"], capture_output=True, check=False)
+    if proc.returncode != 0:
+        return False
+    help_text = proc.stdout + proc.stderr
+    return CODEX_SEARCH_FLAG_RE.search(help_text) is not None
 
 
 def cmd_ray_test(args: argparse.Namespace) -> int:
@@ -364,6 +374,12 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     prompt_template = Path(args.prompt_file).read_text(encoding="utf-8")
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
+    search_supported = _codex_exec_supports_search() if args.search else False
+    if args.search and not search_supported:
+        print(
+            "[gdnctl] WARNING: installed `codex exec` does not support `--search`; continuing without it.",
+            file=sys.stderr,
+        )
 
     failures = 0
     for iteration in range(1, args.iterations + 1):
@@ -400,7 +416,7 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
             cmd += ["-c", f"model_reasoning_effort={json.dumps(args.reasoning_effort)}"]
         if args.codex_profile:
             cmd += ["-p", args.codex_profile]
-        if args.search:
+        if args.search and search_supported:
             cmd.append("--search")
 
         cmd.append("-")
