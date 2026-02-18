@@ -326,6 +326,25 @@ def process_shard(
     return result
 
 
+def tokenize_shard(
+    local_parquet_path: str,
+    tokenizer_path: str,
+    w_visual: float,
+    dual_ordering: bool,
+    generation_ratio: float,
+) -> list[dict[str, np.ndarray]]:
+    """Tokenize a single parquet shard and return records without writing a cache.
+
+    Used by the shuffle path: workers tokenize in parallel, main process
+    collects results into a shared buffer for cross-source mixing.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_path)
+    table = pq.read_table(local_parquet_path)
+    return list(process_parquet_rows(table, tokenizer, w_visual, dual_ordering, generation_ratio))
+
+
 # --- Shard listing ---
 
 
@@ -359,6 +378,13 @@ class TokenizeVLMConfig:
     num_workers: int = 32
     start_shard: int | None = None
     end_shard: int | None = None
+    shuffle: bool = False
+    """Enable cross-source shuffling. When True, rows from multiple input files
+    are mixed together in each output shard instead of the default 1:1 mapping."""
+    rows_per_shard: int = 8000
+    """Number of records per output shard (only used when shuffle=True)."""
+    seed: int = 42
+    """Random seed for shuffling."""
 
 
 def _cache_tokenizer_locally(tokenizer_path: str) -> str:
@@ -381,6 +407,14 @@ def main(config: TokenizeVLMConfig):
 
     shard_paths = _list_shard_paths(config.input_path, config.start_shard, config.end_shard)
 
+    if config.shuffle:
+        _main_shuffled(config, shard_paths)
+    else:
+        _main_sequential(config, shard_paths)
+
+
+def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
+    """Original 1:1 processing: each input parquet → one output shard cache."""
     # Build per-shard output paths
     shard_outputs = []
     for shard_path in shard_paths:
@@ -475,6 +509,170 @@ def main(config: TokenizeVLMConfig):
     logger.info("Consolidating %d shard caches into %s/train", len(existing_paths), config.output_path)
 
     from levanter.store.cache import consolidate_shard_caches
+
+    exemplar = {"input_ids": np.zeros((0,), dtype=np.int32), "loss_weights": np.zeros((0,), dtype=np.float32)}
+    consolidate_shard_caches(
+        shard_cache_paths=existing_paths,
+        output_path=f"{config.output_path}/train",
+        exemplar=exemplar,
+    )
+    logger.info("Consolidation complete.")
+
+
+def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
+    """Cross-source shuffled processing with proportional sampling.
+
+    Follows the same approach as convert_llava_onevision_to_levanter.py:
+    1. File-level shuffle: randomize input file order for cross-source mixing
+    2. Per-file record shuffle: shuffle tokenized records within each file
+    3. Proportional distribution: each output shard receives a proportional
+       slice from every file in the batch, guaranteeing cross-source mixing
+    4. Shard-level shuffle: shuffle each output shard buffer before writing
+    """
+    from levanter.store.cache import consolidate_shard_caches
+    from zephyr.writers import write_levanter_cache
+
+    random.seed(config.seed)
+    random.shuffle(shard_paths)
+    logger.info("Shuffled %d input files (seed=%d)", len(shard_paths), config.seed)
+
+    local_tokenizer_path = _cache_tokenizer_locally(config.tokenizer)
+
+    metadata = {
+        "tokenizer": config.tokenizer,
+        "visual_token_offset": VISUAL_TOKEN_OFFSET,
+        "w_visual": config.w_visual,
+        "dual_ordering": config.dual_ordering,
+        "generation_ratio": config.generation_ratio,
+        "shuffle": True,
+        "seed": config.seed,
+        "rows_per_shard": config.rows_per_shard,
+        "format": "shuffled_pretraining",
+    }
+
+    num_workers = min(config.num_workers, len(shard_paths))
+    chunk_size = num_workers
+    num_chunks = math.ceil(len(shard_paths) / chunk_size)
+
+    shard_idx = 0
+    all_output_paths: list[str] = []
+    total_records = 0
+
+    logger.info(
+        "Shuffle mode: %d files in %d batches, rows_per_shard=%d",
+        len(shard_paths),
+        num_chunks,
+        config.rows_per_shard,
+    )
+
+    for chunk_idx in range(num_chunks):
+        chunk = shard_paths[chunk_idx * chunk_size : (chunk_idx + 1) * chunk_size]
+        chunk_label = f"Batch {chunk_idx + 1}/{num_chunks}"
+
+        # Create per-batch work directory
+        work_dir = tempfile.mkdtemp(prefix=f"vlm_shuffle_batch{chunk_idx}_")
+        local_parquet_dir = os.path.join(work_dir, "parquets")
+        os.makedirs(local_parquet_dir)
+
+        # Step 1: Download this batch's parquet files
+        logger.info("[%s] Downloading %d files ...", chunk_label, len(chunk))
+        local_parquets = []
+        for shard_path in chunk:
+            gcs_shard = shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
+            filename = shard_path.rsplit("/", 1)[-1]
+            local_parquet = os.path.join(local_parquet_dir, filename)
+            gcs_download(gcs_shard, local_parquet)
+            local_parquets.append(local_parquet)
+
+        # Step 2: Tokenize all files in parallel, keeping per-file record lists
+        logger.info("[%s] Tokenizing %d files with %d workers ...", chunk_label, len(local_parquets), num_workers)
+        file_records: dict[str, list[dict[str, np.ndarray]]] = {}
+
+        with ProcessPoolExecutor(max_workers=num_workers) as pool:
+            futures = {
+                pool.submit(
+                    tokenize_shard,
+                    lp,
+                    local_tokenizer_path,
+                    config.w_visual,
+                    config.dual_ordering,
+                    config.generation_ratio,
+                ): lp
+                for lp in local_parquets
+            }
+
+            for future in as_completed(futures):
+                source = futures[future]
+                try:
+                    records = future.result()
+                    # Layer 2: shuffle records within each file
+                    random.shuffle(records)
+                    file_records[source] = records
+                    logger.info(
+                        "[%s] Tokenized %s: %d records",
+                        chunk_label,
+                        os.path.basename(source),
+                        len(records),
+                    )
+                except Exception:
+                    logger.exception("Failed to tokenize %s", source)
+                    raise
+
+        # Step 3: Proportional distribution across output shards
+        batch_total = sum(len(r) for r in file_records.values())
+        total_records += batch_total
+        num_shards_in_batch = math.ceil(batch_total / config.rows_per_shard)
+
+        logger.info(
+            "[%s] Distributing %d records across %d shards (proportional sampling)",
+            chunk_label,
+            batch_total,
+            num_shards_in_batch,
+        )
+
+        shard_buffers: list[list[dict[str, np.ndarray]]] = [[] for _ in range(num_shards_in_batch)]
+
+        for _source_path, records in file_records.items():
+            n = len(records)
+            if n == 0:
+                continue
+            # a_i = fractional records per shard from this file
+            a_i = n / num_shards_in_batch
+
+            for shard_k in range(num_shards_in_batch):
+                start = int(shard_k * a_i)
+                end = int((shard_k + 1) * a_i) if shard_k < num_shards_in_batch - 1 else n
+                shard_buffers[shard_k].extend(records[start:end])
+
+            # Free this file's records to reduce peak memory
+            records.clear()
+
+        file_records.clear()
+
+        # Step 4: Shuffle each shard buffer and write
+        logger.info("[%s] Shuffling and writing %d shards ...", chunk_label, num_shards_in_batch)
+        for buf in shard_buffers:
+            if not buf:
+                continue
+            random.shuffle(buf)
+            out = f"{config.output_path}/train/shard-{shard_idx:06d}"
+            write_levanter_cache(iter(buf), out, metadata)
+            all_output_paths.append(out)
+            logger.info("Wrote shard %06d (%d records)", shard_idx, len(buf))
+            shard_idx += 1
+            buf.clear()
+
+        del shard_buffers
+
+        # Step 5: Clean up local files
+        shutil.rmtree(work_dir)
+        logger.info("[%s] Done. Total records so far: %d", chunk_label, total_records)
+
+    logger.info("Wrote %d shuffled shards (%d total records)", len(all_output_paths), total_records)
+
+    # Consolidate all shard caches
+    existing_paths = [p for p in all_output_paths if fsspec_exists(f"{p}/.success")]
+    logger.info("Consolidating %d shard caches into %s/train", len(existing_paths), config.output_path)
 
     exemplar = {"input_ids": np.zeros((0,), dtype=np.int32), "loss_weights": np.zeros((0,), dtype=np.float32)}
     consolidate_shard_caches(
