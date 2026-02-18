@@ -42,15 +42,6 @@ class DedupMode(StrEnum):
     """
 
 
-@dataclass
-class DedupMetadata:
-    mode: str
-    parent_path: str
-    data_path: str
-    metadata_path: str
-    stats: dict[str, int]
-
-
 @dataclass(frozen=True)
 class DedupConfig:
     """
@@ -86,43 +77,7 @@ class DedupConfig:
     fuzzy_minhash_seed: int = 42
 
 
-# TODO: remove ` deduplicate` and `DedupConfig`
-def deduplicate_fn(
-    input_paths: str | list[str],
-    output_path: str,
-    filetypes: list[str] | None = None,
-    processes: int = 1,
-    mode: DedupMode = DedupMode.EXACT_PARAGRAPH,
-    # field to use for text content in Parquet files
-    text_field: str = "text",
-    ray_num_cpus: int = 2,
-    ray_memory: int = 64 * 1024**3,  # 64GB
-    # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
-    fuzzy_minhash_num_perms: int = 286,
-    fuzzy_minhash_num_bands: int = 26,
-    fuzzy_minhash_ngram_size: int = 5,
-    fuzzy_minhash_seed: int = 42,
-) -> DedupMetadata:
-    """Deduplicate documents based on the provided configuration parameters."""
-    config = DedupConfig(
-        input_paths=input_paths,
-        output_path=output_path,
-        filetypes=filetypes or ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"],
-        processes=processes,
-        mode=mode,
-        text_field=text_field,
-        ray_num_cpus=ray_num_cpus,
-        ray_memory=ray_memory,
-        fuzzy_minhash_num_perms=fuzzy_minhash_num_perms,
-        fuzzy_minhash_num_bands=fuzzy_minhash_num_bands,
-        fuzzy_minhash_ngram_size=fuzzy_minhash_ngram_size,
-        fuzzy_minhash_seed=fuzzy_minhash_seed,
-    )
-    return deduplicate(config)
-
-
-# TODO: make a custom dedup dataset type
-def deduplicate(config: DedupConfig) -> DedupMetadata:
+def deduplicate(config: DedupConfig):
     """Main entry point for deduplication"""
     if config.mode == DedupMode.EXACT_PARAGRAPH:
         from marin.processing.classification.deduplication.exact import dedup_exact_paragraph

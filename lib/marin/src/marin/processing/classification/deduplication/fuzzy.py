@@ -10,7 +10,6 @@ import pyarrow as pa
 from fray.v2.local_backend import LocalClient
 from marin.processing.classification.deduplication.dedup_commons import (
     DedupConfig,
-    DedupMetadata,
     DedupMode,
     DupCounters,
     _collect_input_files,
@@ -72,7 +71,7 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
     return shard_dup_map
 
 
-def dedup_fuzzy_document(config: DedupConfig) -> DedupMetadata:
+def dedup_fuzzy_document(config: DedupConfig):
     """Perform fuzzy document-level deduplication"""
 
     if config.fuzzy_minhash_num_perms % config.fuzzy_minhash_num_bands != 0:
@@ -180,10 +179,4 @@ def dedup_fuzzy_document(config: DedupConfig) -> DedupMetadata:
     if wandb.run:
         wandb.finish()
 
-    return DedupMetadata(
-        mode=DedupMode.FUZZY_DOCUMENT,
-        parent_path=config.output_path,
-        data_path=f"{config.output_path}/data",
-        metadata_path=f"{config.output_path}/metadata",
-        stats=fuzzy_cnt.to_dict(),
-    )
+    return {"success": True, "mode": str(DedupMode.FUZZY_DOCUMENT)} | fuzzy_cnt.to_dict()

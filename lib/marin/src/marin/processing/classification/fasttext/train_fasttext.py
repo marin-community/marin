@@ -17,9 +17,9 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import draccus
 import fsspec
 from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from marin.execution.artifact import PathMetadata
 from marin.processing.classification.dataset_utils import (
     Attribute,
     DatasetConfig,
@@ -341,43 +341,33 @@ class TrainFasttextClassifierConfig:
     memory: int = 1
 
 
-def train(
-    *,
-    datasets: list[DatasetConfig],
-    output_path: str,
-    fasttext_args: dict | None = None,
-    seed: int = 0,
-    val_frac: float = 0.1,
-    memory: int = 1,
-) -> PathMetadata:
-    for dataset in datasets:
+def train(cfg: TrainFasttextClassifierConfig):
+    for dataset in cfg.datasets:
         create_dataset(
             config=CreateDatasetConfig(
-                input_doc_path=(
-                    dataset.input_doc_path if isinstance(dataset.input_doc_path, str) else dataset.input_doc_path.path
-                ),
-                output_dataset_path=output_path,
+                input_doc_path=dataset.input_doc_path,
+                output_dataset_path=cfg.output_path,
                 label_func=lambda doc, attrs, dataset=dataset: dataset.label,
-                seed=seed,
+                seed=cfg.seed,
                 sampling_rate=dataset.sampling_rate,
                 max_sample_size=dataset.max_sample_size,
             )
         )
 
-    input_dataset_path = os.path.join(output_path, "data")
+    input_dataset_path = os.path.join(cfg.output_path, "data")
 
     job_request = JobRequest(
-        name=f"train-fasttext-{output_path}",
-        resources=ResourceConfig.with_cpu(ram=f"{memory}g", disk="10G", preemptible=True),
+        name=f"train-fasttext-{cfg.output_path}",
+        resources=ResourceConfig.with_cpu(ram=f"{cfg.memory}g", disk="10G", preemptible=True),
         entrypoint=Entrypoint.from_callable(
             train_model,
             kwargs={
                 "input_path": input_dataset_path,
-                "output_path": output_path,
-                "seed": seed,
-                "val_frac": val_frac,
-                "memory_req": memory,
-                **(fasttext_args or {}),
+                "output_path": cfg.output_path,
+                "seed": cfg.seed,
+                "val_frac": cfg.val_frac,
+                "memory_req": cfg.memory,
+                **cfg.fasttext_args,
             },
         ),
         environment=EnvironmentConfig.create(),
@@ -386,4 +376,11 @@ def train(
     job_id = cluster.launch(job_request)
     cluster.wait(job_id, raise_on_failure=True)
 
-    return PathMetadata(path=output_path)
+
+@draccus.wrap()
+def main(cfg: TrainFasttextClassifierConfig):
+    train(cfg)
+
+
+if __name__ == "__main__":
+    main()

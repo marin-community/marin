@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.transform.ar5iv.transform_ar5iv import clean_html as ar5iv_clean_html
 from marin.transform.ar5iv.transform_ar5iv import process_record as ar5iv_process_record
-from marin.transform.simple_html_to_md.process import html_to_md
+from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 from marin.transform.wikipedia.transform_wikipedia import (
     clean_wiki_html,
 )
@@ -280,12 +280,14 @@ def test_simple_html_to_md_pipeline(tmp_path, write_jsonl_gz, read_all_jsonl_gz)
         [SAMPLE_FINEWEB_HTML_RECORD, SAMPLE_FINEWEB_HTML_RECORD],
     )
 
-    html_to_md(
+    config = SimpleHtmlToMdConfig(
         input_path=str(input_dir),
         output_path=str(output_dir),
         extract_method="resiliparse",
         config=ResiliparseConfig(),
     )
+
+    html_to_md(config)
 
     # Verify output
     results = read_all_jsonl_gz(output_dir)

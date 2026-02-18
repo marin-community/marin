@@ -16,7 +16,8 @@ def test_exact_paragraph_deduplication(fox_corpus):
     )
 
     result = deduplicate(dedupe_config)
-    assert result.mode == DedupMode.EXACT_PARAGRAPH
+    assert result["success"]
+    assert result["mode"] == DedupMode.EXACT_PARAGRAPH
     # Read and verify attributes
     attrs_by_id = load_dedup_outputs(fox_corpus["output_dir"])
     assert len(attrs_by_id) > 0
@@ -52,7 +53,8 @@ def test_exact_document_deduplication(fox_corpus):
     )
 
     result = deduplicate(config)
-    assert result.mode == DedupMode.EXACT_DOCUMENT
+    assert result["success"]
+    assert result["mode"] == DedupMode.EXACT_DOCUMENT
 
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
 

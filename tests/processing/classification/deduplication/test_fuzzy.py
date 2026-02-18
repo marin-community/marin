@@ -14,7 +14,8 @@ def test_fuzzy_document_deduplication(fox_corpus):
     )
 
     result = deduplicate(config)
-    assert result.mode == DedupMode.FUZZY_DOCUMENT
+    assert result["success"]
+    assert result["mode"] == DedupMode.FUZZY_DOCUMENT
 
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
 

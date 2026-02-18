@@ -14,7 +14,6 @@ uv run zephyr --backend=ray --max-parallelism=1000 --memory=1GB --num-cpus=1 --c
 import logging
 from dataclasses import dataclass, field
 
-from marin.execution.artifact import PathsMetadata
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
@@ -78,19 +77,13 @@ class SimpleHtmlToMdConfig:
     config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig)
 
 
-def html_to_md(
-    input_path: str,  # Input directory containing jsonl.gz files
-    output_path: str,  # Output directory containing md files
-    extract_method: str = "resiliparse",
-    config: ExtractionConfig = HtmlToMarkdownConfig(),
-) -> PathsMetadata:
+def html_to_md(cfg: SimpleHtmlToMdConfig):
     """Transform HTML content to markdown using the specified extraction method."""
-    print(f"html_to_md called with {input_path=}, {output_path=}")
     pipeline = (
-        Dataset.from_files(f"{input_path}/**/*.jsonl.gz")
+        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
-        .map(lambda data: _html_to_md(data, extract_method, config))
-        .write_jsonl(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+        .map(lambda data: _html_to_md(data, cfg.extract_method, cfg.config))
+        .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
     with ZephyrContext(name="html-to-md") as ctx:
-        return PathsMetadata(parent_path=output_path, paths=list(ctx.execute(pipeline)))
+        list(ctx.execute(pipeline))
