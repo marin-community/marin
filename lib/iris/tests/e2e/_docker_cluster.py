@@ -171,6 +171,7 @@ class E2ECluster:
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),
+                log_prefix=f"file://{(cache_path / 'iris-logs').as_posix()}",
             )
             env_provider = None
             if self._env_provider_factory:
