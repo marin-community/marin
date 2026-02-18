@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import asdict, is_dataclass
 import itertools
 import json
@@ -20,24 +21,32 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def unique_temp_path(output_path: str) -> str:
+    """Return a unique temporary path derived from ``output_path``.
+
+    Appends ``.tmp.<uuid>`` to avoid collisions when multiple writers target the
+    same output path (e.g. during network-partition induced worker races).
+    """
+    return f"{output_path}.tmp.{uuid.uuid4().hex}"
+
+
 @contextmanager
 def atomic_rename(output_path: str) -> Iterable[str]:
-    """Context manager for atomic write-and-rename.
+    """Context manager for atomic write-and-rename with UUID collision avoidance.
 
-    Yields a temporary path to write to. On successful exit, atomically renames
-    the temp file to the final path. On failure, cleans up the temp file.
+    Yields a unique temporary path to write to. On successful exit, atomically
+    renames the temp file to the final path. On failure, cleans up the temp file.
 
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
-    temp_path = f"{output_path}.tmp"
+    temp_path = unique_temp_path(output_path)
     fs = fsspec.core.url_to_fs(output_path)[0]
 
     try:
         yield temp_path
-        # not so atomic if on a remote FS and recursive, but ...
         fs.mv(temp_path, output_path, recursive=True)
     except Exception:
         # Try to cleanup if something went wrong
