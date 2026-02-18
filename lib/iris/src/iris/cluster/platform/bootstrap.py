@@ -11,6 +11,7 @@ is performed by the worker environment probe at runtime.
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 
 import yaml
@@ -20,6 +21,44 @@ from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
+
+
+def render_template(template: str, **variables: str | int) -> str:
+    """Render a template string with {{ variable }} placeholders.
+
+    Uses ``{{ variable }}`` syntax (double braces with exactly one space) to
+    avoid conflicts with shell ``${var}`` and Docker ``{{.Field}}`` syntax.
+
+    Args:
+        template: Template string with ``{{ variable }}`` placeholders.
+        **variables: Variable values to substitute.
+
+    Returns:
+        Rendered template string.
+
+    Raises:
+        ValueError: If a required variable is missing from the template or if
+            variables are passed that do not appear in the template.
+    """
+    used_vars: set[str] = set()
+
+    def replace_var(match: re.Match) -> str:
+        var_name = match.group(1)
+        if var_name not in variables:
+            raise ValueError(f"Template variable '{var_name}' not provided")
+        used_vars.add(var_name)
+        value = variables[var_name]
+        return str(value)
+
+    # Match {{ variable_name }} — exactly one space inside each brace pair.
+    result = re.sub(r"\{\{ (\w+) \}\}", replace_var, template)
+
+    unused = set(variables) - used_vars
+    if unused:
+        raise ValueError(f"Unused template variables: {', '.join(sorted(unused))}")
+
+    return result
+
 
 # ============================================================================
 # Worker Bootstrap
@@ -63,7 +102,7 @@ set -e
 echo "[iris-init] Starting Iris worker bootstrap"
 
 # Write config file
-{config_setup}
+{{ config_setup }}
 
 echo "[iris-init] Phase: prerequisites"
 
@@ -82,7 +121,7 @@ fi
 sudo systemctl start docker || true
 
 # Create cache directory
-sudo mkdir -p {cache_dir}
+sudo mkdir -p {{ cache_dir }}
 
 echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Configuring docker authentication"
@@ -90,12 +129,12 @@ echo "[iris-init] Configuring docker authentication"
 sudo gcloud auth configure-docker \\
   europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
 
-echo "[iris-init] Pulling image: {docker_image}"
-sudo docker pull {docker_image}
+echo "[iris-init] Pulling image: {{ docker_image }}"
+sudo docker pull {{ docker_image }}
 
 # Pull the pre-built task image (base image for job containers).
 # Derive registry path from the worker image by replacing the image name.
-TASK_IMAGE_REGISTRY=$(echo "{docker_image}" | sed 's|/iris-worker:|/iris-task:|')
+TASK_IMAGE_REGISTRY=$(echo "{{ docker_image }}" | sed 's|/iris-worker:|/iris-task:|')
 echo "[iris-init] Pulling task image: $TASK_IMAGE_REGISTRY"
 if sudo docker pull "$TASK_IMAGE_REGISTRY"; then
     sudo docker tag "$TASK_IMAGE_REGISTRY" iris-task:latest
@@ -119,14 +158,14 @@ fi
 # Start worker container without restart policy first (fail fast during bootstrap)
 sudo docker run -d --name iris-worker \\
     --network=host \\
-    -v {cache_dir}:{cache_dir} \\
+    -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
-    {config_volume} \\
-    {env_flags} \\
-    {docker_image} \\
+    {{ config_volume }} \\
+    {{ env_flags }} \\
+    {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
-        --host 0.0.0.0 --port {worker_port} \\
-        --cache-dir {cache_dir} \\
+        --host 0.0.0.0 --port {{ worker_port }} \\
+        --cache-dir {{ cache_dir }} \\
         --config /etc/iris/config.yaml
 
 echo "[iris-init] Worker container started"
@@ -139,13 +178,13 @@ for i in $(seq 1 60); do
     if ! sudo docker ps -q -f name=iris-worker | grep -q .; then
         echo "[iris-init] ERROR: Worker container exited unexpectedly"
         echo "[iris-init] Container status:"
-        sudo docker ps -a -f name=iris-worker --format "table {{{{.Status}}}}\\t{{{{.State}}}}"
+        sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}"
         echo "[iris-init] Container logs:"
         sudo docker logs iris-worker --tail 100
         exit 1
     fi
 
-    if curl -sf http://localhost:{worker_port}/health > /dev/null 2>&1; then
+    if curl -sf http://localhost:{{ worker_port }}/health > /dev/null 2>&1; then
         echo "[iris-init] Worker is healthy"
         # Now add restart policy for production
         sudo docker update --restart=unless-stopped iris-worker
@@ -157,7 +196,7 @@ done
 
 echo "[iris-init] ERROR: Worker failed to become healthy after 120s"
 echo "[iris-init] Container status:"
-sudo docker ps -a -f name=iris-worker --format "table {{{{.Status}}}}\\t{{{{.State}}}}"
+sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}"
 echo "[iris-init] Container logs:"
 sudo docker logs iris-worker --tail 100
 exit 1
@@ -204,7 +243,8 @@ def build_worker_bootstrap_script(
 
     env_flags = build_worker_env_flags(bootstrap_config, vm_address)
 
-    return WORKER_BOOTSTRAP_SCRIPT.format(
+    return render_template(
+        WORKER_BOOTSTRAP_SCRIPT,
         config_setup=config_setup,
         cache_dir=bootstrap_config.cache_dir or "/var/cache/iris",
         docker_image=bootstrap_config.docker_image,
@@ -228,7 +268,7 @@ echo "[iris-controller] Starting controller bootstrap at $(date -Iseconds)"
 echo "[iris-controller] ================================================"
 
 # Write config file if provided
-{config_setup}
+{{ config_setup }}
 
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
@@ -256,9 +296,9 @@ sudo gcloud auth configure-docker \\
   europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
 echo "[iris-controller] [3/5] Docker registry configuration complete"
 
-echo "[iris-controller] [4/5] Pulling image: {docker_image}"
+echo "[iris-controller] [4/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
-if sudo docker pull {docker_image}; then
+if sudo docker pull {{ docker_image }}; then
     echo "[iris-controller] [4/5] Image pull complete"
 else
     echo "[iris-controller] [4/5] ERROR: Image pull failed"
@@ -267,24 +307,24 @@ fi
 
 # Stop existing controller if running
 echo "[iris-controller] [5/5] Starting controller container..."
-if sudo docker ps -a --format '{{{{.Names}}}}' | grep -q "^{container_name}$"; then
+if sudo docker ps -a --format '{{.Names}}' | grep -q "^{{ container_name }}$"; then
     echo "[iris-controller]       Stopping existing container..."
-    sudo docker stop {container_name} 2>/dev/null || true
-    sudo docker rm {container_name} 2>/dev/null || true
+    sudo docker stop {{ container_name }} 2>/dev/null || true
+    sudo docker rm {{ container_name }} 2>/dev/null || true
 fi
 
 # Create cache directory
 sudo mkdir -p /var/cache/iris
 
 # Start controller container with restart policy
-sudo docker run -d --name {container_name} \\
+sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
     -v /var/cache/iris:/var/cache/iris \\
-    {config_volume} \\
-    {docker_image} \\
+    {{ config_volume }} \\
+    {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.controller.main serve \\
-        --host 0.0.0.0 --port {port} {config_flag}
+        --host 0.0.0.0 --port {{ port }} {{ config_flag }}
 
 echo "[iris-controller] [5/5] Controller container started"
 
@@ -293,14 +333,14 @@ echo "[iris-controller] Waiting for controller to become healthy..."
 RESTART_COUNT=0
 for i in $(seq 1 30); do
     echo "[iris-controller] Health check attempt $i/30 at $(date -Iseconds)..."
-    if curl -sf http://localhost:{port}/health > /dev/null 2>&1; then
+    if curl -sf http://localhost:{{ port }}/health > /dev/null 2>&1; then
         echo "[iris-controller] ================================================"
         echo "[iris-controller] Controller is healthy! Bootstrap complete."
         echo "[iris-controller] ================================================"
         exit 0
     fi
     # Check container status and detect restart loop
-    STATUS=$(sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'unknown')
+    STATUS=$(sudo docker inspect --format='{{.State.Status}}' {{ container_name }} 2>/dev/null || echo 'unknown')
     echo "[iris-controller] Container status: $STATUS"
 
     # Detect restart loop - if container keeps restarting, fail early
@@ -311,10 +351,10 @@ for i in $(seq 1 30); do
             echo "[iris-controller] ERROR: Container in restart loop (restarting $RESTART_COUNT times)"
             echo "[iris-controller] ================================================"
             echo "[iris-controller] Full container logs:"
-            sudo docker logs {container_name} 2>&1
+            sudo docker logs {{ container_name }} 2>&1
             echo "[iris-controller] ================================================"
             echo "[iris-controller] Container inspect:"
-            sudo docker inspect {container_name} 2>&1
+            sudo docker inspect {{ container_name }} 2>&1
             exit 1
         fi
     else
@@ -327,26 +367,26 @@ echo "[iris-controller] ================================================"
 echo "[iris-controller] ERROR: Controller failed to become healthy after 60 seconds"
 echo "[iris-controller] ================================================"
 echo "[iris-controller] Full container logs:"
-sudo docker logs {container_name} 2>&1
+sudo docker logs {{ container_name }} 2>&1
 echo "[iris-controller] ================================================"
 echo "[iris-controller] Container inspect:"
-sudo docker inspect {container_name} 2>&1
+sudo docker inspect {{ container_name }} 2>&1
 exit 1
 """
 
 CONFIG_SETUP_TEMPLATE = """
 sudo mkdir -p /etc/iris
 cat > /tmp/iris_config.yaml << 'IRIS_CONFIG_EOF'
-{config_yaml}
+{{ config_yaml }}
 IRIS_CONFIG_EOF
 sudo mv /tmp/iris_config.yaml /etc/iris/config.yaml
-echo "{log_prefix} Config written to /etc/iris/config.yaml"
+echo "{{ log_prefix }} Config written to /etc/iris/config.yaml"
 """
 
 
 def _build_config_setup(config_yaml: str, log_prefix: str) -> str:
     """Generate config setup script fragment with given log prefix."""
-    return CONFIG_SETUP_TEMPLATE.format(config_yaml=config_yaml, log_prefix=log_prefix)
+    return render_template(CONFIG_SETUP_TEMPLATE, config_yaml=config_yaml, log_prefix=log_prefix)
 
 
 def build_controller_bootstrap_script(
@@ -370,7 +410,8 @@ def build_controller_bootstrap_script(
         config_volume = ""
         config_flag = ""
 
-    return CONTROLLER_BOOTSTRAP_SCRIPT.format(
+    return render_template(
+        CONTROLLER_BOOTSTRAP_SCRIPT,
         docker_image=docker_image,
         container_name=CONTROLLER_CONTAINER_NAME,
         port=port,
