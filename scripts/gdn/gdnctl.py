@@ -546,10 +546,7 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
         cmd.append("-")
 
-        proc = _run(cmd, cwd=workdir, input_text=prompt, capture_output=True, check=False)
-        sys.stdout.write(proc.stdout)
-        sys.stderr.write(proc.stderr)
-        rc = proc.returncode
+        rc = _run(cmd, cwd=workdir, input_text=prompt, check=False).returncode
 
         if rc != 0:
             failures += 1
