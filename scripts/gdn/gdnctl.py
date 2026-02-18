@@ -562,7 +562,21 @@ def cmd_lint_log(args: argparse.Namespace) -> int:
         return 2
 
     lines = log_path.read_text(encoding="utf-8").splitlines()
-    pending_lines = [idx for idx, line in enumerate(lines, start=1) if line.strip() == "- Commit: (pending)"]
+    if args.scope == "last-entry":
+        last_entry_start = None
+        for idx, line in enumerate(lines):
+            if line.startswith("### Iteration "):
+                last_entry_start = idx
+        if last_entry_start is None:
+            pending_lines = []
+        else:
+            pending_lines = [
+                idx
+                for idx, line in enumerate(lines[last_entry_start:], start=last_entry_start + 1)
+                if line.strip() == "- Commit: (pending)"
+            ]
+    else:
+        pending_lines = [idx for idx, line in enumerate(lines, start=1) if line.strip() == "- Commit: (pending)"]
 
     if pending_lines and not args.allow_pending:
         print(f"[gdnctl] unresolved `Commit: (pending)` entries in {log_path}:", file=sys.stderr)
@@ -862,6 +876,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     lint_log = subparsers.add_parser("lint-log", help="Check hill-climb log for unresolved placeholders")
     lint_log.add_argument("--log-file", default=str(DEFAULT_HILLCLIMB_LOG))
+    lint_log.add_argument(
+        "--scope",
+        choices=["last-entry", "all"],
+        default="last-entry",
+        help="Check placeholders only in the latest iteration entry or across the whole file.",
+    )
     lint_log.add_argument(
         "--allow-pending",
         action="store_true",
