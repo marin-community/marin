@@ -37,6 +37,19 @@ DEV_TPU = ["uv", "run", "scripts/ray/dev_tpu.py"]
 GDN_KERNEL_TEST = "tests/test_gdn_kernels.py"
 GDN_LAYER_TEST = "tests/test_gdn_layer.py"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+DEFAULT_HF_TRACE_PATTERN = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$)"
+DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = (
+    r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$|xplane\\.pb$)"
+)
+DEFAULT_HILLCLIMB_LOG = REPO_ROOT / "lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md"
+
+SESSION_DIRECTIVE_PRESETS = {
+    "triangular-inversion": (
+        "Prioritize strict lower-triangular inversion redesign on TPU. Favor numerically stable "
+        "parallel formulations (for example block-recursive or hybrid doubling variants) that "
+        "reduce sequential dependencies and improve MXU utilization without changing model semantics."
+    ),
+}
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
 CODEX_SEARCH_FLAG_RE = re.compile(r"(^|\\s)--search(\\s|$)")
@@ -85,6 +98,21 @@ def _git_dirty(cwd: Path) -> bool:
     return bool(proc.stdout.strip())
 
 
+def _stash_dirty_tree(cwd: Path, *, iteration: int) -> str:
+    stash_message = f"gdnctl-codex-loop-iter-{iteration:03d}-{int(time.time())}"
+    proc = _run(
+        ["git", "stash", "push", "-u", "-m", stash_message],
+        cwd=cwd,
+        capture_output=True,
+        check=True,
+    )
+    output = (proc.stdout + proc.stderr).strip()
+    print(f"[gdnctl] stashed dirty tree: {stash_message}")
+    if output:
+        print(f"[gdnctl] {output}")
+    return stash_message
+
+
 def _test_targets(selection: str) -> list[str]:
     if selection == "kernels":
         return [GDN_KERNEL_TEST]
@@ -113,6 +141,25 @@ def _build_remote_test_command(test_selection: str, extra_pytest_args: str | Non
 def _extract_submission_id(text: str) -> str | None:
     match = SUBMISSION_ID_RE.search(text)
     return None if match is None else match.group(1)
+
+
+def _load_session_directives(args: argparse.Namespace) -> list[str]:
+    directives: list[str] = []
+
+    for preset in args.directive_preset:
+        directives.append(SESSION_DIRECTIVE_PRESETS[preset])
+
+    for directive_file in args.directive_file:
+        directive_text = Path(directive_file).read_text(encoding="utf-8").strip()
+        if directive_text:
+            directives.append(directive_text)
+
+    for directive in args.directive:
+        stripped = directive.strip()
+        if stripped:
+            directives.append(stripped)
+
+    return directives
 
 
 def _codex_exec_supports_search(codex_bin: str) -> bool:
@@ -444,7 +491,10 @@ def cmd_hf_download_trace(args: argparse.Namespace) -> int:
         normalized_prefix = args.path_prefix.strip("/")
         files = [f for f in files if f.startswith(normalized_prefix + "/") or f == normalized_prefix]
 
-    pattern = re.compile(args.pattern)
+    pattern_text = args.pattern
+    if args.include_xplane and pattern_text == DEFAULT_HF_TRACE_PATTERN:
+        pattern_text = DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE
+    pattern = re.compile(pattern_text)
     selected = sorted([f for f in files if pattern.search(f)])
 
     if args.limit is not None:
@@ -473,11 +523,30 @@ def cmd_hf_download_trace(args: argparse.Namespace) -> int:
     return 0
 
 
-def _format_prompt(template: str, iteration: int, total: int, head_sha: str) -> str:
-    return (
+def _format_prompt(
+    template: str,
+    iteration: int,
+    total: int,
+    head_sha: str,
+    session_directives: Sequence[str],
+) -> str:
+    prompt = (
         template.replace("{{ITERATION}}", str(iteration))
         .replace("{{TOTAL_ITERATIONS}}", str(total))
         .replace("{{HEAD_SHA}}", head_sha)
+    )
+    if not session_directives:
+        return prompt
+
+    blocks = []
+    for idx, directive in enumerate(session_directives, start=1):
+        blocks.append(f"[Directive {idx}]\n{directive}")
+    joined_blocks = "\n".join(blocks)
+
+    return (
+        f"{prompt.rstrip()}\n\n"
+        "Session directives for this codex-loop run (must follow unless they conflict with tests/correctness):\n\n"
+        f"{joined_blocks}\n"
     )
 
 
@@ -486,9 +555,29 @@ def _run_post_checks(cwd: Path, commands: Sequence[str]) -> None:
         _run(["bash", "-lc", command], cwd=cwd)
 
 
+def cmd_lint_log(args: argparse.Namespace) -> int:
+    log_path = Path(args.log_file).resolve()
+    if not log_path.exists():
+        print(f"[gdnctl] log file not found: {log_path}", file=sys.stderr)
+        return 2
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    pending_lines = [idx for idx, line in enumerate(lines, start=1) if line.strip() == "- Commit: (pending)"]
+
+    if pending_lines and not args.allow_pending:
+        print(f"[gdnctl] unresolved `Commit: (pending)` entries in {log_path}:", file=sys.stderr)
+        for line_no in pending_lines:
+            print(f"[gdnctl]   line {line_no}", file=sys.stderr)
+        return 1
+
+    print(f"[gdnctl] log lint passed: {log_path}")
+    return 0
+
+
 def cmd_codex_loop(args: argparse.Namespace) -> int:
     workdir = Path(args.workdir).resolve()
     prompt_template = Path(args.prompt_file).read_text(encoding="utf-8")
+    session_directives = _load_session_directives(args)
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
     codex_bin, supported_efforts = _resolve_codex_binary(
@@ -498,6 +587,8 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     selected_efforts = ", ".join(supported_efforts) if supported_efforts else "unknown"
     print(f"[gdnctl] using codex binary: {codex_bin}")
     print(f"[gdnctl] supported model_reasoning_effort values: {selected_efforts}")
+    if session_directives:
+        print(f"[gdnctl] session directives: {len(session_directives)} loaded")
 
     search_supported = _codex_exec_supports_search(codex_bin) if args.search else False
     if args.search and not search_supported:
@@ -511,15 +602,24 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
         print(f"\n[gdnctl] === codex iteration {iteration}/{args.iterations} ===")
 
         if args.require_clean and _git_dirty(workdir):
-            print(
-                "[gdnctl] Working tree is dirty before starting the iteration. "
-                "Commit/stash or rerun with --allow-dirty.",
-                file=sys.stderr,
-            )
-            return 2
+            if args.dirty_policy == "stash":
+                _stash_dirty_tree(workdir, iteration=iteration)
+            else:
+                print(
+                    "[gdnctl] Working tree is dirty before starting the iteration. "
+                    "Commit/stash or rerun with --allow-dirty or --dirty-policy stash.",
+                    file=sys.stderr,
+                )
+                return 2
 
         head_before = _git_head(workdir)
-        prompt = _format_prompt(prompt_template, iteration, args.iterations, head_before)
+        prompt = _format_prompt(
+            prompt_template,
+            iteration,
+            args.iterations,
+            head_before,
+            session_directives,
+        )
 
         message_path = log_dir / f"iteration-{iteration:03d}-last-message.txt"
         prompt_path = log_dir / f"iteration-{iteration:03d}-prompt.txt"
@@ -557,11 +657,19 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
         head_after = _git_head(workdir)
         if args.require_new_commit and head_after == head_before:
-            print(
-                "[gdnctl] Iteration did not produce a new commit. Rerun with --allow-no-commit if this is expected.",
-                file=sys.stderr,
+            message = (
+                "[gdnctl] Iteration did not produce a new commit. "
+                "Use --allow-no-commit or set --no-commit-policy count-failure/continue."
             )
-            return 3
+            if args.no_commit_policy == "fail":
+                print(message, file=sys.stderr)
+                return 3
+            print(f"{message} Continuing due to policy={args.no_commit_policy}.", file=sys.stderr)
+            if args.no_commit_policy == "count-failure":
+                failures += 1
+                if failures > args.max_failures:
+                    return 3
+            continue
 
         if args.post_check:
             try:
@@ -674,8 +782,13 @@ def build_parser() -> argparse.ArgumentParser:
     hf_trace.add_argument("--path-prefix", default=None, help="Only consider files under this prefix")
     hf_trace.add_argument(
         "--pattern",
-        default=r"(trace\\.json\\.gz$|xplane\\.pb$|profile\\.json$)",
+        default=DEFAULT_HF_TRACE_PATTERN,
         help="Regex for files to download",
+    )
+    hf_trace.add_argument(
+        "--include-xplane",
+        action="store_true",
+        help="Include .xplane.pb files when using the default --pattern.",
     )
     hf_trace.add_argument("--limit", type=int, default=None)
     hf_trace.add_argument("--output-dir", default=".profiles/hf")
@@ -703,6 +816,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     codex_loop.add_argument("--codex-profile", default=None, help="Codex CLI profile")
     codex_loop.add_argument("--search", action="store_true", help="Enable Codex web search tool")
+    codex_loop.add_argument(
+        "--directive",
+        action="append",
+        default=[],
+        help="Extra per-session instruction appended to every loop iteration prompt (repeatable).",
+    )
+    codex_loop.add_argument(
+        "--directive-file",
+        action="append",
+        default=[],
+        help="Path to a file containing one extra per-session directive (repeatable).",
+    )
+    codex_loop.add_argument(
+        "--directive-preset",
+        choices=sorted(SESSION_DIRECTIVE_PRESETS),
+        action="append",
+        default=[],
+        help="Named per-session directive preset (repeatable).",
+    )
     codex_loop.add_argument("--sleep-seconds", type=float, default=5.0)
     codex_loop.add_argument(
         "--post-check",
@@ -713,8 +845,29 @@ def build_parser() -> argparse.ArgumentParser:
     codex_loop.add_argument("--max-failures", type=int, default=0)
     codex_loop.add_argument("--log-dir", default=str(REPO_ROOT / ".agents/logs/gdn_codex_loop"))
     codex_loop.add_argument("--allow-dirty", action="store_true", help="Allow starting from a dirty tree")
+    codex_loop.add_argument(
+        "--dirty-policy",
+        choices=["fail", "stash"],
+        default="fail",
+        help="Behavior when the tree is dirty at iteration start (ignored with --allow-dirty).",
+    )
     codex_loop.add_argument("--allow-no-commit", action="store_true", help="Do not require a new commit")
+    codex_loop.add_argument(
+        "--no-commit-policy",
+        choices=["fail", "count-failure", "continue"],
+        default="fail",
+        help="Behavior when an iteration exits cleanly but does not create a commit.",
+    )
     codex_loop.set_defaults(func=cmd_codex_loop)
+
+    lint_log = subparsers.add_parser("lint-log", help="Check hill-climb log for unresolved placeholders")
+    lint_log.add_argument("--log-file", default=str(DEFAULT_HILLCLIMB_LOG))
+    lint_log.add_argument(
+        "--allow-pending",
+        action="store_true",
+        help="Do not fail when `Commit: (pending)` placeholders are present.",
+    )
+    lint_log.set_defaults(func=cmd_lint_log)
 
     return parser
 

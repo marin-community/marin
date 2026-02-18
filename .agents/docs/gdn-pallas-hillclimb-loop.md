@@ -22,8 +22,12 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 10 \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
+  --directive-preset triangular-inversion \
+  --dirty-policy stash \
+  --no-commit-policy count-failure \
   --prompt-file scripts/gdn/codex_iteration_prompt.md \
-  --post-check "uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both"
+  --post-check "uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both" \
+  --post-check "uv run python scripts/gdn/gdnctl.py lint-log"
 ```
 
 ## How The Loop Behaves
@@ -45,6 +49,10 @@ Prompt and final-response logs are stored under:
   - one high-upside structural choice,
   - no standalone scalar-only tuning iterations,
   - escalation after low-impact (<3%) results.
+- Prefer `.json.gz` traces by default and only download `.xplane.pb` artifacts when doing XProf analysis.
+- `--directive`, `--directive-file`, and `--directive-preset` allow per-session research directives without editing shared prompt files.
+- `--dirty-policy stash` avoids hard stops after failed attempts leave a dirty tree.
+- `--no-commit-policy count-failure` allows the loop to continue when an iteration intentionally records a failed attempt without a commit.
 - If TPU queueing is unstable, switch profile runs to `dev-tpu-profile` on an allocated TPU.
 - If runs flap on infra errors, restart from the latest successful commit.
 

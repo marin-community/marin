@@ -28,6 +28,9 @@ Required behavior for this iteration:
 7. Download trace/profiler artifact, analyze before/after hotspots, and update the running log.
 8. If validation passes, commit exactly one commit with the optimization and evidence.
 
+Session directives:
+- If this prompt includes an extra "Session directives for this codex-loop run" block, treat it as mandatory guidance for this run.
+
 Major-bet requirement:
 - The optimization must materially change kernel structure, launch structure, or algorithmic decomposition.
 - At least one of these must be true:
@@ -44,6 +47,13 @@ Disallowed as a standalone iteration:
 Escalation rule:
 - If measured MFU gain is <3% and dominant hotspot is unchanged, mark the attempt as low-impact in the log and set the next hypothesis to a more radical design (not another small tuning step).
 
+Failed-attempt handling:
+- If the profile run fails (for example OOM/infra errors) or the change regresses meaningfully, do not leave speculative code changes uncommitted in the tree.
+- Either:
+  - revert the failed code attempt and record `Commit: none (failed attempt)`, or
+  - keep only clearly justified scaffolding that is necessary for the next planned attempt and commit it with explicit rationale.
+- Never leave `Commit: (pending)` in a newly-added log entry.
+
 Constraints:
 - TPU-only optimization target.
 - No backward-compatibility shims/fallback hacks.
@@ -55,6 +65,11 @@ Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-wait`
 - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-sync`
 - `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 <job_id> --show-logs --tail 400`
+- `uv run python scripts/gdn/gdnctl.py lint-log`
+
+Artifact guidance:
+- Prefer `perfetto_trace.json.gz` / `trace.json.gz` artifacts by default.
+- Only pull `.xplane.pb` artifacts when you will actually run XProf analysis.
 
 Definition of done:
 - One high-impact optimization committed, tests green, one profiled run completed, running log updated with:

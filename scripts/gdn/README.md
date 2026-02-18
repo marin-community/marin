@@ -38,9 +38,20 @@ Download traces from HF:
 uv run python scripts/gdn/gdnctl.py hf-download-trace --repo-id <org/repo> --path-prefix <path>
 ```
 
+Download XProf payloads only when needed:
+```bash
+uv run python scripts/gdn/gdnctl.py hf-download-trace --repo-id <org/repo> --path-prefix <path> --include-xplane
+```
+
 Run unattended Codex loop:
 ```bash
-uv run python scripts/gdn/gdnctl.py codex-loop --iterations 5 --model gpt-5.3-codex --reasoning-effort xhigh
+uv run python scripts/gdn/gdnctl.py codex-loop \
+  --iterations 5 \
+  --model gpt-5.3-codex \
+  --reasoning-effort xhigh \
+  --directive-preset triangular-inversion \
+  --dirty-policy stash \
+  --no-commit-policy count-failure
 ```
 
 Prompt template used by the loop:
@@ -50,3 +61,4 @@ The default prompt is aggressive by design:
 - prioritizes high-upside kernel redesigns over small tuning,
 - disallows standalone scalar-only tweaks,
 - requires hotspot-driven escalation when gains are small.
+- disallows leaving `Commit: (pending)` in new log entries.

@@ -24,6 +24,7 @@ The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://
 - Do not run standalone iterations that only tweak scalar constants (`unroll`, `chunk`, `segment`, `batch`) unless paired with a structural kernel/dataflow change.
 - If an iteration delivers <3% MFU gain and hotspots are unchanged, the next iteration must escalate to a more radical design.
 - Use FlashLinearAttention and Pallas TPU docs as design references before implementing.
+- Failed or regressive attempts must not leave uncommitted working tree changes that block the next loop iteration.
 
 ## Infra Added For This Loop
 - `scripts/gdn/gdnctl.py`: one CLI for tests, profile submission, Ray wait/logs, HF trace downloads, and unattended Codex loops.
@@ -116,6 +117,14 @@ uv run python scripts/gdn/gdnctl.py hf-download-trace \
   --output-dir .profiles/hf
 ```
 
+To include XProf `xplane.pb` payloads only when needed:
+```bash
+uv run python scripts/gdn/gdnctl.py hf-download-trace \
+  --repo-id <org/repo> \
+  --path-prefix <run_or_trace_path> \
+  --include-xplane
+```
+
 ## Unattended Codex Loop
 
 Run multiple autonomous iterations:
@@ -125,8 +134,12 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 10 \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
+  --directive-preset triangular-inversion \
+  --dirty-policy stash \
+  --no-commit-policy count-failure \
   --prompt-file scripts/gdn/codex_iteration_prompt.md \
-  --post-check "uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both"
+  --post-check "uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both" \
+  --post-check "uv run python scripts/gdn/gdnctl.py lint-log"
 ```
 
 Notes:
@@ -134,6 +147,8 @@ Notes:
 - By default, `codex-loop` stops if an iteration does not create a new commit.
 - Use `--allow-dirty` or `--allow-no-commit` only when intentionally debugging the loop harness.
 - The default iteration prompt (`scripts/gdn/codex_iteration_prompt.md`) is intentionally aggressive; keep it aligned with this policy.
+- `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
+- Prefer `--dirty-policy stash --no-commit-policy count-failure` for unattended long runs so failed attempts do not permanently block progress.
 
 ## Logging Expectations
 After each meaningful iteration, append:
@@ -145,3 +160,6 @@ After each meaningful iteration, append:
 - next bold hypothesis,
 
 to `lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md`.
+
+Log hygiene:
+- Do not leave `Commit: (pending)` in new entries. Use a concrete status such as a SHA, `this commit`, or `none (failed attempt)`.
