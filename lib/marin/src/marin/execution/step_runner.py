@@ -397,7 +397,7 @@ class StepRunner:
         from marin.execution.artifact import Artifact
         from marin.execution.disk_cache import disk_cached
         from marin.execution.distributed_lock import distributed_lock
-        from marin.execution.fray_exe import exe_on_fray
+        from marin.execution.fray_exe import fray_exec
 
         output_path = step.output_path
         step_name = step.name_with_hash
@@ -428,9 +428,8 @@ class StepRunner:
 
         def worker_fn():
             disk_cached(
-                step.name,
                 distributed_lock(step_fn, force_run_failed=force_run_failed),
-                override_output_path=output_path,
+                output_path,
                 save=Artifact.save,
                 load=Artifact.load,
             )
@@ -438,7 +437,7 @@ class StepRunner:
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
 
-        return exe_on_fray(
+        return fray_exec(
             worker_fn,
             name=step_name,
             resources=step.resources,

@@ -22,7 +22,7 @@ def _sanitize_job_name(name: str) -> str:
     return sanitized or "job"
 
 
-def exe_on_fray(
+def fray_exec(
     fn: Callable[[], Any],
     *,
     name: str = "job",

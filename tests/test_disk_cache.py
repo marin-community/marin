@@ -34,13 +34,14 @@ def _make_fn():
 
 def test_disk_cached_runs_and_caches(tmp_path: Path):
     fn, get_count = _make_fn()
+    output_path = StepSpec(name="step", output_path_prefix=tmp_path.as_posix()).output_path
 
-    result1 = disk_cached("step", fn, output_path_prefix=tmp_path.as_posix())
+    result1 = disk_cached(fn, output_path)
     assert get_count() == 1
     assert result1 == {"value": 42, "computed": True}
 
     # Cache hit: fn is called to load but no recomputation
-    result2 = disk_cached("step", fn, output_path_prefix=tmp_path.as_posix())
+    result2 = disk_cached(fn, output_path)
     assert get_count() == 1
     assert result2 == result1
 
@@ -55,7 +56,7 @@ def test_disk_cached_skips_when_another_worker_completed(tmp_path: Path):
         json.dump({"value": 99, "from_other": True}, f)
     StatusFile(spec.output_path, "other-worker").write_status(STATUS_SUCCESS)
 
-    result = disk_cached("race", fn, output_path_prefix=tmp_path.as_posix())
+    result = disk_cached(fn, spec.output_path)
 
     assert get_count() == 0
     assert result == {"value": 99, "from_other": True}
@@ -71,10 +72,11 @@ def test_composition_with_save_load(tmp_path: Path):
         os.makedirs(output_path, exist_ok=True)
         return {"value": 42}
 
+    output_path = StepSpec(name="comp", output_path_prefix=tmp_path.as_posix()).output_path
+
     result1 = disk_cached(
-        "comp",
         distributed_lock(counting_fn),
-        output_path_prefix=tmp_path.as_posix(),
+        output_path,
         save=Artifact.save,
         load=Artifact.load,
     )
@@ -82,9 +84,8 @@ def test_composition_with_save_load(tmp_path: Path):
     assert result1 == {"value": 42}
 
     result2 = disk_cached(
-        "comp",
         distributed_lock(counting_fn),
-        output_path_prefix=tmp_path.as_posix(),
+        output_path,
         save=Artifact.save,
         load=Artifact.load,
     )
