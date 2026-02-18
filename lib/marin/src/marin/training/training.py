@@ -223,6 +223,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     elif isinstance(config.resources.device, GpuConfig):
         extras.append("gpu")
 
+    # Note: Using a constant job name allows restarts to adopt the existing job handle
+    # instead of raising a duplicate name error (adopt_existing=True is the default).
     job_request = JobRequest(
         name="train_lm",
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),

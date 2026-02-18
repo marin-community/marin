@@ -273,3 +273,59 @@ class StatusFile:
         """Check if any worker has an active (non-stale) lock."""
         _, lock_data = self._read_lock_with_generation()
         return lock_data is not None and not lock_data.is_stale()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def worker_id() -> str:
+    import threading
+
+    return f"{os.uname()[1]}-{threading.get_ident()}"
+
+
+class PreviousTaskFailedError(Exception):
+    """Raised when a step failed previously and force_run_failed is False."""
+
+
+def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = True) -> bool:
+    """Check if the step should run based on lease-based distributed locking.
+
+    Uses lease files for distributed locking and status file for final state.
+    """
+    wid = status_file.worker_id
+    log_once = True
+
+    while True:
+        status = status_file.status
+
+        if log_once:
+            logger.info(f"[{wid}] Status {step_name}: {status}")
+            log_once = False
+
+        if status == STATUS_SUCCESS:
+            logger.info(f"[{wid}] Step {step_name} has already succeeded.")
+            return False
+
+        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+            if force_run_failed:
+                logger.info(f"[{wid}] Force running {step_name}, previous status: {status}")
+            else:
+                raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
+        elif status == STATUS_RUNNING and status_file.has_active_lock():
+            logger.debug(f"[{wid}] Step {step_name} has active lock, waiting...")
+            time.sleep(5)
+            continue
+        elif status == STATUS_RUNNING:
+            logger.info(f"[{wid}] Step {step_name} has no active lock, taking over.")
+
+        logger.info(f"[{wid}] Attempting to acquire lock for {step_name}")
+        if status_file.try_acquire_lock():
+            status_file.write_status(STATUS_RUNNING)
+            logger.info(f"[{wid}] Acquired lock for {step_name}")
+            return True
+
+        logger.info(f"[{wid}] Lost lock race for {step_name}, retrying...")
+        time.sleep(1)
