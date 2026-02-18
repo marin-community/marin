@@ -19,10 +19,13 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 import json
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -37,6 +40,10 @@ TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
 CODEX_SEARCH_FLAG_RE = re.compile(r"(^|\\s)--search(\\s|$)")
+CODEX_REASONING_VARIANT_RE = re.compile(
+    r"unknown variant `(?P<requested>[^`]+)`, expected one of (?P<expected>.+?)\s+in `model_reasoning_effort`",
+    re.DOTALL,
+)
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -50,11 +57,17 @@ def _run(
     input_text: str | None = None,
     capture_output: bool = False,
     check: bool = True,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     _echo_cmd(cmd)
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
     return subprocess.run(
         list(cmd),
         cwd=str(cwd or REPO_ROOT),
+        env=env,
         input=input_text,
         text=True,
         capture_output=capture_output,
@@ -102,13 +115,117 @@ def _extract_submission_id(text: str) -> str | None:
     return None if match is None else match.group(1)
 
 
-def _codex_exec_supports_search() -> bool:
+def _codex_exec_supports_search(codex_bin: str) -> bool:
     """Return True when `codex exec` advertises a `--search` flag."""
-    proc = _run(["codex", "exec", "--help"], capture_output=True, check=False)
+    proc = _run([codex_bin, "exec", "--help"], capture_output=True, check=False)
     if proc.returncode != 0:
         return False
     help_text = proc.stdout + proc.stderr
     return CODEX_SEARCH_FLAG_RE.search(help_text) is not None
+
+
+def _extract_reasoning_error(text: str) -> tuple[str, list[str]] | None:
+    """Parse codex config enum errors for model_reasoning_effort."""
+    match = CODEX_REASONING_VARIANT_RE.search(text)
+    if match is None:
+        return None
+    requested = match.group("requested")
+    expected_raw = match.group("expected")
+    expected = re.findall(r"`([^`]+)`", expected_raw)
+    return requested, expected
+
+
+def _candidate_codex_binaries(explicit_binary: str | None) -> list[str]:
+    candidates: list[str] = []
+
+    def add_candidate(candidate: str) -> None:
+        resolved = shutil.which(candidate) if "/" not in candidate else candidate
+        if resolved is None:
+            return
+        normalized = str(Path(resolved).expanduser().resolve(strict=False))
+        if normalized not in candidates:
+            candidates.append(normalized)
+
+    if explicit_binary:
+        add_candidate(explicit_binary)
+    add_candidate("codex")
+    add_candidate("/Applications/Codex.app/Contents/Resources/codex")
+    add_candidate(str(Path.home() / "Applications/Codex.app/Contents/Resources/codex"))
+    return candidates
+
+
+def _codex_supported_reasoning_efforts(codex_bin: str) -> list[str] | None:
+    """Return supported model_reasoning_effort values from local config validation."""
+    probe_value = "__gdnctl_invalid_reasoning_effort_probe__"
+    with tempfile.TemporaryDirectory(prefix="gdnctl-codex-probe-") as probe_home:
+        proc = _run(
+            [
+                codex_bin,
+                "exec",
+                "-c",
+                f"model_reasoning_effort={json.dumps(probe_value)}",
+                "probe",
+            ],
+            capture_output=True,
+            check=False,
+            extra_env={"CODEX_HOME": probe_home, "HOME": probe_home},
+        )
+    parsed = _extract_reasoning_error(proc.stdout + proc.stderr)
+    if parsed is None:
+        return None
+    _, expected = parsed
+    return expected
+
+
+def _resolve_codex_binary(
+    *,
+    explicit_binary: str | None,
+    reasoning_effort: str | None,
+) -> tuple[str, list[str] | None]:
+    candidates = _candidate_codex_binaries(explicit_binary)
+    if not candidates:
+        raise SystemExit(
+            "[gdnctl] Could not find a `codex` binary. Install Codex CLI or pass --codex-bin /path/to/codex."
+        )
+
+    if reasoning_effort is None:
+        return candidates[0], None
+
+    unknown_support: list[str] = []
+    support_rows: list[tuple[str, list[str] | None]] = []
+    for candidate in candidates:
+        supported = _codex_supported_reasoning_efforts(candidate)
+        support_rows.append((candidate, supported))
+        if supported is None:
+            unknown_support.append(candidate)
+            continue
+        if reasoning_effort in supported:
+            return candidate, supported
+
+    if unknown_support:
+        chosen = unknown_support[0]
+        print(
+            "[gdnctl] WARNING: could not determine supported reasoning-effort values for "
+            f"{chosen}; trying it for --reasoning-effort={reasoning_effort}.",
+            file=sys.stderr,
+        )
+        return chosen, None
+
+    detail_lines = []
+    for candidate, supported in support_rows:
+        if supported is None:
+            detail = "unknown"
+        else:
+            detail = ", ".join(supported)
+        detail_lines.append(f"  - {candidate}: {detail}")
+
+    details = "\n".join(detail_lines)
+    raise SystemExit(
+        "[gdnctl] No discovered codex binary supports "
+        f"--reasoning-effort={reasoning_effort!r}.\n"
+        f"{details}\n"
+        "Install a newer Codex CLI and/or pass --codex-bin to select it."
+    )
 
 
 def cmd_ray_test(args: argparse.Namespace) -> int:
@@ -374,7 +491,15 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     prompt_template = Path(args.prompt_file).read_text(encoding="utf-8")
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
-    search_supported = _codex_exec_supports_search() if args.search else False
+    codex_bin, supported_efforts = _resolve_codex_binary(
+        explicit_binary=args.codex_bin,
+        reasoning_effort=args.reasoning_effort,
+    )
+    selected_efforts = ", ".join(supported_efforts) if supported_efforts else "unknown"
+    print(f"[gdnctl] using codex binary: {codex_bin}")
+    print(f"[gdnctl] supported model_reasoning_effort values: {selected_efforts}")
+
+    search_supported = _codex_exec_supports_search(codex_bin) if args.search else False
     if args.search and not search_supported:
         print(
             "[gdnctl] WARNING: installed `codex exec` does not support `--search`; continuing without it.",
@@ -401,7 +526,7 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
         prompt_path.write_text(prompt, encoding="utf-8")
 
         cmd = [
-            "codex",
+            codex_bin,
             "exec",
             "-C",
             str(workdir),
@@ -421,7 +546,11 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
         cmd.append("-")
 
-        rc = _run(cmd, cwd=workdir, input_text=prompt, check=False).returncode
+        proc = _run(cmd, cwd=workdir, input_text=prompt, capture_output=True, check=False)
+        sys.stdout.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        rc = proc.returncode
+
         if rc != 0:
             failures += 1
             print(f"[gdnctl] codex iteration failed with exit code {rc}", file=sys.stderr)
@@ -565,6 +694,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     codex_loop.add_argument("--workdir", default=str(REPO_ROOT), help="Repository root for codex runs")
     codex_loop.add_argument("--model", default="gpt-5.3-codex", help="Codex model")
+    codex_loop.add_argument(
+        "--codex-bin",
+        default=None,
+        help="Optional path to codex binary. Defaults to an auto-discovered compatible binary.",
+    )
     codex_loop.add_argument(
         "--reasoning-effort",
         default="xhigh",
