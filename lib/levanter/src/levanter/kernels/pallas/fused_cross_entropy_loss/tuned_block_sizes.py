@@ -39,6 +39,50 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
     },
+    "NVIDIA": {
+        ("bfloat16", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("float32", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
+        ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+    },
+    "NVIDIA GB10": {
+        ("bfloat16", "tiny"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
+        ("float32", "tiny"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=256),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=256),
+        ("bfloat16", "small-h-small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
+        ("float32", "small-h-small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
+    },
+    "NVIDIA H100": {
+        ("bfloat16", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("float32", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
+        ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+    },
+    "NVIDIA A100": {
+        ("bfloat16", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("float32", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
+        ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+    },
     "TPU v5e": {
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
         ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
@@ -158,11 +202,29 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
 
 SHAPE_BUCKETS: list[ShapeBucket] = [
     ShapeBucket(
+        name="tiny",
+        b_min=1,
+        b_max=512,
+        h_min=1,
+        h_max=1024,
+        v_min=1,
+        v_max=8192,
+    ),
+    ShapeBucket(
         name="small-vocab",
         b_min=512,
         b_max=2048,
         h_min=256,
         h_max=1024,
+        v_min=4096,
+        v_max=16384,
+    ),
+    ShapeBucket(
+        name="small-h-small-vocab",
+        b_min=2048,
+        b_max=8192,
+        h_min=1,
+        h_max=256,
         v_min=4096,
         v_max=16384,
     ),
@@ -202,6 +264,14 @@ def _device_key(device_kind: Optional[str]) -> Optional[str]:
     if not device_kind:
         return None
     device_kind = device_kind.lower()
+    if "nvidia" in device_kind:
+        if "gb10" in device_kind:
+            return "NVIDIA GB10"
+        if "h100" in device_kind:
+            return "NVIDIA H100"
+        if "a100" in device_kind:
+            return "NVIDIA A100"
+        return "NVIDIA"
     if "v6" in device_kind:
         return "TPU v6"
     if "v4" in device_kind:

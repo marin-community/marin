@@ -7,6 +7,7 @@ import pytest
 
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
+from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_gpu
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
 )
@@ -217,6 +218,79 @@ def test_fused_cross_entropy_default_grad_matches_reference():
 
     assert jnp.allclose(gx_default, gx_ref, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
+
+
+def test_fused_cross_entropy_pallas_gpu_matches_reference():
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires GPU backend")
+
+    x = jnp.zeros((128, 128), dtype=jnp.float32)
+    w = jnp.zeros((128, 128), dtype=jnp.float32)
+    y = jnp.zeros((128,), dtype=jnp.int32)
+
+    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation="pallas_gpu",
+    )
+
+    loss_ref, _ = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_pallas_gpu_matches_reference_non_multiple():
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires GPU backend")
+
+    key = jax.random.PRNGKey(1)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+
+    x = jax.random.normal(key_x, (6, 7), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (7, 9), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (6,), 0, 9, dtype=jnp.int32)
+    block_sizes = fused_api.BlockSizes(b_block_size=16, h_block_size=16, v_block_size=16)
+
+    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation="pallas_gpu",
+        block_sizes=block_sizes,
+    )
+
+    loss_ref, _ = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_pallas_gpu_requires_gpu():
+    if jax.default_backend() == "gpu":
+        pytest.skip("requires non-GPU backend")
+
+    x = jnp.zeros((128, 128), dtype=jnp.float32)
+    w = jnp.zeros((128, 128), dtype=jnp.float32)
+    y = jnp.zeros((128,), dtype=jnp.int32)
+
+    with pytest.raises(pallas_gpu.PallasUnsupportedError):
+        fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            y,
+            w,
+            reduction=None,
+            implementation="pallas_gpu",
+        )
 
 
 def test_fused_cross_entropy_pallas_bwd_matches_reference():

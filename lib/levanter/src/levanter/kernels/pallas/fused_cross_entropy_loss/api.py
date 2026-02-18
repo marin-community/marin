@@ -15,7 +15,7 @@ from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
-Implementation: TypeAlias = Literal["pallas_tpu", "xla", "reference"]
+Implementation: TypeAlias = Literal["pallas_tpu", "pallas_gpu", "xla", "reference"]
 Reduction: TypeAlias = Literal["sum", "mean"] | None
 
 
@@ -32,9 +32,24 @@ try:
     from .pallas_tpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
-    _DEFAULT_IMPLEMENTATION = ("pallas_tpu",) + _DEFAULT_IMPLEMENTATION
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
+
+try:
+    from .pallas_gpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas_gpu
+
+    IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
+except ImportError:
+    pass
+
+if jax.default_backend() == "gpu" and "pallas_gpu" in IMPLEMENTATIONS:
+    device_kind = jax.devices()[0].device_kind.lower() if jax.devices() else ""
+    if "gb10" in device_kind:
+        _DEFAULT_IMPLEMENTATION = _DEFAULT_IMPLEMENTATION + ("pallas_gpu",)
+    else:
+        _DEFAULT_IMPLEMENTATION = ("pallas_gpu",) + _DEFAULT_IMPLEMENTATION
+elif jax.default_backend() == "tpu" and "pallas_tpu" in IMPLEMENTATIONS:
+    _DEFAULT_IMPLEMENTATION = ("pallas_tpu",) + _DEFAULT_IMPLEMENTATION
 
 
 def _validate_inputs(x: jax.Array, labels: jax.Array, w: jax.Array) -> None:
@@ -87,6 +102,18 @@ def _apply_reduction(loss: jax.Array, reduction: Reduction, weight: Optional[jax
         denom = jnp.sum(weight)
         return jnp.where(denom != 0, jnp.sum(loss) / denom, jnp.zeros_like(denom))
     raise ValueError(f"Unsupported reduction: {reduction}")
+
+
+def _resolve_precision_for_impl(
+    impl: Implementation | ArrayImpl,
+    precision: jax.lax.PrecisionLike,
+) -> jax.lax.PrecisionLike:
+    if precision is not None:
+        return precision
+    pallas_gpu_impl = IMPLEMENTATIONS.get("pallas_gpu")
+    if impl == "pallas_gpu" or (callable(impl) and pallas_gpu_impl is not None and impl is pallas_gpu_impl):
+        return jax.lax.Precision.HIGHEST
+    return None
 
 
 def fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -148,6 +175,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         else:
             block_sizes_for_impl = infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
         if callable(impl):
+            precision_for_impl = _resolve_precision_for_impl(impl, precision)
             try:
                 loss, lse = impl(
                     x,
@@ -156,7 +184,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     block_sizes=block_sizes_for_impl,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
-                    precision=precision,
+                    precision=precision_for_impl,
                 )
             except PallasUnsupportedError as e:
                 if explicit:
@@ -180,6 +208,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             fn = IMPLEMENTATIONS.get(impl)
             if fn is None:
                 raise ValueError(f"Unsupported implementation: {impl}")
+            precision_for_impl = _resolve_precision_for_impl(impl, precision)
             try:
                 loss, lse = fn(
                     x,
@@ -188,7 +217,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     block_sizes=block_sizes_for_impl,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
-                    precision=precision,
+                    precision=precision_for_impl,
                 )
             except PallasUnsupportedError as e:
                 if explicit:
