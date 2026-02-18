@@ -18,6 +18,9 @@ from tests.test_utils import skip_if_no_torch
 
 jax.config.update("jax_default_matmul_precision", "float32")
 
+is_tpu = jax.devices()[0].platform == "tpu"
+USE_FLASH_CASES = [True, False] if is_tpu else [False]
+
 
 def _np(x):
     return np.array(x.detach().cpu().numpy())
@@ -105,7 +108,7 @@ def _lev_state_from_hf_layer(lev_cfg: GatedDeltaNetConfig, hf_layer) -> dict[str
 # -------------------------------
 
 
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_layer_streaming_decode_matches_one_shot_prefill(use_flash: bool):
     """Streaming (per-token) with carried (conv_state, S_state) must match one-shot prefill."""
     key = jax.random.PRNGKey(0)
@@ -147,7 +150,7 @@ def test_layer_streaming_decode_matches_one_shot_prefill(use_flash: bool):
     np.testing.assert_allclose(y_stream, y_full.array, rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_layer_masking_trailing_zeros_equivalence(use_flash: bool):
     """Zeroing trailing positions via attention_mask should not change earlier outputs (causality)."""
     key = jax.random.PRNGKey(0)
@@ -180,7 +183,7 @@ def test_layer_masking_trailing_zeros_equivalence(use_flash: bool):
 
 
 @pytest.mark.parametrize("csize_a,csize_b", [(8, 16), (16, 32)])
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_layer_chunk_size_invariance(csize_a, csize_b, use_flash: bool):
     """Prefill outputs should be invariant to chunk size."""
     key = jax.random.PRNGKey(0)
@@ -204,7 +207,7 @@ def test_layer_chunk_size_invariance(csize_a, csize_b, use_flash: bool):
     np.testing.assert_allclose(y_a.array, y_b.array, rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_layer_gradients_exist(use_flash: bool):
     """End-to-end differentiability: grads w.r.t. inputs exist and are finite."""
     key = jax.random.PRNGKey(0)
@@ -233,7 +236,7 @@ def test_layer_gradients_exist(use_flash: bool):
 
 
 @skip_if_no_torch
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_gdn_layer_backward_matches_hf(use_flash: bool):
     import torch
 
@@ -284,7 +287,7 @@ def test_gdn_layer_backward_matches_hf(use_flash: bool):
 
 
 @skip_if_no_torch
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_gdn_layer_matches_hf_prefill(use_flash: bool):
     import torch  # local import for environments without torch
 
@@ -343,7 +346,7 @@ def test_gdn_layer_matches_hf_prefill(use_flash: bool):
 
 
 @skip_if_no_torch
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_gdn_layer_decode_matches_hf_one_step(use_flash: bool):
     """
     Prefill to build state, then decode one token using the recurrent path in both Levanter and HF.
@@ -466,7 +469,7 @@ def test_depthwise_conv_backward_matches_torch():
     np.testing.assert_allclose(np.array(gw_j), gw_t, rtol=1e-5, atol=1e-6)
 
 
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_layer_backward_chunk_size_invariance(use_flash: bool):
     """Gradients wrt inputs should be invariant to chunk size choices in prefill/train path."""
     key = jax.random.PRNGKey(0)
@@ -498,7 +501,7 @@ def test_layer_backward_chunk_size_invariance(use_flash: bool):
 
 
 @skip_if_no_torch
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_ratio_equal_one_and_greater_than_one(use_flash: bool):
     """
     Exercise both ratio paths: nv == nk and nv > nk (repeat-interleave of Q/K).
@@ -537,7 +540,7 @@ def test_ratio_equal_one_and_greater_than_one(use_flash: bool):
 
 
 @skip_if_no_torch
-@pytest.mark.parametrize("use_flash", [True, False])
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_linear_mask_zeroes_padded_tokens_prefill(use_flash: bool):
     hidden_size, nk, nv, dk, dv, ksz = 96, 4, 8, 8, 8, 4
     hf_cfg, hf_layer = _init_small_hf_layer_with_linear_only(hidden_size, nk, nv, dk, dv, ksz)
