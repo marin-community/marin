@@ -104,13 +104,14 @@ def _cloud_worker_state_from_iris(state: vm_pb2.VmState) -> CloudWorkerState:
     return CloudWorkerState.UNKNOWN
 
 
-def make_mock_worker_handle(vm_id: str, address: str, state: vm_pb2.VmState) -> MagicMock:
+def make_mock_worker_handle(vm_id: str, address: str, state: vm_pb2.VmState, bootstrap_log: str = "") -> MagicMock:
     """Create a mock RemoteWorkerHandle for testing."""
     handle = MagicMock()
     handle.vm_id = vm_id
     handle.worker_id = vm_id
     handle.internal_address = address
     handle.external_address = None
+    handle.bootstrap_log = bootstrap_log
     handle.status.return_value = WorkerStatus(state=_cloud_worker_state_from_iris(state))
     return handle
 
@@ -121,6 +122,7 @@ def make_mock_slice_handle(
     all_ready: bool = False,
     any_failed: bool = False,
     vm_states: list[vm_pb2.VmState] | None = None,
+    bootstrap_logs: list[str] | None = None,
     created_at_ms: int = 1000000,
 ) -> MagicMock:
     """Create a mock SliceHandle for testing."""
@@ -152,10 +154,12 @@ def make_mock_slice_handle(
     slice_hash = abs(hash(slice_id)) % 256
     worker_handles = []
     for i, state in enumerate(vm_states):
+        bootstrap_log = bootstrap_logs[i] if bootstrap_logs and i < len(bootstrap_logs) else ""
         worker_handle = make_mock_worker_handle(
             vm_id=f"{slice_id}-vm-{i}",
             address=f"10.0.{slice_hash}.{i}",
             state=state,
+            bootstrap_log=bootstrap_log,
         )
         worker_handles.append(worker_handle)
 
@@ -736,6 +740,24 @@ class TestAutoscalerStatusReporting:
 
         assert status.HasField("last_routing_decision")
         assert "test-group" in status.last_routing_decision.routed_entries
+
+
+class TestAutoscalerBootstrapLogs:
+    """Tests for bootstrap log reporting."""
+
+    def test_get_init_log_returns_bootstrap_output(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Worker bootstrap logs are captured in autoscaler worker tracking."""
+        bootstrap_log = "line1\nline2\nline3"
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True, bootstrap_logs=[bootstrap_log])
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        autoscaler._register_slice_workers(mock_handle, "test-group")
+
+        vm_id = mock_handle.describe().workers[0].worker_id
+        assert autoscaler.get_init_log(vm_id) == bootstrap_log
+        assert autoscaler.get_init_log(vm_id, tail=2) == "line2\nline3"
 
 
 class TestWaterfallRouting:

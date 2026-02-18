@@ -342,18 +342,18 @@ class GcpSliceHandle:
         with self._bootstrap_lock:
             bs = self._bootstrap_state
 
-        if cloud_state == CloudSliceState.CREATING:
-            effective_state = CloudSliceState.CREATING
-        elif cloud_state == CloudSliceState.READY and bs is None:
+        if cloud_state != CloudSliceState.READY:
+            # Never mask non-READY cloud states (DELETING/REPAIRING/UNKNOWN/etc)
+            # with local bootstrap state.
+            effective_state = cloud_state
+        elif bs is None:
             # Cloud is ready but bootstrap hasn't completed yet — still bootstrapping.
             # This handles the case where bootstrap_config was provided.
             effective_state = CloudSliceState.BOOTSTRAPPING
-        elif bs == CloudSliceState.READY:
-            effective_state = CloudSliceState.READY
         elif bs == CloudSliceState.FAILED:
             effective_state = CloudSliceState.FAILED
         else:
-            effective_state = cloud_state
+            effective_state = CloudSliceState.READY
 
         return SliceStatus(
             state=effective_state,

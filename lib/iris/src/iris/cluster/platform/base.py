@@ -145,6 +145,11 @@ class RemoteWorkerHandle(Protocol):
         """External/public IP address, if available. Returns None when no external IP."""
         ...
 
+    @property
+    def bootstrap_log(self) -> str:
+        """Most recent bootstrap output captured for this worker."""
+        ...
+
     def status(self) -> WorkerStatus:
         """Cloud-level worker status."""
         ...

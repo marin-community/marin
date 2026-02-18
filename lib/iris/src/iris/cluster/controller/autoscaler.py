@@ -584,6 +584,7 @@ class Autoscaler:
                 slice_id=handle.slice_id,
                 scale_group=scale_group,
                 handle=worker,
+                bootstrap_log=worker.bootstrap_log,
             )
 
     def _unregister_slice_workers(self, slice_id: str) -> None:
