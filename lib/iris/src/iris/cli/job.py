@@ -24,7 +24,7 @@ from tabulate import tabulate
 
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
-from iris.client.client import JobFailedError
+from iris.client.client import Job, JobFailedError
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -537,28 +537,24 @@ def logs(
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
 
-    cursor_ms = since_ms or 0
+    start_since_ms = since_ms or 0
     job_name = JobName.from_wire(job_id)
 
-    while True:
-        result = client.stream_task_logs(
-            job_name,
+    if follow:
+        job = Job(client, job_name)
+        job.wait(
+            stream_logs=True,
             include_children=include_children,
-            since_ms=cursor_ms,
+            timeout=float("inf"),
+            raise_on_failure=False,
         )
+        return
 
-        # Print errors first so user knows why some logs might be missing
-        for error in result.errors:
-            click.echo(f"[ERROR] task={error.task_id} worker={error.worker_id or '?'} | {error.error}", err=True)
-
-        # Print log entries
-        for entry in result.entries:
-            ts = entry.timestamp.as_short_time()
-            click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")
-
-        if result.last_timestamp_ms > cursor_ms:
-            cursor_ms = result.last_timestamp_ms
-
-        if not follow:
-            break
-        time.sleep(1.0)
+    entries = client.fetch_task_logs(
+        job_name,
+        include_children=include_children,
+        start=Timestamp.from_ms(start_since_ms) if start_since_ms > 0 else None,
+    )
+    for entry in entries:
+        ts = entry.timestamp.as_short_time()
+        click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")

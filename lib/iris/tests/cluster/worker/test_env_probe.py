@@ -103,3 +103,41 @@ def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch)
     assert metadata.tpu_worker_hostnames == ""
     assert metadata.tpu_chips_per_host_bounds == ""
     assert metadata.device.HasField("cpu")
+
+
+def test_infer_worker_log_prefix_uses_region_bucket_mapping(monkeypatch):
+    """europe-west4 must map to marin-tmp-eu-west4 bucket naming."""
+    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
+    monkeypatch.setattr(
+        env_probe,
+        "_get_gcp_metadata",
+        lambda key: "projects/hai-gcp-models/zones/europe-west4-b" if key == "zone" else None,
+    )
+
+    prefix = env_probe._infer_worker_log_prefix()
+    assert prefix == "gs://marin-tmp-eu-west4/ttl=30d/iris-logs"
+
+
+def test_infer_worker_log_prefix_unknown_region_returns_none(monkeypatch):
+    """Unknown regions should fail closed (no guessed bucket)."""
+    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
+    monkeypatch.setattr(
+        env_probe,
+        "_get_gcp_metadata",
+        lambda key: "projects/hai-gcp-models/zones/antarctica-south1-a" if key == "zone" else None,
+    )
+
+    assert env_probe._infer_worker_log_prefix() is None
+
+
+def test_log_prefix_prefers_env_override(monkeypatch):
+    """IRIS_LOG_PREFIX overrides inferred values."""
+    monkeypatch.setenv("IRIS_LOG_PREFIX", "gs://custom/ttl=30d/iris-logs")
+    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
+    monkeypatch.setattr(
+        env_probe,
+        "_get_gcp_metadata",
+        lambda key: "projects/hai-gcp-models/zones/europe-west4-b" if key == "zone" else None,
+    )
+
+    assert DefaultEnvironmentProvider().log_prefix() == "gs://custom/ttl=30d/iris-logs"

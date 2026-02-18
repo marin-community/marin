@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 
 _GCP_METADATA_ROOT = "http://metadata.google.internal/computeMetadata/v1/instance"
 _GCP_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
+_REGION_TO_TMP_BUCKET = {
+    "asia-northeast1": "marin-tmp-asia-northeast-1",
+    "us-central1": "marin-tmp-us-central1",
+    "us-central2": "marin-tmp-us-central2",
+    "europe-west4": "marin-tmp-eu-west4",
+    "us-west4": "marin-tmp-us-west4",
+    "us-east1": "marin-tmp-us-east1",
+    "us-east5": "marin-tmp-us-east5",
+}
 
 
 @lru_cache(maxsize=1)
@@ -52,6 +61,25 @@ def _get_gcp_metadata(path: str) -> str | None:
             return value or None
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
         return None
+
+
+def _infer_worker_log_prefix() -> str | None:
+    """Infer worker log prefix from GCP metadata."""
+    if not _is_gcp_vm():
+        return None
+    zone = _get_gcp_metadata("zone")
+    if not zone:
+        return None
+    # zone format: projects/<project>/zones/us-central2-b
+    zone_name = zone.split("/")[-1]
+    if "-" not in zone_name:
+        return None
+    region = zone_name.rsplit("-", 1)[0]
+    bucket = _REGION_TO_TMP_BUCKET.get(region)
+    if not bucket:
+        logger.warning("No tmp bucket mapping for region %s", region)
+        return None
+    return f"gs://{bucket}/ttl=30d/iris-logs"
 
 
 def _extract_tpu_name(instance_name: str) -> str:
@@ -285,6 +313,7 @@ class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
+    def log_prefix(self) -> str | None: ...
 
 
 class TPUSimEnvironmentProvider:
@@ -317,6 +346,9 @@ class TPUSimEnvironmentProvider:
         # Mark device as TPU so _build_device_env_vars triggers
         base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
         return base
+
+    def log_prefix(self) -> str | None:
+        return None
 
 
 class DefaultEnvironmentProvider:
@@ -400,3 +432,9 @@ class DefaultEnvironmentProvider:
             attributes=attributes,
             vm_address=vm_address,
         )
+
+    def log_prefix(self) -> str | None:
+        explicit = os.environ.get("IRIS_LOG_PREFIX")
+        if explicit:
+            return explicit
+        return _infer_worker_log_prefix()

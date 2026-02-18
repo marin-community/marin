@@ -126,6 +126,7 @@ class ControllerTaskAttempt:
     attempt_id: int
     worker_id: WorkerId | None = None
     state: int = cluster_pb2.TASK_STATE_ASSIGNED
+    log_directory: str | None = None  # Storage location for logs
 
     # Timing
     created_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
@@ -1925,6 +1926,9 @@ class ControllerState:
                 task = self._tasks.get(task_id)
                 if task and task.state != entry.state and not task.is_finished():
                     self._process_task_state_change(task_id, entry.state, entry.attempt_id)
+                    # Store log_directory from worker
+                    if task and entry.attempt_id < len(task.attempts) and entry.log_directory:
+                        task.attempts[entry.attempt_id].log_directory = entry.log_directory
 
             # Process completed tasks
             for entry in response.completed_tasks:
@@ -1938,6 +1942,9 @@ class ControllerState:
                         error=entry.error or None,
                         exit_code=entry.exit_code,
                     )
+                    # Store log_directory from worker
+                    if task and entry.attempt_id < len(task.attempts) and entry.log_directory:
+                        task.attempts[entry.attempt_id].log_directory = entry.log_directory
 
     def _process_task_state_change(
         self,
