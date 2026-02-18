@@ -904,11 +904,6 @@ class ZephyrContext:
             else:
                 # Default to 128 for distributed, but allow override
                 env_val = os.environ.get("ZEPHYR_MAX_WORKERS")
-                if env_val is None:
-                    legacy = os.environ.get("ZEPHYR_NUM_WORKERS")
-                    if legacy is not None:
-                        logger.warning("ZEPHYR_NUM_WORKERS is deprecated, use ZEPHYR_MAX_WORKERS instead")
-                        env_val = legacy
                 self.max_workers = int(env_val) if env_val else 128
 
         if self.chunk_storage_prefix is None:

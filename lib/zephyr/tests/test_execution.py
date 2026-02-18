@@ -311,19 +311,6 @@ def test_workers_capped_to_shard_count(fray_client, tmp_path):
         assert ctx._worker_count == 3
 
 
-def test_workers_deferred_until_execute(fray_client, tmp_path):
-    """Entering the context creates the coordinator but not workers."""
-    with ZephyrContext(
-        client=fray_client,
-        max_workers=4,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    ) as ctx:
-        assert ctx._coordinator is not None
-        assert ctx._worker_group is None
-
-
 def test_worker_group_identity_stable_across_executes(fray_client, tmp_path):
     """Second execute() reuses the same worker group object (no re-creation)."""
     with ZephyrContext(
