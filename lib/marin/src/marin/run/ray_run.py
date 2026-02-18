@@ -124,7 +124,20 @@ def make_client() -> JobSubmissionClient:
     # API endpoint (e.g. from a `ray://...` address), it can resolve to the head
     # node's internal `webui_url`, which isn't reachable from a developer laptop
     # when using SSH port forwarding.
-    return JobSubmissionClient(address)
+
+    # Support token auth for older Ray clients (< 2.53) that don't natively
+    # handle RAY_AUTH_MODE=token. Read the token and pass it as a header.
+    headers = None
+    token = os.environ.get("RAY_AUTH_TOKEN")
+    if not token:
+        token_path = os.environ.get("RAY_AUTH_TOKEN_PATH", str(Path.home() / ".ray" / "auth_token"))
+        token_file = Path(token_path)
+        if token_file.exists():
+            token = token_file.read_text().strip()
+    if token:
+        headers = {"Authorization": f"Bearer {token}"}
+
+    return JobSubmissionClient(address, headers=headers)
 
 
 async def submit_and_track_job(
