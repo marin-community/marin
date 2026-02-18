@@ -397,19 +397,24 @@ class TokenizeVLMConfig:
     but use more memory (~6x expansion from parquet to tokenized records in RAM)."""
     seed: int = 42
     """Random seed for shuffling."""
+    download_dir: str = "/dev/shm"
+    """Directory for temporary parquet downloads (default: /dev/shm for faster I/O)."""
+    staging_dir: str = "/run/shards"
+    """Directory for staging output shard caches before uploading to GCS."""
 
 
-def _cache_tokenizer_locally(tokenizer_path: str) -> str:
+def _cache_tokenizer_locally(tokenizer_path: str, download_dir: str = "/dev/shm") -> str:
     """Download a (possibly GCS-hosted) tokenizer to a local directory.
 
     Returns the local directory path.
     """
     from levanter.compat.hf_checkpoints import load_tokenizer
 
-    local_dir = tempfile.mkdtemp(prefix="tokenizer_cache_")
+    os.makedirs(download_dir, exist_ok=True)
+    local_dir = tempfile.mkdtemp(prefix="tokenizer_cache_", dir=download_dir)
     tok = load_tokenizer(tokenizer_path)
     tok.save_pretrained(local_dir)
-    logger.info("Tokenizer cached locally (vocab_size=%d)", len(tok))
+    logger.info("Tokenizer cached locally at %s (vocab_size=%d)", local_dir, len(tok))
     return local_dir
 
 
@@ -446,22 +451,28 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
         logger.info("All shards already processed. Running consolidation only.")
     else:
         # Pre-cache tokenizer locally
-        local_tokenizer_path = _cache_tokenizer_locally(config.tokenizer)
+        local_tokenizer_path = _cache_tokenizer_locally(config.tokenizer, config.download_dir)
 
         num_workers = min(config.num_workers, len(pending))
         chunk_size = num_workers
         num_chunks = math.ceil(len(pending) / chunk_size)
-        logger.info("Processing %d shards in %d chunks (%d workers per chunk)", len(pending), num_chunks, num_workers)
+        logger.info(
+            "Processing %d shards in %d chunks (%d workers per chunk), download_dir=%s",
+            len(pending), num_chunks, num_workers, config.download_dir,
+        )
 
+        os.makedirs(config.download_dir, exist_ok=True)
+        os.makedirs(config.staging_dir, exist_ok=True)
         total_completed = 0
         for chunk_idx in range(num_chunks):
             chunk = pending[chunk_idx * chunk_size : (chunk_idx + 1) * chunk_size]
             chunk_label = f"Chunk {chunk_idx + 1}/{num_chunks}"
 
-            # Create per-chunk work directory (cleaned up after each chunk)
-            work_dir = tempfile.mkdtemp(prefix=f"vlm_chunk{chunk_idx}_")
-            local_parquet_dir = os.path.join(work_dir, "parquets")
-            local_cache_dir = os.path.join(work_dir, "caches")
+            # Parquet downloads go to download_dir, cache output goes to staging_dir
+            parquet_work_dir = tempfile.mkdtemp(prefix=f"vlm_chunk{chunk_idx}_", dir=config.download_dir)
+            local_parquet_dir = os.path.join(parquet_work_dir, "parquets")
+            cache_work_dir = tempfile.mkdtemp(prefix=f"vlm_cache{chunk_idx}_", dir=config.staging_dir)
+            local_cache_dir = os.path.join(cache_work_dir, "caches")
             os.makedirs(local_parquet_dir)
             os.makedirs(local_cache_dir)
 
@@ -512,7 +523,8 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                 gcs_upload(local_cache, gcs_dest)
 
             # Step 4: Clean up local files for this chunk
-            shutil.rmtree(work_dir)
+            shutil.rmtree(parquet_work_dir)
+            shutil.rmtree(cache_work_dir)
             logger.info("[%s] Done and cleaned up.", chunk_label)
 
     # Consolidate all shard caches
@@ -583,7 +595,9 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     )
 
     # --- Setup ---
-    local_tokenizer_path = _cache_tokenizer_locally(config.tokenizer)
+    os.makedirs(config.download_dir, exist_ok=True)
+    os.makedirs(config.staging_dir, exist_ok=True)
+    local_tokenizer_path = _cache_tokenizer_locally(config.tokenizer, config.download_dir)
 
     metadata = {
         "tokenizer": config.tokenizer,
@@ -621,8 +635,8 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
             sub_chunk = batch[sub_idx * num_workers : (sub_idx + 1) * num_workers]
             sub_label = f"{batch_label} sub {sub_idx + 1}/{num_sub_chunks}"
 
-            # Download sub-chunk to local disk
-            work_dir = tempfile.mkdtemp(prefix=f"vlm_batch{batch_idx}_sub{sub_idx}_")
+            # Download sub-chunk to /dev/shm (or configured download_dir)
+            work_dir = tempfile.mkdtemp(prefix=f"vlm_batch{batch_idx}_sub{sub_idx}_", dir=config.download_dir)
             local_parquet_dir = os.path.join(work_dir, "parquets")
             os.makedirs(local_parquet_dir)
 
@@ -692,20 +706,26 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
 
         file_records.clear()
 
-        # --- Shuffle each shard buffer and write ---
+        # --- Shuffle each shard buffer, write locally, then upload ---
         logger.info("[%s] Shuffling and writing %d shards ...", batch_label, num_shards_in_batch)
+        staging_batch_dir = tempfile.mkdtemp(prefix=f"vlm_shards_batch{batch_idx}_", dir=config.staging_dir)
         for buf in shard_buffers:
             if not buf:
                 continue
             random.shuffle(buf)
-            out = f"{config.output_path}/train/shard-{shard_idx:06d}"
-            write_levanter_cache(iter(buf), out, metadata)
-            all_output_paths.append(out)
-            logger.info("Wrote shard %06d (%d records)", shard_idx, len(buf))
+            shard_name = f"shard-{shard_idx:06d}"
+            local_out = os.path.join(staging_batch_dir, shard_name)
+            write_levanter_cache(iter(buf), local_out, metadata)
+
+            gcs_out = f"{config.output_path}/train/{shard_name}"
+            gcs_upload(local_out, gcs_out if gcs_out.startswith("gs://") else f"gs://{gcs_out}")
+            all_output_paths.append(gcs_out)
+            logger.info("Wrote and uploaded shard %06d (%d records)", shard_idx, len(buf))
             shard_idx += 1
             buf.clear()
 
         del shard_buffers
+        shutil.rmtree(staging_batch_dir)
         logger.info("[%s] Done. Total records so far: %d", batch_label, total_records)
 
     logger.info("Wrote %d shuffled shards (%d total records)", len(all_output_paths), total_records)
