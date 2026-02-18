@@ -42,7 +42,7 @@ When using W&B:
   - iteration is quick,
   - you are tuning kernels or benchmarks,
   - full pipeline apparatus is unnecessary.
-- See [docs/dev-guide/dev_tpu.md](docs/dev-guide/dev_tpu.md) for operational details and troubleshooting.
+- See [dev_tpu.md](../dev-guide/dev_tpu.md) for operational details and troubleshooting.
 
 ### Dev TPU script (explicit)
 For fast iteration, use:
