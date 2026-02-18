@@ -71,9 +71,8 @@ class TaskLogEntry:
     attempt_id: int = 0
 
 
-def _log_stream_response(response: cluster_pb2.Controller.GetTaskLogsResponse) -> int:
-    """Log stream response entries/errors and return next timestamp cursor."""
-    last_timestamp_ms = response.last_timestamp_ms
+def _log_stream_response(response: cluster_pb2.Controller.GetTaskLogsResponse) -> None:
+    """Log stream response entries/errors."""
     for batch in response.task_logs:
         task_id = JobName.from_wire(batch.task_id)
         worker_id = batch.worker_id or "?"
@@ -87,9 +86,6 @@ def _log_stream_response(response: cluster_pb2.Controller.GetTaskLogsResponse) -
                 proto.attempt_id,
                 proto.data,
             )
-            if proto.timestamp.epoch_ms > last_timestamp_ms:
-                last_timestamp_ms = proto.timestamp.epoch_ms
-    return last_timestamp_ms
 
 
 class JobFailedError(Exception):
@@ -284,7 +280,7 @@ class Job:
         rather than N individual calls. The batch API uses a global since_ms cursor
         for efficient incremental fetching.
         """
-        since_ms = 0
+        stream_start_ms = 0
         stream_interval = Duration.from_seconds(poll_interval)
         deadline = Deadline.from_seconds(timeout)
 
@@ -292,10 +288,10 @@ class Job:
             status = self._client._cluster_client.get_job_status(self._job_id)
 
             try:
-                since_ms = self._client.stream_task_logs(
+                self._client.stream_task_logs(
                     self._job_id,
                     include_children=include_children,
-                    since_ms=since_ms,
+                    since_ms=stream_start_ms,
                 )
             except Exception as e:
                 logger.warning("Failed to fetch job logs: %s", e)
@@ -303,10 +299,10 @@ class Job:
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
                 try:
-                    since_ms = self._client.stream_task_logs(
+                    self._client.stream_task_logs(
                         self._job_id,
                         include_children=include_children,
-                        since_ms=since_ms,
+                        since_ms=stream_start_ms,
                     )
                 except Exception as e:
                     logger.warning("Failed to fetch final job logs: %s", e)
@@ -825,7 +821,7 @@ class IrisClient:
         max_lines: int = 0,
         regex: str | None = None,
         attempt_id: int = -1,
-    ) -> int:
+    ) -> None:
         """Stream logs for a task or job to the python logger.
 
         Args:
@@ -837,7 +833,7 @@ class IrisClient:
             attempt_id: Filter to specific attempt (-1 = all attempts)
 
         Returns:
-            Next timestamp cursor (max observed epoch ms)
+            None
         """
         response = self._cluster_client.stream_task_logs(
             target,
@@ -847,7 +843,7 @@ class IrisClient:
             regex=regex,
             attempt_id=attempt_id,
         )
-        return _log_stream_response(response)
+        _log_stream_response(response)
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client.

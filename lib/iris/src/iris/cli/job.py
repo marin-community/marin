@@ -537,14 +537,14 @@ def logs(
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
 
-    cursor_ms = since_ms or 0
+    start_since_ms = since_ms or 0
     job_name = JobName.from_wire(job_id)
 
     while True:
-        cursor_ms = client.stream_task_logs(
+        client.stream_task_logs(
             job_name,
             include_children=include_children,
-            since_ms=cursor_ms,
+            since_ms=start_since_ms,
         )
 
         if not follow:
