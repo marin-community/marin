@@ -97,15 +97,15 @@ class AsyncDataset(DatasetBase[T_co]):
         """
         return self.slice_dataset(end_index=n)
 
-    def shuffle(self, key: PRNGKeyArray, *, perm_type: PermType = "feistel", num_epochs: int = 1):
+    def shuffle(self, key: PRNGKeyArray, *, perm_type: PermType = "feistel"):
         import levanter.data.permutation as permutation
 
-        return permutation.PermutationDataset(self, key, perm_type=perm_type, num_epochs=num_epochs)
+        return permutation.PermutationDataset(self, key, perm_type=perm_type)
 
-    def era_shuffle(self, era_length: int, key: PRNGKeyArray, *, perm_type: PermType = "feistel", num_epochs: int = 1):
+    def era_shuffle(self, era_length: int, key: PRNGKeyArray, *, perm_type: PermType = "feistel"):
         import levanter.data.permutation as permutation
 
-        return permutation.EraShufflingDataset(self, era_length, key=key, perm_type=perm_type, num_epochs=num_epochs)
+        return permutation.EraShufflingDataset(self, era_length, key=key, perm_type=perm_type)
 
 
 class SyncDataset(DatasetBase[T_co]):

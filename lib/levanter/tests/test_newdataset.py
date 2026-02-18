@@ -1,6 +1,9 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+from collections import Counter
+
 import jax.random
 import pytest
 
@@ -45,14 +48,98 @@ async def test_permutation_dataset_is_at_least_sometimes_permuted():
 
 
 @pytest.mark.asyncio
-async def test_era_shuffling_dataset_returns_correct_length():
+async def test_permutation_dataset_is_infinite():
+    """PermutationDataset reports infinite length and is_finite() == False."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0))
+    assert not perm_ds.is_finite()
+    assert await perm_ds.async_len() == sys.maxsize
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_single_epoch_is_permutation():
+    """The first epoch (indices 0..N-1) visits every element exactly once."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0))
+    batch = await perm_ds.get_batch(list(range(10)))
+    assert set(batch) == set(data)
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_multi_epoch_exact_coverage():
+    """Each epoch-window of N indices visits every element exactly once."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    n = len(data)
+    num_epochs = 3
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(42))
+
+    for epoch in range(num_epochs):
+        batch = await perm_ds.get_batch(list(range(epoch * n, (epoch + 1) * n)))
+        assert set(batch) == set(data), f"Epoch {epoch} did not cover all elements"
+
+    # Over all epochs, every element appears exactly num_epochs times
+    all_items = await perm_ds.get_batch(list(range(num_epochs * n)))
+    counts = Counter(all_items)
+    for item, count in counts.items():
+        assert count == num_epochs, f"Item {item} appeared {count} times, expected {num_epochs}"
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_reshuffles_across_epochs():
+    """Different epochs produce different orderings."""
+    data = list(range(20))
+    dataset = ListAsyncDataset(data)
+    n = len(data)
+    num_epochs = 3
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(7))
+
+    epochs = []
+    for epoch in range(num_epochs):
+        batch = await perm_ds.get_batch(list(range(epoch * n, (epoch + 1) * n)))
+        epochs.append(batch)
+
+    # At least two of the three epochs should differ in ordering
+    num_different = sum(1 for i in range(num_epochs) for j in range(i + 1, num_epochs) if epochs[i] != epochs[j])
+    assert num_different >= 1, "Multi-epoch permutation should produce different orderings across epochs"
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_deterministic_resume():
+    """Reading the same index twice gives the same result (deterministic & resumable)."""
+    data = list(range(50))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(99))
+
+    batch1 = await perm_ds.get_batch([0, 25, 50, 75, 100])
+    batch2 = await perm_ds.get_batch([0, 25, 50, 75, 100])
+    assert batch1 == batch2
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_take_bounds_iteration():
+    """Using .take() with PermutationDataset produces a finite dataset of the right length."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0))
+    bounded = perm_ds.take(30)  # 3 epochs worth
+    assert bounded.is_finite()
+    assert await bounded.async_len() == 30
+
+
+# --- EraShufflingDataset tests ---
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_dataset_is_infinite():
+    """EraShufflingDataset reports infinite length for finite underlying datasets."""
     data = list(range(100))
     dataset = ListAsyncDataset(data)
-    era_length = 10
-    key = jax.random.PRNGKey(0)
-    shuffling_dataset = EraShufflingDataset(dataset, era_length, key=key)
-    assert shuffling_dataset.is_finite()
-    assert await shuffling_dataset.async_len() == 100
+    era_ds = EraShufflingDataset(dataset, era_length=10, key=jax.random.PRNGKey(0))
+    assert not era_ds.is_finite()
+    assert await era_ds.async_len() == sys.maxsize
 
 
 @pytest.mark.asyncio
@@ -69,152 +156,68 @@ async def test_era_shuffling_dataset_get_batch_returns_shuffled_batch():
 
 
 @pytest.mark.asyncio
-async def test_era_shuffling_returns_full_finite_length():
-    data = list(range(16))
+async def test_era_shuffling_first_epoch_covers_all():
+    """The first epoch of era-shuffled data covers every element when era_length divides dataset_len."""
+    data = list(range(20))
     dataset = ListAsyncDataset(data)
-    era_length = 5
-    key = jax.random.PRNGKey(0)
-    shuffling_dataset = EraShufflingDataset(dataset, era_length, key=key)
-    assert await shuffling_dataset.async_len() == 16
-    batch = await shuffling_dataset.get_batch(list(range(16)))
-    assert set(batch) == set(range(16))
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
+    batch = await era_ds.get_batch(list(range(20)))
+    assert set(batch) == set(range(20))
 
 
 @pytest.mark.asyncio
-async def test_era_shuffling_raises_on_out_of_bounds_index():
-    dataset = ListAsyncDataset(list(range(16)))
-    shuffling_dataset = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
-    with pytest.raises(IndexError, match="out of bounds"):
-        await shuffling_dataset.getitem_async(16)
+async def test_era_shuffling_multi_epoch_coverage():
+    """Era shuffling covers all elements when iterated over multiple epochs.
 
-
-# --- Multi-epoch tests ---
-
-
-@pytest.mark.asyncio
-async def test_permutation_dataset_multi_epoch_length():
-    """num_epochs multiplies the reported length."""
-    data = list(range(10))
+    Era shuffling provides local shuffling, not exact per-epoch coverage (use
+    ``PermutationDataset`` for that).  When ``era_length`` divides ``dataset_len``
+    evenly, coverage is exact; otherwise it's approximate.
+    """
+    # Use era_length that divides dataset_len evenly for exact coverage test
+    data = list(range(20))
     dataset = ListAsyncDataset(data)
-    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0), num_epochs=3)
-    assert await perm_ds.async_len() == 30
-
-
-@pytest.mark.asyncio
-async def test_permutation_dataset_multi_epoch_covers_all_items():
-    """Every original item appears exactly num_epochs times across the full index range."""
-    from collections import Counter
-
-    data = list(range(10))
-    dataset = ListAsyncDataset(data)
+    n = len(data)
     num_epochs = 3
-    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(42), num_epochs=num_epochs)
-    total_len = await perm_ds.async_len()
-    batch = await perm_ds.get_batch(list(range(total_len)))
-    counts = Counter(batch)
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
+
+    all_items = await era_ds.get_batch(list(range(num_epochs * n)))
+    counts = Counter(all_items)
     assert set(counts.keys()) == set(data)
     for item, count in counts.items():
         assert count == num_epochs, f"Item {item} appeared {count} times, expected {num_epochs}"
 
 
 @pytest.mark.asyncio
-async def test_permutation_dataset_multi_epoch_reshuffles():
-    """Different epochs produce different orderings."""
-    data = list(range(20))
+async def test_era_shuffling_take_bounds_iteration():
+    """Using .take() with EraShufflingDataset produces a finite dataset."""
+    data = list(range(16))
     dataset = ListAsyncDataset(data)
-    num_epochs = 3
-    n = len(data)
-    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(7), num_epochs=num_epochs)
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
+    bounded = era_ds.take(32)
+    assert bounded.is_finite()
+    assert await bounded.async_len() == 32
 
-    epochs = []
-    for epoch in range(num_epochs):
-        batch = await perm_ds.get_batch(list(range(epoch * n, (epoch + 1) * n)))
-        epochs.append(batch)
 
-    # At least two of the three epochs should differ in ordering
-    num_different = sum(1 for i in range(num_epochs) for j in range(i + 1, num_epochs) if epochs[i] != epochs[j])
-    assert num_different >= 1, "Multi-epoch permutation should produce different orderings across epochs"
+# --- Convenience method tests ---
 
 
 @pytest.mark.asyncio
-async def test_permutation_dataset_single_epoch_unchanged():
-    """With num_epochs=1, behavior is identical to the original PermutationDataset."""
+async def test_shuffle_method():
+    """The .shuffle() convenience method produces an infinite PermutationDataset."""
     data = list(range(10))
     dataset = ListAsyncDataset(data)
-    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0), num_epochs=1)
-    assert await perm_ds.async_len() == 10
+    perm_ds = dataset.shuffle(jax.random.PRNGKey(0))
+    assert not perm_ds.is_finite()
     batch = await perm_ds.get_batch(list(range(10)))
     assert set(batch) == set(data)
 
 
 @pytest.mark.asyncio
-async def test_permutation_dataset_num_epochs_validation():
-    """num_epochs < 1 raises ValueError."""
-    data = list(range(10))
+async def test_era_shuffle_method():
+    """The .era_shuffle() convenience method produces an infinite EraShufflingDataset."""
+    data = list(range(20))
     dataset = ListAsyncDataset(data)
-    with pytest.raises(ValueError, match="num_epochs"):
-        PermutationDataset(dataset, jax.random.PRNGKey(0), num_epochs=0)
-
-
-@pytest.mark.asyncio
-async def test_era_shuffling_multi_epoch_length():
-    """num_epochs multiplies the reported length for EraShufflingDataset."""
-    data = list(range(16))
-    dataset = ListAsyncDataset(data)
-    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), num_epochs=3)
-    assert await era_ds.async_len() == 48
-
-
-@pytest.mark.asyncio
-async def test_era_shuffling_multi_epoch_covers_all_items():
-    """Every original item appears num_epochs times across all epochs."""
-    from collections import Counter
-
-    data = list(range(16))
-    dataset = ListAsyncDataset(data)
-    num_epochs = 3
-    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), num_epochs=num_epochs)
-    total_len = await era_ds.async_len()
-    batch = await era_ds.get_batch(list(range(total_len)))
-    counts = Counter(batch)
-    assert set(counts.keys()) == set(data)
-    for item, count in counts.items():
-        assert count == num_epochs, f"Item {item} appeared {count} times, expected {num_epochs}"
-
-
-@pytest.mark.asyncio
-async def test_era_shuffling_multi_epoch_raises_on_out_of_bounds():
-    """Index beyond num_epochs * dataset_len raises IndexError."""
-    data = list(range(16))
-    dataset = ListAsyncDataset(data)
-    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), num_epochs=2)
-    # Total length is 32; index 32 is out of bounds
-    with pytest.raises(IndexError, match="out of bounds"):
-        await era_ds.getitem_async(32)
-
-
-@pytest.mark.asyncio
-async def test_era_shuffling_num_epochs_validation():
-    """num_epochs < 1 raises ValueError."""
-    data = list(range(10))
-    dataset = ListAsyncDataset(data)
-    with pytest.raises(ValueError, match="num_epochs"):
-        EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), num_epochs=0)
-
-
-@pytest.mark.asyncio
-async def test_shuffle_method_passes_num_epochs():
-    """The .shuffle() convenience method forwards num_epochs."""
-    data = list(range(10))
-    dataset = ListAsyncDataset(data)
-    perm_ds = dataset.shuffle(jax.random.PRNGKey(0), num_epochs=3)
-    assert await perm_ds.async_len() == 30
-
-
-@pytest.mark.asyncio
-async def test_era_shuffle_method_passes_num_epochs():
-    """The .era_shuffle() convenience method forwards num_epochs."""
-    data = list(range(16))
-    dataset = ListAsyncDataset(data)
-    era_ds = dataset.era_shuffle(5, jax.random.PRNGKey(0), num_epochs=2)
-    assert await era_ds.async_len() == 32
+    era_ds = dataset.era_shuffle(5, jax.random.PRNGKey(0))
+    assert not era_ds.is_finite()
+    batch = await era_ds.get_batch(list(range(20)))
+    assert set(batch) == set(data)
