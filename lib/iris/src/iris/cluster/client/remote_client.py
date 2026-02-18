@@ -5,6 +5,7 @@
 
 import logging
 import time
+from collections.abc import Callable
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.task_logging import LogReader
@@ -46,7 +47,6 @@ class RemoteClusterClient:
             address=controller_address,
             timeout_ms=timeout_ms,
         )
-        self._attempt_readers: dict[str, LogReader] = {}
 
     def submit_job(
         self,
@@ -151,6 +151,48 @@ class RemoteClusterClient:
 
             interval = backoff.next_interval()
             time.sleep(min(interval, deadline.remaining_seconds()))
+
+    def wait_for_job_with_streaming(
+        self,
+        job_id: JobName,
+        *,
+        timeout: float,
+        poll_interval: float,
+        include_children: bool,
+        since_ms: int = 0,
+        on_logs: Callable[[cluster_pb2.Controller.GetTaskLogsResponse], None] | None = None,
+    ) -> cluster_pb2.JobStatus:
+        """Wait for job completion while streaming task logs."""
+        deadline = Deadline.from_seconds(timeout)
+        readers: dict[str, LogReader] = {}
+        try:
+            while True:
+                status = self.get_job_status(job_id)
+                response = self._poll_stream_logs(
+                    target=job_id,
+                    include_children=include_children,
+                    since_ms=since_ms,
+                    readers=readers,
+                )
+                if on_logs is not None:
+                    on_logs(response)
+
+                if is_job_finished(status.state):
+                    # Final drain after terminal state.
+                    response = self._poll_stream_logs(
+                        target=job_id,
+                        include_children=include_children,
+                        since_ms=since_ms,
+                        readers=readers,
+                    )
+                    if on_logs is not None:
+                        on_logs(response)
+                    return status
+
+                deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
+                time.sleep(poll_interval)
+        finally:
+            readers.clear()
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
@@ -327,17 +369,18 @@ class RemoteClusterClient:
             truncated=total_lines >= max_lines,
         )
 
-    def stream_task_logs(
+    def _poll_stream_logs(
         self,
-        target: JobName,
         *,
-        include_children: bool = False,
-        since_ms: int = 0,
+        target: JobName,
+        include_children: bool,
+        since_ms: int,
+        readers: dict[str, LogReader],
         max_total_lines: int = 0,
         regex: str | None = None,
         attempt_id: int = -1,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Stream logs incrementally using per-attempt readers."""
+        """Poll tasks and emit newly appended logs from per-attempt readers."""
         tasks = self._collect_task_statuses(target, include_children=include_children)
         task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
         total_lines = 0
@@ -364,7 +407,7 @@ class RemoteClusterClient:
                     continue
 
                 reader_key = f"{task_status.log_directory}|{worker_id}|{att_id}"
-                reader = self._attempt_readers.get(reader_key)
+                reader = readers.get(reader_key)
                 if reader is None:
                     try:
                         reader = LogReader.from_log_directory_for_attempt(
@@ -378,7 +421,7 @@ class RemoteClusterClient:
                         )
                         continue
                     reader.seek_to(since_ms)
-                    self._attempt_readers[reader_key] = reader
+                    readers[reader_key] = reader
 
                 entries = reader.read_logs(
                     source=None,

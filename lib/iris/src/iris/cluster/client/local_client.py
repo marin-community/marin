@@ -8,6 +8,7 @@ instead of Docker containers, ensuring local execution follows the same code pat
 as production cluster execution.
 """
 
+from collections.abc import Callable
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
@@ -192,23 +193,23 @@ class LocalClusterClient:
             attempt_id=attempt_id,
         )
 
-    def stream_task_logs(
+    def wait_for_job_with_streaming(
         self,
-        target: JobName,
+        job_id: JobName,
         *,
-        include_children: bool = False,
+        timeout: float,
+        poll_interval: float,
+        include_children: bool,
         since_ms: int = 0,
-        max_total_lines: int = 0,
-        regex: str | None = None,
-        attempt_id: int = -1,
-    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        return self._remote_client.stream_task_logs(
-            target,
+        on_logs: Callable[[cluster_pb2.Controller.GetTaskLogsResponse], None] | None = None,
+    ) -> cluster_pb2.JobStatus:
+        return self._remote_client.wait_for_job_with_streaming(
+            job_id,
+            timeout=timeout,
+            poll_interval=poll_interval,
             include_children=include_children,
             since_ms=since_ms,
-            max_total_lines=max_total_lines,
-            regex=regex,
-            attempt_id=attempt_id,
+            on_logs=on_logs,
         )
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:

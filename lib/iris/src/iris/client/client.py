@@ -18,7 +18,6 @@ Example:
 """
 
 import logging
-import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -42,10 +41,9 @@ from iris.cluster.types import (
     JobName,
     Namespace,
     ResourceSpec,
-    is_job_finished,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -280,36 +278,14 @@ class Job:
         rather than N individual calls. The batch API uses a global since_ms cursor
         for efficient incremental fetching.
         """
-        stream_start_ms = 0
-        stream_interval = Duration.from_seconds(poll_interval)
-        deadline = Deadline.from_seconds(timeout)
-
-        while True:
-            status = self._client._cluster_client.get_job_status(self._job_id)
-
-            try:
-                self._client.stream_task_logs(
-                    self._job_id,
-                    include_children=include_children,
-                    since_ms=stream_start_ms,
-                )
-            except Exception as e:
-                logger.warning("Failed to fetch job logs: %s", e)
-
-            if is_job_finished(status.state):
-                # Final drain to catch any remaining logs
-                try:
-                    self._client.stream_task_logs(
-                        self._job_id,
-                        include_children=include_children,
-                        since_ms=stream_start_ms,
-                    )
-                except Exception as e:
-                    logger.warning("Failed to fetch final job logs: %s", e)
-                return status
-
-            deadline.raise_if_expired(f"Job {self._job_id} did not complete in {timeout}s")
-            time.sleep(stream_interval.to_seconds())
+        return self._client._cluster_client.wait_for_job_with_streaming(
+            self._job_id,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            include_children=include_children,
+            since_ms=0,
+            on_logs=_log_stream_response,
+        )
 
     def terminate(self) -> None:
         """Terminate this job."""
@@ -811,39 +787,6 @@ class IrisClient:
 
         result.sort(key=lambda x: x.timestamp.epoch_ms())
         return result
-
-    def stream_task_logs(
-        self,
-        target: JobName,
-        *,
-        include_children: bool = False,
-        since_ms: int = 0,
-        max_lines: int = 0,
-        regex: str | None = None,
-        attempt_id: int = -1,
-    ) -> None:
-        """Stream logs for a task or job to the python logger.
-
-        Args:
-            target: Task ID or Job ID (detected by trailing numeric)
-            include_children: Include logs from child jobs (job ID only)
-            since_ms: Only return logs after this timestamp in epoch ms (exclusive)
-            max_lines: Maximum number of log lines to return (0 = unlimited)
-            regex: Regex filter for log content
-            attempt_id: Filter to specific attempt (-1 = all attempts)
-
-        Returns:
-            None
-        """
-        response = self._cluster_client.stream_task_logs(
-            target,
-            include_children=include_children,
-            since_ms=since_ms,
-            max_total_lines=max_lines,
-            regex=regex,
-            attempt_id=attempt_id,
-        )
-        _log_stream_response(response)
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client.
