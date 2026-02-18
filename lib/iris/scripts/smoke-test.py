@@ -12,18 +12,18 @@ This script provides end-to-end validation of an Iris cluster:
 5. Cleans up on success/failure/interrupt
 
 Usage:
-    # Basic smoke test (logs to logs/smoke-test-{timestamp}/)
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
+    # Basic smoke test (uses examples/smoke.yaml, logs to logs/smoke-test-{timestamp}/)
+    uv run python scripts/smoke-test.py
 
-    # With custom log directory
+    # With custom config and log directory
     uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \\
         --log-dir /path/to/logs
 
     # Custom timeout (45 min) for slow environments
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --timeout 2700
+    uv run python scripts/smoke-test.py --timeout 2700
 
     # Keep cluster running on failure for debugging
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode keep
+    uv run python scripts/smoke-test.py --mode keep
 """
 
 import logging
@@ -39,13 +39,6 @@ from typing import Literal, TextIO
 import click
 from iris.cli.cluster import _build_cluster_images
 from iris.client import IrisClient
-from iris.cluster.types import (
-    CoschedulingConfig,
-    Entrypoint,
-    EnvironmentSpec,
-    ResourceSpec,
-    tpu_device,
-)
 from iris.cluster.config import IrisConfig, load_config, make_local_config
 from iris.cluster.controller.lifecycle import start_controller, stop_controller
 from iris.cluster.controller.local import LocalController
@@ -57,11 +50,19 @@ from iris.cluster.platform.debug import (
     list_iris_tpus,
     stream_docker_logs,
 )
+from iris.cluster.types import (
+    CoschedulingConfig,
+    Entrypoint,
+    EnvironmentSpec,
+    ResourceSpec,
+    tpu_device,
+)
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import format_accelerator_display
 
 IRIS_ROOT = Path(__file__).parent.parent
+DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
 DEFAULT_CONTROLLER_PORT = 10000
 
 
@@ -258,8 +259,7 @@ class SmokeTestLogger:
         self._file.write(f"**Started:** {self._start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         self._file.write(f"**Config:** `{config.config_path}`\n\n")
         self._file.write(f"**TPU type:** `{config.tpu_type}`\n\n")
-        if config.prefix:
-            self._file.write(f"**Prefix:** `{config.prefix}`\n\n")
+        self._file.write(f"**Prefix:** `{config.prefix}`\n\n")
         self._file.write(f"**Log directory:** `{config.log_dir}`\n\n")
         self._file.write("---\n\n")
         self._file.flush()
@@ -303,9 +303,9 @@ class DockerLogStreamer:
         mode: Literal["controller", "workers"],
         zone: str,
         project: str,
+        label_prefix: str,
         log_tree: LogTree,
         container_name: str = "iris-worker",
-        label_prefix: str = "iris",
     ):
         self._mode = mode
         self._zone = zone
@@ -403,13 +403,13 @@ class SmokeTestConfig:
     timeout_seconds: int = 1800  # 30 min total
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
     tpu_type: str = "v5litepod-16"
-    prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
+    prefix: str = "smoke"  # Unique prefix for controller VM name (sets label_prefix in config)
     local: bool = False  # Run locally without GCP
     mode: Literal["full", "keep", "redeploy"] = "full"
 
     @property
     def label_prefix(self) -> str:
-        return self.prefix or "iris"
+        return self.prefix
 
 
 # =============================================================================
@@ -479,8 +479,7 @@ class SmokeTestRunner:
                 cluster_config = make_local_config(cluster_config)
 
             # Apply prefix to cluster config for unique controller VM name
-            if self.config.prefix:
-                cluster_config.platform.label_prefix = self.config.prefix
+            cluster_config.platform.label_prefix = self.config.prefix
 
             self._is_local = cluster_config.controller.WhichOneof("controller") == "local"
 
@@ -578,8 +577,7 @@ class SmokeTestRunner:
         self.logger.log(f"Timeout: {self.config.timeout_seconds}s")
         self.logger.log(f"TPU type: {self.config.tpu_type}")
         self.logger.log(f"Log directory: {self.config.log_dir}")
-        if self.config.prefix:
-            self.logger.log(f"Prefix: {self.config.prefix}")
+        self.logger.log(f"Prefix: {self.config.prefix}")
 
     def _cleanup_existing(self, zone: str, project: str):
         """Delete existing iris resources (controller VM, TPU slices) for clean start."""
@@ -966,21 +964,24 @@ class SmokeTestRunner:
 @click.option(
     "--config",
     "config_path",
-    required=True,
+    default=str(DEFAULT_CONFIG_PATH),
     type=click.Path(exists=True, path_type=Path),
-    help="Path to cluster config YAML (e.g., examples/eu-west4.yaml)",
+    show_default=True,
+    help="Path to cluster config YAML",
 )
 @click.option(
     "--timeout",
     "timeout_seconds",
     default=1800,
-    help="Total timeout in seconds (default: 1800 = 30 min)",
+    show_default=True,
+    help="Total timeout in seconds",
 )
 @click.option(
     "--job-timeout",
     "job_timeout_seconds",
     default=DEFAULT_JOB_TIMEOUT,
-    help=f"Per-job timeout in seconds (default: {DEFAULT_JOB_TIMEOUT} = 10 min)",
+    show_default=True,
+    help="Per-job timeout in seconds",
 )
 @click.option(
     "--log-dir",
@@ -990,18 +991,20 @@ class SmokeTestRunner:
 @click.option(
     "--tpu-type",
     default="v5litepod-16",
-    help="TPU type for test jobs (default: v5litepod-16)",
+    show_default=True,
+    help="TPU type for test jobs",
 )
 @click.option(
     "--mode",
     type=click.Choice(["full", "keep", "redeploy"]),
     default="full",
+    show_default=True,
     help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), 'redeploy' (reuse VMs)",
 )
 @click.option(
     "--prefix",
-    type=str,
-    default=None,
+    default="smoke",
+    show_default=True,
     help="Unique prefix for controller VM name (e.g., 'smoke-123' creates 'iris-controller-smoke-123')",
 )
 @click.option(
@@ -1016,7 +1019,7 @@ def main(
     log_dir: Path | None,
     tpu_type: str,
     mode: str,
-    prefix: str | None,
+    prefix: str,
     local: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
@@ -1027,16 +1030,16 @@ def main(
 
     Examples:
 
-        # Basic smoke test (full VM creation)
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
+        # Basic smoke test (uses examples/smoke.yaml by default)
+        uv run python scripts/smoke-test.py
 
         # Keep VMs running after test
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode keep
+        uv run python scripts/smoke-test.py --mode keep
 
         # Redeploy mode: reuse existing VMs (much faster for iteration)
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode redeploy
+        uv run python scripts/smoke-test.py --mode redeploy
 
-        # With custom log directory
+        # With custom config and log directory
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \
             --log-dir /path/to/logs
     """
