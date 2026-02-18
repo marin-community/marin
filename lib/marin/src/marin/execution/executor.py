@@ -100,7 +100,7 @@ import levanter.utils.fsspec_utils as fsspec_utils
 from fray.v2 import client as fray_client
 from fray.v2.types import ResourceConfig
 
-from marin.execution.step_model import StepSpec
+from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, resolve_executor_step, worker_id
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,

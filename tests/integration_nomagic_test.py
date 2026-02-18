@@ -19,7 +19,7 @@ from levanter.trainer import TrainerConfig
 
 
 from marin.execution.artifact import Artifact
-from marin.execution.step_model import StepSpec
+from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate_fn
 from marin.processing.classification.dataset_utils import DatasetConfig

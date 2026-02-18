@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import ExecutorStep
-from marin.execution.step_model import StepSpec
+from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, resolve_executor_step
 
 # ---------------------------------------------------------------------------

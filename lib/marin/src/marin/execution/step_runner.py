@@ -40,7 +40,7 @@ from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
-from marin.execution.step_model import StepSpec
+from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 # Re-export for backward compatibility

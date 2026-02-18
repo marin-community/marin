@@ -18,11 +18,10 @@ from .executor import (
     unwrap_versioned_value,
     versioned,
 )
-from .step_model import StepSpec
+from .step_spec import StepSpec
 from .step_runner import StepRunner, resolve_executor_step
 from .disk_cache import disk_cached
 from .distributed_lock import StepAlreadyDone, distributed_lock
-from .fray_exe import fray_exec
 from .executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,

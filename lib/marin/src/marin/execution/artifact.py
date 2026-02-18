@@ -4,7 +4,7 @@
 import json
 from typing import TypeVar, overload, Any
 from dataclasses import dataclass, is_dataclass
-from marin.execution.step_model import StepSpec
+from marin.execution.step_spec import StepSpec
 
 import fsspec
 from pydantic import BaseModel
