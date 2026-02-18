@@ -31,26 +31,33 @@ def cli():
     "--config",
     "config_file",
     type=click.Path(exists=True),
-    required=True,
+    required=False,
     help="Cluster config for platform-based controller discovery",
 )
+@click.option("--controller-address", default=None, help="Controller address host:port (overrides --config discovery)")
 def serve(
     host: str,
     port: int,
     cache_dir: str,
     port_range: str,
     worker_id: str | None,
-    config_file: str,
+    config_file: str | None,
+    controller_address: str | None,
 ):
     """Start the Iris worker service."""
     configure_logging(level=logging.INFO)
 
-    cluster_config = load_config(Path(config_file))
-    platform = create_platform(
-        platform_config=cluster_config.platform,
-        ssh_config=cluster_config.defaults.ssh,
-    )
-    controller_address = f"http://{platform.discover_controller(cluster_config.controller)}"
+    if controller_address:
+        resolved_controller_address = f"http://{controller_address}"
+    else:
+        if not config_file:
+            raise click.ClickException("Either --controller-address or --config must be provided")
+        cluster_config = load_config(Path(config_file))
+        platform = create_platform(
+            platform_config=cluster_config.platform,
+            ssh_config=cluster_config.defaults.ssh,
+        )
+        resolved_controller_address = f"http://{platform.discover_controller(cluster_config.controller)}"
 
     port_start, port_end = map(int, port_range.split("-"))
 
@@ -59,7 +66,7 @@ def serve(
         port=port,
         cache_dir=Path(cache_dir).expanduser(),
         port_range=(port_start, port_end),
-        controller_address=controller_address,
+        controller_address=resolved_controller_address,
         worker_id=worker_id,
     )
 
@@ -67,7 +74,7 @@ def serve(
 
     click.echo(f"Starting Iris worker on {host}:{port}")
     click.echo(f"  Cache dir: {config.cache_dir}")
-    click.echo(f"  Controller: {controller_address}")
+    click.echo(f"  Controller: {resolved_controller_address}")
     worker.start()
     worker.wait()  # Block until worker is stopped
 

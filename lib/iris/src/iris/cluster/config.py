@@ -685,7 +685,7 @@ def create_autoscaler(
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
-    cluster_config: config_pb2.IrisClusterConfig | None = None,
+    bootstrap_config: config_pb2.BootstrapConfig | None = None,
     threads: ThreadContainer | None = None,
 ):
     """Create autoscaler from Platform and explicit config.
@@ -695,7 +695,7 @@ def create_autoscaler(
         autoscaler_config: Autoscaler settings (already resolved with defaults)
         scale_groups: Map of scale group name to config
         label_prefix: Prefix for labels on managed resources
-        cluster_config: Full cluster config passed through to platform.create_slice() for bootstrap.
+        bootstrap_config: Worker bootstrap settings passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
 
@@ -731,5 +731,5 @@ def create_autoscaler(
         scale_groups=scaling_groups,
         config=autoscaler_config,
         platform=platform,
-        cluster_config=cluster_config,
+        bootstrap_config=bootstrap_config,
     )

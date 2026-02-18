@@ -264,12 +264,12 @@ class Platform(Protocol):
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        cluster_config: config_pb2.IrisClusterConfig | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> SliceHandle:
         """Create a slice of connected workers (e.g., TPU pod, IB GPU cluster).
 
         The slice is the atomic scaling unit -- it succeeds or fails as a whole.
-        When cluster_config is provided, the platform handles worker bootstrapping
+        When bootstrap_config is provided, the platform handles worker bootstrapping
         internally (docker setup, worker container startup). describe() returns
         BOOTSTRAPPING while in progress, then READY or FAILED when complete.
         """

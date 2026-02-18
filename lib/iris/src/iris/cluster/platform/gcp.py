@@ -293,6 +293,7 @@ class GcpSliceHandle:
         _accelerator_variant: str,
         _ssh_config: config_pb2.SshConfig | None = None,
         _state: str = "READY",
+        _bootstrapping: bool = False,
     ):
         self._slice_id = _slice_id
         self._zone = _zone
@@ -303,9 +304,7 @@ class GcpSliceHandle:
         self._accelerator_variant = _accelerator_variant
         self._ssh_config = _ssh_config
         self._state = _state
-        # Bootstrap state: None means no bootstrap requested or not yet started.
-        # Set by the platform's internal bootstrap thread.
-        self._bootstrap_state: CloudSliceState | None = None
+        self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
 
     @property
@@ -534,11 +533,11 @@ class GcpPlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        cluster_config: config_pb2.IrisClusterConfig | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> GcpSliceHandle:
         """Create a TPU slice via gcloud.
 
-        When cluster_config is provided, spawns a background thread that waits
+        When bootstrap_config is provided, spawns a background thread that waits
         for the slice to reach cloud READY, then runs the bootstrap script on
         each worker. The handle's describe() composites bootstrap state with
         cloud state.
@@ -581,13 +580,14 @@ class GcpPlatform:
             _label_prefix=self._label_prefix,
             _accelerator_variant=config.accelerator_variant,
             _ssh_config=self._ssh_config,
+            _bootstrapping=bootstrap_config is not None,
         )
 
-        if cluster_config:
+        if bootstrap_config:
 
             def _bootstrap_worker():
                 try:
-                    self._run_bootstrap(handle, cluster_config)
+                    self._run_bootstrap(handle, bootstrap_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
                     with handle._bootstrap_lock:
@@ -598,18 +598,13 @@ class GcpPlatform:
                 name=f"bootstrap-{handle.slice_id}",
                 daemon=True,
             ).start()
-        else:
-            # No bootstrap requested — mark as immediately ready so describe()
-            # doesn't report BOOTSTRAPPING.
-            with handle._bootstrap_lock:
-                handle._bootstrap_state = CloudSliceState.READY
 
         return handle
 
     def _run_bootstrap(
         self,
         handle: GcpSliceHandle,
-        cluster_config: config_pb2.IrisClusterConfig,
+        bootstrap_config: config_pb2.BootstrapConfig,
         poll_interval: float = 10.0,
         cloud_ready_timeout: float = 600.0,
     ) -> None:
@@ -634,19 +629,19 @@ class GcpPlatform:
                 raise PlatformError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
             time.sleep(poll_interval)
 
-        # Phase 2: Bootstrap each worker
+        # Phase 2: Wait for SSH connectivity, then bootstrap each worker.
+        # gcloud compute tpus tpu-vm ssh may need to generate SSH keys on the
+        # first call; wait_for_connection() retries until that succeeds.
         cloud_status = handle._describe_cloud()
         for worker in cloud_status.workers:
             if not worker.internal_address:
                 raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
 
-            script = build_worker_bootstrap_script(cluster_config, worker.internal_address)
-            result = worker.run_command(script, timeout=Duration.from_seconds(600))
-            if result.returncode != 0:
-                raise PlatformError(
-                    f"Bootstrap failed for worker {worker.worker_id} in slice {handle.slice_id}: "
-                    f"exit code {result.returncode}\n{result.stderr}"
-                )
+            if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
+                raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
+
+            script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+            worker.bootstrap(script)
 
         logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(cloud_status.workers))
         with handle._bootstrap_lock:

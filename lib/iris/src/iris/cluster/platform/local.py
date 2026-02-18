@@ -413,13 +413,13 @@ class LocalPlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        cluster_config: config_pb2.IrisClusterConfig | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> LocalSliceHandle:
         """Create a local slice, optionally spawning real Worker instances.
 
         When controller_address was provided at construction, spawns real Workers
         that register with the controller (E2E mode). Otherwise creates in-memory
-        stubs (unit test mode). The cluster_config parameter is accepted for
+        stubs (unit test mode). The bootstrap_config parameter is accepted for
         interface compatibility but ignored — local workers are already READY.
         """
         slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"

@@ -47,7 +47,7 @@ class CoreweavePlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        cluster_config: config_pb2.IrisClusterConfig | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> SliceHandle:
         raise NotImplementedError("CoreWeave platform is not yet implemented")
 

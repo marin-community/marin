@@ -20,7 +20,7 @@ from iris.cluster.controller.autoscaler import (
     ScalingDecision,
     route_demand,
 )
-from iris.cluster.controller.scaling_group import ScalingGroup, SliceLifecycleState
+from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.cluster.platform.base import CloudSliceState, CloudWorkerState, QuotaExhaustedError, SliceStatus, WorkerStatus
 from iris.cluster.types import DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
@@ -171,7 +171,7 @@ def make_mock_platform(slices_to_discover: list[MagicMock] | None = None) -> Mag
 
     create_count = [0]
 
-    def create_slice_side_effect(config: config_pb2.SliceConfig, cluster_config=None) -> MagicMock:
+    def create_slice_side_effect(config: config_pb2.SliceConfig, bootstrap_config=None) -> MagicMock:
         create_count[0] += 1
         slice_id = f"new-slice-{create_count[0]}"
         return make_mock_slice_handle(slice_id)
@@ -254,7 +254,7 @@ def make_autoscaler(
     scale_groups: dict[str, ScalingGroup],
     config: config_pb2.AutoscalerConfig | None = None,
     platform: MagicMock | None = None,
-    cluster_config: config_pb2.IrisClusterConfig | None = None,
+    bootstrap_config: config_pb2.BootstrapConfig | None = None,
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     mock_platform = platform or make_mock_platform()
@@ -264,14 +264,14 @@ def make_autoscaler(
             scale_groups=scale_groups,
             config=config,
             platform=mock_platform,
-            cluster_config=cluster_config,
+            bootstrap_config=bootstrap_config,
         )
     else:
         return Autoscaler(
             scale_groups=scale_groups,
             evaluation_interval=Duration.from_seconds(0.1),
             platform=mock_platform,
-            cluster_config=cluster_config,
+            bootstrap_config=bootstrap_config,
         )
 
 
@@ -630,31 +630,6 @@ class TestAutoscalerExecution:
         assert group.slice_count() == 0
 
 
-class TestAutoscalerReconcile:
-    """Tests for reconcile behavior."""
-
-    def test_reconcile_discovers_slices_in_all_groups(self):
-        """reconcile() calls reconcile on all groups."""
-        config1 = make_scale_group_config(name="group-1", min_slices=0, max_slices=5, zones=["us-central1-a"])
-        config2 = make_scale_group_config(name="group-2", min_slices=0, max_slices=5, zones=["us-central1-a"])
-
-        platform1 = make_mock_platform(
-            slices_to_discover=[make_mock_slice_handle("slice-1", scale_group="group-1", all_ready=True)]
-        )
-        platform2 = make_mock_platform(
-            slices_to_discover=[make_mock_slice_handle("slice-2", scale_group="group-2", all_ready=True)]
-        )
-
-        group1 = ScalingGroup(config1, platform1)
-        group2 = ScalingGroup(config2, platform2)
-
-        autoscaler = make_autoscaler({"group-1": group1, "group-2": group2})
-        autoscaler.reconcile()
-
-        assert group1.slice_count() == 1
-        assert group2.slice_count() == 1
-
-
 class TestAutoscalerWorkerFailure:
     """Tests for worker failure handling."""
 
@@ -663,8 +638,8 @@ class TestAutoscalerWorkerFailure:
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
-        autoscaler.reconcile()
         _mark_discovered_ready(group, [mock_handle])
 
         vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
@@ -1284,8 +1259,8 @@ class TestAutoscalerActionLogging:
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
-        autoscaler.reconcile()
         _mark_discovered_ready(group, [mock_handle])
 
         vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
@@ -1430,9 +1405,9 @@ class TestAutoscalerAsyncScaleUp:
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
 
-        def slow_create(config, cluster_config=None):
+        def slow_create(config, bootstrap_config=None):
             time.sleep(0.5)
-            return original_create(config, cluster_config)
+            return original_create(config, bootstrap_config)
 
         platform.create_slice.side_effect = slow_create
 
@@ -1461,9 +1436,9 @@ class TestAutoscalerAsyncScaleUp:
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
 
-        def slow_create(config, cluster_config=None):
+        def slow_create(config, bootstrap_config=None):
             time.sleep(0.2)
-            return original_create(config, cluster_config)
+            return original_create(config, bootstrap_config)
 
         platform.create_slice.side_effect = slow_create
 
@@ -1498,9 +1473,9 @@ class TestAutoscalerAsyncScaleUp:
         original_create = platform.create_slice.side_effect
         create_completed = []
 
-        def slow_create(config, cluster_config=None):
+        def slow_create(config, bootstrap_config=None):
             time.sleep(0.2)
-            result = original_create(config, cluster_config)
+            result = original_create(config, bootstrap_config)
             create_completed.append(True)
             return result
 
@@ -1554,9 +1529,9 @@ def test_pending_counter_prevents_double_scaleup():
     class SlowFakePlatform(FakePlatform):
         """FakePlatform where create_slice blocks until barrier is released."""
 
-        def create_slice(self, config, cluster_config=None):
+        def create_slice(self, config, bootstrap_config=None):
             create_barrier.wait(timeout=10)
-            return super().create_slice(config, cluster_config)
+            return super().create_slice(config, bootstrap_config)
 
     sg_config = make_scale_group_config(
         name="test-group",
@@ -1605,7 +1580,7 @@ def test_pending_counter_prevents_double_scaleup():
 
 
 def test_bootstrap_called_after_scaleup():
-    """After scale_up with cluster_config, platform handles bootstrap internally
+    """After scale_up with bootstrap_config, platform handles bootstrap internally
     and describe() reaches READY after tick().
     """
     sg_config = make_scale_group_config(
@@ -1614,9 +1589,11 @@ def test_bootstrap_called_after_scaleup():
         max_slices=4,
         zones=["us-central1-a"],
     )
-    cluster_config = config_pb2.IrisClusterConfig()
-    cluster_config.defaults.bootstrap.docker_image = "test:latest"
-    cluster_config.defaults.bootstrap.worker_port = 10001
+    bootstrap_config = config_pb2.BootstrapConfig(
+        docker_image="test:latest",
+        worker_port=10001,
+        controller_address="controller:10000",
+    )
     platform = FakePlatform(FakePlatformConfig(config=sg_config))
     group = ScalingGroup(
         sg_config,
@@ -1627,7 +1604,7 @@ def test_bootstrap_called_after_scaleup():
         scale_groups={"test-group": group},
         evaluation_interval=Duration.from_ms(100),
         platform=platform,
-        cluster_config=cluster_config,
+        bootstrap_config=bootstrap_config,
     )
 
     demand = make_demand_entries(1)
@@ -1654,7 +1631,7 @@ def test_bootstrap_called_after_scaleup():
 
 
 def test_bootstrap_skipped_without_config():
-    """Without cluster_config, slices reach READY immediately after tick() (no bootstrap)."""
+    """Without bootstrap_config, slices reach READY immediately after tick() (no bootstrap)."""
     sg_config = make_scale_group_config(
         name="test-group",
         min_slices=0,
@@ -1690,62 +1667,3 @@ def test_bootstrap_skipped_without_config():
         assert vm._bootstrap_count == 0, "No bootstrap without config"
 
     autoscaler.shutdown()
-
-
-class TestReconcileBootstrap:
-    """Tests for reconcile discovering slices and state polling moving them to READY."""
-
-    def _create_discoverable_slice(self, sg_config: config_pb2.ScaleGroupConfig, platform: FakePlatform):
-        """Create a slice through the platform with labels that reconcile will discover."""
-        from iris.cluster.controller.scaling_group import prepare_slice_config
-
-        slice_config = prepare_slice_config(sg_config.slice_template, sg_config, "iris")
-        handle = platform.create_slice(slice_config)
-        platform.tick()
-        return handle
-
-    def test_reconcile_discovers_and_polls_to_ready(self):
-        """After reconcile, state polling in refresh() moves discovered slices to READY."""
-        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
-        platform = FakePlatform(FakePlatformConfig(config=sg_config))
-        self._create_discoverable_slice(sg_config, platform)
-
-        group = ScalingGroup(sg_config, platform, scale_up_cooldown=Duration.from_ms(0))
-        autoscaler = Autoscaler(
-            scale_groups={"test-group": group},
-            evaluation_interval=Duration.from_ms(100),
-            platform=platform,
-        )
-
-        autoscaler.reconcile()
-        assert group.slice_count() == 1
-
-        # State polling in refresh detects READY
-        autoscaler.refresh({})
-        assert group.ready_slice_count() == 1
-
-        autoscaler.shutdown()
-
-    def test_reconcile_populates_vm_addresses_via_polling(self):
-        """After reconcile + refresh polling, slices have vm_addresses populated."""
-        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
-        platform = FakePlatform(FakePlatformConfig(config=sg_config))
-        self._create_discoverable_slice(sg_config, platform)
-
-        group = ScalingGroup(sg_config, platform, scale_up_cooldown=Duration.from_ms(0))
-        autoscaler = Autoscaler(
-            scale_groups={"test-group": group},
-            evaluation_interval=Duration.from_ms(100),
-            platform=platform,
-        )
-
-        autoscaler.reconcile()
-        autoscaler.refresh({})
-
-        with group._slices_lock:
-            states = list(group._slices.values())
-        assert len(states) == 1
-        assert states[0].lifecycle == SliceLifecycleState.READY
-        assert len(states[0].vm_addresses) > 0
-
-        autoscaler.shutdown()

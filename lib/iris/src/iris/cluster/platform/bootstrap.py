@@ -64,17 +64,10 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # Bootstrap script template for worker VMs.
-#
-# Workers receive the full cluster config.yaml and use platform.discover_controller()
-# to find the controller address themselves. The config is embedded in the script
-# and written to /etc/iris/config.yaml.
 WORKER_BOOTSTRAP_SCRIPT = """
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
-
-# Write config file
-{{ config_setup }}
 
 echo "[iris-init] Phase: prerequisites"
 
@@ -132,13 +125,12 @@ sudo docker run -d --name iris-worker \\
     --network=host \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
-    {{ config_volume }} \\
     {{ env_flags }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
         --host 0.0.0.0 --port {{ worker_port }} \\
         --cache-dir {{ cache_dir }} \\
-        --config /etc/iris/config.yaml
+        --controller-address {{ controller_address }}
 
 echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
@@ -192,36 +184,25 @@ def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) 
 
 
 def build_worker_bootstrap_script(
-    cluster_config: config_pb2.IrisClusterConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
     vm_address: str,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
-    The worker receives the full cluster config.yaml and discovers the controller
-    itself via platform.discover_controller().
-
     Args:
-        cluster_config: Full cluster configuration
+        bootstrap_config: Worker bootstrap settings
         vm_address: VM IP address for autoscaler tracking
     """
-    # Local import to avoid circular dependency (config.py imports from bootstrap)
-    from iris.cluster.config import config_to_dict
-
-    bootstrap_config = cluster_config.defaults.bootstrap
-
-    # Serialize cluster config to YAML and embed it
-    config_yaml = yaml.dump(config_to_dict(cluster_config), default_flow_style=False)
-    config_setup = _build_config_setup(config_yaml, log_prefix="[iris-init]")
-
     env_flags = build_worker_env_flags(bootstrap_config, vm_address)
+    if not bootstrap_config.controller_address:
+        raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
-        config_setup=config_setup,
         cache_dir=bootstrap_config.cache_dir or "/var/cache/iris",
         docker_image=bootstrap_config.docker_image,
         worker_port=bootstrap_config.worker_port or 10001,
-        config_volume="-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro",
+        controller_address=bootstrap_config.controller_address,
         env_flags=env_flags,
     )
 

@@ -318,7 +318,7 @@ class ScalingGroup:
         self,
         tags: dict[str, str] | None = None,
         timestamp: Timestamp | None = None,
-        cluster_config: config_pb2.IrisClusterConfig | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> SliceHandle:
         """Create a new slice via the platform.
 
@@ -328,7 +328,7 @@ class ScalingGroup:
         Args:
             tags: Optional extra labels/tags for the slice (merged with managed labels)
             timestamp: Optional timestamp (for testing)
-            cluster_config: Full cluster config passed to platform.create_slice() for bootstrap
+            bootstrap_config: Bootstrap settings passed to platform.create_slice()
 
         Returns:
             The newly created SliceHandle
@@ -345,7 +345,7 @@ class ScalingGroup:
             for k, v in tags.items():
                 slice_config.labels[k] = v
 
-        return self._platform.create_slice(slice_config, cluster_config=cluster_config)
+        return self._platform.create_slice(slice_config, bootstrap_config=bootstrap_config)
 
     def scale_down(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
         """Terminate a slice.

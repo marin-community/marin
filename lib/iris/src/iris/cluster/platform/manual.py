@@ -254,11 +254,11 @@ class ManualPlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        cluster_config: config_pb2.IrisClusterConfig | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> ManualSliceHandle:
         """Allocate hosts from the pool for a slice.
 
-        When cluster_config is provided, spawns a background thread that runs
+        When bootstrap_config is provided, spawns a background thread that runs
         the bootstrap script on each worker. The handle's describe() composites
         bootstrap state with the base state.
         """
@@ -294,15 +294,15 @@ class ManualPlatform:
             _label_prefix=self._label_prefix,
             _ssh_connections=ssh_connections,
             _on_terminate=on_terminate,
-            _bootstrapping=cluster_config is not None,
+            _bootstrapping=bootstrap_config is not None,
         )
         self._slices[slice_id] = handle
 
-        if cluster_config:
+        if bootstrap_config:
 
             def _bootstrap_worker():
                 try:
-                    self._run_bootstrap(handle, cluster_config)
+                    self._run_bootstrap(handle, bootstrap_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
                     with handle._bootstrap_lock:
@@ -319,7 +319,7 @@ class ManualPlatform:
     def _run_bootstrap(
         self,
         handle: ManualSliceHandle,
-        cluster_config: config_pb2.IrisClusterConfig,
+        bootstrap_config: config_pb2.BootstrapConfig,
     ) -> None:
         """Bootstrap each worker in the slice.
 
@@ -331,13 +331,11 @@ class ManualPlatform:
             if not worker.internal_address:
                 raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
 
-            script = build_worker_bootstrap_script(cluster_config, worker.internal_address)
-            result = worker.run_command(script, timeout=Duration.from_seconds(600))
-            if result.returncode != 0:
-                raise PlatformError(
-                    f"Bootstrap failed for worker {worker.worker_id} in slice {handle.slice_id}: "
-                    f"exit code {result.returncode}\n{result.stderr}"
-                )
+            if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
+                raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
+
+            script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+            worker.bootstrap(script)
 
         logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(status.workers))
         with handle._bootstrap_lock:

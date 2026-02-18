@@ -272,7 +272,7 @@ class Autoscaler:
         evaluation_interval: Duration,
         platform: Platform,
         threads: ThreadContainer | None = None,
-        cluster_config: config_pb2.IrisClusterConfig | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -281,13 +281,13 @@ class Autoscaler:
             evaluation_interval: How often to evaluate scaling decisions
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
-            cluster_config: Full cluster config passed to platform.create_slice() for bootstrap.
+            bootstrap_config: Worker bootstrap settings passed to platform.create_slice().
                 None disables bootstrap (test/local mode).
         """
         self._groups = scale_groups
         self._platform = platform
         self.evaluation_interval = evaluation_interval
-        self._cluster_config = cluster_config
+        self._bootstrap_config = bootstrap_config
 
         # Centralized per-worker state indexed by worker_id
         self._workers: dict[str, TrackedWorker] = {}
@@ -308,7 +308,7 @@ class Autoscaler:
         config: config_pb2.AutoscalerConfig,
         platform: Platform,
         threads: ThreadContainer | None = None,
-        cluster_config: config_pb2.IrisClusterConfig | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -317,7 +317,7 @@ class Autoscaler:
             config: Autoscaler configuration proto (with defaults already applied)
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
-            cluster_config: Full cluster config passed to platform.create_slice() for bootstrap
+            bootstrap_config: Worker bootstrap settings passed to platform.create_slice()
 
         Returns:
             Configured Autoscaler instance
@@ -327,7 +327,7 @@ class Autoscaler:
             evaluation_interval=Duration.from_proto(config.evaluation_interval),
             platform=platform,
             threads=threads,
-            cluster_config=cluster_config,
+            bootstrap_config=bootstrap_config,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -366,18 +366,6 @@ class Autoscaler:
 
     def __exit__(self, *exc) -> None:
         self.shutdown()
-
-    def reconcile(self) -> None:
-        """Reconcile all groups (discover existing slices from cloud).
-
-        Called once at startup to recover state from a previous controller.
-        Discovered slices are adopted. State polling in subsequent refresh()
-        cycles will move them to READY.
-        """
-        for group in self._groups.values():
-            group.reconcile()
-            for slice_handle in group.slice_handles():
-                self._register_slice_workers(slice_handle, group.name)
 
     def _log_action(
         self,
@@ -561,7 +549,7 @@ class Autoscaler:
 
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
-            slice_obj = group.scale_up(cluster_config=self._cluster_config, timestamp=ts)
+            slice_obj = group.scale_up(bootstrap_config=self._bootstrap_config, timestamp=ts)
             group.complete_scale_up(slice_obj, ts)
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id

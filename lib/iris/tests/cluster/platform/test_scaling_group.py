@@ -117,7 +117,7 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
 
     create_count = [0]
 
-    def create_slice_side_effect(config: config_pb2.SliceConfig, cluster_config=None) -> MagicMock:
+    def create_slice_side_effect(config: config_pb2.SliceConfig, bootstrap_config=None) -> MagicMock:
         create_count[0] += 1
         slice_id = f"new-slice-{create_count[0]}"
         return make_mock_slice_handle(slice_id)
