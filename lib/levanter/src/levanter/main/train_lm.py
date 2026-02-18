@@ -70,7 +70,9 @@ class TrainLmConfig:
     eval_harness_steps: int = 10000
 
     vlm_mc_eval_benchmarks: Optional[list[str]] = None
-    """MC benchmark names (e.g. ["ai2d", "mmmu"]) for VLM accuracy evaluation via log-likelihood comparison."""
+    """VLM benchmark names (e.g. ["ai2d", "mmmu", "textvqa", "chartqa"]) for evaluation via log-likelihood.
+    MC benchmarks report accuracy; open-ended benchmarks report mean normalized log-likelihood.
+    Task type is auto-detected from the parquet data."""
     vlm_mc_eval_parquet_path: Optional[str] = None
     """Base GCS path to tokenized eval parquets (default: gs://marin-vlm/eval_benchmarks_tokenized)."""
     vlm_mc_eval_steps: int = 10000

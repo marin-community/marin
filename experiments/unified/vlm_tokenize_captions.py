@@ -458,7 +458,10 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
         num_chunks = math.ceil(len(pending) / chunk_size)
         logger.info(
             "Processing %d shards in %d chunks (%d workers per chunk), download_dir=%s",
-            len(pending), num_chunks, num_workers, config.download_dir,
+            len(pending),
+            num_chunks,
+            num_workers,
+            config.download_dir,
         )
 
         os.makedirs(config.download_dir, exist_ok=True)

@@ -228,6 +228,57 @@ SODA found that S+A+T unlocked cross-modal capabilities (ASR/TTS) with minimal d
 | AI2D | Diagram understanding |
 | MMMU | Multidiscipline multimodal understanding (may be too hard for small models) |
 
+### Multiple-Choice Evaluation Methodology
+
+For multiple-choice (MC) benchmarks (MMLU, HellaSwag, ARC, AI2D, MMMU, etc.), the evaluation format significantly affects both accuracy and loss predictability. Following Held et al. ("Relative Scaling Laws for LLMs", arxiv 2510.24626, Section 3.2.1), we compare three formats:
+
+**Format 1: Standard MCQ (letter-only completion)**
+
+Given prompt = question + all labeled options + "Answer:", compute log-likelihood of each option letter alone:
+
+```
+Prompt:  "What is the capital of France? A) Paris B) London C) Berlin D) Rome\nAnswer:"
+score_A = log P("A" | prompt)
+score_B = log P("B" | prompt)
+...
+predicted = argmax(score_A, score_B, score_C, score_D)
+```
+
+- Accuracy: 82.0% (MMLU)
+- Loss predictability: R² = 0.28 (poor — thresholding artifacts in hard accuracy metric obscure scaling trends)
+
+**Format 2: Continuation Format (CF, option-text-only completion)**
+
+Given prompt = question only (no labeled options), compute log-likelihood of each option's full text:
+
+```
+Prompt:  "What is the capital of France?"
+score_A = log P("Paris" | prompt)
+score_B = log P("London" | prompt)
+...
+predicted = argmax(score_A, score_B, score_C, score_D)
+```
+
+- Accuracy: 57.7% (MMLU) — low due to **surface form competition** (the model assigns probability mass to semantically equivalent but syntactically different phrasings)
+- Loss predictability: R² = 0.68 (smooth loss curves)
+
+**Format 3: Modified MCQ (label+option completion) — Recommended**
+
+Given prompt = question + all labeled options + "Answer:", compute log-likelihood of the full label+option string for each choice:
+
+```
+Prompt:  "What is the capital of France? A) Paris B) London C) Berlin D) Rome\nAnswer:"
+score_A = log P("A) Paris" | prompt) = Σ_t log P(token_t | prompt, token_1, ..., token_{t-1})
+score_B = log P("B) London" | prompt) = Σ_t log P(token_t | prompt, token_1, ..., token_{t-1})
+...
+predicted = argmax(score_A, score_B, score_C, score_D)
+```
+
+- Accuracy: 81.3% (MMLU) — nearly matches standard MCQ
+- Loss predictability: R² = 0.61 — eliminates surface form competition while preserving the MCQ context; loss curves are smooth enough for scaling law fitting
+
+**Recommendation**: Use Modified MCQ (Format 3) for all MC benchmarks in our scaling law experiments. The smooth, predictable loss curves are essential for RQ5 (correlation between benchmark and validation loss), and the accuracy cost is negligible (81.3% vs 82.0%).
+
 ### Image Generation Benchmarks
 | Dataset | Metrics |
 |---|---|

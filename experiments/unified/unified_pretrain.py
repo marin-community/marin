@@ -58,6 +58,7 @@ UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
 UNDERSTANDING_BENCHMARKS = {"textvqa", "chartqa", "ai2d", "mmmu"}
 GENERATION_BENCHMARKS = {"cifar10_small", "cifar10", "imagenet_small", "imagenet"}
 MC_BENCHMARKS = ["ai2d", "mmmu"]
+VLM_EVAL_BENCHMARKS = ["ai2d", "mmmu", "textvqa", "chartqa"]
 
 
 # --- Extended Tokenizer Creation ---
@@ -189,7 +190,7 @@ unified_0_6b_train = SimpleTrainConfig(
     lr_schedule="cosine",
     weight_decay=0.1,
     max_grad_norm=1.0,
-    vlm_mc_eval_benchmarks=MC_BENCHMARKS,
+    vlm_mc_eval_benchmarks=VLM_EVAL_BENCHMARKS,
 )
 
 unified_1_7b_train = SimpleTrainConfig(
@@ -201,7 +202,7 @@ unified_1_7b_train = SimpleTrainConfig(
     lr_schedule="cosine",
     weight_decay=0.1,
     max_grad_norm=1.0,
-    vlm_mc_eval_benchmarks=MC_BENCHMARKS,
+    vlm_mc_eval_benchmarks=VLM_EVAL_BENCHMARKS,
 )
 
 unified_4b_train = SimpleTrainConfig(
@@ -213,7 +214,7 @@ unified_4b_train = SimpleTrainConfig(
     lr_schedule="cosine",
     weight_decay=0.1,
     max_grad_norm=1.0,
-    vlm_mc_eval_benchmarks=MC_BENCHMARKS,
+    vlm_mc_eval_benchmarks=VLM_EVAL_BENCHMARKS,
 )
 
 
