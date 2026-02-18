@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Job management via command passthrough (replaces ``iris-run``).
 
@@ -35,7 +24,7 @@ from tabulate import tabulate
 
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
-from iris.client.client import JobFailedError
+from iris.client.client import Job, JobFailedError
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -180,7 +169,7 @@ def build_resources(
     memory: str | None,
 ) -> ResourceSpec:
     """Build ResourceSpec from CLI arguments."""
-    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "2GB", disk="10GB")
+    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "8GB", disk="10GB")
 
     if tpu:
         spec.device = tpu_device(tpu)
@@ -355,7 +344,7 @@ Examples:
 @click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16)")
 @click.option("--gpu", type=int, help="Number of GPUs to request")
 @click.option("--cpu", type=int, help="Number of CPUs to request (default: 1)")
-@click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 2GB)")
+@click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 8GB)")
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
 @click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
@@ -392,10 +381,6 @@ def run(
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
-    from iris.logging import configure_logging
-
-    configure_logging(level=logging.INFO)
-
     controller_url = require_controller_url(ctx)
 
     command = list(cmd)
@@ -552,28 +537,24 @@ def logs(
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
 
-    cursor_ms = since_ms or 0
+    start_since_ms = since_ms or 0
     job_name = JobName.from_wire(job_id)
 
-    while True:
-        result = client.stream_task_logs(
-            job_name,
+    if follow:
+        job = Job(client, job_name)
+        job.wait(
+            stream_logs=True,
             include_children=include_children,
-            since_ms=cursor_ms,
+            timeout=float("inf"),
+            raise_on_failure=False,
         )
+        return
 
-        # Print errors first so user knows why some logs might be missing
-        for error in result.errors:
-            click.echo(f"[ERROR] task={error.task_id} worker={error.worker_id or '?'} | {error.error}", err=True)
-
-        # Print log entries
-        for entry in result.entries:
-            ts = entry.timestamp.as_short_time()
-            click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")
-
-        if result.last_timestamp_ms > cursor_ms:
-            cursor_ms = result.last_timestamp_ms
-
-        if not follow:
-            break
-        time.sleep(1.0)
+    entries = client.fetch_task_logs(
+        job_name,
+        include_children=include_children,
+        start=Timestamp.from_ms(start_since_ms) if start_since_ms > 0 else None,
+    )
+    for entry in entries:
+        ts = entry.timestamp.as_short_time()
+        click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")

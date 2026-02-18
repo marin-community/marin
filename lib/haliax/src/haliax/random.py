@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 """Wrappers around jax.random functions."""
 
 import jax.random as jrandom

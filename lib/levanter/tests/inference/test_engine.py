@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-
 import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp

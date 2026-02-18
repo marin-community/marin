@@ -3,10 +3,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - lib/zephyr/**
-      - uv.lock
-      - .github/workflows/zephyr-unit-tests.yaml
   pull_request:
     branches:
       - main

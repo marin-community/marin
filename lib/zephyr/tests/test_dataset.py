@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for Dataset API."""
 
@@ -216,7 +205,7 @@ def test_lazy_evaluation():
 
     # Now execute - should call function
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
+    ctx = ZephyrContext(client=client, max_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
     try:
         result = list(ctx.execute(ds))
         assert result == [2, 4, 6]
@@ -958,7 +947,7 @@ def sample_input_files(tmp_path):
 def test_skip_existing_clean_run(tmp_path, sample_input_files):
     """Test skip_existing with no existing files - all shards process."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
+    ctx = ZephyrContext(client=client, max_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -984,7 +973,7 @@ def test_skip_existing_clean_run(tmp_path, sample_input_files):
 def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
     """Test skip_existing with one output file existing - only that shard skips."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
+    ctx = ZephyrContext(client=client, max_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -1014,7 +1003,7 @@ def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
 def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
     """Test skip_existing with all output files existing - all shards skip."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
+    ctx = ZephyrContext(client=client, max_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
