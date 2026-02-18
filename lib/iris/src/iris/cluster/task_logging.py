@@ -354,7 +354,7 @@ def get_log_location(
     )
 
 
-def parse_log_directory(log_directory: str) -> LogLocation:
+def parse_log_directory(log_directory: str, worker_id: str) -> LogLocation:
     """Parse a persisted task log directory into a LogLocation.
 
     Expected format: ``{prefix}/{worker_id}/{task_id_wire}/{attempt_id}``.
@@ -362,13 +362,24 @@ def parse_log_directory(log_directory: str) -> LogLocation:
     """
     if not log_directory:
         raise ValueError("log_directory is required")
-    log_dir_parts = log_directory.rsplit("/", 3)
-    if len(log_dir_parts) != 4:
+    if not worker_id:
+        raise ValueError("worker_id is required")
+
+    marker = f"/{worker_id}/"
+    marker_index = log_directory.find(marker)
+    if marker_index < 0:
+        raise ValueError(f"log_directory does not contain worker_id '{worker_id}': {log_directory}")
+
+    parsed_prefix = log_directory[:marker_index]
+    suffix = log_directory[marker_index + len(marker) :]
+    suffix_parts = suffix.rsplit("/", 1)
+    if len(suffix_parts) != 2:
         raise ValueError(f"Invalid log_directory format: {log_directory}")
-    parsed_prefix, parsed_worker_id, task_suffix, parsed_attempt_id = log_dir_parts
+    task_suffix, parsed_attempt_id = suffix_parts
+
     return LogLocation(
         prefix=parsed_prefix,
-        worker_id=parsed_worker_id,
+        worker_id=worker_id,
         task_id_wire="/" + task_suffix.lstrip("/"),
         attempt_id=int(parsed_attempt_id),
     )
@@ -507,13 +518,19 @@ def fetch_logs_for_task(
 
 def fetch_logs_for_directory(
     log_directory: str,
+    worker_id: str,
     source: str | None = None,
     regex: str | None = None,
     max_lines: int = 0,
 ) -> list[logging_pb2.LogEntry]:
     """Fetch logs for a task attempt from its persisted log directory."""
     try:
-        return read_logs(parse_log_directory(log_directory), source=source, regex=regex, max_lines=max_lines)
+        return read_logs(
+            parse_log_directory(log_directory, worker_id=worker_id),
+            source=source,
+            regex=regex,
+            max_lines=max_lines,
+        )
     except Exception as e:
         logger.warning(f"Failed to fetch logs from {log_directory}: {e}")
         return []

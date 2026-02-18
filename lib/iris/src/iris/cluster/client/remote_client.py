@@ -3,14 +3,18 @@
 
 """RPC-based cluster client implementation."""
 
+import logging
 import time
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.task_logging import fetch_logs_for_task, parse_log_directory
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteClusterClient:
@@ -242,7 +246,7 @@ class RemoteClusterClient:
         regex: str | None = None,
         attempt_id: int = -1,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Fetch logs for a task or job through the controller.
+        """Fetch logs for a task or job from storage.
 
         Args:
             target: Task ID or Job ID
@@ -252,19 +256,91 @@ class RemoteClusterClient:
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
         """
-        request = cluster_pb2.Controller.GetTaskLogsRequest(
-            id=target.to_wire(),
-            include_children=include_children,
-            since_ms=since_ms,
-            max_total_lines=max_total_lines,
-            regex=regex or "",
-            attempt_id=attempt_id,
+        # Query controller for task status and log directory metadata.
+        if target.is_task:
+            parent_job = target.parent
+            if parent_job is None:
+                return cluster_pb2.Controller.GetTaskLogsResponse()
+            parent_status = self.get_job_status(parent_job)
+            tasks = [ts for ts in parent_status.tasks if ts.task_id == target.to_wire()]
+        else:
+            root_status = self.get_job_status(target)
+            tasks = list(root_status.tasks)
+            if include_children:
+                all_jobs = self.list_jobs()
+                prefix_wire = target.to_wire()
+                for job in all_jobs:
+                    if job.job_id == prefix_wire:
+                        continue
+                    if job.job_id.startswith(prefix_wire + "/"):
+                        child_status = self.get_job_status(JobName.from_wire(job.job_id))
+                        tasks.extend(child_status.tasks)
+
+        task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
+        total_lines = 0
+        last_timestamp_ms = since_ms
+        max_lines = max_total_lines if max_total_lines > 0 else 10000
+
+        for task_status in tasks:
+            if not task_status.log_directory:
+                continue
+            if not task_status.worker_id:
+                continue
+            try:
+                parsed = parse_log_directory(task_status.log_directory, worker_id=task_status.worker_id)
+            except ValueError:
+                logger.warning("Invalid log_directory format for %s: %s", task_status.task_id, task_status.log_directory)
+                continue
+
+            attempts_by_id = {a.attempt_id: a for a in task_status.attempts}
+            if attempt_id >= 0:
+                attempt_ids = [attempt_id]
+            else:
+                attempt_ids = sorted(attempts_by_id) if attempts_by_id else [task_status.current_attempt_id]
+
+            for att_id in attempt_ids:
+                if total_lines >= max_lines:
+                    break
+                worker_id = task_status.worker_id
+                attempt = attempts_by_id.get(att_id)
+                if attempt and attempt.worker_id:
+                    worker_id = attempt.worker_id
+                if not worker_id:
+                    continue
+
+                log_entries = fetch_logs_for_task(
+                    task_id_wire=task_status.task_id,
+                    worker_id=worker_id,
+                    attempt_id=att_id,
+                    source=None,
+                    regex=regex,
+                    max_lines=max_lines - total_lines,
+                    prefix=parsed.prefix,
+                )
+
+                filtered: list[logging_pb2.LogEntry] = []
+                for entry in log_entries:
+                    if since_ms > 0 and entry.timestamp.epoch_ms <= since_ms:
+                        continue
+                    filtered.append(entry)
+                    if entry.timestamp.epoch_ms > last_timestamp_ms:
+                        last_timestamp_ms = entry.timestamp.epoch_ms
+
+                if filtered:
+                    task_logs.append(
+                        cluster_pb2.Controller.TaskLogBatch(
+                            task_id=task_status.task_id,
+                            worker_id=worker_id,
+                            logs=filtered,
+                        )
+                    )
+                    total_lines += len(filtered)
+
+        return cluster_pb2.Controller.GetTaskLogsResponse(
+            task_logs=task_logs,
+            last_timestamp_ms=last_timestamp_ms,
+            truncated=total_lines >= max_lines,
         )
-
-        def _call():
-            return self._client.get_task_logs(request)
-
-        return call_with_retry(f"fetch_task_logs({target})", _call)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.
