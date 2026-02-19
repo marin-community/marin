@@ -8,14 +8,16 @@ import logging
 import os
 import warnings
 from collections import defaultdict
-from typing import Callable, Mapping, Optional, Sequence, TypeVar
+from typing import Callable, Generic, Mapping, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import fsspec
+import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
 from jax.sharding import Mesh
+from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
 
 import haliax as hax
@@ -24,11 +26,11 @@ from haliax.partitioning import ResourceMapping
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
-from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named, named_lm_example_from_grug
+from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.logging import LoadingTimeTrackerIterator
-from levanter.utils.stat_utils import Arrayish, RunningMean
+from levanter.utils.stat_utils import RunningMean
 from levanter.utils.tree_utils import inference_mode
 
 
@@ -37,7 +39,11 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 M = TypeVar("M")
+Ex = TypeVar("Ex")
 LmEvalExample = LmExample | GrugLmExample
+LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
+TagArray = Int[Array, "tag"]
+BatchedTagArray = Int[Array, "... tag"]
 
 
 @dataclasses.dataclass
@@ -53,10 +59,7 @@ class EvalResult:
     tag_micro_bpb: Optional[dict[str, float]] = None
 
 
-# This class doesn't try to be async or work with incomplete datasets, because it's eval
-
-
-class DomainTaggedDataset(AsyncDataset[tuple[T, hax.NamedArray]]):
+class DomainTaggedDataset(AsyncDataset[tuple[T, TagArray]]):
     """Holds multiple datasets, each with its own domain tag. Also indexes the tags to enable easier aggregation."""
 
     tag_index: Mapping[str, int]
@@ -87,7 +90,7 @@ class DomainTaggedDataset(AsyncDataset[tuple[T, hax.NamedArray]]):
             self.datasets.append((dataset, tags))
 
         self.tag_to_index = tag_index
-        self.Tag = hax.Axis("tag", len(self.tag_to_index))
+        self.num_tags = len(self.tag_to_index)
         self._tag_arrays = self._compute_tag_arrays()
         self._offsets: Optional[np.ndarray] = None
 
@@ -101,27 +104,25 @@ class DomainTaggedDataset(AsyncDataset[tuple[T, hax.NamedArray]]):
         return self._offsets  # type: ignore
 
     def _compute_tag_arrays(self):
-        tag_arrays = []
+        tag_arrays: list[TagArray] = []
         for dataset, tags in self.datasets:
             indexed = [self.tag_to_index[tag] for tag in tags]
-            tags = np.zeros(self.Tag.size, dtype=np.int32)
-            tags[indexed] = 1
-            tags = hax.named(tags, self.Tag)
-
-            tag_arrays.append(tags)
+            tag_array = np.zeros(self.num_tags, dtype=np.int32)
+            tag_array[indexed] = 1
+            tag_arrays.append(jnp.asarray(tag_array))
         return tag_arrays
 
     async def async_len(self) -> int:
         return int((await self._get_offsets())[-1])
 
-    async def getitem_async(self, index: int) -> tuple[T, hax.NamedArray]:
+    async def getitem_async(self, index: int) -> tuple[T, TagArray]:
         offsets = await self._get_offsets()
         dataset_index = np.searchsorted(offsets, index, side="right") - 1
         offset = offsets[dataset_index]
         dataset, tags = self.datasets[dataset_index]
         return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index]
 
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[T, hax.NamedArray]]:
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[T, TagArray]]:
         # Chatgpt wrote this. pretty sure it's correct
         offsets = await self._get_offsets()
         original_order = np.argsort(indices)
@@ -176,12 +177,26 @@ def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model
     raise ValueError(f"GrugLmExample tokens must be rank-1 or rank-2 for eval, got rank={batch.tokens.ndim}")
 
 
-def _ensure_grug_lm_example(example: LmEvalExample) -> GrugLmExample:
-    if isinstance(example, GrugLmExample):
-        return example
-    if isinstance(example, LmExample):
-        return grug_lm_example_from_named(example)
-    raise TypeError(f"Unsupported eval example type: {type(example)}")
+def _default_lm_eval_loss_fn(
+    model: LmHeadModel,
+    batch: LmEvalExample,
+    *,
+    EvalBatch: hax.Axis,
+    mp: jmp.Policy | None,
+    axis_mapping: ResourceMapping | None,
+) -> LossFnOutput:
+    model = inference_mode(model, True)
+    named_batch = _ensure_named_lm_example(batch, EvalBatch=EvalBatch, model_pos=model.Pos)
+    if mp is not None:
+        model = mp.cast_to_compute(model)
+    if axis_mapping is not None:
+        with hax.axis_mapping(axis_mapping):
+            per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    else:
+        per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    per_pos_weight = named_batch.loss_weight.array
+    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    return per_pos_loss, per_pos_weight, per_pos_token_id
 
 
 def cb_tagged_lm_evaluate(
@@ -196,6 +211,7 @@ def cb_tagged_lm_evaluate(
     prefix: str = "eval",
     mp: jmp.Policy = None,
     checkpoint_path: Optional[str] = None,
+    loss_fn: Callable[[LmHeadModel, LmEvalExample], LossFnOutput] | None = None,
 ) -> Callable[[StepInfo], None]:
     """
     Evaluates multiple tagged datasets using a given evaluation function.
@@ -207,7 +223,8 @@ def cb_tagged_lm_evaluate(
 
     !!! note
 
-        loss_fn should return *per-token* loss (shape [EvalBatch, Token])
+        The evaluator loss callback should produce per-position arrays with shape `[EvalBatch, Token]`:
+        `(per_pos_loss, per_pos_weight, per_pos_token_id)`.
 
     Args:
         EvalBatch: The axis for the evaluation batch (mostly for the batch size)
@@ -222,8 +239,19 @@ def cb_tagged_lm_evaluate(
         checkpoint_path: If provided, write eval metrics to a JSONL file in this directory
     """
 
+    if loss_fn is None:
+
+        def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
+            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp, axis_mapping=axis_mapping)
+
     evaluator = TaggedEvaluator(
-        EvalBatch, tagged_eval_sets, tokenizer, device_mesh, axis_mapping, max_examples_per_dataset, mp=mp
+        EvalBatch=EvalBatch,
+        tagged_eval_sets=tagged_eval_sets,
+        loss_fn=loss_fn,
+        tokenizer=tokenizer,
+        device_mesh=device_mesh,
+        axis_mapping=axis_mapping,
+        max_examples_per_dataset=max_examples_per_dataset,
     )
 
     if not eval_current and not eval_ema:
@@ -265,14 +293,14 @@ def cb_tagged_lm_evaluate(
     return eval_callback
 
 
-def eval_model(evaluator: "TaggedEvaluator", model: LmHeadModel, prefix: str = "") -> dict[str, float]:
+def eval_model(evaluator, model, prefix: str = "") -> dict[str, float]:
     with levanter.tracker.capture_time() as time_fn:
         result = evaluator.evaluate(model)
-    log_dict = _construct_log_dict(evaluator, result, time_fn(), prefix=prefix)
+    log_dict = construct_log_dict(evaluator, result, time_fn(), prefix=prefix)
     return log_dict
 
 
-def _construct_log_dict(evaluator, eval_result, total_time, prefix):
+def construct_log_dict(evaluator, eval_result, total_time, prefix):
     tokenizer = evaluator.tokenizer
     log_dict = {
         # log micro average as just "loss"
@@ -315,33 +343,21 @@ def _construct_log_dict(evaluator, eval_result, total_time, prefix):
     return log_dict
 
 
-class TaggedEvaluator:
-    """
-    Evaluates multiple tagged datasets using a given evaluation function.
-    Scores for each tag are aggregated and logged separately, as well as getting an overall score.
-
-    TaggedEvaluator computes both log-perplexity and bits-per-byte for each tag, if a tokenizer is provided.
-
-    Tags are arranged hierarchically with "/" as separator, and we log both a micro and macro average loss
-    for each tag.
-
-    """
+class TaggedEvaluator(Generic[Ex, M]):
+    loss_fn: Callable[[M, Ex], LossFnOutput]
 
     def __init__(
         self,
         EvalBatch: hax.Axis,
-        tagged_eval_sets: Sequence[tuple[AsyncDataset[LmEvalExample], Sequence[str]]],
+        tagged_eval_sets: Sequence[tuple[AsyncDataset[Ex], Sequence[str]]],
+        loss_fn: Callable[[M, Ex], LossFnOutput],
         tokenizer: Optional[HfTokenizer] = None,
         device_mesh=None,
         axis_mapping=None,
         max_examples_per_dataset=None,
-        mp: Optional[jmp.Policy] = None,
     ):
-        self.EvalBatch = EvalBatch
-        normalized_tagged_eval_sets: list[tuple[AsyncDataset[GrugLmExample], Sequence[str]]] = [
-            (dataset.map(_ensure_grug_lm_example), tags) for dataset, tags in tagged_eval_sets
-        ]
-        self.dataset = DomainTaggedDataset(normalized_tagged_eval_sets, max_examples_per_dataset)
+        self.loss_fn = loss_fn
+        self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
         self.loader = DataLoader(
             self.dataset.as_async_dataset(),
             EvalBatch,
@@ -349,104 +365,80 @@ class TaggedEvaluator:
             mesh=device_mesh,
             axis_resources=axis_mapping,
         )
-        self.mp = mp
         self.tokenizer = tokenizer
+        self.axis_mapping = axis_mapping
+
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
+        self.hierarchy = self._construct_tag_hierarchy()
+        self.accum_for_batch = self._make_accum_for_batch()
 
-        # tags are arranged hierarchically with "/" as separator. We want to log the average loss for each tag.
-        hierarchy: dict[str, list[int]] = {}
-        for tag, index in self.dataset.tag_to_index.items():
-            parts = tag.split("/")
-            for i in range(1, len(parts)):
-                parent = "/".join(parts[:i])
-                assert parent != tag
-                if parent not in hierarchy:
-                    hierarchy[parent] = []
-                hierarchy[parent].append(index)
-
-        self.hierarchy = hierarchy
+    def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
+        bytes_per_token = self.bytes_per_token
+        log2e = jnp.log2(jnp.e)
 
         @hax.named_jit
-        def accum_for_batch(m: LmHeadModel, state: _EvalRunningMeans, batch: LmEvalExample, tags: hax.NamedArray):
-            m = inference_mode(m, True)
-            batch = _ensure_named_lm_example(batch, EvalBatch=self.EvalBatch, model_pos=m.Pos)
+        def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
+            losses, weights, token_ids = self.loss_fn(model, batch)
+            weighted_loss = losses * weights  # b t
+            this_loss = jnp.sum(weighted_loss)  # scalar
+            this_weights = jnp.sum(weights)  # scalar
 
-            if self.mp is not None:
-                m = self.mp.cast_to_compute(m)
+            if losses.ndim != 2 or weights.ndim != 2 or token_ids.ndim != 2 or tags.ndim != 2:
+                raise ValueError(
+                    f"Expected batched eval tensors with rank 2, got losses={losses.ndim}, "
+                    f"weights={weights.ndim}, token_ids={token_ids.ndim}, tags={tags.ndim}"
+                )
+            this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags)
+            this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags)
 
-            from contextlib import ExitStack
+            mean = state.token_avg_loss.add(this_loss / jnp.maximum(this_weights, 1.0), this_weights)
+            state = dataclasses.replace(state, token_avg_loss=mean)
 
-            context = ExitStack()
+            if len(self.dataset.tag_to_index) > 0:
+                nonzero_token_mask = this_weights_per_tag > 0
+                safe_mean = jnp.where(nonzero_token_mask, this_loss_per_tag / this_weights_per_tag, 0.0)
+                mean_per_tag = state.loss_per_tag.add(safe_mean, this_weights_per_tag)
+                state = dataclasses.replace(state, loss_per_tag=mean_per_tag)
 
-            with context:
-                if axis_mapping is not None:
-                    context.enter_context(hax.axis_mapping(axis_mapping))
-                losses = m.compute_next_token_loss(batch, reduction=None, reduction_axis=())
-                weights = batch.loss_weight  # [Batch, Pos]
-                this_tokens = hax.sum(weights)
-                this_loss = hax.einsum("->", losses, weights)  # to scalar
+            if bytes_per_token is not None:
+                bytes_per_pos = bytes_per_token[token_ids]
+                this_bytes = jnp.sum(bytes_per_pos * weights)
+                bytes_per_tag = jnp.einsum("bt,bt,bk->k", bytes_per_pos, weights, tags)
 
-                # all the *_per_tag variables are [Tag]
-                this_tokens_per_tag = hax.einsum("-> tag", weights, tags)
-                this_loss_per_tag = hax.einsum("-> tag", weights, losses, tags)  # [Tag]
+                bpb = this_loss / jnp.maximum(this_bytes, 1.0) * log2e
+                bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e
 
-                mean = state.token_avg_loss.add(this_loss / this_tokens, this_tokens)
-                state = dataclasses.replace(state, token_avg_loss=mean)
-
+                bpb_mean = state.bpb.add(bpb, this_weights)
+                state = dataclasses.replace(state, bpb=bpb_mean)
                 if len(self.dataset.tag_to_index) > 0:
-                    # careful: this_tokens_per_tag can be 0 if there are no tokens for that tag
-                    nonzero_token_mask = this_tokens_per_tag > 0
-                    safe_mean = hax.where(nonzero_token_mask, this_loss_per_tag / this_tokens_per_tag, 0.0)
-                    mean_per_tag = state.loss_per_tag.add(safe_mean, this_tokens_per_tag)
-                    state = dataclasses.replace(state, loss_per_tag=mean_per_tag)
-
-                if self.bytes_per_token is not None:
-                    next_tokens = hax.roll(
-                        batch.tokens, -1, "position"
-                    )  # [Batch, Pos], rolled by 1 for next token task
-                    bytes_per_pos = self.bytes_per_token.take("vocab", next_tokens)  # [Batch, Pos]
-                    bytes_per_tag = hax.einsum("-> tag", weights, bytes_per_pos, tags)  # [Tag]
-                    this_bytes = hax.einsum("->", bytes_per_pos, weights)  # Scalar
-
-                    # log loss -> bits is log2(e) * loss
-                    bpb_per_tag = this_loss_per_tag / hax.maximum(bytes_per_tag, 1) * jnp.log2(jnp.e)
-                    bpb = this_loss / hax.maximum(this_bytes, 1) * jnp.log2(jnp.e)
-
-                    bpb_mean = state.bpb.add(bpb, this_tokens)
-                    state = dataclasses.replace(state, bpb=bpb_mean)
-                    if len(self.dataset.tag_to_index) > 0:
-                        bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_tokens_per_tag)
-                        state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
+                    bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_weights_per_tag)
+                    state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
 
             return state
 
-        self.accum_for_batch = accum_for_batch
+        return accum_for_batch
 
-    def evaluate(self, m: LmHeadModel):
-        total_loss = jnp.zeros(())
-        mean_losses_per_tag = hax.zeros(self.dataset.Tag, dtype=np.float32)
+    def evaluate(self, model: M) -> EvalResult:
+        total_loss = jnp.zeros((), dtype=jnp.float32)
+        mean_losses_per_tag = jnp.zeros((self.dataset.num_tags,), dtype=jnp.float32)
 
         state = _EvalRunningMeans.zeros_like(total_loss, mean_losses_per_tag)
         del total_loss, mean_losses_per_tag
         state = hax.shard(state)
 
         iterator = LoadingTimeTrackerIterator(self.loader)
-        n = 0
 
         for batch, tags in tqdm(iterator, "eval", total=len(self.loader)):
-            state = self.accum_for_batch(m, state, batch, tags)
-            n += 1
+            state = self.accum_for_batch(model, state, batch, tags)
 
         micro_avg_loss = state.token_avg_loss.mean.item()
         tag_avg_loss = state.loss_per_tag.mean
-
-        # TODO: why do i have to jit this
-        macro_avg_loss = hax.named_jit(lambda x: hax.mean(x).array)(tag_avg_loss).item()
+        macro_avg_loss = jnp.mean(tag_avg_loss).item()
 
         if self.bytes_per_token is not None:
             micro_bpb = state.bpb.mean.item()
             tag_avg_bpb = state.bpb_per_tag.mean
-            macro_avg_bpb = hax.named_jit(lambda x: hax.mean(x).array)(tag_avg_bpb).item()
+            macro_avg_bpb = jnp.mean(tag_avg_bpb).item()
         else:
             micro_bpb = None
             macro_avg_bpb = None
@@ -456,25 +448,17 @@ class TaggedEvaluator:
         tag_macro_bpb: dict[str, float] = {}
         tag_micro_bpb: dict[str, float] = {}
 
-        mean_loss_per_tag_cpu = np.array(state.loss_per_tag.mean.array)
-        total_tokens_per_tag_cpu = np.array(state.loss_per_tag.mean.array)
+        mean_loss_per_tag_cpu = np.array(state.loss_per_tag.mean)
+        total_tokens_per_tag_cpu = np.array(state.loss_per_tag.total)
+        mean_bits_per_tag_cpu = np.array(state.bpb_per_tag.mean)
+        total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.total)
 
-        mean_bits_per_tag_cpu = np.array(state.bpb_per_tag.mean.array)
-        total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.mean.array)
-
-        # add in the hierarchy
         for parent, children in self.hierarchy.items():
-            mask = np.zeros(self.dataset.Tag.size, dtype=bool)
+            mask = np.zeros(self.dataset.num_tags, dtype=bool)
             mask[children] = 1
-            assert total_tokens_per_tag_cpu.shape == mask.shape
-
-            # don't consider tags with no tokens in macro average
             mask = mask & (total_tokens_per_tag_cpu > 0)
 
-            # macro is the average of the averages
             tag_macro_loss[parent] = np.mean(mean_loss_per_tag_cpu, where=mask)
-            # micro is the total loss for the parent tag
-            # (average doesn't support where directly so we just 0 out the weights)
             tag_micro_loss[parent] = np.average(mean_loss_per_tag_cpu, weights=total_tokens_per_tag_cpu * mask)
 
             if self.bytes_per_token is not None:
@@ -483,8 +467,6 @@ class TaggedEvaluator:
 
         for tag, index in self.dataset.tag_to_index.items():
             tag_micro_loss[tag] = float(mean_loss_per_tag_cpu[index])
-            # no macro loss for the leaf tags
-
             if self.bytes_per_token is not None:
                 tag_micro_bpb[tag] = float(mean_bits_per_tag_cpu[index])
 
@@ -500,18 +482,30 @@ class TaggedEvaluator:
             tag_micro_bpb,
         )
 
-    def _calculate_bytes_per_token_type(self, tokenizer: HfTokenizer) -> Optional[hax.NamedArray]:
+    def _construct_tag_hierarchy(self) -> dict[str, list[int]]:
+        hierarchy: dict[str, list[int]] = {}
+        for tag, index in self.dataset.tag_to_index.items():
+            parts = tag.split("/")
+            for i in range(1, len(parts)):
+                parent = "/".join(parts[:i])
+                assert parent != tag
+                if parent not in hierarchy:
+                    hierarchy[parent] = []
+                hierarchy[parent].append(index)
+        return hierarchy
+
+    def _calculate_bytes_per_token_type(self, tokenizer: HfTokenizer) -> Optional[Int[Array, "vocab"]]:
         if tokenizer is None:
             return None
         else:
             # calculate the number of bytes in each token
-            Vocab = hax.Axis("vocab", len(tokenizer.get_vocab()))
-            bytes = np.ndarray((Vocab.size,), dtype=np.int32)
+            vocab_size = len(tokenizer.get_vocab())
+            bytes = np.ndarray((vocab_size,), dtype=np.int32)
 
-            for i in range(Vocab.size):
+            for i in range(vocab_size):
                 bytes[i] = byte_length_of_token(tokenizer, i)
 
-            return hax.named(jnp.array(bytes), Vocab)
+            return jnp.array(bytes)
 
 
 class _EvalRunningMeans(eqx.Module):
@@ -521,7 +515,7 @@ class _EvalRunningMeans(eqx.Module):
     bpb_per_tag: RunningMean  # bits per byte per tag
 
     @staticmethod
-    def zeros_like(total: Arrayish, per_tag: Arrayish) -> "_EvalRunningMeans":
+    def zeros_like(total: Float[Array, "..."], per_tag: Float[Array, "tag"]) -> "_EvalRunningMeans":
         z = RunningMean.zeros_like(total)
         per_tag = RunningMean.zeros_like(per_tag)
         return _EvalRunningMeans(z, per_tag, z, per_tag)
