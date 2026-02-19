@@ -22,6 +22,8 @@ _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_1K = 2048
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_4K = 3072
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3584
+_GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
+_GB10_CUSTOM_BWD_V_BLOCK_BATCH_8K = 8192
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -434,10 +436,13 @@ def _gb10_custom_backward_v_block_size(
         return None
     if _should_use_gb10_full_matmul_fallback(x, w):
         return None
-    block_sizes = _gb10_xla_fallback_block_sizes(b_dim=x.shape[0], v_dim=w.shape[1])
-    if block_sizes is None:
+    if w.shape[1] < 65536:
         return None
-    return block_sizes.v_block_size
+    if x.shape[0] >= 8192:
+        return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_8K
+    if x.shape[0] >= 1024:
+        return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K
+    return None
 
 
 @partial(jax.jit, static_argnames=["v_block_size", "logit_soft_cap", "precision"])

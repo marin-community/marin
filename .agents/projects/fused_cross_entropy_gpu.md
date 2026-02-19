@@ -199,3 +199,54 @@ Forward+backward aggregate (loss mean, grads wrt `x` and `w`):
 ### Notes
 - This pass materially improves backward throughput for the target GB10 large-batch regime.
 - Next optimization frontier is likely deeper kernel-level scheduling/fusion (once toolchain supports the relevant Blackwell instruction path), not just fallback block retuning.
+
+## 2026-02-19 follow-up: decoupled backward block tuning
+
+### Change summary
+- Refined custom backward tuning in
+  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
+  - Decoupled backward `v_block` from forward fallback `v_block`.
+  - Forward fallback (XLA streaming) remains:
+    - `B >= 8192` -> `3584`
+    - `B >= 4096` -> `3072`
+    - `B >= 1024` -> `2048`
+  - Custom backward streaming now uses:
+    - `B >= 8192` -> `8192`
+    - `B >= 1024` -> `6144`
+  - (for GB10 BF16 with `V >= 65536`, outside full-matmul fallback regime).
+
+### Why
+- Direct backward-kernel sweeps showed larger vocab tiles are better for custom backward than for forward fallback.
+- Using one shared block-size policy left backward performance on the table.
+
+### Backward-only sweep highlights (`H=1024, V=128256`)
+- `B=8192`: best around `8192` (and close `7168/6144`), notably better than `3584`.
+- `B=4096`: best around `6144` (better than `3072/3584/4096`).
+- `B=2048`: `8192` slightly best in sampled runs; `6144` close.
+- `B=1024`: `6144` best in sampled runs.
+
+### End-to-end after decoupling (`fwd+bwd`)
+- `B=2048, H=1024, V=128256`:
+  - `xla`: `~96.65 ms`
+  - `pallas_gpu`: `~65.95 ms`
+  - `xla/pallas`: `~1.47x`
+- `B=4096, H=1024, V=128256`:
+  - `xla`: `~169.40 ms`
+  - `pallas_gpu`: `~119.01 ms`
+  - `xla/pallas`: `~1.42x`
+- `B=8192, H=1024, V=128256`:
+  - `xla`: `~320.70 ms`
+  - `pallas_gpu`: `~226.83 ms`
+  - `xla/pallas`: `~1.41x`
+
+Effective large batch (`16 x 8192` chunks, `B=131072`, `H=1024`, `V=128256`):
+- `xla_ms`: `~5204.35`
+- `pallas_ms`: `~3499.87`
+- `xla/pallas`: `~1.49x`
+- aggregate loss/checksum diffs remained small (loss diff on order `1e-5`).
+
+### Forward-only check (unchanged objective sanity)
+- `B=8192, H=1024, V=128256`:
+  - `xla`: `~71.88 ms`
+  - `pallas_gpu`: `~46.71 ms`
+  - `xla/pallas`: `~1.54x`
