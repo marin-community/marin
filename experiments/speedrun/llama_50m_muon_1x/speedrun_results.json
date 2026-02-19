@@ -4,7 +4,7 @@
       "run_info": {
         "author": {
           "affiliation": "Northeastern University",
-          "name": "redagavin",
+          "name": "Zihao Yang",
           "url": "https://redagavin.github.io/"
         },
         "description": "Phase 1: 50M Llama with Muon at 1\u00d7 Chinchilla (1B tokens). Baseline validation.",

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Phase 1: 50M Llama with Muon optimizer at 1× Chinchilla-optimal data.
+Phase 1: 50M Llama with Muon optimizer at 1x Chinchilla-optimal data.
 
 Baseline validation: Does Muon beat Adam at standard scale?
 Expected: 1.38-1.42 BPB
@@ -26,7 +26,6 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
-
 
 muon_config = MuonConfig(
     learning_rate=0.020,
@@ -43,18 +42,14 @@ muon_config = MuonConfig(
     decay=0.8,
 )
 
-# Calculate steps for 1× Chinchilla (1B tokens)
-# 50M params × 1 × 20 = 1B tokens
-# 1B tokens / (128 batch × 1024 seq_len) = 7,629 steps
+# Calculate steps for 1x Chinchilla (1B tokens)
+# 50M params x 1 x 20 = 1B tokens
+# 1B tokens / (128 batch x 1024 seq_len) = 7,629 steps
 num_train_steps = 7629
 
 speedrun_config = SpeedrunConfig(
-    author=Author(
-        name="redagavin",
-        affiliation="Northeastern University",
-        url="https://redagavin.github.io/"
-    ),
-    description="Phase 1: 50M Llama with Muon at 1× Chinchilla (1B tokens). Baseline validation.",
+    author=Author(name="Zihao Yang", affiliation="Northeastern University", url="https://redagavin.github.io/"),
+    description="Phase 1: 50M Llama with Muon at 1x Chinchilla (1B tokens). Baseline validation.",
     model_config=llama_50m,
     train_config=SimpleTrainConfig(
         GpuConfig(gpu_count=1, accelerator_type="H200"),
