@@ -29,7 +29,7 @@ def maybe_fused_next_token_loss(
     reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
-    block_size: Optional[int] = None,
+    block_size: int | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
@@ -47,7 +47,7 @@ def maybe_fused_next_token_loss(
         reduction (Optional[hax.ReductionFunction]): Reduction function.
         reduction_axis (Optional[hax.AxisSelection]): Axis to apply reduction.
         logsumexp_weight (Optional[float]): Weight for logsumexp penalty.
-        block_size (Optional[int]): Optional vocabulary block size for processing.
+        block_size (int | None): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
         logit_soft_cap (Optional[float]): Optional soft cap for logits
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override.
@@ -168,7 +168,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     reduction_axis: Optional[hax.AxisSelection] = None,
     weight: Optional[NamedArray] = None,
     logsumexp_weight: float | None = 0.0,
-    block_size: Optional[int] = None,
+    block_size: int | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
@@ -186,7 +186,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         reduction_axis (Optional[hax.AxisSelection]): Axis to apply reduction.
         weight (Optional[NamedArray]): Sample weights to apply to the loss.
         logsumexp_weight (float): Weight for logsumexp penalty.
-        block_size (Optional[int]): Optional vocabulary block size for processing.
+        block_size (int | None): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override for the fused kernel.
 

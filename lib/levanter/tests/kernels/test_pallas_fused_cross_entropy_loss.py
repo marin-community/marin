@@ -328,6 +328,25 @@ def test_infer_block_sizes_huge_batch_with_scoped_vmem_flag_uses_fast_v(
     assert block_sizes.v_block_size == 1024
 
 
+def test_infer_block_sizes_skips_invalid_tuned_entry(monkeypatch: pytest.MonkeyPatch):
+    tuned = dict(tuned_block_sizes.TUNED_BLOCK_SIZES["TPU v5p"])
+    tuned[("bfloat16", "llama3-ish")] = fused_api.BlockSizes(
+        b_block_size=3072,
+        h_block_size=512,
+        v_block_size=1024,
+    )
+    monkeypatch.setitem(tuned_block_sizes.TUNED_BLOCK_SIZES, "TPU v5p", tuned)
+
+    block_sizes = infer_block_sizes(
+        b=4096,
+        h=4096,
+        v=128_256,
+        dtype=jnp.bfloat16,
+        device_kind="TPU v5p",
+    )
+    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)
+
+
 def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")

@@ -33,18 +33,11 @@ def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) ->
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
 
 
-def _should_use_emulated_one_hot() -> bool:
-    # Keep kernel behavior deterministic and backend-stable: always use emulated one-hot.
-    return True
-
-
 def _labels_one_hot_emulated(
     labels_adjusted: jax.Array,
     num_classes: int,
     dtype: jnp.dtype,
 ) -> jax.Array:
-    if not _should_use_emulated_one_hot():
-        return jax.nn.one_hot(labels_adjusted, num_classes, dtype=dtype)
     labels_adjusted = labels_adjusted.astype(jnp.int32)
     in_block = (labels_adjusted >= 0) & (labels_adjusted < num_classes)
     safe_labels = jnp.where(in_block, labels_adjusted, -1)
