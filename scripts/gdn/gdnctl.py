@@ -43,12 +43,8 @@ DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = (
 )
 DEFAULT_HILLCLIMB_LOG = REPO_ROOT / "lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md"
 
-SESSION_DIRECTIVE_PRESETS = {
-    "triangular-inversion": (
-        "Prioritize strict lower-triangular inversion redesign on TPU. Favor numerically stable "
-        "parallel formulations (for example block-recursive or hybrid doubling variants) that "
-        "reduce sequential dependencies and improve MXU utilization without changing model semantics."
-    ),
+SESSION_DIRECTIVE_PRESET_FILES = {
+    "triangular-inversion": REPO_ROOT / "scripts/gdn/session_directives/triangular-inversion.md",
 }
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
@@ -143,16 +139,26 @@ def _extract_submission_id(text: str) -> str | None:
     return None if match is None else match.group(1)
 
 
+def _read_directive_file(path: Path, *, source: str) -> str:
+    if not path.is_absolute():
+        path = (REPO_ROOT / path).resolve()
+    if not path.exists():
+        raise SystemExit(f"[gdnctl] directive file not found for {source}: {path}")
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise SystemExit(f"[gdnctl] directive file is empty for {source}: {path}")
+    return text
+
+
 def _load_session_directives(args: argparse.Namespace) -> list[str]:
     directives: list[str] = []
 
     for preset in args.directive_preset:
-        directives.append(SESSION_DIRECTIVE_PRESETS[preset])
+        preset_path = SESSION_DIRECTIVE_PRESET_FILES[preset]
+        directives.append(_read_directive_file(preset_path, source=f"preset {preset}"))
 
     for directive_file in args.directive_file:
-        directive_text = Path(directive_file).read_text(encoding="utf-8").strip()
-        if directive_text:
-            directives.append(directive_text)
+        directives.append(_read_directive_file(Path(directive_file), source=directive_file))
 
     for directive in args.directive:
         stripped = directive.strip()
@@ -844,10 +850,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     codex_loop.add_argument(
         "--directive-preset",
-        choices=sorted(SESSION_DIRECTIVE_PRESETS),
+        choices=sorted(SESSION_DIRECTIVE_PRESET_FILES),
         action="append",
         default=[],
-        help="Named per-session directive preset (repeatable).",
+        help="Named per-session directive preset loaded from scripts/gdn/session_directives/*.md (repeatable).",
     )
     codex_loop.add_argument("--sleep-seconds", type=float, default=5.0)
     codex_loop.add_argument(

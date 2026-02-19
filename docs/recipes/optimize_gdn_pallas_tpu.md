@@ -21,6 +21,7 @@ The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://
 ## Optimization Policy (Aggressive Phase)
 - Every iteration must target a meaningful reduction in dominant hotspot cost, not only parameter retuning.
 - Prefer changes that reduce Pallas custom-call launch count, increase work per call, improve tiling/layout, or remove serial dependencies.
+- Equivalent mathematical reformulations are encouraged when they preserve model semantics and remove expensive operations (including explicit triangular inversion).
 - Do not run standalone iterations that only tweak scalar constants (`unroll`, `chunk`, `segment`, `batch`) unless paired with a structural kernel/dataflow change.
 - If an iteration delivers <3% MFU gain and hotspots are unchanged, the next iteration must escalate to a more radical design.
 - Use FlashLinearAttention and Pallas TPU docs as design references before implementing.
@@ -148,6 +149,7 @@ Notes:
 - Use `--allow-dirty` or `--allow-no-commit` only when intentionally debugging the loop harness.
 - The default iteration prompt (`scripts/gdn/codex_iteration_prompt.md`) is intentionally aggressive; keep it aligned with this policy.
 - `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
+- Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
 - Prefer `--dirty-policy stash --no-commit-policy count-failure` for unattended long runs so failed attempts do not permanently block progress.
 
 ## Logging Expectations

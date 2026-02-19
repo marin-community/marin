@@ -33,6 +33,7 @@ Session directives:
 
 Major-bet requirement:
 - The optimization must materially change kernel structure, launch structure, or algorithmic decomposition.
+- Equivalent mathematical reformulations are allowed (including reformulations that avoid explicit triangular inversion) if end-to-end semantics remain correct and performance improves.
 - At least one of these must be true:
   - fewer/larger Pallas custom calls per training step (reduce launch overhead),
   - more useful work per kernel (higher arithmetic intensity),

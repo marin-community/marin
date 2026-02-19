@@ -56,9 +56,12 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
 
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
+- session directive presets:
+  - `triangular-inversion` -> `scripts/gdn/session_directives/triangular-inversion.md`
 
 The default prompt is aggressive by design:
 - prioritizes high-upside kernel redesigns over small tuning,
 - disallows standalone scalar-only tweaks,
 - requires hotspot-driven escalation when gains are small.
 - disallows leaving `Commit: (pending)` in new log entries.
+- allows equivalent model reformulations (including removing explicit triangular inversion) if semantics stay correct and performance improves.

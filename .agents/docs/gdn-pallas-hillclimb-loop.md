@@ -51,6 +51,7 @@ Prompt and final-response logs are stored under:
   - escalation after low-impact (<3%) results.
 - Prefer `.json.gz` traces by default and only download `.xplane.pb` artifacts when doing XProf analysis.
 - `--directive`, `--directive-file`, and `--directive-preset` allow per-session research directives without editing shared prompt files.
+- Preset directives are backed by markdown docs in `scripts/gdn/session_directives/` (for example `triangular-inversion`).
 - `--dirty-policy stash` avoids hard stops after failed attempts leave a dirty tree.
 - `--no-commit-policy count-failure` allows the loop to continue when an iteration intentionally records a failed attempt without a commit.
 - If TPU queueing is unstable, switch profile runs to `dev-tpu-profile` on an allocated TPU.
