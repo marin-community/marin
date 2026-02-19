@@ -22,6 +22,8 @@ import shlex
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -452,28 +454,22 @@ def update_token():
     """
     github_token = get_github_token()
 
-    # Verify token works before storing
+    # Verify token works before storing. We use urllib instead of curl to avoid
+    # leaking the PAT in logged command arguments.
     logging.info("Verifying token against GitHub API...")
-    result = run(
-        [
-            "curl",
-            "-s",
-            "-X",
-            "POST",
-            "-H",
-            "Accept: application/vnd.github+json",
-            "-H",
-            f"Authorization: Bearer {github_token}",
-            f"https://api.github.com/repos/{config.GITHUB_REPOSITORY}/actions/runners/registration-token",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    url = f"https://api.github.com/repos/{config.GITHUB_REPOSITORY}/actions/runners/registration-token"
+    req = urllib.request.Request(
+        url,
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_token}",
+        },
     )
 
-
     try:
-        resp = json_mod.loads(result.stdout)
+        with urllib.request.urlopen(req) as response:
+            resp = json.loads(response.read().decode())
         if resp.get("token"):
             logging.info("Token is valid - registration token obtained")
         else:
@@ -483,8 +479,16 @@ def update_token():
                 "(fine-grained) or 'repo' scope (classic)."
             )
             sys.exit(1)
-    except json_mod.JSONDecodeError:
-        logging.error(f"Unexpected response: {result.stdout}")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        logging.error(f"Token verification failed (HTTP {e.code}): {body}")
+        logging.error(
+            "Ensure the PAT has 'Administration' read & write repository permission "
+            "(fine-grained) or 'repo' scope (classic)."
+        )
+        sys.exit(1)
+    except (json.JSONDecodeError, urllib.error.URLError) as e:
+        logging.error(f"Unexpected error verifying token: {e}")
         sys.exit(1)
 
     update_github_token_in_secret_manager(github_token)
