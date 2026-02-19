@@ -135,6 +135,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 10 \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
+  --resilient \
   --directive-preset triangular-inversion \
   --dirty-policy stash \
   --no-commit-policy count-failure \
@@ -155,6 +156,7 @@ Notes:
 - By default, `codex-loop` stops if an iteration does not create a new commit.
 - Use `--allow-dirty` or `--allow-no-commit` only when intentionally debugging the loop harness.
 - The default iteration prompt (`scripts/gdn/codex_iteration_prompt.md`) is intentionally aggressive; keep it aligned with this policy.
+- Use `--resilient` for unattended loops to keep running through transient failures (network, connectivity, allocation).
 - `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
 - Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
 - Prefer `--dirty-policy stash --no-commit-policy count-failure` for unattended long runs so failed attempts do not permanently block progress.

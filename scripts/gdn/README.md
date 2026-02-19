@@ -49,6 +49,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 5 \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
+  --resilient \
   --directive-preset triangular-inversion \
   --dirty-policy stash \
   --no-commit-policy count-failure
@@ -62,6 +63,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 5 \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
+  --resilient \
   --hold-dev-tpu \
   --dev-tpu-cluster us-central1 \
   --dev-tpu-fallback-cluster us-east5-a \
@@ -88,3 +90,4 @@ The default prompt is aggressive by design:
 - allows equivalent model reformulations (including removing explicit triangular inversion) if semantics stay correct and performance improves.
 - `--dirty-policy stash` restores the stashed tree automatically at the end of each iteration.
 - If stash restore conflicts with new iteration edits, the default `--stash-restore-policy warn-keep` keeps the stash and continues; use `--stash-restore-policy fail` for strict behavior.
+- `--resilient` is the recommended unattended mode: unlimited failure budget (`--max-failures -1`), retry-enabled codex/post-check paths, and best-effort managed dev TPU hold.

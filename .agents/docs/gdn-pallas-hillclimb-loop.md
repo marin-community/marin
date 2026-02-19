@@ -22,6 +22,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 10 \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
+  --resilient \
   --directive-preset triangular-inversion \
   --dirty-policy stash \
   --no-commit-policy count-failure \
@@ -51,6 +52,7 @@ Prompt and final-response logs are stored under:
 ## Operational Advice
 - Prefer `--post-check` commands that are strict but fast enough to run every iteration.
 - Keep each iteration scoped to one optimization so regressions are easy to bisect.
+- Prefer `--resilient` for unattended runs; it keeps the loop alive through transient command/network/allocation failures.
 - Ensure the prompt enforces aggressive optimization strategy. `scripts/gdn/codex_iteration_prompt.md` now requires:
   - 3-candidate shortlist each iteration,
   - one high-upside structural choice,

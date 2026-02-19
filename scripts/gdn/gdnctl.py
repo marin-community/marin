@@ -334,9 +334,16 @@ def _hold_dev_tpu_for_loop(
             )
             time.sleep(args.dev_tpu_allocate_retry_sleep)
 
-    if last_error is None:
-        raise SystemExit("[gdnctl] managed dev TPU allocation failed without diagnostic output.")
-    raise SystemExit(last_error)
+    error_message = last_error or "[gdnctl] managed dev TPU allocation failed without diagnostic output."
+    if args.hold_dev_tpu_policy == "best-effort":
+        print(
+            "[gdnctl] WARNING: managed dev TPU allocation failed; continuing without held dev TPU.\n"
+            f"{error_message}",
+            file=sys.stderr,
+        )
+        yield
+        return
+    raise SystemExit(error_message)
 
 
 def _git_head(cwd: Path) -> str:
@@ -904,6 +911,61 @@ def _run_post_checks(cwd: Path, commands: Sequence[str]) -> None:
         _run(["bash", "-lc", command], cwd=cwd)
 
 
+def _run_post_checks_with_retries(
+    cwd: Path,
+    commands: Sequence[str],
+    *,
+    retries: int,
+    retry_sleep_seconds: float,
+) -> tuple[bool, int]:
+    for command in commands:
+        for attempt in range(1, retries + 2):
+            try:
+                _run(["bash", "-lc", command], cwd=cwd)
+                break
+            except subprocess.CalledProcessError as exc:
+                if attempt > retries:
+                    return False, exc.returncode or 1
+                print(
+                    "[gdnctl] post-check failed "
+                    f"(attempt {attempt}/{retries + 1}) for command: {command}",
+                    file=sys.stderr,
+                )
+                if retry_sleep_seconds > 0:
+                    print(
+                        f"[gdnctl] retrying post-check in {retry_sleep_seconds:.1f}s",
+                        file=sys.stderr,
+                    )
+                    time.sleep(retry_sleep_seconds)
+    return True, 0
+
+
+def _failure_limit_exceeded(*, failures: int, max_failures: int) -> bool:
+    if max_failures < 0:
+        return False
+    return failures > max_failures
+
+
+def _apply_resilient_defaults(args: argparse.Namespace) -> None:
+    if not args.resilient:
+        return
+    if args.max_failures >= 0:
+        args.max_failures = -1
+    if args.dirty_policy == "fail":
+        args.dirty_policy = "stash"
+    if args.no_commit_policy == "fail":
+        args.no_commit_policy = "count-failure"
+    if args.post_check_policy == "fail":
+        args.post_check_policy = "count-failure"
+    if args.iteration_error_policy == "fail":
+        args.iteration_error_policy = "count-failure"
+    if args.hold_dev_tpu_policy == "required":
+        args.hold_dev_tpu_policy = "best-effort"
+    args.stash_restore_policy = "warn-keep"
+    args.codex_retries = max(args.codex_retries, 2)
+    args.post_check_retries = max(args.post_check_retries, 2)
+
+
 def cmd_lint_log(args: argparse.Namespace) -> int:
     log_path = Path(args.log_file).resolve()
     if not log_path.exists():
@@ -944,8 +1006,18 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    _apply_resilient_defaults(args)
+
     if args.hold_dev_tpu and not args.dev_tpu_name:
-        raise SystemExit("[gdnctl] --hold-dev-tpu requires --dev-tpu-name.")
+        if args.resilient:
+            print(
+                "[gdnctl] WARNING: --hold-dev-tpu requested without --dev-tpu-name; "
+                "continuing without managed dev TPU due to --resilient.",
+                file=sys.stderr,
+            )
+            args.hold_dev_tpu = False
+        else:
+            raise SystemExit("[gdnctl] --hold-dev-tpu requires --dev-tpu-name.")
 
     if args.dev_tpu_ready_timeout <= 0:
         raise SystemExit("[gdnctl] --dev-tpu-ready-timeout must be > 0.")
@@ -958,6 +1030,21 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
     if args.dev_tpu_stop_timeout <= 0:
         raise SystemExit("[gdnctl] --dev-tpu-stop-timeout must be > 0.")
+
+    if args.codex_retries < 0:
+        raise SystemExit("[gdnctl] --codex-retries must be >= 0.")
+
+    if args.post_check_retries < 0:
+        raise SystemExit("[gdnctl] --post-check-retries must be >= 0.")
+
+    if args.retry_sleep_seconds < 0:
+        raise SystemExit("[gdnctl] --retry-sleep-seconds must be >= 0.")
+
+    if args.resilient:
+        print(
+            "[gdnctl] resilient mode active: unlimited failures, stash dirty handling, "
+            "best-effort dev TPU hold, and retry-enabled command paths."
+        )
 
     codex_bin, supported_efforts = _resolve_codex_binary(
         explicit_binary=args.codex_bin,
@@ -977,9 +1064,15 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     failures = 0
     with _hold_dev_tpu_for_loop(args, log_dir=log_dir):
         session_directives = list(base_session_directives)
-        if args.hold_dev_tpu:
+        managed_hold_active = hasattr(args, "active_dev_tpu_cluster")
+        if managed_hold_active:
             session_directives.append(_managed_dev_tpu_session_directive(args))
             _warn_if_hold_dev_tpu_with_ray_post_checks(args)
+        elif args.hold_dev_tpu:
+            print(
+                "[gdnctl] managed dev TPU hold is not active for this run; continuing without hold-specific directives.",
+                file=sys.stderr,
+            )
         if session_directives:
             print(f"[gdnctl] session directives: {len(session_directives)} loaded")
 
@@ -1021,18 +1114,31 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
                     cmd.append("-")
 
-                    rc = _run_streaming(
-                        cmd,
-                        cwd=workdir,
-                        input_text=prompt,
-                        check=False,
-                        hide_codex_file_updates=not args.show_file_updates,
-                    )
+                    codex_attempts = args.codex_retries + 1
+                    rc = 1
+                    for attempt in range(1, codex_attempts + 1):
+                        rc = _run_streaming(
+                            cmd,
+                            cwd=workdir,
+                            input_text=prompt,
+                            check=False,
+                            hide_codex_file_updates=not args.show_file_updates,
+                        )
+                        if rc == 0:
+                            break
+                        if attempt < codex_attempts:
+                            print(
+                                "[gdnctl] codex iteration command failed "
+                                f"(attempt {attempt}/{codex_attempts}, rc={rc}); retrying.",
+                                file=sys.stderr,
+                            )
+                            if args.retry_sleep_seconds > 0:
+                                time.sleep(args.retry_sleep_seconds)
 
                     if rc != 0:
                         failures += 1
                         print(f"[gdnctl] codex iteration failed with exit code {rc}", file=sys.stderr)
-                        if failures > args.max_failures:
+                        if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
                             return rc
                         continue
 
@@ -1048,22 +1154,48 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                         print(f"{message} Continuing due to policy={args.no_commit_policy}.", file=sys.stderr)
                         if args.no_commit_policy == "count-failure":
                             failures += 1
-                            if failures > args.max_failures:
+                            if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
                                 return 3
                         continue
 
                     if args.post_check:
-                        try:
-                            _run_post_checks(workdir, args.post_check)
-                        except subprocess.CalledProcessError as exc:
-                            print(f"[gdnctl] post-check failed: {exc}", file=sys.stderr)
-                            return exc.returncode or 1
+                        ok, post_rc = _run_post_checks_with_retries(
+                            workdir,
+                            args.post_check,
+                            retries=args.post_check_retries,
+                            retry_sleep_seconds=args.retry_sleep_seconds,
+                        )
+                        if not ok:
+                            message = (
+                                "[gdnctl] post-check failed. "
+                                "Use --post-check-policy count-failure/continue to avoid exiting."
+                            )
+                            if args.post_check_policy == "fail":
+                                print(message, file=sys.stderr)
+                                return post_rc or 1
+                            print(
+                                f"{message} Continuing due to policy={args.post_check_policy}.",
+                                file=sys.stderr,
+                            )
+                            if args.post_check_policy == "count-failure":
+                                failures += 1
+                                if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
+                                    return post_rc or 1
+                            continue
 
                     if iteration < args.iterations and args.sleep_seconds > 0:
                         time.sleep(args.sleep_seconds)
-            except RuntimeError as exc:
-                print(str(exc), file=sys.stderr)
-                return 2
+            except Exception as exc:  # pragma: no cover - defensive loop safety
+                message = f"[gdnctl] iteration {iteration} raised: {exc!r}"
+                if args.iteration_error_policy == "fail":
+                    print(message, file=sys.stderr)
+                    return 2
+                print(f"{message}. Continuing due to policy={args.iteration_error_policy}.", file=sys.stderr)
+                if args.iteration_error_policy == "count-failure":
+                    failures += 1
+                    if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
+                        return 2
+                continue
 
     return 0
 
@@ -1231,7 +1363,39 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Shell command run after each successful iteration (repeatable)",
     )
-    codex_loop.add_argument("--max-failures", type=int, default=0)
+    codex_loop.add_argument(
+        "--post-check-policy",
+        choices=["fail", "count-failure", "continue"],
+        default="fail",
+        help="Behavior when post-check commands fail.",
+    )
+    codex_loop.add_argument("--max-failures", type=int, default=0, help="Max failures before aborting (-1 = unlimited).")
+    codex_loop.add_argument(
+        "--resilient",
+        action="store_true",
+        help=(
+            "Enable resilient unattended mode: unlimited failures, retries, best-effort managed dev TPU hold, "
+            "and non-fatal dirty-tree restore behavior."
+        ),
+    )
+    codex_loop.add_argument(
+        "--codex-retries",
+        type=int,
+        default=0,
+        help="Retry attempts for each codex exec iteration command.",
+    )
+    codex_loop.add_argument(
+        "--post-check-retries",
+        type=int,
+        default=0,
+        help="Retry attempts per post-check command.",
+    )
+    codex_loop.add_argument(
+        "--retry-sleep-seconds",
+        type=float,
+        default=20.0,
+        help="Sleep interval between retry attempts for codex/post-check commands.",
+    )
     codex_loop.add_argument("--log-dir", default=str(REPO_ROOT / ".agents/logs/gdn_codex_loop"))
     codex_loop.add_argument("--allow-dirty", action="store_true", help="Allow starting from a dirty tree")
     codex_loop.add_argument(
@@ -1257,9 +1421,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Behavior when an iteration exits cleanly but does not create a commit.",
     )
     codex_loop.add_argument(
+        "--iteration-error-policy",
+        choices=["fail", "count-failure", "continue"],
+        default="fail",
+        help="Behavior when an unexpected iteration exception occurs.",
+    )
+    codex_loop.add_argument(
         "--hold-dev-tpu",
         action="store_true",
         help="Allocate and hold a dev TPU allocation for the full loop duration.",
+    )
+    codex_loop.add_argument(
+        "--hold-dev-tpu-policy",
+        choices=["required", "best-effort"],
+        default="required",
+        help="Whether managed dev TPU allocation failure should abort or continue without hold.",
     )
     codex_loop.add_argument(
         "--dev-tpu-cluster",
