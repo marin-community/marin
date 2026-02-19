@@ -94,14 +94,16 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray v2 ResourceConfig."""
-    from iris.cluster.types import preemptible_constraint, region_constraint
+    from iris.cluster.types import preemptible_constraint, region_constraint, region_in_constraint
 
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
     if resources.regions:
-        for region in resources.regions:
-            constraints.append(region_constraint(region))
+        if len(resources.regions) == 1:
+            constraints.append(region_constraint(resources.regions[0]))
+        else:
+            constraints.append(region_in_constraint(resources.regions))
     return constraints
 
 

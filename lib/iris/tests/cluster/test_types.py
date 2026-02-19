@@ -15,6 +15,7 @@ from iris.cluster.types import (
     preemptible_constraint,
     preemptible_preference_from_constraints,
     region_constraint,
+    region_in_constraint,
     required_regions_from_constraints,
 )
 from iris.rpc import cluster_pb2
@@ -281,3 +282,91 @@ def test_merge_multiple_canonical_keys_partial_override():
     preemptibles = [c for c in result if c.key == "preemptible"]
     assert len(preemptibles) == 1
     assert preemptibles[0].value == "true"
+
+
+# ---------------------------------------------------------------------------
+# region_in_constraint (returns a Python Constraint dataclass with IN op)
+# ---------------------------------------------------------------------------
+
+
+def test_region_in_constraint_happy_path():
+    c = region_in_constraint(["us-central1", "us-central2"])
+    assert c.key == "region"
+    assert c.op == ConstraintOp.IN
+    assert c.values == ("us-central1", "us-central2")
+    assert c.value is None
+
+
+def test_region_in_constraint_empty_list_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        region_in_constraint([])
+
+
+def test_region_in_constraint_empty_string_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        region_in_constraint(["us-central1", ""])
+
+
+def test_region_in_constraint_single_region():
+    """A single-element list still produces a valid IN constraint."""
+    c = region_in_constraint(["us-central1"])
+    assert c.op == ConstraintOp.IN
+    assert c.values == ("us-central1",)
+
+
+# ---------------------------------------------------------------------------
+# Constraint.to_proto / from_proto round-trip for IN operator
+# ---------------------------------------------------------------------------
+
+
+def test_constraint_in_proto_roundtrip():
+    """IN constraint survives a proto round-trip."""
+    original = Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "eu-west4"))
+    proto = original.to_proto()
+    assert proto.op == cluster_pb2.CONSTRAINT_OP_IN
+    assert len(proto.values) == 2
+    restored = Constraint.from_proto(proto)
+    assert restored == original
+
+
+# ---------------------------------------------------------------------------
+# required_regions_from_constraints with IN operator (proto inputs)
+# ---------------------------------------------------------------------------
+
+
+def _proto_in_constraint(key: str, string_values: list[str]) -> cluster_pb2.Constraint:
+    """Build a proto Constraint with IN op and multiple string values."""
+    c = cluster_pb2.Constraint(key=key, op=cluster_pb2.CONSTRAINT_OP_IN)
+    for sv in string_values:
+        c.values.append(cluster_pb2.AttributeValue(string_value=sv))
+    return c
+
+
+def test_required_regions_in_multiple():
+    constraints = [_proto_in_constraint("region", ["us-central1", "us-central2"])]
+    result = required_regions_from_constraints(constraints)
+    assert result == frozenset({"us-central1", "us-central2"})
+
+
+def test_required_regions_in_single():
+    constraints = [_proto_in_constraint("region", ["eu-west4"])]
+    result = required_regions_from_constraints(constraints)
+    assert result == frozenset({"eu-west4"})
+
+
+def test_required_regions_in_empty_values_raises():
+    """IN constraint with no values is invalid."""
+    c = cluster_pb2.Constraint(key="region", op=cluster_pb2.CONSTRAINT_OP_IN)
+    with pytest.raises(ValueError, match="at least one value"):
+        required_regions_from_constraints([c])
+
+
+def test_normalize_constraints_with_in_region():
+    """normalize_constraints works with IN region constraints."""
+    constraints = [
+        _proto_constraint("preemptible", "false"),
+        _proto_in_constraint("region", ["us-central1", "us-central2"]),
+    ]
+    nc = normalize_constraints(constraints)
+    assert nc.preemptible is False
+    assert nc.required_regions == frozenset({"us-central1", "us-central2"})
