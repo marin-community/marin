@@ -2,40 +2,50 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Grugformer starter speedrun.
+Grugformer native speedrun entrypoint.
 
-This uses the grug core implementation (`levanter.grug`) and wires it into the existing
-Marin speedrun harness via the `levanter.models.grug_wrapper.GrugWrapper` adapter.
+This runs directly through the grug-native loop:
+- no LmConfig subclass
+- no GrugWrapper in the training path
+- no default_speedrun/default_train harness
 
-On TPU, grug uses JAX's Splash Attention; on other backends it falls back to a reference
-attention implementation.
-
-How to run:
-  python marin/run/ray_run.py -- \
-    python -m experiments.speedrun.grugformer_starter.grugformer_speedrun
+Usage:
+  uv run -m experiments.speedrun.grugformer_20260129.grugformer_speedrun \
+    --size 130m \
+    --train-cache-dir /path/to/tokenized_cache_root
 """
 
 # nodryrun
 
+import argparse
 import logging
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 
-from fray.cluster import ResourceConfig
-from haliax import Axis
-from jaxtyping import PRNGKeyArray
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh
 
-from levanter.grug.model import GrugModelConfig
-from levanter.models.grug_wrapper import GrugWrapper
-from levanter.models.lm_model import LmConfig
-from levanter.utils.flop_utils import lm_flops_per_token
-from marin.execution.executor import executor_main
-from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
+from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat
+from levanter.grug.model import GrugModelConfig, init_parameters
+from levanter.grug_native import (
+    GrugEvalConfig,
+    GrugNativeRunConfig,
+    GrugTrainerConfig,
+    run_grug_native,
+)
+from levanter.optim import AdamConfig
+from levanter.tracker import NoopConfig
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
 
-from experiments.llama import llama3_tokenizer_vocab_size
-from experiments.simple_train_config import SimpleTrainConfig
+from experiments.marin_models import marin_tokenizer
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _get_num_train_steps(param_count: int, batch_size: int, max_seq_len: int, tpp: int = 20) -> int:
@@ -43,37 +53,45 @@ def _get_num_train_steps(param_count: int, batch_size: int, max_seq_len: int, tp
     return max(1, total_tokens // (batch_size * max_seq_len))
 
 
-def _size_presets() -> dict[str, "GrugformerConfig"]:
+def _size_presets() -> dict[str, GrugModelConfig]:
     base = dict(max_seq_len=2048, head_dim=None)
     return {
-        "130m": GrugformerConfig(
-            hidden_dim=512, intermediate_dim=1792, num_layers=6, num_heads=8, num_kv_heads=8, **base
+        "130m": GrugModelConfig(
+            vocab_size=128_256,
+            hidden_dim=512,
+            intermediate_dim=1792,
+            num_layers=6,
+            num_heads=8,
+            num_kv_heads=8,
+            **base,
         ),
-        "300m": GrugformerConfig(
-            hidden_dim=768, intermediate_dim=2688, num_layers=12, num_heads=12, num_kv_heads=12, **base
+        "300m": GrugModelConfig(
+            vocab_size=128_256,
+            hidden_dim=768,
+            intermediate_dim=2688,
+            num_layers=12,
+            num_heads=12,
+            num_kv_heads=12,
+            **base,
         ),
-        "520m": GrugformerConfig(
-            hidden_dim=1024, intermediate_dim=3584, num_layers=24, num_heads=16, num_kv_heads=16, **base
+        "520m": GrugModelConfig(
+            vocab_size=128_256,
+            hidden_dim=1024,
+            intermediate_dim=3584,
+            num_layers=24,
+            num_heads=16,
+            num_kv_heads=16,
+            **base,
         ),
-        "1_2b": GrugformerConfig(
-            hidden_dim=2048, intermediate_dim=7168, num_layers=16, num_heads=16, num_kv_heads=16, **base
+        "1_2b": GrugModelConfig(
+            vocab_size=128_256,
+            hidden_dim=2048,
+            intermediate_dim=7168,
+            num_layers=16,
+            num_heads=16,
+            num_kv_heads=16,
+            **base,
         ),
-    }
-
-
-def _resource_presets(use_tpu: bool = False):
-    if use_tpu:
-        return {
-            "130m": ResourceConfig.with_tpu("v5p-8"),
-            "300m": ResourceConfig.with_tpu("v5p-8"),
-            "520m": ResourceConfig.with_tpu("v5p-8"),
-            "1_2b": ResourceConfig.with_tpu("v5p-8"),
-        }
-    return {
-        "130m": ResourceConfig.with_gpu("A100-80G", count=1),
-        "300m": ResourceConfig.with_gpu("A100-80G", count=1),
-        "520m": ResourceConfig.with_gpu("A100-80G", count=2),
-        "1_2b": ResourceConfig.with_gpu("A100-80G", count=4),
     }
 
 
@@ -81,122 +99,179 @@ def _batch_sizes() -> dict[str, int]:
     return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 128}
 
 
-@LmConfig.register_subclass("grugformer")
+def _total_trainable_params(cfg: GrugModelConfig) -> int:
+    single_device = np.array(jax.devices()[:1]).reshape((1, 1))
+    mesh = Mesh(single_device, ("data", "model"), axis_types=(AxisType.Explicit, AxisType.Explicit))
+    with jax.set_mesh(mesh):
+        params_shape = eqx.filter_eval_shape(init_parameters, cfg, key=jax.random.PRNGKey(0))
+
+    total = 0
+    for leaf in jax.tree_util.tree_leaves(params_shape):
+        if hasattr(leaf, "dtype") and hasattr(leaf, "shape") and jnp.issubdtype(leaf.dtype, jnp.floating):
+            total += int(np.prod(leaf.shape))
+    return total
+
+
 @dataclass(frozen=True)
-class GrugformerConfig(LmConfig[GrugWrapper]):
-    """LmConfig wrapper around grug core hyperparameters."""
+class SpeedrunArgs:
+    size: str
+    train_cache_dir: str
+    validation_cache_dir: str | None
+    tokenizer: str
+    steps: int | None
+    batch_size: int | None
+    learning_rate: float
+    weight_decay: float
+    steps_per_eval: int
+    max_eval_batches: int | None
+    output_dir: str
+    run_id: str | None
+    disable_wandb: bool
+    seed: int
+    ema_beta: float | None
+    require_accelerator: bool
 
-    # LmConfig field
-    max_seq_len: int = 2048
 
-    # Grug core hyperparams
-    hidden_dim: int = 1024
-    intermediate_dim: int = 2752
-    num_layers: int = 12
-    num_heads: int = 16
-    num_kv_heads: int = 16
-    head_dim: int | None = None
-
-    # ---- LmConfig API ----
-    @property
-    def model_type(self) -> type[GrugWrapper]:
-        return GrugWrapper
-
-    @property
-    def Embed(self) -> Axis:
-        # Not used by GrugWrapper (it returns logits directly), but LmConfig requires it.
-        return Axis("embed", self.hidden_dim)
-
-    def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> GrugWrapper:
-        grug_cfg = GrugModelConfig(
-            vocab_size=Vocab.size,
-            hidden_dim=self.hidden_dim,
-            intermediate_dim=self.intermediate_dim,
-            num_layers=self.num_layers,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_kv_heads,
-            head_dim=self.head_dim,
-            max_seq_len=self.max_seq_len,
+def _build_data_config(args: SpeedrunArgs) -> LmDataConfig:
+    components: dict[str, DatasetComponent] = {
+        "train": DatasetComponent(
+            cache_dir=args.train_cache_dir,
+            source=None,
+            format=TextLmDatasetFormat(),
         )
-        return GrugWrapper.init(Vocab, grug_cfg, key=key)
+    }
+    train_weights: dict[str, float] = {"train": 1.0}
 
-    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
-        return lm_flops_per_token(
-            hidden_dim=self.hidden_dim,
-            intermediate_dim=self.intermediate_dim,
-            num_layers=self.num_layers,
-            num_kv_heads=self.num_kv_heads,
-            num_heads=self.num_heads,
-            seq_len=context_length,
-            vocab_size=vocab_size,
-            glu=True,
+    if args.validation_cache_dir is not None:
+        components["validation"] = DatasetComponent(
+            cache_dir=args.validation_cache_dir,
+            source=None,
+            format=TextLmDatasetFormat(),
         )
+        train_weights["validation"] = 0.0
 
-    def total_trainable_params(self, vocab_size: int) -> int:
-        head_dim = self.head_dim or (self.hidden_dim // self.num_heads)
-        token_embedding = vocab_size * self.hidden_dim
-        attn = (
-            self.hidden_dim * head_dim * self.num_heads
-            + 2 * self.hidden_dim * head_dim * self.num_kv_heads
-            + head_dim * self.num_heads * self.hidden_dim
-        )
-        mlp = 3 * self.hidden_dim * self.intermediate_dim
-        transformer = self.num_layers * (attn + mlp + 2 * self.hidden_dim) + self.hidden_dim
-        return int(transformer + 2 * token_embedding)
+    return LmDataConfig(
+        tokenizer=args.tokenizer,
+        components=components,
+        train_weights=train_weights,
+        cache_dir=None,
+        shuffle=True,
+        permutation_type="feistel",
+    )
 
 
-def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]:
+def build_run_config(args: SpeedrunArgs) -> GrugNativeRunConfig:
     sizes = _size_presets()
-    if size not in sizes:
-        raise ValueError(f"Unknown size: {size}")
-    model_cfg = sizes[size]
+    if args.size not in sizes:
+        raise ValueError(f"Unknown size: {args.size}")
 
-    batch = _batch_sizes()[size]
-    max_seq_len = model_cfg.max_seq_len
-    params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
-    steps = _get_num_train_steps(params, batch, max_seq_len, tpp=20)
-    resources = _resource_presets(use_tpu=use_tpu)[size]
+    model_cfg = sizes[args.size]
+    batch = args.batch_size if args.batch_size is not None else _batch_sizes()[args.size]
+    params = _total_trainable_params(model_cfg)
+    steps = args.steps if args.steps is not None else _get_num_train_steps(params, batch, model_cfg.max_seq_len, tpp=20)
 
-    train = SimpleTrainConfig(
-        resources,
-        train_seq_len=max_seq_len,
+    run_id = args.run_id or f"grugformer_native_{args.size}"
+    tracker = (
+        NoopConfig()
+        if args.disable_wandb
+        else WandbConfig(
+            project="marin",
+            name=run_id,
+            tags=["grug-native", "speedrun", f"size:{args.size}"],
+        )
+    )
+
+    trainer = TrainerConfig(
+        id=run_id,
+        seed=args.seed,
         train_batch_size=batch,
         num_train_steps=steps,
-        learning_rate=3e-3,
-        weight_decay=0.1,
-        steps_per_eval=500,
-        steps_per_hf_export=-1,
-        explicit_mesh_axes=True,
+        steps_per_eval=max(1, args.steps_per_eval),
+        tracker=tracker,
+        use_explicit_mesh_axes=True,
+        require_accelerator=args.require_accelerator,
+        allow_nondivisible_batch_size=True,
+        checkpointer=CheckpointerConfig(
+            base_path=os.path.join(args.output_dir, args.size),
+            append_run_id_to_base_path=False,
+            save_interval=timedelta(minutes=10),
+            keep=[{"every": 1000}],
+        ),
     )
 
-    run_name = f"grugformer_starter_{size}"
-    desc = f"Grugformer starter ({size}) with new cross entropy kernel."
-    cfg = SpeedrunConfig(
-        author=Author(
-            name="David Hall",
-            affiliation="Open Athena",
-            url="http://github.com/dlwh",
+    data = _build_data_config(args)
+
+    return GrugNativeRunConfig(
+        model=model_cfg,
+        data=data,
+        optimizer=AdamConfig(
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
         ),
-        description=desc,
-        model_config=model_cfg,
-        train_config=train,
+        trainer=GrugTrainerConfig(
+            trainer=trainer,
+            log_every=1,
+            ema_beta=args.ema_beta,
+        ),
+        eval=GrugEvalConfig(
+            steps_per_eval=args.steps_per_eval,
+            max_eval_batches=args.max_eval_batches,
+            eval_current=True,
+            eval_ema=bool(args.ema_beta is not None),
+        ),
     )
-    return run_name, cfg
+
+
+def _parse_args() -> SpeedrunArgs:
+    parser = argparse.ArgumentParser(description="Run grugformer speedrun with grug-native training loop.")
+    parser.add_argument("--size", type=str, default="130m", choices=list(_size_presets().keys()))
+    parser.add_argument("--train-cache-dir", type=str, required=True)
+    parser.add_argument("--validation-cache-dir", type=str, default=None)
+    parser.add_argument("--tokenizer", type=str, default=marin_tokenizer)
+    parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--learning-rate", type=float, default=3e-3)
+    parser.add_argument("--weight-decay", type=float, default=0.1)
+    parser.add_argument("--steps-per-eval", type=int, default=500)
+    parser.add_argument("--max-eval-batches", type=int, default=None)
+    parser.add_argument("--output-dir", type=str, default="checkpoints/grug_native_speedrun")
+    parser.add_argument("--run-id", type=str, default=None)
+    parser.add_argument("--disable-wandb", action="store_true")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--ema-beta", type=float, default=0.999)
+    parser.add_argument("--require-accelerator", action="store_true")
+    parsed = parser.parse_args()
+
+    return SpeedrunArgs(
+        size=parsed.size,
+        train_cache_dir=parsed.train_cache_dir,
+        validation_cache_dir=parsed.validation_cache_dir,
+        tokenizer=parsed.tokenizer,
+        steps=parsed.steps,
+        batch_size=parsed.batch_size,
+        learning_rate=parsed.learning_rate,
+        weight_decay=parsed.weight_decay,
+        steps_per_eval=parsed.steps_per_eval,
+        max_eval_batches=parsed.max_eval_batches,
+        output_dir=parsed.output_dir,
+        run_id=parsed.run_id,
+        disable_wandb=parsed.disable_wandb,
+        seed=parsed.seed,
+        ema_beta=parsed.ema_beta,
+        require_accelerator=parsed.require_accelerator,
+    )
 
 
 def main() -> None:
-    sizes = ["130m", "300m", "520m", "1_2b"]
-    use_tpu = bool(int(os.environ.get("SR_USE_TPU", "0")))
-
-    steps = []
-    for s in sizes:
-        name, cfg = build_run(s, use_tpu=use_tpu)
-        if cfg.vocab_size != llama3_tokenizer_vocab_size:
-            raise AssertionError("Speedrun vocab_size mismatch; expected llama3_tokenizer_vocab_size")
-        cfg.print_run_info()
-        steps.extend(default_speedrun(name, cfg))
-
-    executor_main(steps=steps, description="Grugformer starter")
+    args = _parse_args()
+    run_config = build_run_config(args)
+    logger.info(
+        "Starting grug-native speedrun size=%s batch=%s steps=%s",
+        args.size,
+        run_config.trainer.trainer.train_batch_size,
+        run_config.trainer.trainer.num_train_steps,
+    )
+    run_grug_native(run_config)
 
 
 if __name__ == "__main__":

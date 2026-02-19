@@ -16,6 +16,7 @@ __all__ = [
     "trainer",
     "visualization",
     "grug",
+    "grug_native",
     "current_tracker",
     "initialize",
 ]
@@ -34,6 +35,7 @@ import levanter.tracker as tracker
 import levanter.trainer as trainer
 import levanter.visualization as visualization
 import levanter.grug as grug
+import levanter.grug_native as grug_native
 from levanter.tracker import current_tracker
 from levanter.trainer import initialize
 
